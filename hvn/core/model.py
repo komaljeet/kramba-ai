@@ -43,7 +43,9 @@ class HamiltonianVortexNetwork(nn.Module):
         vocab_size: int,
         d_model: int = 256,
         num_layers: int = 2,
+        n_heads: int = 4,
         bond_dimension: int | None = None,
+        chunk_size: int = 16,
         dropout: float = 0.1,
         use_mlp_decoder: bool = False,
     ):
@@ -51,15 +53,18 @@ class HamiltonianVortexNetwork(nn.Module):
         self.vocab_size = vocab_size
         self.d_model = d_model
         self.num_layers = num_layers
+        self.n_heads = n_heads
 
         # Token embedding
         self.token_embedding = nn.Embedding(vocab_size, d_model)
 
-        # Stacked HVN blocks
+        # Stacked HVN blocks (multi-head)
         self.blocks = nn.ModuleList([
             HVNBlock(
                 d_model=d_model,
+                n_heads=n_heads,
                 bond_dimension=bond_dimension,
+                chunk_size=chunk_size,
                 dropout=dropout,
             )
             for _ in range(num_layers)

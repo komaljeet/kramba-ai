@@ -26,12 +26,14 @@ def load_model(checkpoint_path: str, tokenizer_path: str, device: torch.device):
     vocab_size = ckpt["vocab_size"]
     d_model = ckpt["d_model"]
     num_layers = ckpt["num_layers"]
+    n_heads = ckpt.get("n_heads", 4)  # backward compat
 
     # Rebuild model with saved hyperparameters
     model = HamiltonianVortexNetwork(
         vocab_size=vocab_size,
         d_model=d_model,
         num_layers=num_layers,
+        n_heads=n_heads,
     )
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)

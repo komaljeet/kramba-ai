@@ -162,6 +162,7 @@ def train_model(
         "vocab_size": model.vocab_size,
         "d_model": model.d_model,
         "num_layers": model.num_layers,
+        "n_heads": model.n_heads,
     }, save_path)
     print(f"\n✓ Model saved to {save_path}")
 
@@ -259,6 +260,8 @@ def main():
     parser.add_argument("--d_model", type=int, default=128, help="Model dimension")
     parser.add_argument("--num_layers", type=int, default=2, help="Number of HVN blocks")
     parser.add_argument("--bond_dim", type=int, default=32, help="SVD bond dimension (quantum renormalization rank)")
+    parser.add_argument("--n_heads", type=int, default=4, help="Number of parallel Hamiltonian heads")
+    parser.add_argument("--chunk_size", type=int, default=16, help="Chunk size for parallel processing")
     parser.add_argument("--save", type=str, default="hvn_checkpoint.pt", help="Checkpoint save path")
     parser.add_argument("--generate", action="store_true", help="Generate text after training")
     parser.add_argument("--prompt", type=str, default="The ", help="Prompt for generation")
@@ -291,7 +294,9 @@ def main():
         vocab_size=tokenizer.vocab_size,
         d_model=args.d_model,
         num_layers=args.num_layers,
+        n_heads=args.n_heads,
         bond_dimension=args.bond_dim,
+        chunk_size=args.chunk_size,
         dropout=0.1,
     )
     param_count = sum(p.numel() for p in model.parameters())

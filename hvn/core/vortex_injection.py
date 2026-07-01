@@ -18,7 +18,12 @@ Theoretical basis (see docs/THEORETICAL_FRAMEWORK.md §2):
     product — O(d_model²) regardless of sequence length N.
 
     The deflected (interacted) representation is:
-        r̃_t = x_t + Γ · v_t
+        r̃_t = x_t + g_t ⊙ (Γ · v_t)
+
+    where g_t is a learned gate (sigmoid of a linear projection of x_t and v_t).
+    This gating allows the model to selectively decide how much the vortex
+    velocity field should deflect each token — analogous to the output gate in
+    an LSTM.
 
 This layer is purely feed-forward (no recurrence, no attention).  It receives the
 current Hamiltonian matrix H from the memory block and returns both the deflected
@@ -45,12 +50,18 @@ class VortexInjectionLayer(nn.Module):
         self.d_model = d_model
 
         # Learned vorticity projection: ω_t = W_ω · x_t
-        # Initialized with small values so initial vorticity is gentle.
         self.vorticity_proj = nn.Linear(d_model, d_model, bias=False)
         nn.init.normal_(self.vorticity_proj.weight, mean=0.0, std=1.0 / math.sqrt(d_model))
 
         # Coupling constant Γ (learnable scalar, initialized to 1/√d_model)
         self.gamma = nn.Parameter(torch.tensor(1.0 / math.sqrt(d_model)))
+
+        # Gating: g_t = σ(W_g · [x_t ; v_t]) — controls how much the vortex
+        # velocity deflects the token.  This is analogous to an LSTM output gate
+        # and lets the model selectively attend to or ignore the velocity field.
+        self.gate_proj = nn.Linear(d_model * 2, d_model, bias=True)
+        nn.init.xavier_uniform_(self.gate_proj.weight)
+        nn.init.zeros_(self.gate_proj.bias)
 
         # Output projection back to d_model
         self.output_proj = nn.Linear(d_model, d_model, bias=False)
@@ -87,23 +98,20 @@ class VortexInjectionLayer(nn.Module):
         B, S, D = x.shape
 
         # --- Step 1: Vorticity projection ---
-        # ω_t = W_ω · x_t   →  [B, S, D]
-        vorticity = self.vorticity_proj(x)
+        vorticity = self.vorticity_proj(x)  # [B, S, D]
 
         # --- Step 2: Biot-Savart local velocity ---
         # v_t = Γ · (H · ω_t)
-        # H: [B, D, D],  ω_t: [B, S, D] → need [B, S, D]
-        # We compute bmm(H, ω_t^T) → [B, D, S] → transpose → [B, S, D]
-        # Equivalently: einsum('bsd,bde->bse', ω_t, H)  (note H acts on the left)
-        #
-        # v_t[b, s, e] = Γ * Σ_d H[b, e, d] * ω_t[b, s, d]
         velocity = torch.einsum("bsd,bde->bse", vorticity, hamiltonian)
         velocity = self.gamma * velocity  # [B, S, D]
 
-        # --- Step 3: Deflection ---
-        # r̃_t = x_t + Γ · v_t
-        # We apply the deflection and then project back.
-        deflected_raw = x + velocity  # [B, S, D]
+        # --- Step 3: Gated deflection ---
+        # g_t = σ(W_g · [x_t ; v_t]) — gate decides how much velocity deflects
+        gate_input = torch.cat([x, velocity], dim=-1)  # [B, S, 2D]
+        gate = torch.sigmoid(self.gate_proj(gate_input))  # [B, S, D]
+
+        # r̃_t = x_t + g_t ⊙ (Γ · v_t)
+        deflected_raw = x + gate * velocity  # [B, S, D]
         deflected = self.output_proj(deflected_raw)  # [B, S, D]
         deflected = self.layer_norm(deflected)  # stabilise
 

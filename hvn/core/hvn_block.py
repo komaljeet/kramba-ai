@@ -10,14 +10,20 @@ For each token in the sequence:
      produces the deflected representation r̃_t.
   2. HamiltonianMemoryBlock absorbs v_t into H via entanglement renormalization.
 
-The key insight: the Hamiltonian H is updated *sequentially* token-by-token,
-but each update is O(d_model²) — constant in N.  The velocity computation is
-also O(d_model²) per token.  Therefore the entire block is O(S · d_model²) for
-a sequence of length S, i.e. **O(d_model²) per token = O(1) in N**.
+Key insight: the Hamiltonian H is updated *sequentially* token-by-token,
+but each update is O(d_model²) — constant in N.
 
-To produce per-token outputs (not just a final summary), HVNBlock maintains a
-running Hamiltonian and applies the vortex injection at each step, collecting
-outputs for every position.
+**Multi-head Hamiltonian**: Instead of a single H matrix, we maintain `n_heads`
+parallel Hamiltonian matrices, each operating on a `d_head = d_model // n_heads`
+slice of the hidden dimension.  This is analogous to multi-head attention and
+allows the model to capture different types of associations simultaneously.
+
+**Chunked parallel processing**: For training speed, tokens are processed in
+chunks of `chunk_size`.  Within a chunk, all tokens share the same Hamiltonian
+state (computed from the previous chunk), enabling parallel GPU computation.
+The Hamiltonian is then updated sequentially with the chunk's velocities.  This
+trades a small amount of causal accuracy (tokens within a chunk see the H from
+*before* the chunk, not the intra-chunk updates) for a large speedup.
 """
 
 import torch
@@ -27,7 +33,7 @@ from .hamiltonian_memory import HamiltonianMemoryBlock
 
 
 class HVNBlock(nn.Module):
-    """A single Hamiltonian Vortex Network block.
+    """A single Hamiltonian Vortex Network block with multi-head memory.
 
     Combines fluid-dynamical vortex injection with quantum entanglement memory
     evolution into a single residual block.
@@ -36,8 +42,14 @@ class HVNBlock(nn.Module):
     ----------
     d_model : int
         Model dimensionality.
+    n_heads : int
+        Number of parallel Hamiltonian heads (like multi-head attention).
+        Each head operates on d_model // n_heads dimensions.
     bond_dimension : int, optional
         SVD truncation rank for quantum renormalization.  None = full rank.
+    chunk_size : int
+        Number of tokens to process in parallel within a chunk.  Larger = faster
+        but less causally accurate within the chunk.  Default 16.
     dropout : float
         Dropout rate applied to the block output.
     """
@@ -45,19 +57,39 @@ class HVNBlock(nn.Module):
     def __init__(
         self,
         d_model: int,
+        n_heads: int = 4,
         bond_dimension: int | None = None,
+        chunk_size: int = 16,
         dropout: float = 0.1,
     ):
         super().__init__()
         self.d_model = d_model
+        self.n_heads = n_heads
+        assert d_model % n_heads == 0, f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"
+        self.d_head = d_model // n_heads
+        self.chunk_size = chunk_size
 
-        # Fluid dynamics component
-        self.vortex = VortexInjectionLayer(d_model)
+        # Per-head vortex injection layers
+        self.vortex_heads = nn.ModuleList([
+            VortexInjectionLayer(self.d_head)
+            for _ in range(n_heads)
+        ])
 
-        # Quantum memory component
-        self.memory = HamiltonianMemoryBlock(d_model, bond_dimension=bond_dimension)
+        # Per-head quantum memory
+        self.memory_heads = nn.ModuleList([
+            HamiltonianMemoryBlock(self.d_head, bond_dimension=bond_dimension)
+            for _ in range(n_heads)
+        ])
 
-        # Feed-forward sub-layer (lightweight, 2x expansion)
+        # Input projection: d_model → n_heads * d_head (identity if d_model == n_heads * d_head)
+        self.input_proj = nn.Linear(d_model, d_model, bias=False)
+        nn.init.xavier_uniform_(self.input_proj.weight)
+
+        # Output projection: n_heads * d_head → d_model
+        self.output_proj = nn.Linear(d_model, d_model, bias=False)
+        nn.init.xavier_uniform_(self.output_proj.weight)
+
+        # Feed-forward sub-layer (2x expansion)
         self.ffn = nn.Sequential(
             nn.Linear(d_model, d_model * 2),
             nn.GELU(),
@@ -74,7 +106,11 @@ class HVNBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Process a sequence through the HVN block.
+        """Process a sequence through the multi-head HVN block.
+
+        Uses chunked parallel processing: tokens within a chunk share the same
+        Hamiltonian state, enabling parallel GPU computation.  The Hamiltonian
+        is updated between chunks.
 
         Parameters
         ----------
@@ -88,97 +124,130 @@ class HVNBlock(nn.Module):
         """
         B, S, D = x.shape
 
-        # --- Initialise the Hamiltonian (ground state) ---
-        H = self.memory.init_hamiltonian(B, device=x.device, dtype=x.dtype)  # [B, D, D]
-
-        # --- Pre-norm: normalise input before vortex injection ---
+        # Pre-norm
         x_norm = self.norm1(x)  # [B, S, D]
 
-        # --- Sequential vortex injection + Hamiltonian evolution ---
-        # We process token-by-token so that H evolves causally:
-        # token t's velocity depends on H updated through tokens 0..t-1.
-        outputs = []
-        velocities_all = []
+        # Project input to per-head dimensions
+        x_proj = self.input_proj(x_norm)  # [B, S, D]
+        # Split into heads: [B, S, n_heads, d_head]
+        x_heads = x_proj.view(B, S, self.n_heads, self.d_head)
 
-        for t in range(S):
-            # Current token
-            x_t = x_norm[:, t:t + 1, :]  # [B, 1, D]
+        # Process each head
+        head_outputs = []
+        for h in range(self.n_heads):
+            x_h = x_heads[:, :, h, :]  # [B, S, d_head]
+            out_h = self._process_head_chunked(h, x_h, B, S)
+            head_outputs.append(out_h)
 
-            # Vortex injection: compute velocity from current H and deflect
-            deflected_t, velocity_t = self.vortex(x_t, H)  # [B,1,D], [B,1,D]
-            outputs.append(deflected_t.squeeze(1))  # [B, D]
-            velocities_all.append(velocity_t.squeeze(1))  # [B, D]
+        # Concatenate heads and project: [B, S, D]
+        deflected = torch.cat(head_outputs, dim=-1)  # [B, S, D]
+        deflected = self.output_proj(deflected)  # [B, S, D]
 
-            # Update Hamiltonian with this token's velocity (causal)
-            H = self.memory.update(H, velocity_t.squeeze(1))  # [B, D, D]
-
-        # Stack outputs: [B, S, D]
-        deflected = torch.stack(outputs, dim=1)  # [B, S, D]
-
-        # --- Residual connection ---
+        # Residual connection
         x = x + self.dropout(deflected)
 
-        # --- Feed-forward sub-layer with residual ---
+        # Feed-forward sub-layer with residual
         x = x + self.ffn(self.norm2(x))
 
         return x
 
-    def init_state(self, batch_size: int, device=None, dtype=None) -> list[torch.Tensor]:
-        """Initialize the causal Hamiltonian state for incremental generation.
+    def _process_head_chunked(
+        self, head_idx: int, x_h: torch.Tensor, B: int, S: int
+    ) -> torch.Tensor:
+        """Process one head with chunked parallel vortex injection.
 
-        Returns a list of Hamiltonian matrices (one per block is handled by
-        the model, but each block has one H).  This enables O(1) per-token
-        generation without reprocessing the full context.
+        Tokens within a chunk share the same Hamiltonian state (from before
+        the chunk), enabling parallel computation.  After each chunk, the
+        Hamiltonian is updated with all velocities from that chunk.
+        """
+        vortex = self.vortex_heads[head_idx]
+        memory = self.memory_heads[head_idx]
+
+        # Initialize Hamiltonian for this head
+        H = memory.init_hamiltonian(B, device=x_h.device, dtype=x_h.dtype)  # [B, d_head, d_head]
+
+        chunk_size = self.chunk_size
+        all_outputs = []
+
+        # Process in chunks
+        for chunk_start in range(0, S, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, S)
+            x_chunk = x_h[:, chunk_start:chunk_end, :]  # [B, chunk_len, d_head]
+
+            # All tokens in this chunk use the SAME Hamiltonian H
+            # This enables parallel computation across the chunk
+            deflected_chunk, velocity_chunk = vortex(x_chunk, H)  # [B, chunk_len, d_head] x2
+            all_outputs.append(deflected_chunk)
+
+            # Update Hamiltonian with each token's velocity (sequential within chunk)
+            chunk_len = chunk_end - chunk_start
+            for t in range(chunk_len):
+                H = memory.update(H, velocity_chunk[:, t, :])
+
+        return torch.cat(all_outputs, dim=1)  # [B, S, d_head]
+
+    def init_state(self, batch_size: int, device=None, dtype=None) -> list[list[torch.Tensor]]:
+        """Initialize the causal Hamiltonian state for all heads (incremental generation).
 
         Returns
         -------
-        state : list[torch.Tensor]
-            A list containing one Hamiltonian matrix [B, D, D].
+        state : list[list[torch.Tensor]]
+            One Hamiltonian matrix per head: [[H_0], [H_1], ..., [H_{n_heads-1}]].
         """
-        H = self.memory.init_hamiltonian(batch_size, device=device, dtype=dtype)
-        return [H]
+        return [
+            [head.init_hamiltonian(batch_size, device=device, dtype=dtype)]
+            for head in self.memory_heads
+        ]
 
     def forward_step(
         self,
         x_t: torch.Tensor,
-        state: list[torch.Tensor],
-    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        state: list[list[torch.Tensor]],
+    ) -> tuple[torch.Tensor, list[list[torch.Tensor]]]:
         """Process a SINGLE token incrementally — O(1) per token generation.
-
-        This is the key optimization for fast autoregressive generation.
-        Instead of reprocessing the entire context, we maintain the Hamiltonian
-        state and only process the new token.
 
         Parameters
         ----------
         x_t : torch.Tensor
             Single token embedding, shape [batch, 1, d_model].
-        state : list[torch.Tensor]
-            Hamiltonian state from previous tokens: [H] where H is [B, D, D].
+        state : list[list[torch.Tensor]]
+            Per-head Hamiltonian states: [[H_0], [H_1], ...].
 
         Returns
         -------
         output : torch.Tensor
             Output for this token, shape [batch, 1, d_model].
-        new_state : list[torch.Tensor]
-            Updated Hamiltonian state.
+        new_state : list[list[torch.Tensor]]
+            Updated per-head Hamiltonian states.
         """
         B, _, D = x_t.shape
-        H = state[0]  # [B, D, D]
 
-        # Pre-norm
-        x_t_norm = self.norm1(x_t)  # [B, 1, D]
+        # Pre-norm + project
+        x_norm = self.norm1(x_t)  # [B, 1, D]
+        x_proj = self.input_proj(x_norm)  # [B, 1, D]
+        x_heads = x_proj.view(B, 1, self.n_heads, self.d_head)  # [B, 1, n_heads, d_head]
 
-        # Vortex injection with current Hamiltonian
-        deflected_t, velocity_t = self.vortex(x_t_norm, H)  # [B,1,D], [B,1,D]
+        head_outputs = []
+        new_state = []
+        for h in range(self.n_heads):
+            x_h = x_heads[:, :, h, :]  # [B, 1, d_head]
+            H = state[h][0]  # [B, d_head, d_head]
 
-        # Update Hamiltonian with this token's velocity
-        H_new = self.memory.update(H, velocity_t.squeeze(1))  # [B, D, D]
+            # Vortex injection
+            deflected_t, velocity_t = self.vortex_heads[h](x_h, H)
 
-        # Residual
-        x_t = x_t + self.dropout(deflected_t)
+            # Update Hamiltonian
+            H_new = self.memory_heads[h].update(H, velocity_t.squeeze(1))
 
-        # FFN sub-layer
+            head_outputs.append(deflected_t)
+            new_state.append([H_new])
+
+        # Concatenate and project
+        deflected = torch.cat(head_outputs, dim=-1)  # [B, 1, D]
+        deflected = self.output_proj(deflected)
+
+        # Residual + FFN
+        x_t = x_t + self.dropout(deflected)
         x_t = x_t + self.ffn(self.norm2(x_t))
 
-        return x_t, [H_new]
+        return x_t, new_state
