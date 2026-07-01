@@ -1,0 +1,326 @@
+"""
+HVN Training Script
+====================
+
+A minimal but complete training pipeline for the Hamiltonian Vortex Network.
+
+This script demonstrates:
+  1. Building a simple character-level tokenizer
+  2. Preparing a dataset from a text file
+  3. Training the HVN model with next-token prediction (autoregressive LM)
+  4. Saving / loading model checkpoints
+  5. Generating text with the trained model
+
+Usage:
+    python train.py                          # Train on the bundled sample text
+    python train.py --text my_corpus.txt      # Train on your own text file
+    python train.py --epochs 50 --lr 3e-4     # Custom hyperparameters
+"""
+
+import argparse
+import math
+import os
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+
+from hvn.core import HamiltonianVortexNetwork
+
+
+# ---------------------------------------------------------------------------
+# 1. Simple Character-Level Tokenizer
+# ---------------------------------------------------------------------------
+
+class CharTokenizer:
+    """A minimal character-level tokenizer.
+
+    Maps each unique character in the training text to an integer ID.
+    This keeps the vocabulary small so we can train quickly on CPU.
+    """
+
+    def __init__(self, text: str):
+        chars = sorted(set(text))
+        self.char_to_id = {ch: i for i, ch in enumerate(chars)}
+        self.id_to_char = {i: ch for i, ch in enumerate(chars)}
+        self.vocab_size = len(chars)
+
+    def encode(self, text: str) -> list[int]:
+        return [self.char_to_id[ch] for ch in text if ch in self.char_to_id]
+
+    def decode(self, ids: list[int]) -> str:
+        return "".join(self.id_to_char[i] for i in ids)
+
+    def save(self, path: str):
+        import json
+        with open(path, "w") as f:
+            json.dump({"char_to_id": self.char_to_id, "id_to_char": {str(k): v for k, v in self.id_to_char.items()}}, f)
+
+    @classmethod
+    def load(cls, path: str):
+        import json
+        with open(path) as f:
+            data = json.load(f)
+        tok = cls.__new__(cls)
+        tok.char_to_id = data["char_to_id"]
+        tok.id_to_char = {int(k): v for k, v in data["id_to_char"].items()}
+        tok.vocab_size = len(tok.char_to_id)
+        return tok
+
+
+# ---------------------------------------------------------------------------
+# 2. Dataset
+# ---------------------------------------------------------------------------
+
+class TextDataset(Dataset):
+    """Autoregressive next-token-prediction dataset.
+
+    Each sample is a chunk of `seq_len` tokens.  The input is tokens[0:seq_len-1]
+    and the target is tokens[1:seq_len] (shifted by one).
+    """
+
+    def __init__(self, token_ids: list[int], seq_len: int):
+        self.data = token_ids
+        self.seq_len = seq_len
+
+    def __len__(self):
+        # Number of non-overlapping chunks
+        return max(1, (len(self.data) - 1) // self.seq_len)
+
+    def __getitem__(self, idx):
+        start = idx * self.seq_len
+        end = start + self.seq_len + 1  # +1 for the shifted target
+        chunk = self.data[start:end]
+        # Pad if needed (last chunk may be short)
+        if len(chunk) < self.seq_len + 1:
+            chunk = chunk + [0] * (self.seq_len + 1 - len(chunk))
+        x = torch.tensor(chunk[:-1], dtype=torch.long)      # [seq_len]
+        y = torch.tensor(chunk[1:], dtype=torch.long)       # [seq_len]
+        return x, y
+
+
+# ---------------------------------------------------------------------------
+# 3. Training Loop
+# ---------------------------------------------------------------------------
+
+def train_model(
+    model: HamiltonianVortexNetwork,
+    dataloader: DataLoader,
+    epochs: int,
+    lr: float,
+    device: torch.device,
+    save_path: str = "hvn_checkpoint.pt",
+):
+    """Train the HVN model with next-token prediction (cross-entropy loss)."""
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    # Cosine LR schedule for smooth convergence
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    criterion = nn.CrossEntropyLoss()
+
+    model.to(device)
+    model.train()
+
+    print(f"\nTraining for {epochs} epochs | lr={lr} | device={device}")
+    print("-" * 60)
+
+    for epoch in range(1, epochs + 1):
+        total_loss = 0.0
+        n_batches = 0
+
+        for batch_x, batch_y in dataloader:
+            batch_x = batch_x.to(device)  # [B, S]
+            batch_y = batch_y.to(device)  # [B, S]
+
+            # Forward pass
+            logits = model(batch_x)  # [B, S, V]
+
+            # Compute loss (flatten for cross-entropy)
+            loss = criterion(
+                logits.reshape(-1, model.vocab_size),   # [B*S, V]
+                batch_y.reshape(-1),                      # [B*S]
+            )
+
+            # Backward + optimize
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # gradient clipping
+            optimizer.step()
+
+            total_loss += loss.item()
+            n_batches += 1
+
+        scheduler.step()
+        avg_loss = total_loss / max(n_batches, 1)
+        perplexity = math.exp(min(avg_loss, 20))  # clamp to avoid overflow
+
+        if epoch % 5 == 0 or epoch == 1:
+            print(f"Epoch {epoch:3d}/{epochs}  |  Loss: {avg_loss:.4f}  |  Perplexity: {perplexity:.2f}  |  LR: {scheduler.get_last_lr()[0]:.6f}")
+
+    # Save checkpoint
+    torch.save({
+        "model_state_dict": model.state_dict(),
+        "vocab_size": model.vocab_size,
+        "d_model": model.d_model,
+        "num_layers": model.num_layers,
+    }, save_path)
+    print(f"\n✓ Model saved to {save_path}")
+
+
+# ---------------------------------------------------------------------------
+# 4. Text Generation (Inference)
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def generate_text(
+    model: HamiltonianVortexNetwork,
+    tokenizer: CharTokenizer,
+    prompt: str,
+    max_new_tokens: int = 200,
+    temperature: float = 0.8,
+    top_k: int = 10,
+    device: torch.device = None,
+) -> str:
+    """Generate text autoregressively from a prompt.
+
+    Parameters
+    ----------
+    prompt : str
+        The seed text to start generation from.
+    max_new_tokens : int
+        How many new tokens to generate.
+    temperature : float
+        Controls randomness. Lower = more deterministic, higher = more random.
+    top_k : int
+        Only sample from the top-k most likely next tokens (0 = no restriction).
+    """
+    if device is None:
+        device = next(model.parameters()).device
+
+    model.eval()
+
+    # Encode the prompt
+    ids = tokenizer.encode(prompt)
+    if not ids:
+        ids = [0]
+
+    generated = list(ids)
+
+    for _ in range(max_new_tokens):
+        # Prepare input — use a limited context window for speed.
+        # The HVN's Hamiltonian memory compresses history into a fixed-size
+        # matrix, so we don't need a huge context window.  128 tokens is
+        # a good balance between speed and context.
+        context = generated[-128:]
+        x = torch.tensor([context], dtype=torch.long, device=device)  # [1, seq_len]
+
+        # Forward pass → logits for the LAST position
+        logits = model(x)  # [1, seq_len, V]
+        next_logits = logits[0, -1, :] / temperature  # [V]
+
+        # Top-k filtering
+        if top_k > 0:
+            top_k = min(top_k, next_logits.size(-1))
+            values, _ = torch.topk(next_logits, top_k)
+            next_logits[next_logits < values[-1]] = float("-inf")
+
+        # Sample
+        probs = torch.softmax(next_logits, dim=-1)
+        next_id = torch.multinomial(probs, num_samples=1).item()
+
+        generated.append(next_id)
+
+    return tokenizer.decode(generated)
+
+
+# ---------------------------------------------------------------------------
+# 5. Main Entry Point
+# ---------------------------------------------------------------------------
+
+SAMPLE_TEXT = """
+The Hamiltonian Vortex Network is a novel architecture for sequence modeling.
+It combines fluid dynamics with quantum mechanics to achieve efficient long range
+recall. Each token is a vortex particle moving through a velocity field. The
+Hamiltonian memory stores entangled associations in a fixed size tensor. This
+allows the model to scale in constant time per token during inference. The
+architecture does not use attention or a key value cache. Instead it relies on
+a Biot Savart approximation and entanglement renormalization. Destructive
+interference cancels noise while associative alignment reinforces correlated
+concepts. The result is a model that is both fast and expressive.
+"""
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Train the Hamiltonian Vortex Network")
+    parser.add_argument("--text", type=str, default=None, help="Path to training text file")
+    parser.add_argument("--epochs", type=int, default=30, help="Number of training epochs")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
+    parser.add_argument("--seq_len", type=int, default=64, help="Sequence length")
+    parser.add_argument("--d_model", type=int, default=128, help="Model dimension")
+    parser.add_argument("--num_layers", type=int, default=2, help="Number of HVN blocks")
+    parser.add_argument("--bond_dim", type=int, default=32, help="SVD bond dimension (quantum renormalization rank)")
+    parser.add_argument("--save", type=str, default="hvn_checkpoint.pt", help="Checkpoint save path")
+    parser.add_argument("--generate", action="store_true", help="Generate text after training")
+    parser.add_argument("--prompt", type=str, default="The ", help="Prompt for generation")
+    args = parser.parse_args()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
+
+    # --- Load training text ---
+    if args.text and os.path.exists(args.text):
+        with open(args.text, "r", encoding="utf-8") as f:
+            text = f.read()
+        print(f"Loaded {len(text)} characters from {args.text}")
+    else:
+        text = SAMPLE_TEXT * 50  # repeat to have enough data
+        print(f"Using bundled sample text ({len(text)} characters)")
+
+    # --- Build tokenizer ---
+    tokenizer = CharTokenizer(text)
+    print(f"Vocabulary size: {tokenizer.vocab_size} characters")
+
+    # --- Prepare dataset ---
+    token_ids = tokenizer.encode(text)
+    dataset = TextDataset(token_ids, seq_len=args.seq_len)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=False)
+    print(f"Dataset: {len(dataset)} samples | DataLoader: {len(dataloader)} batches")
+
+    # --- Build model ---
+    model = HamiltonianVortexNetwork(
+        vocab_size=tokenizer.vocab_size,
+        d_model=args.d_model,
+        num_layers=args.num_layers,
+        bond_dimension=args.bond_dim,
+        dropout=0.1,
+    )
+    param_count = sum(p.numel() for p in model.parameters())
+    print(f"Model parameters: {param_count:,}")
+
+    # --- Train ---
+    train_model(model, dataloader, args.epochs, args.lr, device, args.save)
+
+    # --- Save tokenizer ---
+    tok_path = args.save.replace(".pt", "_tokenizer.json")
+    tokenizer.save(tok_path)
+    print(f"✓ Tokenizer saved to {tok_path}")
+
+    # --- Generate text ---
+    if args.generate:
+        print("\n" + "=" * 60)
+        print("GENERATED TEXT")
+        print("=" * 60)
+        output = generate_text(
+            model, tokenizer,
+            prompt=args.prompt,
+            max_new_tokens=200,
+            temperature=0.7,
+            top_k=10,
+            device=device,
+        )
+        print(output)
+        print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
