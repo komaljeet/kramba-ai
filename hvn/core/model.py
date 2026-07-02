@@ -192,6 +192,170 @@ class HamiltonianVortexNetwork(nn.Module):
 
         return logits, new_states
 
+    # ------------------------------------------------------------------
+    # Batched generation: multiple sequences with independent H states
+    # ------------------------------------------------------------------
+
+    def init_generation_state_batched(
+        self, batch_size: int, device=None, dtype=None
+    ) -> list[torch.Tensor]:
+        """Initialize batched Hamiltonian states for all blocks.
+
+        Each block returns a single tensor [B*n_heads, d_head, d_head]
+        instead of a list of per-head states.  This is the efficient path
+        for multi-sequence generation.
+
+        Returns
+        -------
+        states : list[torch.Tensor]
+            One batched H tensor per HVN block, each [B*n_heads, d_head, d_head].
+        """
+        return [
+            block.init_state_batched(batch_size, device=device, dtype=dtype)
+            for block in self.blocks
+        ]
+
+    def forward_step_batched(
+        self,
+        input_ids: torch.Tensor,
+        states: list[torch.Tensor],
+        position_idx: int | None = None,
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        """Process a single token for ALL sequences in one batched call.
+
+        This is the batched multi-sequence inference path.  Multiple sequences
+        (each with its own independent Hamiltonian state) are processed
+        simultaneously, maximizing GPU utilization.
+
+        Parameters
+        ----------
+        input_ids : torch.Tensor
+            Single token IDs for all sequences, shape [B, 1], dtype long.
+        states : list[torch.Tensor]
+            Batched Hamiltonian states from previous tokens (one per block).
+            Each tensor: [B*n_heads, d_head, d_head].
+        position_idx : int, optional
+            Position index for this token (for RoPE).
+
+        Returns
+        -------
+        logits : torch.Tensor
+            Logits for this token, shape [B, 1, vocab_size].
+        new_states : list[torch.Tensor]
+            Updated batched Hamiltonian states.
+        """
+        x = self.token_embedding(input_ids)  # [B, 1, D]
+
+        new_states = []
+        for i, block in enumerate(self.blocks):
+            x, new_state = block.forward_step_batched(x, states[i], position_idx=position_idx)
+            new_states.append(new_state)
+
+        x = self.final_norm(x)
+        logits = self.decoder(x)  # [B, 1, V]
+
+        return logits, new_states
+
+    @torch.no_grad()
+    def generate_batched(
+        self,
+        prompt_ids_list: list[list[int]],
+        max_new_tokens: int = 200,
+        temperature: float = 0.8,
+        top_k: int = 10,
+        device: torch.device = None,
+    ) -> list[list[int]]:
+        """Batched autoregressive generation for multiple sequences.
+
+        Processes multiple sequences simultaneously, each with its own
+        independent Hamiltonian state.  This maximizes GPU utilization
+        compared to processing sequences one at a time.
+
+        All sequences generate the same number of tokens (max_new_tokens).
+        Shorter prompts are left-padded with a pad token (ID 0); the model
+        processes the full prompt for each sequence to initialize its H state.
+
+        Parameters
+        ----------
+        prompt_ids_list : list[list[int]]
+            List of prompt token ID lists, one per sequence.
+        max_new_tokens : int
+            How many new tokens to generate per sequence.
+        temperature : float
+            Sampling temperature.
+        top_k : int
+            Top-k sampling (0 = disabled).
+        device : torch.device
+            Device to run on.
+
+        Returns
+        -------
+        generated_list : list[list[int]]
+            Full token lists (prompt + generated), one per sequence.
+        """
+        if device is None:
+            device = next(self.parameters()).device
+
+        self.eval()
+        B = len(prompt_ids_list)
+        if B == 0:
+            return []
+
+        # Ensure all prompts have at least 1 token
+        prompt_ids_list = [p if len(p) > 0 else [0] for p in prompt_ids_list]
+
+        # --- Phase 1: Process prompts to initialize Hamiltonian states ---
+        # Each sequence processes its prompt token-by-token through forward_step_batched.
+        # We pad shorter prompts to the max prompt length so all sequences stay in sync.
+        max_prompt_len = max(len(p) for p in prompt_ids_list)
+
+        # Initialize batched states
+        param_dtype = next(self.parameters()).dtype
+        states = self.init_generation_state_batched(B, device=device, dtype=param_dtype)
+
+        # Process prompts token-by-token (all sequences in parallel)
+        for t in range(max_prompt_len):
+            # Build batch: use token t from each prompt, or pad token (0) if shorter
+            tok_ids = torch.zeros(B, 1, dtype=torch.long, device=device)
+            for b, prompt in enumerate(prompt_ids_list):
+                if t < len(prompt):
+                    tok_ids[b, 0] = prompt[t]
+                # else: pad token 0 (already initialized)
+
+            logits_step, states = self.forward_step_batched(tok_ids, states, position_idx=t)
+
+        # Last logits for sampling: [B, 1, V] → [B, V]
+        next_logits = logits_step[:, -1, :] / temperature  # [B, V]
+
+        # Track generated tokens
+        generated_list = [list(p) for p in prompt_ids_list]
+
+        # --- Phase 2: Generate new tokens incrementally (all sequences in parallel) ---
+        for step_idx in range(max_new_tokens):
+            # Top-k filtering (per sequence)
+            if top_k > 0:
+                top_k_val = min(top_k, next_logits.size(-1))
+                values, _ = torch.topk(next_logits, top_k_val, dim=-1)  # [B, k]
+                threshold = values[:, -1:]  # [B, 1] — k-th largest value
+                next_logits = next_logits.clone()
+                next_logits[next_logits < threshold] = float("-inf")
+
+            # Sample (batched)
+            probs = torch.softmax(next_logits, dim=-1)  # [B, V]
+            next_ids = torch.multinomial(probs, num_samples=1)  # [B, 1]
+
+            # Append to each sequence
+            for b in range(B):
+                generated_list[b].append(next_ids[b, 0].item())
+
+            # Forward step for all sequences at once: O(d²) per sequence, batched
+            logits_step, states = self.forward_step_batched(
+                next_ids, states, position_idx=max_prompt_len + step_idx
+            )
+            next_logits = logits_step[:, -1, :] / temperature  # [B, V]
+
+        return generated_list
+
     @torch.no_grad()
     def generate_incremental(
         self,

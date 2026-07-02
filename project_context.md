@@ -89,9 +89,9 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - #14 — Learned input-dependent entanglement rate (η_t = σ(W_η · x_t))
 - #15 — RMSNorm + parallel residual (x = x + vortex(norm(x)) + ffn(norm(x)))
 - #16 — Per-head vorticity frequency projections (geometric init 2^h, Fourier-style specialization)
+- #17 — Batched generation for multiple sequences (generate_batched, forward_step_batched, 18x speedup)
 
 ### Remaining Open Issues
-- #17 — Batched generation for multiple sequences
 - #18 — Scaling laws evaluation (eval/scaling_laws.py)
 - #19 — Mixed-precision training (fp16/bf16 via torch.cuda.amp)
 - #20 — Hamiltonian quantization (INT8/4-bit, hvn/quantize.py)
@@ -115,5 +115,5 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - SSM: 114.6s total, 10.6s/epoch, PPL 4.28
 
 ### How to Continue
-1. Proceed to #17 — Batched generation for multiple sequences
-2. Then #18, #19, #20 in order
+1. Proceed to #18 — Scaling laws evaluation
+2. Then #19, #20 in order

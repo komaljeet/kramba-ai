@@ -290,6 +290,19 @@ class HVNBlock(nn.Module):
             for head in self.memory_heads
         ]
 
+    def init_state_batched(self, batch_size: int, device=None, dtype=None) -> torch.Tensor:
+        """Initialize batched Hamiltonian state for all heads at once.
+
+        Uses the batched MultiHeadHamiltonianMemory module, producing a single
+        tensor of shape [B*n_heads, d_head, d_head] instead of a list of per-head
+        states.  This is the efficient path for batched multi-sequence generation.
+
+        Returns
+        -------
+        H : torch.Tensor, shape [B*n_heads, d_head, d_head]
+        """
+        return self.memory.init_hamiltonian(batch_size, device=device, dtype=dtype)
+
     def forward_step(
         self,
         x_t: torch.Tensor,
@@ -347,3 +360,73 @@ class HVNBlock(nn.Module):
         x_t = x_t + self.dropout(deflected) + self.ffn(x_norm)
 
         return x_t, new_state
+
+    def forward_step_batched(
+        self,
+        x_t: torch.Tensor,
+        H: torch.Tensor,
+        position_idx: int | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Process a single token for ALL sequences + heads in one batched call.
+
+        This is the efficient batched path for multi-sequence generation.  Instead
+        of looping over heads (as in forward_step), it uses the batched
+        MultiHeadVortexInjection and MultiHeadHamiltonianMemory modules to
+        process all sequences and all heads simultaneously.
+
+        Parameters
+        ----------
+        x_t : torch.Tensor
+            Single token embedding, shape [B, 1, d_model].
+        H : torch.Tensor
+            Batched Hamiltonian state, shape [B*n_heads, d_head, d_head].
+        position_idx : int, optional
+            Position index for this token (for RoPE).
+
+        Returns
+        -------
+        output : torch.Tensor
+            Output for this token, shape [B, 1, d_model].
+        H_new : torch.Tensor
+            Updated Hamiltonian state, shape [B*n_heads, d_head, d_head].
+        """
+        B, _, D = x_t.shape
+
+        if position_idx is None:
+            position_ids = torch.arange(1, device=x_t.device).unsqueeze(0).expand(B, -1)
+        else:
+            position_ids = torch.full((B, 1), int(position_idx), device=x_t.device, dtype=torch.long)
+
+        # Single shared norm for parallel residual (matches forward())
+        x_norm = self.norm(x_t)  # [B, 1, D]
+        x_proj = self.input_proj(x_norm)  # [B, 1, D]
+        x_heads = x_proj.view(B, 1, self.n_heads, self.d_head)  # [B, 1, n_heads, d_head]
+
+        # Reshape to [B*n_heads, 1, d_head] for batched processing
+        x_batched = x_heads.permute(0, 2, 1, 3).contiguous().view(B * self.n_heads, 1, self.d_head)
+
+        # Expand position_ids for all heads: [B*n_heads, 1]
+        pos_batched = position_ids.unsqueeze(1).expand(B, self.n_heads, 1).contiguous()
+        pos_batched = pos_batched.view(B * self.n_heads, 1)
+
+        # --- Batched vortex injection (all heads at once) ---
+        deflected_batched, velocity_batched = self.vortex(
+            x_batched, H, position_ids=pos_batched
+        )  # [B*n_heads, 1, d_head] x 2
+
+        # --- Batched Hamiltonian update (all heads at once) ---
+        # velocity_batched: [B*n_heads, 1, d_head] → squeeze to [B*n_heads, d_head]
+        velocity_single = velocity_batched.squeeze(1)  # [B*n_heads, d_head]
+        # input for input-dependent eta: x_batched squeezed
+        input_single = x_batched.squeeze(1)  # [B*n_heads, d_head]
+        H_new = self.memory.update_single(H, velocity_single)
+
+        # --- Reshape back to [B, 1, D] ---
+        deflected = deflected_batched.view(B, self.n_heads, 1, self.d_head).permute(0, 2, 1, 3).contiguous()
+        deflected = deflected.view(B, 1, self.n_heads * self.d_head)  # [B, 1, D]
+        deflected = self.output_proj(deflected)
+
+        # Parallel residual: x = x + vortex(norm(x)) + ffn(norm(x))
+        x_t = x_t + self.dropout(deflected) + self.ffn(x_norm)
+
+        return x_t, H_new

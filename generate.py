@@ -60,6 +60,10 @@ def main():
     parser.add_argument("--tokenizer", type=str, default=None,
                         help="Path to tokenizer JSON (default: auto-detect from checkpoint name)")
     parser.add_argument("--prompt", type=str, default="The ", help="Generation prompt")
+    parser.add_argument("--prompts", type=str, default=None,
+                        help="Multiple prompts separated by '||' for batched generation")
+    parser.add_argument("--batch", type=int, default=1,
+                        help="Number of sequences to generate in parallel (batched generation)")
     parser.add_argument("--tokens", type=int, default=200, help="Max new tokens to generate")
     parser.add_argument("--temp", type=float, default=0.8, help="Sampling temperature")
     parser.add_argument("--top_k", type=int, default=10, help="Top-k sampling (0 = disabled)")
@@ -73,29 +77,67 @@ def main():
     # Load model + tokenizer
     model, tokenizer = load_model(args.checkpoint, tok_path, device)
 
-    # Generate using fast incremental generation (O(1) per token)
-    print(f"\nPrompt: \"{args.prompt}\"")
-    print("-" * 60)
+    # --- Batched generation mode ---
+    if args.prompts or args.batch > 1:
+        if args.prompts:
+            prompt_strs = [p.strip() for p in args.prompts.split("||") if p.strip()]
+        else:
+            prompt_strs = [args.prompt] * args.batch
 
-    prompt_ids = tokenizer.encode(args.prompt)
-    if not prompt_ids:
-        prompt_ids = [0]
+        print(f"\nBatched generation: {len(prompt_strs)} sequences")
+        print("-" * 60)
+        for i, p in enumerate(prompt_strs):
+            print(f"  Seq {i}: \"{p}\"")
+        print("-" * 60)
 
-    t0 = time.time()
-    generated_ids = model.generate_incremental(
-        prompt_ids,
-        max_new_tokens=args.tokens,
-        temperature=args.temp,
-        top_k=args.top_k,
-        device=device,
-    )
-    elapsed = time.time() - t0
-    output = tokenizer.decode(generated_ids)
+        prompt_ids_list = [tokenizer.encode(p) or [0] for p in prompt_strs]
 
-    print(output)
-    print("-" * 60)
-    print(f"Generated {args.tokens} tokens in {elapsed:.2f}s ({args.tokens/elapsed:.1f} tokens/sec)")
-    print(f"Method: incremental O(1) per-token (Hamiltonian state cache)")
+        t0 = time.time()
+        generated_list = model.generate_batched(
+            prompt_ids_list,
+            max_new_tokens=args.tokens,
+            temperature=args.temp,
+            top_k=args.top_k,
+            device=device,
+        )
+        elapsed = time.time() - t0
+
+        total_tokens = sum(len(g) - len(p) for g, p in zip(generated_list, prompt_ids_list))
+        for i, (gen_ids, prompt_str) in enumerate(zip(generated_list, prompt_strs)):
+            output = tokenizer.decode(gen_ids)
+            print(f"\n--- Sequence {i} ---")
+            print(output)
+
+        print("-" * 60)
+        print(f"Generated {total_tokens} tokens across {len(prompt_strs)} sequences "
+              f"in {elapsed:.2f}s ({total_tokens/elapsed:.1f} tokens/sec)")
+        print(f"Method: batched incremental O(1) per-token ({len(prompt_strs)} parallel sequences)")
+
+    # --- Single-sequence generation (default) ---
+    else:
+        # Generate using fast incremental generation (O(1) per token)
+        print(f"\nPrompt: \"{args.prompt}\"")
+        print("-" * 60)
+
+        prompt_ids = tokenizer.encode(args.prompt)
+        if not prompt_ids:
+            prompt_ids = [0]
+
+        t0 = time.time()
+        generated_ids = model.generate_incremental(
+            prompt_ids,
+            max_new_tokens=args.tokens,
+            temperature=args.temp,
+            top_k=args.top_k,
+            device=device,
+        )
+        elapsed = time.time() - t0
+        output = tokenizer.decode(generated_ids)
+
+        print(output)
+        print("-" * 60)
+        print(f"Generated {args.tokens} tokens in {elapsed:.2f}s ({args.tokens/elapsed:.1f} tokens/sec)")
+        print(f"Method: incremental O(1) per-token (Hamiltonian state cache)")
 
 
 if __name__ == "__main__":

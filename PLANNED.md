@@ -112,7 +112,7 @@ These changes are needed to close the perplexity gap with Transformer (PPL 1.90)
   - Expected impact: lower memory, faster for large d_model
 
 ### 5.4 KV-Cache-Free Generation Optimization
-- [ ] Optimize the `forward_step` path for batched generation
+- [x] Optimize the `forward_step` path for batched generation
   - Currently: processes 1 token at a time
   - Proposed: batch multiple sequences with different Hamiltonian states
   - File: `hvn/core/model.py`
