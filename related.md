@@ -3,16 +3,14 @@
 > Issues that are related to HVN's quality improvement journey.
 > Created for context continuity across sessions.
 
+> **⚠️ Workflow note**: Always create a new branch for each issue
+> (e.g. `git checkout -b issue-NN-short-description`).  Never work directly
+> on `main`.  After implementation, push the branch, merge to `main, and
+> close the issue via `glab issue close NN --repo komalbarun/kramba-ai`.
+
 ---
 
 ## Open Issues
-
-### #23 — Vision: Image Encoding via Vortex-Projected Patch Embeddings
-- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/23
-- **Status**: Open
-- **Goal**: Treat image patches as vortex particles — split image into grid, project to d_model, process through HVN blocks.
-- **Key idea**: HVN already processes arbitrary embedding vectors — patches are just another embedding source.
-- **Expected impact**: Image captioning, visual QA, multimodal HVN
 
 ### #24 — Tool Calling: Structured Output and Function Invocation
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/24
@@ -53,6 +51,24 @@
 ---
 
 ## Closed Issues (Quality Journey)
+
+### #23 — Vision: Image Encoding via Vortex-Projected Patch Embeddings (CLOSED)
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/23
+- **Status**: Closed (2026-07-02)
+- **What was done**: Image patches treated as vortex particles — split image
+  into grid, project to d_model, process through HVN blocks.
+  - New module: `hvn/vision.py` — `PatchEmbedding`, `PositionalEmbedding2D`,
+    `ImageEncoder`, `CrossModalProjector`, `MultimodalHVN`
+  - `model.py`: `forward_multimodal()` for image patches + optional text
+  - `hf_model.py`: `HVNConfig` gains vision fields, `HVNForCausalLM` gains
+    `vision_encoder` + `forward_multimodal()`
+  - `train.py`: `--vision` flag for image-text training mode with captioning demo
+  - `demo_vision.py`: standalone demo verifying all success criteria
+  - O(1) inference preserved: Hamiltonian memory is fixed d×d, constant in
+    num_patches and seq_len
+  - All tests pass on GPU (RTX 4050)
+- **Result**: Image [B,C,H,W] + text [B,S] → logits [B, num_patches+S, V].
+  Image captioning (image → text generation) works with O(1) inference.
 
 ### #22 — Multi-Thread Hamiltonian Memory (CLOSED)
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/22
