@@ -57,6 +57,8 @@ def run_evaluation(
     output_json: str | None = None,
     compile: bool = False,
     models: list[str] | None = None,
+    precision: str = "fp32",
+    grad_accum_steps: int = 1,
 ) -> dict:
     """Run a full evaluation on the named dataset and return results dict.
 
@@ -191,6 +193,8 @@ def run_evaluation(
             lr=lr,
             device=device,
             compile=compile,
+            precision=precision,
+            grad_accum_steps=grad_accum_steps,
         )
         results[name] = result
 
@@ -305,6 +309,19 @@ def main():
         choices=["HVN", "Transformer", "SSM"],
         help="Which models to evaluate (default: all). E.g. --models HVN Transformer",
     )
+    parser.add_argument(
+        "--precision",
+        type=str,
+        default="fp32",
+        choices=["fp32", "fp16", "bf16"],
+        help="Mixed-precision training mode (fp16/bf16 require CUDA)",
+    )
+    parser.add_argument(
+        "--grad_accum",
+        type=int,
+        default=1,
+        help="Gradient accumulation steps (effective batch size = batch_size × grad_accum)",
+    )
     args = parser.parse_args()
 
     run_evaluation(
@@ -319,6 +336,8 @@ def main():
         output_json=args.output_json,
         compile=args.compile,
         models=args.models,
+        precision=args.precision,
+        grad_accum_steps=args.grad_accum,
     )
 
 

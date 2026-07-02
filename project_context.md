@@ -91,9 +91,9 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - #16 — Per-head vorticity frequency projections (geometric init 2^h, Fourier-style specialization)
 - #17 — Batched generation for multiple sequences (generate_batched, forward_step_batched, 18x speedup)
 - #18 — Scaling laws evaluation (eval/scaling_laws.py: d_model={64,128,256,512}, power-law fits, crossover analysis, matplotlib plots)
+- #19 — Mixed-precision training (fp16/bf16 via torch.cuda.amp + gradient accumulation, --precision/--grad_accum flags in train.py, quality_benchmark.py, eval/run_eval.py, eval/scaling_laws.py; fixed QR dtype issue in batched_memory.py and hamiltonian_memory.py)
 
 ### Remaining Open Issues
-- #19 — Mixed-precision training (fp16/bf16 via torch.cuda.amp)
 - #20 — Hamiltonian quantization (INT8/4-bit, hvn/quantize.py)
 
 ### Key Architecture Files (current state on main)
@@ -124,5 +124,4 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - Key finding: HVN's rank-1 entanglement update lacks expressiveness to benefit from scale
 
 ### How to Continue
-1. Proceed to #19 — Mixed-precision training (fp16/bf16)
-2. Then #20 — Hamiltonian quantization (INT8/4-bit)
+1. Proceed to #20 — Hamiltonian quantization (INT8/4-bit)

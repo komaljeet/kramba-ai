@@ -48,8 +48,19 @@ def train_and_evaluate(
     lr: float,
     device: torch.device,
     compile: bool = False,
+    precision: str = "fp32",
+    grad_accum_steps: int = 1,
 ) -> dict:
-    """Train a model and return training history + final eval metrics."""
+    """Train a model and return training history + final eval metrics.
+
+    Parameters
+    ----------
+    precision : str
+        Mixed-precision mode: "fp32" (default), "fp16", or "bf16".
+    grad_accum_steps : int
+        Number of micro-batches to accumulate gradients over before each
+        optimizer step.  Effective batch size = batch_size × grad_accum_steps.
+    """
 
     if compile and device.type == "cuda":
         print(f"  Compiling {name} with torch.compile...")
@@ -61,6 +72,17 @@ def train_and_evaluate(
 
     model.to(device)
     model.train()
+
+    # --- Mixed-precision setup ---
+    use_amp = precision in ("fp16", "bf16") and device.type == "cuda"
+    amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
+    scaler = torch.amp.GradScaler("cuda") if (use_amp and precision == "fp16") else None
+
+    if use_amp:
+        print(f"  Mixed-precision: {precision.upper()}")
+    if grad_accum_steps > 1:
+        print(f"  Gradient accumulation: {grad_accum_steps} steps "
+              f"(effective batch size = {train_loader.batch_size * grad_accum_steps})")
 
     eval_x, eval_y = eval_data
     eval_x = eval_x.to(device)
@@ -75,24 +97,50 @@ def train_and_evaluate(
         total_loss = 0.0
         n_batches = 0
         t0 = time.time()
+        optimizer.zero_grad()
 
-        for batch_x, batch_y in train_loader:
+        for step, (batch_x, batch_y) in enumerate(train_loader):
             batch_x = batch_x.to(device)
             batch_y = batch_y.to(device)
 
-            logits = model(batch_x)
-            loss = criterion(
-                logits.reshape(-1, model.vocab_size),
-                batch_y.reshape(-1),
-            )
+            with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
+                logits = model(batch_x)
+                loss = criterion(
+                    logits.reshape(-1, model.vocab_size),
+                    batch_y.reshape(-1),
+                )
+                loss = loss / grad_accum_steps
 
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            if scaler is not None:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
-            total_loss += loss.item()
+            total_loss += loss.item() * grad_accum_steps
             n_batches += 1
+
+            if (step + 1) % grad_accum_steps == 0:
+                if scaler is not None:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+                optimizer.zero_grad()
+
+        # Handle remaining accumulated gradients at epoch end
+        if n_batches % grad_accum_steps != 0:
+            if scaler is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+            optimizer.zero_grad()
 
         scheduler.step()
         avg_loss = total_loss / max(n_batches, 1)
@@ -100,11 +148,12 @@ def train_and_evaluate(
         # Evaluate
         model.eval()
         with torch.no_grad():
-            eval_logits = model(eval_x)
-            eval_loss = criterion(
-                eval_logits.reshape(-1, model.vocab_size),
-                eval_y.reshape(-1),
-            ).item()
+            with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
+                eval_logits = model(eval_x)
+                eval_loss = criterion(
+                    eval_logits.reshape(-1, model.vocab_size),
+                    eval_y.reshape(-1),
+                ).item()
         model.train()
 
         eval_ppl = math.exp(min(eval_loss, 20))
@@ -145,6 +194,8 @@ def main():
     parser.add_argument("--train-split", type=float, default=0.9, help="Fraction of the corpus used for training")
     parser.add_argument("--output-json", type=str, default=None, help="Optional path to save benchmark results as JSON")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile for faster training (GPU + Triton required)")
+    parser.add_argument("--precision", type=str, default="fp32", choices=["fp32", "fp16", "bf16"], help="Mixed-precision training mode (fp16/bf16 require CUDA)")
+    parser.add_argument("--grad_accum", type=int, default=1, help="Gradient accumulation steps (effective batch size = batch_size × grad_accum)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -208,7 +259,8 @@ def main():
         result = train_and_evaluate(
             model, name, train_loader, (eval_x, eval_y),
             epochs=args.epochs, lr=args.lr, device=device,
-            compile=args.compile,
+            compile=args.compile, precision=args.precision,
+            grad_accum_steps=args.grad_accum,
         )
         results[name] = result
 

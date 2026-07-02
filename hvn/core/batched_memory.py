@@ -164,28 +164,40 @@ class MultiHeadHamiltonianMemory(nn.Module):
         return hamiltonian_new
 
     def _svd_truncate_batched(self, H: torch.Tensor) -> torch.Tensor:
-        """Batched low-rank renormalization via randomized power iteration."""
+        """Batched low-rank renormalization via randomized power iteration.
+
+        Handles half-precision (fp16/bf16) by running the QR decomposition in
+        float32, then casting the result back to the original dtype.
+        """
         BH, D, _ = H.shape
         r = min(self.bond_dimension, D)
         n_iter = 3
+        orig_dtype = H.dtype
+        # torch.linalg.qr doesn't support fp16/bf16 — upcast for the no-grad section
+        work_dtype = torch.float32 if orig_dtype in (torch.float16, torch.bfloat16) else orig_dtype
 
         with torch.no_grad():
-            Omega = torch.randn(BH, D, r, device=H.device, dtype=H.dtype)
-            Omega = Omega / math.sqrt(r)
+            # Disable autocast to ensure QR runs in float32
+            with torch.amp.autocast("cuda", enabled=False):
+                H_f32 = H.to(work_dtype)
+                Omega = torch.randn(BH, D, r, device=H.device, dtype=work_dtype)
+                Omega = Omega / math.sqrt(r)
 
-            G = torch.bmm(H, H.transpose(-1, -2))  # [BH, D, D]
-            G = G + 1e-5 * torch.eye(D, device=H.device, dtype=H.dtype).unsqueeze(0)
+                G = torch.bmm(H_f32, H_f32.transpose(-1, -2))  # [BH, D, D]
+                G = G + 1e-5 * torch.eye(D, device=H.device, dtype=work_dtype).unsqueeze(0)
 
-            Q = Omega
-            for _ in range(n_iter):
-                Q = torch.bmm(G, Q)
-                Q, _ = torch.linalg.qr(Q)
+                Q = Omega
+                for _ in range(n_iter):
+                    Q = torch.bmm(G, Q)
+                    Q, _ = torch.linalg.qr(Q)
 
-        Qt_H = torch.bmm(Q.transpose(-1, -2), H)
-        Qt_H_Q = torch.bmm(Qt_H, Q)
-        H_trunc = torch.bmm(Q, torch.bmm(Qt_H_Q, Q.transpose(-1, -2)))
-
-        return H_trunc
+        # Project H in float32 (outside autocast) then cast back
+        with torch.amp.autocast("cuda", enabled=False):
+            H_work = H.to(work_dtype)
+            Qt_H = torch.bmm(Q.transpose(-1, -2), H_work)
+            Qt_H_Q = torch.bmm(Qt_H, Q)
+            H_trunc = torch.bmm(Q, torch.bmm(Qt_H_Q, Q.transpose(-1, -2)))
+        return H_trunc.to(orig_dtype)
 
     def update_single(
         self,

@@ -190,34 +190,42 @@ class HamiltonianMemoryBlock(nn.Module):
         B, D, _ = H.shape
         r = min(self.bond_dimension, D)
         n_iter = 3  # power iterations (3 is enough for good approximation)
+        orig_dtype = H.dtype
+        # torch.linalg.qr doesn't support fp16/bf16 — upcast for the no-grad section
+        work_dtype = torch.float32 if orig_dtype in (torch.float16, torch.bfloat16) else orig_dtype
 
         # --- Randomized subspace iteration ---
         # Use a fixed random seed per call for reproducibility within a step
         # but different across batch elements
         with torch.no_grad():
-            # Draw random probe: [B, D, r]
-            Omega = torch.randn(B, D, r, device=H.device, dtype=H.dtype)
-            Omega = Omega / math.sqrt(r)
+            # Disable autocast to ensure QR runs in float32
+            with torch.amp.autocast("cuda", enabled=False):
+                H_f32 = H.to(work_dtype)
+                # Draw random probe: [B, D, r]
+                Omega = torch.randn(B, D, r, device=H.device, dtype=work_dtype)
+                Omega = Omega / math.sqrt(r)
 
-            # Gram matrix G = H · H^T  (we need the top-r eigenvectors of G)
-            G = torch.bmm(H, H.transpose(-1, -2))  # [B, D, D]
-            G = G + 1e-5 * torch.eye(D, device=H.device, dtype=H.dtype).unsqueeze(0)
+                # Gram matrix G = H · H^T  (we need the top-r eigenvectors of G)
+                G = torch.bmm(H_f32, H_f32.transpose(-1, -2))  # [B, D, D]
+                G = G + 1e-5 * torch.eye(D, device=H.device, dtype=work_dtype).unsqueeze(0)
 
-            # Power iteration: Q ≈ top-r eigenvectors of G
-            Q = Omega
-            for _ in range(n_iter):
-                Q = torch.bmm(G, Q)  # [B, D, r]
-                # QR orthonormalize for numerical stability
-                Q, _ = torch.linalg.qr(Q)  # Q: [B, D, r]
+                # Power iteration: Q ≈ top-r eigenvectors of G
+                Q = Omega
+                for _ in range(n_iter):
+                    Q = torch.bmm(G, Q)  # [B, D, r]
+                    # QR orthonormalize for numerical stability
+                    Q, _ = torch.linalg.qr(Q)  # Q: [B, D, r]
 
         # --- Project H into the low-rank subspace ---
         # Gradients flow through H (Q is detached)
         # H_trunc = Q · (Q^T · H · Q) · Q^T
-        Qt_H = torch.bmm(Q.transpose(-1, -2), H)  # [B, r, D]
-        Qt_H_Q = torch.bmm(Qt_H, Q)                 # [B, r, r]
-        H_trunc = torch.bmm(Q, torch.bmm(Qt_H_Q, Q.transpose(-1, -2)))  # [B, D, D]
+        with torch.amp.autocast("cuda", enabled=False):
+            H_work = H.to(work_dtype)
+            Qt_H = torch.bmm(Q.transpose(-1, -2), H_work)  # [B, r, D]
+            Qt_H_Q = torch.bmm(Qt_H, Q)                 # [B, r, r]
+            H_trunc = torch.bmm(Q, torch.bmm(Qt_H_Q, Q.transpose(-1, -2)))  # [B, D, D]
 
-        return H_trunc
+        return H_trunc.to(orig_dtype)
 
     def update_batch(
         self,
