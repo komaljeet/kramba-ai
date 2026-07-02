@@ -30,6 +30,8 @@ import torch
 import torch.nn as nn
 from .vortex_injection import VortexInjectionLayer
 from .hamiltonian_memory import HamiltonianMemoryBlock
+from .batched_vortex import MultiHeadVortexInjection
+from .batched_memory import MultiHeadHamiltonianMemory
 
 
 class HVNBlock(nn.Module):
@@ -70,13 +72,17 @@ class HVNBlock(nn.Module):
         self.d_head = d_model // n_heads
         self.chunk_size = chunk_size
 
-        # Per-head vortex injection layers
+        # Batched multi-head vortex injection (replaces per-head ModuleList)
+        self.vortex = MultiHeadVortexInjection(self.d_head, n_heads)
+
+        # Batched multi-head quantum memory (replaces per-head ModuleList)
+        self.memory = MultiHeadHamiltonianMemory(self.d_head, n_heads, bond_dimension=bond_dimension)
+
+        # Backward-compatible references (for checkpoint loading from old format)
         self.vortex_heads = nn.ModuleList([
             VortexInjectionLayer(self.d_head)
             for _ in range(n_heads)
         ])
-
-        # Per-head quantum memory
         self.memory_heads = nn.ModuleList([
             HamiltonianMemoryBlock(self.d_head, bond_dimension=bond_dimension)
             for _ in range(n_heads)
@@ -133,18 +139,24 @@ class HVNBlock(nn.Module):
 
         # Project input to per-head dimensions
         x_proj = self.input_proj(x_norm)  # [B, S, D]
-        # Split into heads: [B, S, n_heads, d_head]
+        # Reshape to [B*n_heads, S, d_head] — all heads as one large batch
         x_heads = x_proj.view(B, S, self.n_heads, self.d_head)
+        x_batched = x_heads.permute(0, 2, 1, 3).contiguous().view(B * self.n_heads, S, self.d_head)
 
-        # Process each head
-        head_outputs = []
-        for h in range(self.n_heads):
-            x_h = x_heads[:, :, h, :]  # [B, S, d_head]
-            out_h = self._process_head_chunked(h, x_h, B, S, position_ids)
-            head_outputs.append(out_h)
+        # Expand position_ids for all heads: [B, S] → [B*n_heads, S]
+        if position_ids is not None:
+            # position_ids is [B, S] — repeat for each head
+            pos_batched = position_ids.unsqueeze(1).expand(B, self.n_heads, S).contiguous()
+            pos_batched = pos_batched.view(B * self.n_heads, S)
+        else:
+            pos_batched = None
 
-        # Concatenate heads and project: [B, S, D]
-        deflected = torch.cat(head_outputs, dim=-1)  # [B, S, D]
+        # Process all heads in a single batched pass (no Python loop!)
+        out_batched = self._process_batched_chunked(x_batched, B, S, pos_batched)
+
+        # Reshape back: [B*n_heads, S, d_head] → [B, S, n_heads * d_head]
+        deflected = out_batched.view(B, self.n_heads, S, self.d_head).permute(0, 2, 1, 3).contiguous()
+        deflected = deflected.view(B, S, self.n_heads * self.d_head)  # [B, S, D]
         deflected = self.output_proj(deflected)  # [B, S, D]
 
         # Residual connection
@@ -154,6 +166,47 @@ class HVNBlock(nn.Module):
         x = x + self.ffn(self.norm2(x))
 
         return x
+
+    def _process_batched_chunked(
+        self,
+        x_batched: torch.Tensor,
+        B: int,
+        S: int,
+        position_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Process all heads simultaneously with chunked parallel vortex injection.
+
+        All n_heads are batched into the batch dimension (B*n_heads), so the
+        entire forward pass uses a single set of batched matmuls — no Python
+        loop over heads or tokens.
+        """
+        BH = B * self.n_heads  # effective batch size
+
+        # Initialize Hamiltonian for all heads at once
+        H = self.memory.init_hamiltonian(B, device=x_batched.device, dtype=x_batched.dtype)
+        # H shape: [B*n_heads, d_head, d_head]
+
+        chunk_size = self._resolve_chunk_size(S)
+        all_outputs = []
+
+        for chunk_start in range(0, S, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, S)
+            x_chunk = x_batched[:, chunk_start:chunk_end, :]  # [BH, chunk_len, d_head]
+
+            chunk_position_ids = None
+            if position_ids is not None:
+                chunk_position_ids = position_ids[:, chunk_start:chunk_end]
+
+            # Batched vortex injection for all heads at once
+            deflected_chunk, velocity_chunk = self.vortex(
+                x_chunk, H, position_ids=chunk_position_ids
+            )  # [BH, chunk_len, d_head] x2
+            all_outputs.append(deflected_chunk)
+
+            # Batched Hamiltonian update for all heads at once
+            H = self.memory.update_batch(H, velocity_chunk)
+
+        return torch.cat(all_outputs, dim=1)  # [BH, S, d_head]
 
     def _resolve_chunk_size(self, seq_len: int) -> int:
         """Choose a chunk size that balances parallelism and accuracy."""
@@ -211,10 +264,9 @@ class HVNBlock(nn.Module):
     def init_state(self, batch_size: int, device=None, dtype=None) -> list[list[torch.Tensor]]:
         """Initialize the causal Hamiltonian state for all heads (incremental generation).
 
-        Returns
-        -------
-        state : list[list[torch.Tensor]]
-            One Hamiltonian matrix per head: [[H_0], [H_1], ..., [H_{n_heads-1}]].
+        Returns a list of per-head states for backward compatibility with
+        the incremental generation path (which still uses the per-head loop
+        for simplicity — it only processes 1 token at a time so speed is fine).
         """
         return [
             [head.init_hamiltonian(batch_size, device=device, dtype=dtype)]
