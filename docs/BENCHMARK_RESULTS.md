@@ -122,9 +122,12 @@ HVN (PPL 8.37) vs Transformer (PPL 1.90) vs SSM (PPL 1.12):
 The gap is still significant. The main reasons:
 1. **Hamiltonian update expressiveness**: The rank-1 entanglement renormalization
    is less expressive than attention's full QK^T or the SSM's gated recurrence
+   (Note: rank-k update added in Issue #21 helps but doesn't fully close the gap)
 2. **Chunked approximation**: Tokens within a chunk share the same H state,
-   introducing a small causal approximation
-3. **No positional encoding**: HVN has no explicit position information
+   introducing a small causal approximation (Note: causal re-injection added
+   in Issue #21 partially addresses this)
+3. **~~No positional encoding~~**: RoPE added in Issue #1; per-head frequency
+   specialization added in Issue #16
 4. **Training data is tiny**: 34K characters — all models would improve with more data
 
 ---
