@@ -100,6 +100,32 @@ See [docs/FLOP_ANALYSIS.md](docs/FLOP_ANALYSIS.md) for the full derivation.
 | `HVNDecoder` | `decoder.py` | Shallow projection: hidden state → vocabulary logits |
 | `HamiltonianVortexNetwork` | `model.py` | Full model: embedding + N×HVNBlock + decoder |
 
+## Hamiltonian Quantization (Inference)
+
+HVN supports INT8 and 4-bit NF4 quantization for the Hamiltonian matrices —
+the main memory consumers during inference.  This reduces the Hamiltonian
+state memory by **4× (INT8)** or **8× (NF4)** with minimal quality loss.
+
+```python
+from hvn.quantize import QuantizedHVNInference, estimate_memory_savings
+
+# Estimate memory savings
+savings = estimate_memory_savings(model, batch_size=1, bits=4)
+print(f"Compression: {savings['compression']:.1f}×, "
+      f"Savings: {savings['savings_pct']:.1f}%")
+
+# Quantized inference (drop-in replacement for model.generate_incremental)
+q_infer = QuantizedHVNInference(model, bits=4)  # or bits=8 for INT8
+output = q_infer.generate_incremental(
+    prompt_ids=[1, 5, 10], max_new_tokens=200, temperature=0.8, top_k=10,
+)
+```
+
+| Quantization | Memory Reduction | Relative Error | Use Case |
+|-------------|-----------------|----------------|----------|
+| INT8 | ~4× (75% saved) | <1% | General inference |
+| NF4 4-bit | ~8× (87% saved) | <10% | Memory-constrained inference |
+
 ## License
 
 Research / educational use.

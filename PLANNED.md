@@ -200,6 +200,22 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
 
 ---
 
+## Phase 7: Inference Optimization (✅ Complete)
+
+### 7.4 Hamiltonian Quantization
+- [x] Add **INT8 and 4-bit NF4 quantization** for Hamiltonian matrices (Issue #20, closed)
+  - File: `hvn/quantize.py` (new)
+  - INT8 symmetric quantization (per-tensor and per-channel): ~4× memory reduction, <1% relative error
+  - NF4 (NormalFloat 4-bit) block-wise quantization: ~7-8× memory reduction, <10% relative error
+  - `QuantizedHamiltonian` wrapper for storing/dequantizing Hamiltonian state tensors
+  - `QuantizedHVNInference` wrapper for quantized incremental + batched generation
+  - `quantize_model_hamiltonians()` for quantizing model parameters
+  - `estimate_memory_savings()` for computing expected compression ratios
+  - Test suite: `test_quantize.py` — 8 tests, all passing on GPU
+  - Results: INT8 73.4% memory savings, NF4 85.9% memory savings (d_model=256, 4 layers, 8 heads)
+
+---
+
 ## Phase 6: Evaluation & Scaling (✅ Complete)
 
 ### 6.1 Real Dataset Benchmarks

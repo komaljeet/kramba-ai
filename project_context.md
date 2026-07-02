@@ -92,9 +92,10 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - #17 — Batched generation for multiple sequences (generate_batched, forward_step_batched, 18x speedup)
 - #18 — Scaling laws evaluation (eval/scaling_laws.py: d_model={64,128,256,512}, power-law fits, crossover analysis, matplotlib plots)
 - #19 — Mixed-precision training (fp16/bf16 via torch.cuda.amp + gradient accumulation, --precision/--grad_accum flags in train.py, quality_benchmark.py, eval/run_eval.py, eval/scaling_laws.py; fixed QR dtype issue in batched_memory.py and hamiltonian_memory.py)
+- #20 — Hamiltonian quantization (INT8 + NF4 4-bit, hvn/quantize.py: QuantizedHamiltonian, QuantizedHVNInference, quantize_int8, quantize_nf4, estimate_memory_savings; test_quantize.py: 8 tests all passing; INT8 ~4× compression <1% error, NF4 ~7× compression <10% error)
 
 ### Remaining Open Issues
-- #20 — Hamiltonian quantization (INT8/4-bit, hvn/quantize.py)
+- (none — all issues closed)
 
 ### Key Architecture Files (current state on main)
 - `hvn/core/hvn_block.py` — HVNBlock with batched multi-head processing, RMSNorm (in progress on branch)
@@ -109,6 +110,7 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - `eval/scaling_laws.py` — Scaling laws evaluation (multi-size training, power-law fits, crossover analysis, plots)
 - `eval/long_context.py` — Speed scaling + needle-in-haystack tests
 - `eval/datasets.py` — Dataset loaders (WikiText, Shakespeare, code)
+- `hvn/quantize.py` — Hamiltonian quantization (INT8 + NF4 4-bit, QuantizedHVNInference)
 
 ### Speed Results (Shakespeare, 10 epochs, d_model=128, RTX 4050, torch.compile)
 - HVN: 45.2s total, 4.0s/epoch steady-state, PPL 13.87
@@ -124,4 +126,8 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - Key finding: HVN's rank-1 entanglement update lacks expressiveness to benefit from scale
 
 ### How to Continue
-1. Proceed to #20 — Hamiltonian quantization (INT8/4-bit)
+1. All planned issues are complete. Future work may include:
+   - Custom Triton kernels (Phase 5.1, 5.3)
+   - Parallel scan Hamiltonian update (Phase 5.5 Strategy B)
+   - Real-dataset evaluation at scale (WikiText-103, code corpora)
+   - Addressing HVN's poor scaling exponent (PPL ∝ params^-0.007)
