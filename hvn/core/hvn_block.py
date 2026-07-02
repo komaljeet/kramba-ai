@@ -34,6 +34,26 @@ from .batched_vortex import MultiHeadVortexInjection
 from .batched_memory import MultiHeadHamiltonianMemory
 
 
+class RMSNorm(nn.Module):
+    """Root Mean Square Normalization (faster than LayerNorm).
+
+    RMSNorm normalizes by the RMS of the activations without subtracting the mean:
+        x_norm = x / sqrt(mean(x²) + eps) * weight
+
+    This is faster than LayerNorm (no mean computation) and works better
+    with no-bias architectures. Used by GPT-J, PaLM, LLaMA, etc.
+    """
+
+    def __init__(self, d_model: int, eps: float = 1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(d_model))
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        rms = x.pow(2).mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
+        return x * rms * self.weight
+
+
 class HVNBlock(nn.Module):
     """A single Hamiltonian Vortex Network block with multi-head memory.
 
@@ -105,9 +125,8 @@ class HVNBlock(nn.Module):
             nn.Dropout(dropout),
         )
 
-        # Layer norms for pre-norm residual architecture
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
+        # RMSNorm (faster than LayerNorm — no mean subtraction)
+        self.norm = RMSNorm(d_model)
 
         # Dropout for the vortex sub-layer output
         self.dropout = nn.Dropout(dropout)
@@ -115,9 +134,9 @@ class HVNBlock(nn.Module):
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor | None = None) -> torch.Tensor:
         """Process a sequence through the multi-head HVN block.
 
-        Uses chunked parallel processing: tokens within a chunk share the same
-        Hamiltonian state, enabling parallel GPU computation.  The Hamiltonian
-        is updated between chunks.
+        Uses parallel residual architecture (like GPT-J / PaLM):
+            x = x + vortex(norm(x)) + ffn(norm(x))
+        Both branches are computed from the same normed input in parallel.
 
         Parameters
         ----------
@@ -134,36 +153,31 @@ class HVNBlock(nn.Module):
         if position_ids is None:
             position_ids = torch.arange(S, device=x.device).unsqueeze(0).expand(B, -1)
 
-        # Pre-norm
-        x_norm = self.norm1(x)  # [B, S, D]
+        # Single shared norm for parallel residual (both branches use same norm)
+        x_norm = self.norm(x)  # [B, S, D]
 
-        # Project input to per-head dimensions
+        # --- Vortex branch ---
         x_proj = self.input_proj(x_norm)  # [B, S, D]
-        # Reshape to [B*n_heads, S, d_head] — all heads as one large batch
         x_heads = x_proj.view(B, S, self.n_heads, self.d_head)
         x_batched = x_heads.permute(0, 2, 1, 3).contiguous().view(B * self.n_heads, S, self.d_head)
 
-        # Expand position_ids for all heads: [B, S] → [B*n_heads, S]
         if position_ids is not None:
-            # position_ids is [B, S] — repeat for each head
             pos_batched = position_ids.unsqueeze(1).expand(B, self.n_heads, S).contiguous()
             pos_batched = pos_batched.view(B * self.n_heads, S)
         else:
             pos_batched = None
 
-        # Process all heads in a single batched pass (no Python loop!)
         out_batched = self._process_batched_chunked(x_batched, B, S, pos_batched)
 
-        # Reshape back: [B*n_heads, S, d_head] → [B, S, n_heads * d_head]
         deflected = out_batched.view(B, self.n_heads, S, self.d_head).permute(0, 2, 1, 3).contiguous()
-        deflected = deflected.view(B, S, self.n_heads * self.d_head)  # [B, S, D]
-        deflected = self.output_proj(deflected)  # [B, S, D]
+        deflected = deflected.view(B, S, self.n_heads * self.d_head)
+        deflected = self.output_proj(deflected)
 
-        # Residual connection
-        x = x + self.dropout(deflected)
+        # --- FFN branch (computed in parallel with vortex) ---
+        ffn_out = self.ffn(x_norm)
 
-        # Feed-forward sub-layer with residual
-        x = x + self.ffn(self.norm2(x))
+        # Parallel residual: x = x + vortex(norm(x)) + ffn(norm(x))
+        x = x + self.dropout(deflected) + ffn_out
 
         return x
 
