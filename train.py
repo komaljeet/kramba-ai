@@ -163,6 +163,7 @@ def train_model(
         "d_model": model.d_model,
         "num_layers": model.num_layers,
         "n_heads": model.n_heads,
+        "chunk_size": model.blocks[0].chunk_size if hasattr(model.blocks[0], 'chunk_size') else 64,
     }, save_path)
     print(f"\n✓ Model saved to {save_path}")
 
@@ -261,7 +262,7 @@ def main():
     parser.add_argument("--num_layers", type=int, default=2, help="Number of HVN blocks")
     parser.add_argument("--bond_dim", type=int, default=32, help="SVD bond dimension (quantum renormalization rank)")
     parser.add_argument("--n_heads", type=int, default=4, help="Number of parallel Hamiltonian heads")
-    parser.add_argument("--chunk_size", type=int, default=16, help="Chunk size for parallel processing")
+    parser.add_argument("--chunk_size", type=int, default=64, help="Chunk size for parallel processing (larger values improve throughput)")
     parser.add_argument("--save", type=str, default="hvn_checkpoint.pt", help="Checkpoint save path")
     parser.add_argument("--generate", action="store_true", help="Generate text after training")
     parser.add_argument("--prompt", type=str, default="The ", help="Prompt for generation")

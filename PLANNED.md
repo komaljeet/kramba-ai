@@ -55,7 +55,7 @@
 These changes are needed to close the perplexity gap with Transformer (PPL 1.90) and SSM (PPL 1.12).
 
 ### 4.1 Positional Encoding
-- [ ] Add **rotary positional embeddings (RoPE)** to the vortex injection layer
+- [x] Add **rotary positional embeddings (RoPE)** to the vortex injection layer
   - Currently HVN has no position awareness — tokens are position-agnostic
   - RoPE rotates the vorticity vectors based on position, giving the Hamiltonian spatial structure
   - File: `hvn/core/vortex_injection.py`

@@ -13,7 +13,9 @@ Usage:
 """
 
 import argparse
+import json
 import math
+import os
 import time
 import torch
 import torch.nn as nn
@@ -22,6 +24,19 @@ from torch.utils.data import Dataset, DataLoader
 from hvn.core import HamiltonianVortexNetwork
 from benchmark import TransformerLM, SimpleSSMLM
 from train import CharTokenizer, TextDataset, SAMPLE_TEXT
+
+
+def load_corpus_text(text_path: str | None, repeat: int = 50) -> str:
+    """Load text from a file when provided, otherwise fall back to the bundled sample."""
+    if text_path:
+        if not os.path.exists(text_path):
+            raise FileNotFoundError(f"Text corpus not found: {text_path}")
+        with open(text_path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+        if not text.strip():
+            raise ValueError(f"Text corpus is empty: {text_path}")
+        return text
+    return SAMPLE_TEXT * repeat
 
 
 def train_and_evaluate(
@@ -120,6 +135,10 @@ def main():
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
     parser.add_argument("--seq_len", type=int, default=64, help="Sequence length")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
+    parser.add_argument("--text", type=str, default=None, help="Optional path to a training corpus text file")
+    parser.add_argument("--eval-text", type=str, default=None, help="Optional path to a separate evaluation corpus text file")
+    parser.add_argument("--train-split", type=float, default=0.9, help="Fraction of the corpus used for training")
+    parser.add_argument("--output-json", type=str, default=None, help="Optional path to save benchmark results as JSON")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -129,19 +148,29 @@ def main():
     print(f"Config: d_model={args.d_model}, layers={args.n_layers}, epochs={args.epochs}, seq_len={args.seq_len}")
 
     # --- Prepare data ---
-    text = SAMPLE_TEXT * 50
-    tokenizer = CharTokenizer(text)
-    vocab_size = tokenizer.vocab_size
-    token_ids = tokenizer.encode(text)
+    try:
+        train_text = load_corpus_text(args.text, repeat=50)
+        eval_text = load_corpus_text(args.eval_text or args.text, repeat=1)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc))
 
-    # Split: 90% train, 10% eval
-    split = int(len(token_ids) * 0.9)
+    tokenizer = CharTokenizer(train_text + eval_text)
+    vocab_size = tokenizer.vocab_size
+    token_ids = tokenizer.encode(train_text)
+    eval_token_ids = tokenizer.encode(eval_text)
+
+    if not token_ids:
+        raise SystemExit("The training corpus did not contain any tokenizable characters")
+    if not eval_token_ids:
+        raise SystemExit("The evaluation corpus did not contain any tokenizable characters")
+
+    split = max(1, min(len(token_ids) - 2, int(len(token_ids) * args.train_split)))
     train_dataset = TextDataset(token_ids[:split], seq_len=args.seq_len)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
-    # Eval data: one batch
-    eval_x = torch.tensor([token_ids[split:split + args.seq_len]], dtype=torch.long)
-    eval_y = torch.tensor([token_ids[split + 1:split + args.seq_len + 1]], dtype=torch.long)
+    eval_start = min(len(eval_token_ids) - args.seq_len - 1, max(0, len(eval_token_ids) // 2))
+    eval_x = torch.tensor([eval_token_ids[eval_start:eval_start + args.seq_len]], dtype=torch.long)
+    eval_y = torch.tensor([eval_token_ids[eval_start + 1:eval_start + args.seq_len + 1]], dtype=torch.long)
 
     print(f"Vocabulary: {vocab_size} chars")
     print(f"Train samples: {len(train_dataset)}, Batches: {len(train_loader)}")
@@ -222,6 +251,12 @@ def main():
                 bar_len = int(h["eval_ppl"] / 2)
                 bar = "█" * min(bar_len, 50)
                 print(f"    Epoch {h['epoch']:3d}: PPL={h['eval_ppl']:6.2f} |{bar}")
+
+    if args.output_json:
+        output_path = os.path.abspath(args.output_json)
+        with open(output_path, "w", encoding="utf-8") as handle:
+            json.dump(results, handle, indent=2)
+        print(f"\nSaved benchmark summary to {output_path}")
 
     print()
 

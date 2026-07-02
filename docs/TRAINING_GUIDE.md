@@ -230,5 +230,6 @@ for epoch in range(50):
 2. **More epochs**: Character-level models need 50-100+ epochs on small data.
 3. **Larger model**: Increase `--d_model 256`, `--num_layers 4`, `--bond_dim 64` for more capacity.
 4. **Longer sequences**: Increase `--seq_len 128` or `256` so the model sees more context per sample.
+5. **Positional awareness**: The vortex injection layer now uses rotary positional embeddings, which improves sequence-order sensitivity compared with the earlier position-agnostic version.
 5. **Learning rate**: Start with `3e-4`, try `1e-3` for faster (but less stable) training.
 6. **Subword tokenizer**: For real projects, swap the `CharTokenizer` for a BPE tokenizer (e.g., HuggingFace `tokenizers`) for better vocabulary efficiency.

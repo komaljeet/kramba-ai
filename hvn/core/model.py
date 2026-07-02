@@ -45,7 +45,7 @@ class HamiltonianVortexNetwork(nn.Module):
         num_layers: int = 2,
         n_heads: int = 4,
         bond_dimension: int | None = None,
-        chunk_size: int = 16,
+        chunk_size: int | None = 64,
         dropout: float = 0.1,
         use_mlp_decoder: bool = False,
     ):
@@ -81,7 +81,7 @@ class HamiltonianVortexNetwork(nn.Module):
             dropout=dropout,
         )
 
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_ids: torch.Tensor, position_ids: torch.Tensor | None = None) -> torch.Tensor:
         """Forward pass: token IDs → logits.
 
         Parameters
@@ -94,12 +94,16 @@ class HamiltonianVortexNetwork(nn.Module):
         logits : torch.Tensor
             Vocabulary logits, shape [batch, seq_len, vocab_size].
         """
+        B, S = input_ids.shape
+        if position_ids is None:
+            position_ids = torch.arange(S, device=input_ids.device).unsqueeze(0).expand(B, -1)
+
         # Embed tokens
         x = self.token_embedding(input_ids)  # [B, S, D]
 
         # Pass through HVN blocks
         for block in self.blocks:
-            x = block(x)  # [B, S, D]
+            x = block(x, position_ids=position_ids)  # [B, S, D]
 
         # Final normalisation
         x = self.final_norm(x)  # [B, S, D]
@@ -109,7 +113,7 @@ class HamiltonianVortexNetwork(nn.Module):
 
         return logits
 
-    def forward_from_embeddings(self, x: torch.Tensor) -> torch.Tensor:
+    def forward_from_embeddings(self, x: torch.Tensor, position_ids: torch.Tensor | None = None) -> torch.Tensor:
         """Forward pass from pre-computed embeddings (for the demo script).
 
         Parameters
@@ -122,8 +126,11 @@ class HamiltonianVortexNetwork(nn.Module):
         logits : torch.Tensor
             Vocabulary logits, shape [batch, seq_len, vocab_size].
         """
+        B, S, _ = x.shape
+        if position_ids is None:
+            position_ids = torch.arange(S, device=x.device).unsqueeze(0).expand(B, -1)
         for block in self.blocks:
-            x = block(x)
+            x = block(x, position_ids=position_ids)
         x = self.final_norm(x)
         logits = self.decoder(x)
         return logits
@@ -151,6 +158,7 @@ class HamiltonianVortexNetwork(nn.Module):
         self,
         input_ids: torch.Tensor,
         states: list[list[torch.Tensor]],
+        position_idx: int | None = None,
     ) -> tuple[torch.Tensor, list[list[torch.Tensor]]]:
         """Process a single token incrementally — O(1) per token.
 
@@ -176,7 +184,7 @@ class HamiltonianVortexNetwork(nn.Module):
 
         new_states = []
         for i, block in enumerate(self.blocks):
-            x, new_state = block.forward_step(x, states[i])
+            x, new_state = block.forward_step(x, states[i], position_idx=position_idx)
             new_states.append(new_state)
 
         x = self.final_norm(x)
@@ -237,7 +245,7 @@ class HamiltonianVortexNetwork(nn.Module):
 
         for t in range(len(prompt_ids)):
             tok = torch.tensor([[prompt_ids[t]]], dtype=torch.long, device=device)
-            logits_step, states = self.forward_step(tok, states)
+            logits_step, states = self.forward_step(tok, states, position_idx=t)
 
         # Last logits for sampling
         next_logits = logits_step[0, -1, :] / temperature
@@ -245,7 +253,7 @@ class HamiltonianVortexNetwork(nn.Module):
         generated = list(prompt_ids)
 
         # --- Phase 2: Generate new tokens incrementally (O(1) each) ---
-        for _ in range(max_new_tokens):
+        for step_idx in range(max_new_tokens):
             # Top-k filtering
             if top_k > 0:
                 top_k_val = min(top_k, next_logits.size(-1))
@@ -260,7 +268,7 @@ class HamiltonianVortexNetwork(nn.Module):
 
             # Forward step: O(d²) — no context reprocessing!
             tok = torch.tensor([[next_id]], dtype=torch.long, device=device)
-            logits_step, states = self.forward_step(tok, states)
+            logits_step, states = self.forward_step(tok, states, position_idx=len(prompt_ids) + step_idx)
             next_logits = logits_step[0, -1, :] / temperature
 
         return generated

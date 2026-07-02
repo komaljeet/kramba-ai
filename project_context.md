@@ -24,3 +24,20 @@ Write a clean, modular, and fully commented PyTorch implementation including:
 - Provide a strict mathematical comparison of the Floating Point Operations (FLOPs) per token of this model versus a standard Multi-Head Attention mechanism as sequence length (N) scales to 100,000 tokens. Prove how this architecture maintains an O(1) inference footprint.
 
 Apply your maximum reasoning capacity to ensure the PyTorch code handles multi-dimensional tensor contractions properly without shape mismatches.
+
+## Issue and Delivery Workflow
+
+When working on a GitLab issue:
+
+1. Implement the requested change and verify it with a real test or runnable command.
+2. Commit the relevant changes with a clear message that references the issue (for example: `git commit -m "Fix: add positional embeddings for issue #1"`).
+3. Push the branch to the remote repository (for example: `git push origin <branch-name>`).
+4. If the issue has been fully handled and verified, close it in GitLab (for example: `glab issue close <issue-id>`).
+5. If new information shows the issue is not fully resolved or needs further work, reopen it (for example: `glab issue reopen <issue-id>`).
+
+The default expectation is:
+- complete the work,
+- verify it,
+- commit and push,
+- close the issue when resolved,
+- reopen it if the work regresses or needs additional follow-up.

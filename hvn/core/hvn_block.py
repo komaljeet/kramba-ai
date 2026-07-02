@@ -47,9 +47,10 @@ class HVNBlock(nn.Module):
         Each head operates on d_model // n_heads dimensions.
     bond_dimension : int, optional
         SVD truncation rank for quantum renormalization.  None = full rank.
-    chunk_size : int
+    chunk_size : int | None
         Number of tokens to process in parallel within a chunk.  Larger = faster
-        but less causally accurate within the chunk.  Default 16.
+        but less causally accurate within the chunk.  Defaults to 64, and can be
+        set to None to use an adaptive chunk size based on the sequence length.
     dropout : float
         Dropout rate applied to the block output.
     """
@@ -59,7 +60,7 @@ class HVNBlock(nn.Module):
         d_model: int,
         n_heads: int = 4,
         bond_dimension: int | None = None,
-        chunk_size: int = 16,
+        chunk_size: int | None = 64,
         dropout: float = 0.1,
     ):
         super().__init__()
@@ -105,7 +106,7 @@ class HVNBlock(nn.Module):
         # Dropout for the vortex sub-layer output
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, position_ids: torch.Tensor | None = None) -> torch.Tensor:
         """Process a sequence through the multi-head HVN block.
 
         Uses chunked parallel processing: tokens within a chunk share the same
@@ -124,6 +125,9 @@ class HVNBlock(nn.Module):
         """
         B, S, D = x.shape
 
+        if position_ids is None:
+            position_ids = torch.arange(S, device=x.device).unsqueeze(0).expand(B, -1)
+
         # Pre-norm
         x_norm = self.norm1(x)  # [B, S, D]
 
@@ -136,7 +140,7 @@ class HVNBlock(nn.Module):
         head_outputs = []
         for h in range(self.n_heads):
             x_h = x_heads[:, :, h, :]  # [B, S, d_head]
-            out_h = self._process_head_chunked(h, x_h, B, S)
+            out_h = self._process_head_chunked(h, x_h, B, S, position_ids)
             head_outputs.append(out_h)
 
         # Concatenate heads and project: [B, S, D]
@@ -151,8 +155,23 @@ class HVNBlock(nn.Module):
 
         return x
 
+    def _resolve_chunk_size(self, seq_len: int) -> int:
+        """Choose a chunk size that balances parallelism and accuracy."""
+        if self.chunk_size is None:
+            # For short prompts, use the full sequence to avoid extra bookkeeping.
+            # For longer sequences, use a larger chunk to keep the GPU busy.
+            return max(1, min(128, seq_len))
+        if self.chunk_size <= 0:
+            raise ValueError(f"chunk_size must be a positive integer, got {self.chunk_size}")
+        return int(self.chunk_size)
+
     def _process_head_chunked(
-        self, head_idx: int, x_h: torch.Tensor, B: int, S: int
+        self,
+        head_idx: int,
+        x_h: torch.Tensor,
+        B: int,
+        S: int,
+        position_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Process one head with chunked parallel vortex injection.
 
@@ -166,7 +185,7 @@ class HVNBlock(nn.Module):
         # Initialize Hamiltonian for this head
         H = memory.init_hamiltonian(B, device=x_h.device, dtype=x_h.dtype)  # [B, d_head, d_head]
 
-        chunk_size = self.chunk_size
+        chunk_size = self._resolve_chunk_size(S)
         all_outputs = []
 
         # Process in chunks
@@ -176,7 +195,10 @@ class HVNBlock(nn.Module):
 
             # All tokens in this chunk use the SAME Hamiltonian H
             # This enables parallel computation across the chunk
-            deflected_chunk, velocity_chunk = vortex(x_chunk, H)  # [B, chunk_len, d_head] x2
+            chunk_position_ids = None
+            if position_ids is not None:
+                chunk_position_ids = position_ids[:, chunk_start:chunk_end]
+            deflected_chunk, velocity_chunk = vortex(x_chunk, H, position_ids=chunk_position_ids)  # [B, chunk_len, d_head] x2
             all_outputs.append(deflected_chunk)
 
             # Update Hamiltonian with each token's velocity (sequential within chunk)
@@ -203,6 +225,7 @@ class HVNBlock(nn.Module):
         self,
         x_t: torch.Tensor,
         state: list[list[torch.Tensor]],
+        position_idx: int | None = None,
     ) -> tuple[torch.Tensor, list[list[torch.Tensor]]]:
         """Process a SINGLE token incrementally — O(1) per token generation.
 
@@ -222,6 +245,11 @@ class HVNBlock(nn.Module):
         """
         B, _, D = x_t.shape
 
+        if position_idx is None:
+            position_ids = torch.arange(1, device=x_t.device).unsqueeze(0).expand(B, -1)
+        else:
+            position_ids = torch.full((B, 1), int(position_idx), device=x_t.device, dtype=torch.long)
+
         # Pre-norm + project
         x_norm = self.norm1(x_t)  # [B, 1, D]
         x_proj = self.input_proj(x_norm)  # [B, 1, D]
@@ -234,7 +262,7 @@ class HVNBlock(nn.Module):
             H = state[h][0]  # [B, d_head, d_head]
 
             # Vortex injection
-            deflected_t, velocity_t = self.vortex_heads[h](x_h, H)
+            deflected_t, velocity_t = self.vortex_heads[h](x_h, H, position_ids=position_ids)
 
             # Update Hamiltonian
             H_new = self.memory_heads[h].update(H, velocity_t.squeeze(1))

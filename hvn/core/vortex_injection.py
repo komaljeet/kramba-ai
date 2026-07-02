@@ -36,6 +36,44 @@ import torch.nn as nn
 import math
 
 
+def _apply_rotary_embeddings(x: torch.Tensor, position_ids: torch.Tensor) -> torch.Tensor:
+    """Apply rotary positional embeddings to the last dimension of x.
+
+    The implementation rotates pairs of channels using sinusoidal frequencies
+    based on absolute positions. This gives the vortex projection explicit
+    sequence-order information before the Biot-Savart velocity computation.
+    """
+    if x.shape[-1] < 2:
+        return x
+
+    rotary_dim = x.shape[-1] - (x.shape[-1] % 2)
+    if rotary_dim < 2:
+        return x
+
+    device = x.device
+    dtype = x.dtype
+    positions = position_ids.to(device=device, dtype=dtype)
+    inv_freq = 1.0 / (10000.0 ** (torch.arange(0, rotary_dim, 2, device=device, dtype=dtype) / rotary_dim))
+    freqs = positions.unsqueeze(-1) * inv_freq.view(1, 1, -1)
+
+    cos = torch.cos(freqs)
+    sin = torch.sin(freqs)
+
+    x_even = x[..., 0::2]
+    x_odd = x[..., 1::2]
+    rotated_even = x_even * cos - x_odd * sin
+    rotated_odd = x_even * sin + x_odd * cos
+
+    rotated = torch.empty_like(x)
+    rotated[..., 0::2] = rotated_even
+    rotated[..., 1::2] = rotated_odd
+
+    if x.shape[-1] % 2 == 1:
+        rotated[..., -1] = x[..., -1]
+
+    return rotated
+
+
 class VortexInjectionLayer(nn.Module):
     """Translates token embeddings into vortex-particle velocity fields.
 
@@ -74,6 +112,7 @@ class VortexInjectionLayer(nn.Module):
         self,
         x: torch.Tensor,
         hamiltonian: torch.Tensor,
+        position_ids: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute vortex-velocity-deflected token representations.
 
@@ -97,8 +136,16 @@ class VortexInjectionLayer(nn.Module):
         """
         B, S, D = x.shape
 
+        if position_ids is None:
+            position_ids = torch.arange(S, device=x.device).unsqueeze(0).expand(B, -1)
+        elif position_ids.ndim == 1:
+            position_ids = position_ids.unsqueeze(0).expand(B, -1)
+        else:
+            position_ids = position_ids.to(device=x.device)
+
         # --- Step 1: Vorticity projection ---
         vorticity = self.vorticity_proj(x)  # [B, S, D]
+        vorticity = _apply_rotary_embeddings(vorticity, position_ids)
 
         # --- Step 2: Biot-Savart local velocity ---
         # v_t = Γ · (H · ω_t)
