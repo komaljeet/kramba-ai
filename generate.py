@@ -41,8 +41,14 @@ def load_model(checkpoint_path: str, tokenizer_path: str, device: torch.device):
     model.to(device)
     model.eval()
 
-    # Load tokenizer
-    tokenizer = CharTokenizer.load(tokenizer_path)
+    # Load tokenizer — try BPE first, fall back to CharTokenizer
+    try:
+        from hvn.tokenizer import BPETokenizer
+        tokenizer = BPETokenizer.load(tokenizer_path)
+        print(f"✓ Loaded BPE tokenizer from {tokenizer_path}")
+    except Exception:
+        tokenizer = CharTokenizer.load(tokenizer_path)
+        print(f"✓ Loaded char tokenizer from {tokenizer_path}")
 
     print(f"✓ Loaded model: vocab={vocab_size}, d_model={d_model}, layers={num_layers}")
     return model, tokenizer

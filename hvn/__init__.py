@@ -6,6 +6,7 @@ from .core import (
     HamiltonianVortexNetwork,
 )
 from .hf_model import HVNConfig, HVNForCausalLM
+from .tokenizer import BPETokenizer
 
 __all__ = [
     "VortexInjectionLayer",
@@ -15,4 +16,5 @@ __all__ = [
     "HamiltonianVortexNetwork",
     "HVNConfig",
     "HVNForCausalLM",
+    "BPETokenizer",
 ]

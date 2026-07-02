@@ -272,6 +272,8 @@ def main():
     parser.add_argument("--generate", action="store_true", help="Generate text after training")
     parser.add_argument("--prompt", type=str, default="The ", help="Prompt for generation")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile for faster training (GPU recommended)")
+    parser.add_argument("--tokenizer", type=str, default="char", choices=["char", "bpe"], help="Tokenizer type: char or bpe")
+    parser.add_argument("--bpe_vocab", type=int, default=1000, help="BPE vocabulary size (only used with --tokenizer bpe)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -287,8 +289,13 @@ def main():
         print(f"Using bundled sample text ({len(text)} characters)")
 
     # --- Build tokenizer ---
-    tokenizer = CharTokenizer(text)
-    print(f"Vocabulary size: {tokenizer.vocab_size} characters")
+    if args.tokenizer == "bpe":
+        from hvn.tokenizer import BPETokenizer
+        tokenizer = BPETokenizer.train(text, vocab_size=args.bpe_vocab)
+        print(f"Vocabulary size: {tokenizer.vocab_size} BPE tokens")
+    else:
+        tokenizer = CharTokenizer(text)
+        print(f"Vocabulary size: {tokenizer.vocab_size} characters")
 
     # --- Prepare dataset ---
     token_ids = tokenizer.encode(text)
