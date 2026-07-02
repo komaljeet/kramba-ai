@@ -78,16 +78,9 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - #12 — Higher-rank Hamiltonian update (batched projectors in batched_memory.py)
 - #13 — Residual Hamiltonian connection (H_new = H_old + ΔH, use_residual=True)
 - #14 — Learned input-dependent entanglement rate (η_t = σ(W_η · x_t))
-
-### In Progress — Issue #15 (RMSNorm + parallel residual)
-- **Branch**: `feature/rmsnorm-parallel-issue-15`
-- **What's done**: RMSNorm class added to hvn_block.py, forward() rewritten with parallel residual
-- **What's NOT done**: `forward_step()` still references old `self.norm1`/`self.norm2` — needs updating to use `self.norm`
-- **What's NOT done**: Demo not yet verified, benchmark not yet run
-- **Next step**: Fix forward_step to use self.norm, run demo.py, run benchmark, commit, push, close issue
+- #15 — RMSNorm + parallel residual (x = x + vortex(norm(x)) + ffn(norm(x)))
 
 ### Remaining Open Issues
-- #15 — RMSNorm + parallel residual (IN PROGRESS, see above)
 - #16 — Multi-head vorticity projections with different frequencies
 - #17 — Batched generation for multiple sequences
 - #18 — Scaling laws evaluation (eval/scaling_laws.py)
@@ -113,9 +106,5 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - SSM: 114.6s total, 10.6s/epoch, PPL 4.28
 
 ### How to Continue
-1. `git checkout feature/rmsnorm-parallel-issue-15` to resume issue #15
-2. Fix `forward_step` in hvn_block.py to use `self.norm` instead of `self.norm1`/`self.norm2`
-3. Run `python demo.py` to verify
-4. Run benchmark: `python -m eval.run_eval --dataset shakespeare --epochs 10 --d_model 128 --n_layers 2 --compile --output-json results/shakespeare_rmsnorm.json`
-5. Commit, push, close #15, merge to main
-6. Then proceed to #16, #17, #18, #19, #20 in order
+1. Proceed to #16 — Multi-head vorticity projections with different frequencies
+2. Then #17, #18, #19, #20 in order

@@ -78,11 +78,11 @@ These changes are needed to close the perplexity gap with Transformer (PPL 1.90)
   - File: `hvn/core/batched_memory.py` — `use_input_dependent_eta=True` flag
 
 ### 4.6 Normalization Improvements
-- [🔄] Add **RMSNorm** instead of LayerNorm (Issue #15, IN PROGRESS on branch `feature/rmsnorm-parallel-issue-15`)
-  - RMSNorm class added to `hvn/core/hvn_block.py`
-  - Parallel residual: `x = x + vortex(norm(x)) + ffn(norm(x))`
-  - **INCOMPLETE**: `forward_step` still references old `self.norm1`/`self.norm2` — needs updating
-  - **INCOMPLETE**: Demo not yet verified with RMSNorm changes
+- [x] Add **RMSNorm** instead of LayerNorm (Issue #15, closed)
+  - RMSNorm class in `hvn/core/hvn_block.py` — no mean subtraction, faster than LayerNorm
+  - Parallel residual: `x = x + vortex(norm(x)) + ffn(norm(x))` (GPT-J / PaLM style)
+  - `forward_step()` updated to use single `self.norm` (was `norm1`/`norm2`)
+  - Demo verified, benchmark: HVN PPL 14.74 vs Transformer PPL 8.49 (Shakespeare, 10ep)
 
 ---
 
@@ -286,7 +286,7 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
 6. ~~Higher-rank Hamiltonian update~~ ✅ Done (Issue #12)
 7. ~~Residual Hamiltonian connection~~ ✅ Done (Issue #13)
 8. ~~Real dataset evaluation~~ ✅ Done (Issue #2)
-9. **RMSNorm + parallel residual** 🔄 In Progress (Issue #15) — branch `feature/rmsnorm-parallel-issue-15`
+9. ~~RMSNorm + parallel residual~~ ✅ Done (Issue #15)
 10. **Multi-head vorticity frequencies** ⬜ Planned (Issue #16)
 11. **Batched generation** ⬜ Planned (Issue #17)
 12. **Scaling laws evaluation** ⬜ Planned (Issue #18)
