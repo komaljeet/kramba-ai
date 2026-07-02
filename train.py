@@ -110,8 +110,21 @@ def train_model(
     device: torch.device,
     save_path: str = "hvn_checkpoint.pt",
     compile: bool = False,
+    precision: str = "fp32",
+    grad_accum_steps: int = 1,
 ):
-    """Train the HVN model with next-token prediction (cross-entropy loss)."""
+    """Train the HVN model with next-token prediction (cross-entropy loss).
+
+    Parameters
+    ----------
+    precision : str
+        Mixed-precision mode: "fp32" (default), "fp16", or "bf16".
+        fp16 uses torch.cuda.amp with a GradScaler (older GPUs).
+        bf16 uses autocast without a scaler (RTX 40-series and newer).
+    grad_accum_steps : int
+        Number of micro-batches to accumulate gradients over before each
+        optimizer step.  Effective batch size = batch_size × grad_accum_steps.
+    """
 
     if compile:
         print("Compiling model with torch.compile (first epoch will be slower)...")
@@ -125,34 +138,71 @@ def train_model(
     model.to(device)
     model.train()
 
+    # --- Mixed-precision setup ---
+    use_amp = precision in ("fp16", "bf16") and device.type == "cuda"
+    amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
+    scaler = torch.amp.GradScaler("cuda") if (use_amp and precision == "fp16") else None
+
+    if use_amp:
+        print(f"Mixed-precision training enabled: {precision.upper()}")
+    if grad_accum_steps > 1:
+        print(f"Gradient accumulation: {grad_accum_steps} steps "
+              f"(effective batch size = {dataloader.batch_size * grad_accum_steps})")
+
     print(f"\nTraining for {epochs} epochs | lr={lr} | device={device}")
     print("-" * 60)
 
     for epoch in range(1, epochs + 1):
         total_loss = 0.0
         n_batches = 0
+        optimizer.zero_grad()
 
-        for batch_x, batch_y in dataloader:
+        for step, (batch_x, batch_y) in enumerate(dataloader):
             batch_x = batch_x.to(device)  # [B, S]
             batch_y = batch_y.to(device)  # [B, S]
 
-            # Forward pass
-            logits = model(batch_x)  # [B, S, V]
+            # Forward pass (with autocast for mixed precision)
+            with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
+                logits = model(batch_x)  # [B, S, V]
+                loss = criterion(
+                    logits.reshape(-1, model.vocab_size),   # [B*S, V]
+                    batch_y.reshape(-1),                      # [B*S]
+                )
+                # Scale loss by accumulation steps so gradients average correctly
+                loss = loss / grad_accum_steps
 
-            # Compute loss (flatten for cross-entropy)
-            loss = criterion(
-                logits.reshape(-1, model.vocab_size),   # [B*S, V]
-                batch_y.reshape(-1),                      # [B*S]
-            )
+            # Backward pass
+            if scaler is not None:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
-            # Backward + optimize
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # gradient clipping
-            optimizer.step()
-
-            total_loss += loss.item()
+            total_loss += loss.item() * grad_accum_steps  # restore unscaled loss for logging
             n_batches += 1
+
+            # Optimizer step every grad_accum_steps micro-batches
+            if (step + 1) % grad_accum_steps == 0:
+                if scaler is not None:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    optimizer.step()
+                optimizer.zero_grad()
+
+        # Handle any remaining accumulated gradients at epoch end
+        if n_batches % grad_accum_steps != 0:
+            if scaler is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+            optimizer.zero_grad()
 
         scheduler.step()
         avg_loss = total_loss / max(n_batches, 1)
@@ -272,6 +322,8 @@ def main():
     parser.add_argument("--generate", action="store_true", help="Generate text after training")
     parser.add_argument("--prompt", type=str, default="The ", help="Prompt for generation")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile for faster training (GPU recommended)")
+    parser.add_argument("--precision", type=str, default="fp32", choices=["fp32", "fp16", "bf16"], help="Mixed-precision training mode (fp16/bf16 require CUDA)")
+    parser.add_argument("--grad_accum", type=int, default=1, help="Gradient accumulation steps (effective batch size = batch_size × grad_accum)")
     parser.add_argument("--tokenizer", type=str, default="char", choices=["char", "bpe"], help="Tokenizer type: char or bpe")
     parser.add_argument("--bpe_vocab", type=int, default=1000, help="BPE vocabulary size (only used with --tokenizer bpe)")
     args = parser.parse_args()
@@ -317,7 +369,10 @@ def main():
     print(f"Model parameters: {param_count:,}")
 
     # --- Train ---
-    train_model(model, dataloader, args.epochs, args.lr, device, args.save, compile=args.compile)
+    train_model(
+        model, dataloader, args.epochs, args.lr, device, args.save,
+        compile=args.compile, precision=args.precision, grad_accum_steps=args.grad_accum,
+    )
 
     # --- Save tokenizer ---
     tok_path = args.save.replace(".pt", "_tokenizer.json")

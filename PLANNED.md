@@ -244,7 +244,11 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
 ### 7.3 Distributed Training
 - [ ] Add DDP (DistributedDataParallel) support
 - [ ] Add gradient accumulation for large batch sizes
-- [ ] Add mixed-precision (fp16/bf16) training support (Issue #19, open)
+- [x] Add mixed-precision (fp16/bf16) training support (Issue #19, closed)
+  - `--precision fp32|fp16|bf16` flag in train.py, quality_benchmark.py, eval/run_eval.py, eval/scaling_laws.py
+  - Uses `torch.amp.autocast` + `GradScaler` (fp16) or autocast-only (bf16)
+  - `--grad_accum N` flag for gradient accumulation (effective batch = batch_size × N)
+  - Fixed `torch.linalg.qr` dtype issue in batched_memory.py and hamiltonian_memory.py (upcast to fp32 inside autocast-disabled context)
 - File: `hvn/distributed.py` (new)
 
 ### 7.4 Quantization
@@ -296,7 +300,7 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
 10. ~~Multi-head vorticity frequencies~~ ✅ Done (Issue #16)
 11. ~~Batched generation~~ ✅ Done (Issue #17)
 12. ~~Scaling laws evaluation~~ ✅ Done (Issue #18)
-13. **Mixed-precision training** ⬜ Planned (Issue #19)
+13. ~~Mixed-precision training~~ ✅ Done (Issue #19)
 14. **Quantization** ⬜ Planned (Issue #20)
 15. **Triton kernel** ⬜ Planned (no issue yet)
 16. **Associative parallel scan** ⬜ Planned (no issue yet)

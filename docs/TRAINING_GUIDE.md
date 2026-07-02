@@ -60,6 +60,11 @@ python train.py --text my_corpus.txt --epochs 50 --generate --prompt "Once upon 
 | `--save` | hvn_checkpoint.pt | Checkpoint save path |
 | `--generate` | (flag) | Generate text after training |
 | `--prompt` | "The " | Prompt for post-training generation |
+| `--compile` | (flag) | Use torch.compile for faster training (GPU recommended) |
+| `--precision` | fp32 | Mixed-precision mode: fp32, fp16, or bf16 (GPU required for fp16/bf16) |
+| `--grad_accum` | 1 | Gradient accumulation steps (effective batch = batch_size × grad_accum) |
+| `--tokenizer` | char | Tokenizer type: char or bpe |
+| `--bpe_vocab` | 1000 | BPE vocabulary size (only used with --tokenizer bpe) |
 
 ### Example: Larger Model
 
@@ -105,6 +110,34 @@ Epoch  15/15  |  Loss: 2.2027  |  Perplexity: 9.05
 
 - **Loss**: Cross-entropy loss (lower is better)
 - **Perplexity**: exp(loss) — effective vocabulary size the model is choosing from (lower is better)
+
+### Mixed-Precision Training (fp16/bf16)
+
+Mixed-precision training uses 16-bit floats for forward/backward passes, giving
+**2-3× speedup** and **half the memory** on modern NVIDIA GPUs.  The RTX 4050
+supports both fp16 and bf16.
+
+```bash
+# BF16 (recommended for RTX 40-series — no GradScaler needed, more stable)
+python train.py --epochs 50 --precision bf16
+
+# FP16 (older GPUs — uses GradScaler for numerical stability)
+python train.py --epochs 50 --precision fp16
+
+# Combine with gradient accumulation for larger effective batch sizes
+python train.py --epochs 50 --precision bf16 --grad_accum 4 --batch_size 8
+# → effective batch size = 8 × 4 = 32
+```
+
+| Precision | Speed | Memory | Stability | Notes |
+|-----------|-------|--------|-----------|-------|
+| fp32 | 1× | 1× | Best | Default, maximum precision |
+| fp16 | 2-3× | 0.5× | Good | Uses GradScaler, may overflow on very small values |
+| bf16 | 2-3× | 0.5× | Best | Same dynamic range as fp32, no scaler needed (RTX 40-series+) |
+
+**Gradient accumulation** (`--grad_accum N`) splits a large batch into N
+micro-batches, accumulating gradients before each optimizer step.  This allows
+training with effective batch sizes larger than GPU memory would normally allow.
 
 ---
 
