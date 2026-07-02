@@ -56,6 +56,7 @@ def run_evaluation(
     lr: float = 3e-4,
     output_json: str | None = None,
     compile: bool = False,
+    models: list[str] | None = None,
 ) -> dict:
     """Run a full evaluation on the named dataset and return results dict.
 
@@ -145,7 +146,7 @@ def run_evaluation(
     print(f"  Eval batch: {seq_len} tokens")
 
     # --- Build models ---
-    models = {
+    all_models = {
         "HVN": HamiltonianVortexNetwork(
             vocab_size=vocab_size,
             d_model=d_model,
@@ -166,13 +167,21 @@ def run_evaluation(
         ),
     }
 
+    # Filter to requested models only
+    if models is None:
+        models = list(all_models.keys())
+    selected_models = {name: all_models[name] for name in models if name in all_models}
+    if not selected_models:
+        raise ValueError(f"No valid models selected. Available: {list(all_models.keys())}")
+    print(f"\n  Models to evaluate: {list(selected_models.keys())}")
+
     # --- Train and evaluate each ---
     print("\n" + "=" * 70)
     print(f"TRAINING & EVALUATION — Dataset: {dataset_name}")
     print("=" * 70)
 
     results = {}
-    for name, model in models.items():
+    for name, model in selected_models.items():
         result = train_and_evaluate(
             model,
             name,
@@ -196,7 +205,7 @@ def run_evaluation(
     print(header)
     print("-" * 80)
 
-    for name in ["HVN", "Transformer", "SSM"]:
+    for name in results:
         r = results[name]
         ppl_per_param = r["final_eval_ppl"] / r["params"] * 1000
         print(
@@ -288,6 +297,14 @@ def main():
         action="store_true",
         help="Use torch.compile for faster training (GPU + Triton required)",
     )
+    parser.add_argument(
+        "--models",
+        type=str,
+        nargs="+",
+        default=None,
+        choices=["HVN", "Transformer", "SSM"],
+        help="Which models to evaluate (default: all). E.g. --models HVN Transformer",
+    )
     args = parser.parse_args()
 
     run_evaluation(
@@ -301,6 +318,7 @@ def main():
         lr=args.lr,
         output_json=args.output_json,
         compile=args.compile,
+        models=args.models,
     )
 
 

@@ -319,8 +319,8 @@ class HVNBlock(nn.Module):
         else:
             position_ids = torch.full((B, 1), int(position_idx), device=x_t.device, dtype=torch.long)
 
-        # Pre-norm + project
-        x_norm = self.norm1(x_t)  # [B, 1, D]
+        # Single shared norm for parallel residual (matches forward())
+        x_norm = self.norm(x_t)  # [B, 1, D]
         x_proj = self.input_proj(x_norm)  # [B, 1, D]
         x_heads = x_proj.view(B, 1, self.n_heads, self.d_head)  # [B, 1, n_heads, d_head]
 
@@ -343,8 +343,7 @@ class HVNBlock(nn.Module):
         deflected = torch.cat(head_outputs, dim=-1)  # [B, 1, D]
         deflected = self.output_proj(deflected)
 
-        # Residual + FFN
-        x_t = x_t + self.dropout(deflected)
-        x_t = x_t + self.ffn(self.norm2(x_t))
+        # Parallel residual: x = x + vortex(norm(x)) + ffn(norm(x))
+        x_t = x_t + self.dropout(deflected) + self.ffn(x_norm)
 
         return x_t, new_state
