@@ -93,6 +93,7 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - #18 — Scaling laws evaluation (eval/scaling_laws.py: d_model={64,128,256,512}, power-law fits, crossover analysis, matplotlib plots)
 - #19 — Mixed-precision training (fp16/bf16 via torch.cuda.amp + gradient accumulation, --precision/--grad_accum flags in train.py, quality_benchmark.py, eval/run_eval.py, eval/scaling_laws.py; fixed QR dtype issue in batched_memory.py and hamiltonian_memory.py)
 - #20 — Hamiltonian quantization (INT8 + NF4 4-bit, hvn/quantize.py: QuantizedHamiltonian, QuantizedHVNInference, quantize_int8, quantize_nf4, estimate_memory_savings; test_quantize.py: 8 tests all passing; INT8 ~4× compression <1% error, NF4 ~7× compression <10% error)
+- #21 — Multi-strategy quality upgrade (6 strategies: rank-k entanglement, causal re-injection, cross-head mixing, nonlinear update, per-token η, SwiGLU FFN; new CLI flags in train.py, quality_benchmark.py, eval/scaling_laws.py; all strategies preserve O(1) inference)
 
 ### Remaining Open Issues
 - (none — all issues closed)

@@ -126,6 +126,32 @@ output = q_infer.generate_incremental(
 | INT8 | ~4× (75% saved) | <1% | General inference |
 | NF4 4-bit | ~8× (87% saved) | <10% | Memory-constrained inference |
 
+## Quality Improvement Strategies (Issue #21)
+
+HVN's perplexity can be improved by enabling one or more quality strategies.
+All strategies preserve O(1) inference — the Hamiltonian remains fixed-size,
+no KV cache is introduced, and FLOPs stay below 20% of Transformer at long
+sequences.
+
+| Strategy | Flag | Impact | Description |
+|---------|------|--------|-------------|
+| Rank-k entanglement | `--rank_k 4` or `--rank_k 8` | HIGH | Rank-k projector instead of rank-1 — k× more expressive per token |
+| Causal re-injection | `--causal_reinjection` | MEDIUM | 2-pass chunked: re-compute deflections with updated H per chunk |
+| Cross-head mixing | `--cross_head_mixing` | MEDIUM | Learned mixing of Hamiltonian states across heads |
+| Nonlinear update | `--nonlinear_update` | MEDIUM-HIGH | Gated nonlinearity in the projector (like attention's softmax) |
+| Per-token η | `--per_token_eta` | MEDIUM | Per-token entanglement rate (like Mamba's selective scan) |
+| SwiGLU FFN | `--swiglu` | LOW-MEDIUM | SwiGLU gated FFN (used by LLaMA) instead of standard GELU FFN |
+
+```bash
+# Train with all quality strategies enabled
+python train.py --epochs 100 --precision bf16 \
+    --rank_k 8 --nonlinear_update --causal_reinjection \
+    --cross_head_mixing --swiglu --per_token_eta \
+    --generate --prompt "The "
+```
+
+📖 **Full training guide**: [docs/TRAINING_GUIDE.md](docs/TRAINING_GUIDE.md)
+
 ## License
 
 Research / educational use.

@@ -32,6 +32,12 @@ class HVNConfig:
         chunk_size: int | None = 64,
         dropout: float = 0.1,
         use_mlp_decoder: bool = False,
+        rank_k: int = 1,
+        use_nonlinear_update: bool = False,
+        use_causal_reinjection: bool = False,
+        use_cross_head_mixing: bool = False,
+        use_swiglu: bool = False,
+        use_per_token_eta: bool = False,
     ) -> None:
         self.vocab_size = vocab_size
         self.d_model = d_model
@@ -41,6 +47,12 @@ class HVNConfig:
         self.chunk_size = chunk_size
         self.dropout = dropout
         self.use_mlp_decoder = use_mlp_decoder
+        self.rank_k = rank_k
+        self.use_nonlinear_update = use_nonlinear_update
+        self.use_causal_reinjection = use_causal_reinjection
+        self.use_cross_head_mixing = use_cross_head_mixing
+        self.use_swiglu = use_swiglu
+        self.use_per_token_eta = use_per_token_eta
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -52,6 +64,12 @@ class HVNConfig:
             "chunk_size": self.chunk_size,
             "dropout": self.dropout,
             "use_mlp_decoder": self.use_mlp_decoder,
+            "rank_k": self.rank_k,
+            "use_nonlinear_update": self.use_nonlinear_update,
+            "use_causal_reinjection": self.use_causal_reinjection,
+            "use_cross_head_mixing": self.use_cross_head_mixing,
+            "use_swiglu": self.use_swiglu,
+            "use_per_token_eta": self.use_per_token_eta,
         }
 
     @classmethod
@@ -85,6 +103,12 @@ class HVNForCausalLM(nn.Module):
             chunk_size=self.config.chunk_size,
             dropout=self.config.dropout,
             use_mlp_decoder=self.config.use_mlp_decoder,
+            rank_k=self.config.rank_k,
+            use_nonlinear_update=self.config.use_nonlinear_update,
+            use_causal_reinjection=self.config.use_causal_reinjection,
+            use_cross_head_mixing=self.config.use_cross_head_mixing,
+            use_swiglu=self.config.use_swiglu,
+            use_per_token_eta=self.config.use_per_token_eta,
         )
 
     def forward(

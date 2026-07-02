@@ -326,6 +326,13 @@ def main():
     parser.add_argument("--grad_accum", type=int, default=1, help="Gradient accumulation steps (effective batch size = batch_size × grad_accum)")
     parser.add_argument("--tokenizer", type=str, default="char", choices=["char", "bpe"], help="Tokenizer type: char or bpe")
     parser.add_argument("--bpe_vocab", type=int, default=1000, help="BPE vocabulary size (only used with --tokenizer bpe)")
+    # --- Issue #21 quality strategies ---
+    parser.add_argument("--rank_k", type=int, default=1, help="Rank-k entanglement update (Strategy 1). 1=rank-1 (original), 4 or 8 recommended.")
+    parser.add_argument("--nonlinear_update", action="store_true", help="Enable nonlinear gated Hamiltonian update (Strategy 4)")
+    parser.add_argument("--causal_reinjection", action="store_true", help="Enable multi-chunk causal re-injection (Strategy 2)")
+    parser.add_argument("--cross_head_mixing", action="store_true", help="Enable cross-head Hamiltonian mixing (Strategy 3)")
+    parser.add_argument("--swiglu", action="store_true", help="Use SwiGLU FFN instead of GELU FFN (Strategy 6)")
+    parser.add_argument("--per_token_eta", action="store_true", help="Use per-token entanglement rate instead of chunk-averaged (Strategy 5)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -364,6 +371,12 @@ def main():
         bond_dimension=args.bond_dim,
         chunk_size=args.chunk_size,
         dropout=0.1,
+        rank_k=args.rank_k,
+        use_nonlinear_update=args.nonlinear_update,
+        use_causal_reinjection=args.causal_reinjection,
+        use_cross_head_mixing=args.cross_head_mixing,
+        use_swiglu=args.swiglu,
+        use_per_token_eta=args.per_token_eta,
     )
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {param_count:,}")

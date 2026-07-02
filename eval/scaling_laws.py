@@ -64,6 +64,12 @@ def run_scaling_laws(
     models: list[str] | None = None,
     precision: str = "fp32",
     grad_accum_steps: int = 1,
+    rank_k: int = 1,
+    use_nonlinear_update: bool = False,
+    use_causal_reinjection: bool = False,
+    use_cross_head_mixing: bool = False,
+    use_swiglu: bool = False,
+    use_per_token_eta: bool = False,
 ) -> dict:
     """Train HVN and Transformer at multiple d_model sizes and collect scaling data.
 
@@ -129,6 +135,12 @@ def run_scaling_laws(
                 bond_dimension=bond_dim,
                 chunk_size=64,
                 dropout=0.1,
+                rank_k=rank_k,
+                use_nonlinear_update=use_nonlinear_update,
+                use_causal_reinjection=use_causal_reinjection,
+                use_cross_head_mixing=use_cross_head_mixing,
+                use_swiglu=use_swiglu,
+                use_per_token_eta=use_per_token_eta,
             )
         if "Transformer" in models:
             model_specs["Transformer"] = TransformerLM(
@@ -471,6 +483,13 @@ def main() -> None:
         "--grad_accum", type=int, default=1,
         help="Gradient accumulation steps (effective batch size = batch_size × grad_accum).",
     )
+    # --- Issue #21 quality strategies ---
+    parser.add_argument("--rank_k", type=int, default=1, help="Rank-k entanglement update (Strategy 1). 1=rank-1 (original), 4 or 8 recommended.")
+    parser.add_argument("--nonlinear_update", action="store_true", help="Enable nonlinear gated Hamiltonian update (Strategy 4)")
+    parser.add_argument("--causal_reinjection", action="store_true", help="Enable multi-chunk causal re-injection (Strategy 2)")
+    parser.add_argument("--cross_head_mixing", action="store_true", help="Enable cross-head Hamiltonian mixing (Strategy 3)")
+    parser.add_argument("--swiglu", action="store_true", help="Use SwiGLU FFN instead of GELU FFN (Strategy 6)")
+    parser.add_argument("--per_token_eta", action="store_true", help="Use per-token entanglement rate instead of chunk-averaged (Strategy 5)")
     args = parser.parse_args()
 
     d_models = [int(x.strip()) for x in args.d_models.split(",")]
@@ -498,6 +517,12 @@ def main() -> None:
         models=args.models,
         precision=args.precision,
         grad_accum_steps=args.grad_accum,
+        rank_k=args.rank_k,
+        use_nonlinear_update=args.nonlinear_update,
+        use_causal_reinjection=args.causal_reinjection,
+        use_cross_head_mixing=args.cross_head_mixing,
+        use_swiglu=args.swiglu,
+        use_per_token_eta=args.per_token_eta,
     )
 
 

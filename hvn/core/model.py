@@ -48,6 +48,12 @@ class HamiltonianVortexNetwork(nn.Module):
         chunk_size: int | None = 64,
         dropout: float = 0.1,
         use_mlp_decoder: bool = False,
+        rank_k: int = 1,
+        use_nonlinear_update: bool = False,
+        use_causal_reinjection: bool = False,
+        use_cross_head_mixing: bool = False,
+        use_swiglu: bool = False,
+        use_per_token_eta: bool = False,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -66,6 +72,12 @@ class HamiltonianVortexNetwork(nn.Module):
                 bond_dimension=bond_dimension,
                 chunk_size=chunk_size,
                 dropout=dropout,
+                rank_k=rank_k,
+                use_nonlinear_update=use_nonlinear_update,
+                use_causal_reinjection=use_causal_reinjection,
+                use_cross_head_mixing=use_cross_head_mixing,
+                use_swiglu=use_swiglu,
+                use_per_token_eta=use_per_token_eta,
             )
             for _ in range(num_layers)
         ])
