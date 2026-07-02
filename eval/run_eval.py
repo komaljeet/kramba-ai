@@ -55,6 +55,7 @@ def run_evaluation(
     seq_len: int = 64,
     lr: float = 3e-4,
     output_json: str | None = None,
+    compile: bool = False,
 ) -> dict:
     """Run a full evaluation on the named dataset and return results dict.
 
@@ -180,6 +181,7 @@ def run_evaluation(
             epochs=epochs,
             lr=lr,
             device=device,
+            compile=compile,
         )
         results[name] = result
 
@@ -281,6 +283,11 @@ def main():
         default=None,
         help="Optional path to save results as JSON",
     )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Use torch.compile for faster training (GPU + Triton required)",
+    )
     args = parser.parse_args()
 
     run_evaluation(
@@ -293,6 +300,7 @@ def main():
         seq_len=args.seq_len,
         lr=args.lr,
         output_json=args.output_json,
+        compile=args.compile,
     )
 
 

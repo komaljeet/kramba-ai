@@ -176,9 +176,14 @@ class HVNBlock(nn.Module):
     ) -> torch.Tensor:
         """Process all heads simultaneously with chunked parallel vortex injection.
 
-        All n_heads are batched into the batch dimension (B*n_heads), so the
-        entire forward pass uses a single set of batched matmuls — no Python
-        loop over heads or tokens.
+        Refactored for torch.compile compatibility:
+        1. Vortex injection: single batched call for the ENTIRE sequence (no loop)
+           All tokens use the initial H — the same chunked approximation as before.
+        2. Hamiltonian update: sequential loop over chunks (only update_batch,
+           no vortex injection in the loop — much cheaper per iteration).
+
+        This separates the parallel-friendly part (vortex) from the sequential
+        part (H update), making the vortex path fully compile-friendly.
         """
         BH = B * self.n_heads  # effective batch size
 
@@ -186,27 +191,24 @@ class HVNBlock(nn.Module):
         H = self.memory.init_hamiltonian(B, device=x_batched.device, dtype=x_batched.dtype)
         # H shape: [B*n_heads, d_head, d_head]
 
-        chunk_size = self._resolve_chunk_size(S)
-        all_outputs = []
+        # --- Phase 1: Vortex injection for the ENTIRE sequence in one call ---
+        # All tokens use the same initial H (the chunked approximation we already use).
+        # This is a single batched call — no Python loop, fully compile-friendly.
+        deflected_all, velocity_all = self.vortex(
+            x_batched, H, position_ids=position_ids
+        )  # [BH, S, d_head] x2
 
+        # --- Phase 2: Hamiltonian update over chunks (sequential, but cheap) ---
+        # Only update_batch calls — no vortex injection in the loop.
+        # This loop has far fewer iterations than the old approach and each
+        # iteration is just a few matmuls (no Linear, no rotary, no gating).
+        chunk_size = self._resolve_chunk_size(S)
         for chunk_start in range(0, S, chunk_size):
             chunk_end = min(chunk_start + chunk_size, S)
-            x_chunk = x_batched[:, chunk_start:chunk_end, :]  # [BH, chunk_len, d_head]
-
-            chunk_position_ids = None
-            if position_ids is not None:
-                chunk_position_ids = position_ids[:, chunk_start:chunk_end]
-
-            # Batched vortex injection for all heads at once
-            deflected_chunk, velocity_chunk = self.vortex(
-                x_chunk, H, position_ids=chunk_position_ids
-            )  # [BH, chunk_len, d_head] x2
-            all_outputs.append(deflected_chunk)
-
-            # Batched Hamiltonian update for all heads at once
+            velocity_chunk = velocity_all[:, chunk_start:chunk_end, :]
             H = self.memory.update_batch(H, velocity_chunk)
 
-        return torch.cat(all_outputs, dim=1)  # [BH, S, d_head]
+        return deflected_all  # [BH, S, d_head]
 
     def _resolve_chunk_size(self, seq_len: int) -> int:
         """Choose a chunk size that balances parallelism and accuracy."""

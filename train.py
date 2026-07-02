@@ -109,8 +109,13 @@ def train_model(
     lr: float,
     device: torch.device,
     save_path: str = "hvn_checkpoint.pt",
+    compile: bool = False,
 ):
     """Train the HVN model with next-token prediction (cross-entropy loss)."""
+
+    if compile:
+        print("Compiling model with torch.compile (first epoch will be slower)...")
+        model = torch.compile(model, mode="reduce-overhead")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     # Cosine LR schedule for smooth convergence
@@ -266,6 +271,7 @@ def main():
     parser.add_argument("--save", type=str, default="hvn_checkpoint.pt", help="Checkpoint save path")
     parser.add_argument("--generate", action="store_true", help="Generate text after training")
     parser.add_argument("--prompt", type=str, default="The ", help="Prompt for generation")
+    parser.add_argument("--compile", action="store_true", help="Use torch.compile for faster training (GPU recommended)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -304,7 +310,7 @@ def main():
     print(f"Model parameters: {param_count:,}")
 
     # --- Train ---
-    train_model(model, dataloader, args.epochs, args.lr, device, args.save)
+    train_model(model, dataloader, args.epochs, args.lr, device, args.save, compile=args.compile)
 
     # --- Save tokenizer ---
     tok_path = args.save.replace(".pt", "_tokenizer.json")

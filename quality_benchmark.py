@@ -47,8 +47,13 @@ def train_and_evaluate(
     epochs: int,
     lr: float,
     device: torch.device,
+    compile: bool = False,
 ) -> dict:
     """Train a model and return training history + final eval metrics."""
+
+    if compile and device.type == "cuda":
+        print(f"  Compiling {name} with torch.compile...")
+        model = torch.compile(model, mode="reduce-overhead")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
@@ -139,6 +144,7 @@ def main():
     parser.add_argument("--eval-text", type=str, default=None, help="Optional path to a separate evaluation corpus text file")
     parser.add_argument("--train-split", type=float, default=0.9, help="Fraction of the corpus used for training")
     parser.add_argument("--output-json", type=str, default=None, help="Optional path to save benchmark results as JSON")
+    parser.add_argument("--compile", action="store_true", help="Use torch.compile for faster training (GPU + Triton required)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -202,6 +208,7 @@ def main():
         result = train_and_evaluate(
             model, name, train_loader, (eval_x, eval_y),
             epochs=args.epochs, lr=args.lr, device=device,
+            compile=args.compile,
         )
         results[name] = result
 
