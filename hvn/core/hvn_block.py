@@ -201,10 +201,10 @@ class HVNBlock(nn.Module):
             deflected_chunk, velocity_chunk = vortex(x_chunk, H, position_ids=chunk_position_ids)  # [B, chunk_len, d_head] x2
             all_outputs.append(deflected_chunk)
 
-            # Update Hamiltonian with each token's velocity (sequential within chunk)
-            chunk_len = chunk_end - chunk_start
-            for t in range(chunk_len):
-                H = memory.update(H, velocity_chunk[:, t, :])
+            # Update Hamiltonian with all velocities in the chunk at once (batched)
+            # This replaces the sequential for-loop with a single batched operation,
+            # eliminating the Python-level bottleneck that caused 63x slowdown.
+            H = memory.update_batch(H, velocity_chunk)
 
         return torch.cat(all_outputs, dim=1)  # [B, S, d_head]
 

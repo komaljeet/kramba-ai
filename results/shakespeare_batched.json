@@ -1,0 +1,110 @@
+{
+  "dataset": "shakespeare",
+  "dataset_stats": {
+    "train_chars": 1003854,
+    "eval_chars": 111540,
+    "vocab_size": 65,
+    "train_tokens": 1003854,
+    "eval_tokens": 111540
+  },
+  "hyperparameters": {
+    "epochs": 3,
+    "d_model": 128,
+    "n_layers": 2,
+    "batch_size": 16,
+    "seq_len": 64,
+    "lr": 0.0003
+  },
+  "models": {
+    "HVN": {
+      "name": "HVN",
+      "params": 248921,
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 2.5692501240670986,
+          "eval_loss": 2.6504921913146973,
+          "eval_ppl": 14.161006854970395,
+          "time_s": 27.342766284942627
+        },
+        {
+          "epoch": 2,
+          "train_loss": 2.483443259949835,
+          "eval_loss": 2.621709108352661,
+          "eval_ppl": 13.75921949779797,
+          "time_s": 27.24205708503723
+        },
+        {
+          "epoch": 3,
+          "train_loss": 2.474778729233659,
+          "eval_loss": 2.6130919456481934,
+          "eval_ppl": 13.641163449312918,
+          "time_s": 27.24627161026001
+        }
+      ],
+      "final_eval_loss": 2.6130919456481934,
+      "final_eval_ppl": 13.641163449312918,
+      "total_time_s": 81.83109498023987
+    },
+    "Transformer": {
+      "name": "Transformer",
+      "params": 412416,
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 2.4605023615464767,
+          "eval_loss": 2.4555065631866455,
+          "eval_ppl": 11.65233469789728,
+          "time_s": 5.722414493560791
+        },
+        {
+          "epoch": 2,
+          "train_loss": 2.2849915292527943,
+          "eval_loss": 2.3986833095550537,
+          "eval_ppl": 11.008671820731488,
+          "time_s": 5.669161796569824
+        },
+        {
+          "epoch": 3,
+          "train_loss": 2.2200470140828514,
+          "eval_loss": 2.363996982574463,
+          "eval_ppl": 10.633368013493747,
+          "time_s": 5.73065447807312
+        }
+      ],
+      "final_eval_loss": 2.363996982574463,
+      "final_eval_ppl": 10.633368013493747,
+      "total_time_s": 17.122230768203735
+    },
+    "SSM": {
+      "name": "SSM",
+      "params": 313600,
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 2.130318073929875,
+          "eval_loss": 2.0172204971313477,
+          "eval_ppl": 7.517401230101751,
+          "time_s": 116.65168786048889
+        },
+        {
+          "epoch": 2,
+          "train_loss": 1.742141575623725,
+          "eval_loss": 1.8800036907196045,
+          "eval_ppl": 6.553529049384656,
+          "time_s": 117.63293433189392
+        },
+        {
+          "epoch": 3,
+          "train_loss": 1.6385601576679707,
+          "eval_loss": 1.8093712329864502,
+          "eval_ppl": 6.106606592070531,
+          "time_s": 118.83962368965149
+        }
+      ],
+      "final_eval_loss": 1.8093712329864502,
+      "final_eval_ppl": 6.106606592070531,
+      "total_time_s": 353.1242458820343
+    }
+  }
+}

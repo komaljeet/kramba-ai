@@ -219,6 +219,75 @@ class HamiltonianMemoryBlock(nn.Module):
 
         return H_trunc
 
+    def update_batch(
+        self,
+        hamiltonian: torch.Tensor,
+        velocities: torch.Tensor,
+    ) -> torch.Tensor:
+        """Batched Hamiltonian update for all tokens in a chunk simultaneously.
+
+        Instead of looping token-by-token, this processes all tokens in a
+        single batched operation using the linearised approximation:
+
+            H_new ≈ (1 - η)·H + η · Σ_t P_t
+
+        The destructive interference term (H·P·H) is computed once using the
+        chunk-initial H, which is the same approximation used in the chunked
+        forward pass (all tokens in a chunk see the same H).
+
+        This eliminates the Python for-loop bottleneck and replaces ~10·S
+        sequential kernel launches with a handful of batched matmuls.
+
+        Parameters
+        ----------
+        hamiltonian : torch.Tensor
+            Current Hamiltonian, shape [batch, d_model, d_model].
+        velocities : torch.Tensor
+            Velocity vectors for all tokens in the chunk, shape [batch, seq_len, d_model].
+
+        Returns
+        -------
+        hamiltonian_new : torch.Tensor, shape [batch, d_model, d_model]
+        """
+        B, S, D = velocities.shape
+        eta = torch.clamp(self.eta, min=0.0, max=1.0)
+
+        # --- Normalise all velocity vectors ---
+        v_norms = velocities.norm(dim=-1, keepdim=True).clamp(min=1e-8)  # [B, S, 1]
+        v = velocities / v_norms  # [B, S, D]
+
+        # --- Batched rank-1 projectors: P_t = v_t ⊗ v_t^T ---
+        # Sum all projectors in one operation: Σ_t P_t = v^T · v (batched)
+        # P_sum[b] = sum_t v[b,t,:] ⊗ v[b,t,:]^T = v[b].T @ v[b]  → [B, D, D]
+        P_sum = torch.bmm(v.transpose(-1, -2), v)  # [B, D, D]
+
+        # --- Destructive interference: H · P_sum · H (computed once) ---
+        # Using the chunk-initial H for all tokens (same approximation as chunked forward)
+        Hv = torch.bmm(hamiltonian, v.transpose(-1, -2))  # [B, D, S]  (H · v^T)
+        # HPH_sum = Σ_t (Hv_t ⊗ (H^T v_t)^T) = (H v^T) (H v^T)^T ... but with H^T
+        Ht_v = torch.bmm(hamiltonian.transpose(-1, -2), v.transpose(-1, -2))  # [B, D, S]
+        HPH_sum = torch.bmm(Hv, Ht_v.transpose(-1, -2))  # [B, D, D]
+
+        # --- Batched entanglement update ---
+        # H_new = (1 - η)·H + η · (P_sum - HPH_sum) / S
+        # Divide by S to normalise (average projector contribution)
+        hamiltonian_new = (1.0 - eta) * hamiltonian + eta * (P_sum - HPH_sum) / S
+
+        # --- Spectral norm clamping ---
+        fro_norm = hamiltonian_new.norm(dim=(-1, -2), keepdim=True).clamp(min=1e-8)
+        max_norm = (D ** 0.5)
+        scale = torch.clamp(max_norm / fro_norm, max=1.0)
+        hamiltonian_new = hamiltonian_new * scale
+
+        # --- Optional: low-rank truncation ---
+        if self.bond_dimension is not None and self.bond_dimension < D:
+            hamiltonian_new = self._svd_truncate(hamiltonian_new)
+
+        # Apply learnable memory gate
+        hamiltonian_new = hamiltonian_new * self.memory_gate
+
+        return hamiltonian_new
+
     def forward(
         self,
         hamiltonian: torch.Tensor,
