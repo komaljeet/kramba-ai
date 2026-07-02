@@ -64,8 +64,10 @@ These changes are needed to close the perplexity gap with Transformer (PPL 1.90)
   - P_sum = Σ_t v_t ⊗ v_t^T computed in single batched matmul
 
 ### 4.3 Multi-Head Vorticity Projections
-- [ ] Add per-head **learned vorticity projections** with different initialization (Issue #16, open)
+- [x] Add per-head **learned vorticity projections** with different initialization (Issue #16, closed)
   - File: `hvn/core/vortex_injection.py`, `hvn/core/batched_vortex.py`
+  - Per-head `vorticity_frequency` parameter (geometric init: 2^h) scales rotary embeddings
+  - High-frequency heads capture local patterns; low-frequency heads capture global structure
 
 ### 4.4 Residual Hamiltonian Connection
 - [x] Add a **skip connection** from the input Hamiltonian to the output (Issue #13, closed)

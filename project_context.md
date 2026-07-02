@@ -88,9 +88,9 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - #13 — Residual Hamiltonian connection (H_new = H_old + ΔH, use_residual=True)
 - #14 — Learned input-dependent entanglement rate (η_t = σ(W_η · x_t))
 - #15 — RMSNorm + parallel residual (x = x + vortex(norm(x)) + ffn(norm(x)))
+- #16 — Per-head vorticity frequency projections (geometric init 2^h, Fourier-style specialization)
 
 ### Remaining Open Issues
-- #16 — Multi-head vorticity projections with different frequencies
 - #17 — Batched generation for multiple sequences
 - #18 — Scaling laws evaluation (eval/scaling_laws.py)
 - #19 — Mixed-precision training (fp16/bf16 via torch.cuda.amp)
@@ -115,5 +115,5 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - SSM: 114.6s total, 10.6s/epoch, PPL 4.28
 
 ### How to Continue
-1. Proceed to #16 — Multi-head vorticity projections with different frequencies
-2. Then #17, #18, #19, #20 in order
+1. Proceed to #17 — Batched generation for multiple sequences
+2. Then #18, #19, #20 in order
