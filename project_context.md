@@ -41,3 +41,25 @@ The default expectation is:
 - commit and push,
 - close the issue when resolved,
 - reopen it if the work regresses or needs additional follow-up.
+
+## GPU / CUDA Requirement
+
+This project has an NVIDIA GPU available and ALL training, benchmarking, and
+evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
+
+- **GPU**: NVIDIA GeForce RTX 4050 Laptop GPU (6 GB VRAM)
+- **NVIDIA Driver**: 596.36 (CUDA 13.2 capable)
+- **PyTorch**: Must be installed with CUDA support:
+  ```
+  pip install torch --index-url https://download.pytorch.org/whl/cu126
+  ```
+- **Verify before running**:
+  ```python
+  import torch
+  assert torch.cuda.is_available(), "CUDA is not available — install GPU PyTorch!"
+  print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+  ```
+- All scripts use `device = torch.device("cuda" if torch.cuda.is_available() else "cpu")`
+  which will automatically pick the GPU now that CUDA PyTorch is installed.
+- If `torch.cuda.is_available()` returns `False`, do NOT proceed with CPU —
+  stop and fix the PyTorch installation first.
