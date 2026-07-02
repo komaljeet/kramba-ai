@@ -90,9 +90,9 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - #15 — RMSNorm + parallel residual (x = x + vortex(norm(x)) + ffn(norm(x)))
 - #16 — Per-head vorticity frequency projections (geometric init 2^h, Fourier-style specialization)
 - #17 — Batched generation for multiple sequences (generate_batched, forward_step_batched, 18x speedup)
+- #18 — Scaling laws evaluation (eval/scaling_laws.py: d_model={64,128,256,512}, power-law fits, crossover analysis, matplotlib plots)
 
 ### Remaining Open Issues
-- #18 — Scaling laws evaluation (eval/scaling_laws.py)
 - #19 — Mixed-precision training (fp16/bf16 via torch.cuda.amp)
 - #20 — Hamiltonian quantization (INT8/4-bit, hvn/quantize.py)
 
@@ -106,6 +106,7 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - `hvn/hf_model.py` — HVNConfig, HVNForCausalLM (HF-style wrapper)
 - `hvn/tokenizer.py` — BPETokenizer (HuggingFace tokenizers wrapper)
 - `eval/run_eval.py` — Real-dataset evaluation harness (--compile flag)
+- `eval/scaling_laws.py` — Scaling laws evaluation (multi-size training, power-law fits, crossover analysis, plots)
 - `eval/long_context.py` — Speed scaling + needle-in-haystack tests
 - `eval/datasets.py` — Dataset loaders (WikiText, Shakespeare, code)
 
@@ -114,6 +115,14 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - Transformer: 34.5s total, 3.4s/epoch, PPL 8.46
 - SSM: 114.6s total, 10.6s/epoch, PPL 4.28
 
+### Scaling Laws Results (Shakespeare, 20 epochs, d_model={64,128,256,512}, RTX 4050)
+- HVN scaling exponent: PPL ∝ params^-0.007 (nearly flat — poor scaling)
+- Transformer scaling exponent: PPL ∝ params^-0.090 (steep improvement)
+- HVN PPL barely improves with size: 14.24 → 13.82 across 56× param increase
+- Transformer PPL improves dramatically: 9.12 → 4.93 (256), 6.91 (512)
+- No wall-clock crossover found — HVN slower at all tested sizes
+- Key finding: HVN's rank-1 entanglement update lacks expressiveness to benefit from scale
+
 ### How to Continue
-1. Proceed to #18 — Scaling laws evaluation
-2. Then #19, #20 in order
+1. Proceed to #19 — Mixed-precision training (fp16/bf16)
+2. Then #20 — Hamiltonian quantization (INT8/4-bit)

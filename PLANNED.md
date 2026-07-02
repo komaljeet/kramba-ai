@@ -200,7 +200,7 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
 
 ---
 
-## Phase 6: Evaluation & Scaling (⬜ Planned)
+## Phase 6: Evaluation & Scaling (✅ Complete)
 
 ### 6.1 Real Dataset Benchmarks
 - [x] Train on **WikiText-2** (subset) and compare perplexity (Issue #2, closed)
@@ -216,10 +216,14 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
   - File: `eval/long_context.py` (implemented)
 
 ### 6.3 Scaling Laws
-- [ ] Train HVN at d_model = {64, 128, 256, 512} and plot loss curves (Issue #18, open)
-- [ ] Compare scaling efficiency: how does PPL improve with parameters?
-- [ ] Determine the **crossover point** where HVN beats Transformer on wall-clock time
-- File: `eval/scaling_laws.py` (new)
+- [x] Train HVN at d_model = {64, 128, 256, 512} and plot loss curves (Issue #18, closed)
+- [x] Compare scaling efficiency: how does PPL improve with parameters?
+- [x] Determine the **crossover point** where HVN beats Transformer on wall-clock time
+  - **Result**: No crossover found within tested sizes — HVN slower at all d_model values
+  - HVN scaling exponent: PPL ∝ params^-0.007 (nearly flat — poor scaling)
+  - Transformer scaling exponent: PPL ∝ params^-0.090 (steep improvement)
+  - Key finding: HVN's rank-1 entanglement update lacks expressiveness to benefit from scale
+- File: `eval/scaling_laws.py` (implemented, with matplotlib plots + JSON output)
 
 ---
 
@@ -289,9 +293,9 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
 7. ~~Residual Hamiltonian connection~~ ✅ Done (Issue #13)
 8. ~~Real dataset evaluation~~ ✅ Done (Issue #2)
 9. ~~RMSNorm + parallel residual~~ ✅ Done (Issue #15)
-10. **Multi-head vorticity frequencies** ⬜ Planned (Issue #16)
-11. **Batched generation** ⬜ Planned (Issue #17)
-12. **Scaling laws evaluation** ⬜ Planned (Issue #18)
+10. ~~Multi-head vorticity frequencies~~ ✅ Done (Issue #16)
+11. ~~Batched generation~~ ✅ Done (Issue #17)
+12. ~~Scaling laws evaluation~~ ✅ Done (Issue #18)
 13. **Mixed-precision training** ⬜ Planned (Issue #19)
 14. **Quantization** ⬜ Planned (Issue #20)
 15. **Triton kernel** ⬜ Planned (no issue yet)
