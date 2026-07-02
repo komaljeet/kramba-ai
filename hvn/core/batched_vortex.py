@@ -46,6 +46,25 @@ class MultiHeadVortexInjection(nn.Module):
         for h in range(n_heads):
             nn.init.normal_(self.vorticity_weight[h], mean=0.0, std=1.0 / math.sqrt(d_head))
 
+        # --- Per-head vorticity frequency (Fourier-style specialisation) ---
+        # Each head gets a distinct frequency scaling factor for the rotary
+        # positional embeddings.  Heads with high frequency capture local
+        # patterns; heads with low frequency capture global structure.
+        # We initialise with a geometric series from high to low frequency,
+        # analogous to how multi-head attention heads specialise.
+        #
+        #   head 0:           freq = 2^0  = 1.0   (base frequency)
+        #   head 1:           freq = 2^1  = 2.0   (higher — more local)
+        #   ...
+        #   head n_heads-1:   freq = 2^(n-1)     (highest — most local)
+        #
+        # The parameter is learnable so the model can adjust during training.
+        freq_init = torch.tensor(
+            [2.0 ** h for h in range(n_heads)],
+            dtype=torch.float32,
+        )
+        self.vorticity_frequency = nn.Parameter(freq_init)  # [n_heads]
+
         # --- Batched coupling constant Γ (one per head) ---
         self.gamma = nn.Parameter(torch.full((n_heads, 1), 1.0 / math.sqrt(d_head)))
 
@@ -108,8 +127,11 @@ class MultiHeadVortexInjection(nn.Module):
         B = BH // self.n_heads
         w_vort = self.vorticity_weight.repeat_interleave(B, dim=0)  # [BH, D, D]
         vorticity = torch.bmm(x, w_vort.transpose(-1, -2))  # [BH, S, D]
-        # Apply rotary embeddings
-        vorticity = _apply_rotary_embeddings(vorticity, position_ids)
+        # Apply rotary embeddings with per-head frequency scaling
+        # Each head uses a different frequency → different heads capture
+        # different frequency patterns (local vs global, like Fourier features)
+        freq_scale = self.vorticity_frequency.repeat_interleave(B, dim=0)  # [BH]
+        vorticity = _apply_rotary_embeddings(vorticity, position_ids, frequency_scale=freq_scale)
 
         # --- Step 2: Batched Biot-Savart velocity ---
         # v_t = Γ · (H · ω_t)

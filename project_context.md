@@ -27,6 +27,15 @@ Apply your maximum reasoning capacity to ensure the PyTorch code handles multi-d
 
 ## Issue and Delivery Workflow
 
+**Always use the GitLab CLI (`glab`) for all GitLab interactions** — viewing issues,
+work items, closing/reopening issues, creating MRs, etc.  Never use the GitLab web UI
+or browser.  The web UI is behind a login wall and Cloudflare challenge that blocks
+automated access.  Examples:
+- `glab issue view <id> --repo komalbarun/kramba-ai`
+- `glab issue close <id> --repo komalbarun/kramba-ai`
+- `glab issue list --repo komalbarun/kramba-ai`
+- `glab work-items list --repo komalbarun/kramba-ai`
+
 When working on a GitLab issue:
 
 1. Implement the requested change and verify it with a real test or runnable command.

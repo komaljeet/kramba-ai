@@ -36,12 +36,24 @@ import torch.nn as nn
 import math
 
 
-def _apply_rotary_embeddings(x: torch.Tensor, position_ids: torch.Tensor) -> torch.Tensor:
+def _apply_rotary_embeddings(
+    x: torch.Tensor,
+    position_ids: torch.Tensor,
+    frequency_scale: torch.Tensor | float = 1.0,
+) -> torch.Tensor:
     """Apply rotary positional embeddings to the last dimension of x.
 
     The implementation rotates pairs of channels using sinusoidal frequencies
     based on absolute positions. This gives the vortex projection explicit
     sequence-order information before the Biot-Savart velocity computation.
+
+    Parameters
+    ----------
+    frequency_scale : torch.Tensor | float
+        Per-head frequency scaling factor.  A value > 1 increases the rotary
+        frequency (captures local / high-frequency patterns), while a value
+        < 1 decreases it (captures global / low-frequency patterns).
+        Shape: scalar or [B*n_heads, 1] for per-head frequencies.
     """
     if x.shape[-1] < 2:
         return x
@@ -54,7 +66,12 @@ def _apply_rotary_embeddings(x: torch.Tensor, position_ids: torch.Tensor) -> tor
     dtype = x.dtype
     positions = position_ids.to(device=device, dtype=dtype)
     inv_freq = 1.0 / (10000.0 ** (torch.arange(0, rotary_dim, 2, device=device, dtype=dtype) / rotary_dim))
-    freqs = positions.unsqueeze(-1) * inv_freq.view(1, 1, -1)
+    # Apply per-head frequency scaling — different heads see different frequencies
+    if isinstance(frequency_scale, torch.Tensor):
+        # frequency_scale: [BH] → reshape to [BH, 1, 1] for broadcasting
+        freqs = positions.unsqueeze(-1) * inv_freq.view(1, 1, -1) * frequency_scale.view(-1, 1, 1)
+    else:
+        freqs = positions.unsqueeze(-1) * inv_freq.view(1, 1, -1) * frequency_scale
 
     cos = torch.cos(freqs)
     sin = torch.sin(freqs)
