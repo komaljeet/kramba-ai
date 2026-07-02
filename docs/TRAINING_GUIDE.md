@@ -193,6 +193,7 @@ python train.py --text my_corpus.txt --epochs 50 --generate --prompt "Once upon 
 | `--cross_head_mixing` | (flag) | Enable cross-head Hamiltonian mixing (Issue #21 Strategy 3) |
 | `--swiglu` | (flag) | Use SwiGLU FFN instead of GELU FFN (Issue #21 Strategy 6) |
 | `--per_token_eta` | (flag) | Use per-token entanglement rate instead of chunk-averaged (Issue #21 Strategy 5) |
+| `--n_threads` | 1 | Number of independent Hamiltonian threads per head (Issue #22). 1=single Hamiltonian (backward-compatible), 4 recommended for better quality |
 
 ### Example: Larger Model
 
@@ -238,6 +239,34 @@ python train.py \
 **Strategy 1 (rank-k) is the single most impactful change** — it addresses the
 root cause of HVN's flat scaling exponent by making the Hamiltonian update
 more expressive per token.
+
+### Multi-Thread Hamiltonian Memory (Issue #22)
+
+Instead of 1 Hamiltonian per head, maintain **K independent Hamiltonians per
+head**, each updated with a different projection of the input.  Different
+threads learn to track different types of relationships (syntax, semantics,
+repetition, etc.).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--n_threads` | 1 | Number of independent Hamiltonian threads per head (K). 1=single (backward-compatible), 4 recommended |
+
+**Key insight**: One d×d matrix can only store one view of the sequence. K
+matrices can store K different views — like having K people each take notes
+on the same conversation from different angles.
+
+**Memory cost**: O(K·d²) per head — still O(1) in sequence length N.  With
+K=4 and d=512: 4 × 6.29 MB = 25.2 MB — still 100× less than the KV cache.
+
+**Recommended combination** (all strategies + multi-thread):
+
+```bash
+python train.py \
+    --epochs 100 --precision bf16 \
+    --n_threads 4 --rank_k 8 --nonlinear_update \
+    --causal_reinjection --cross_head_mixing --swiglu --per_token_eta \
+    --generate --prompt "The "
+```
 
 ### What Happens During Training
 

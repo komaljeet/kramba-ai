@@ -31,8 +31,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .vortex_injection import VortexInjectionLayer
 from .hamiltonian_memory import HamiltonianMemoryBlock
-from .batched_vortex import MultiHeadVortexInjection
-from .batched_memory import MultiHeadHamiltonianMemory
+from .batched_vortex import MultiHeadVortexInjection, MultiThreadVortexInjection
+from .batched_memory import MultiHeadHamiltonianMemory, MultiThreadHamiltonianMemory
 
 
 class RMSNorm(nn.Module):
@@ -166,6 +166,7 @@ class HVNBlock(nn.Module):
         use_cross_head_mixing: bool = False,
         use_swiglu: bool = False,
         use_per_token_eta: bool = False,
+        n_threads: int = 1,
     ):
         super().__init__()
         self.d_model = d_model
@@ -178,18 +179,35 @@ class HVNBlock(nn.Module):
         self.use_causal_reinjection = use_causal_reinjection
         self.use_cross_head_mixing = use_cross_head_mixing
         self.use_per_token_eta = use_per_token_eta
+        self.n_threads = n_threads
+        self.n_units = n_heads * n_threads  # total (head, thread) pairs
 
-        # Batched multi-head vortex injection (replaces per-head ModuleList)
-        self.vortex = MultiHeadVortexInjection(self.d_head, n_heads)
+        # Batched multi-head vortex injection
+        # Use MultiThreadVortexInjection when n_threads > 1, else MultiHeadVortexInjection
+        if n_threads > 1:
+            self.vortex = MultiThreadVortexInjection(self.d_head, n_heads, n_threads)
+        else:
+            self.vortex = MultiHeadVortexInjection(self.d_head, n_heads)
 
-        # Batched multi-head quantum memory (replaces per-head ModuleList)
-        self.memory = MultiHeadHamiltonianMemory(
-            self.d_head,
-            n_heads,
-            bond_dimension=bond_dimension,
-            rank_k=rank_k,
-            use_nonlinear_update=use_nonlinear_update,
-        )
+        # Batched multi-head quantum memory
+        # Use MultiThreadHamiltonianMemory when n_threads > 1, else MultiHeadHamiltonianMemory
+        if n_threads > 1:
+            self.memory = MultiThreadHamiltonianMemory(
+                self.d_head,
+                n_heads,
+                n_threads=n_threads,
+                bond_dimension=bond_dimension,
+                rank_k=rank_k,
+                use_nonlinear_update=use_nonlinear_update,
+            )
+        else:
+            self.memory = MultiHeadHamiltonianMemory(
+                self.d_head,
+                n_heads,
+                bond_dimension=bond_dimension,
+                rank_k=rank_k,
+                use_nonlinear_update=use_nonlinear_update,
+            )
 
         # Backward-compatible references (for checkpoint loading from old format)
         self.vortex_heads = nn.ModuleList([
@@ -293,33 +311,39 @@ class HVNBlock(nn.Module):
     ) -> torch.Tensor:
         """Process all heads simultaneously with chunked parallel vortex injection.
 
-        Supports Strategy 2 (causal re-injection), Strategy 3 (cross-head mixing),
-        and Strategy 5 (per-token η).
+        Supports multi-thread memory (Issue #22), Strategy 2 (causal re-injection),
+        Strategy 3 (cross-head mixing), and Strategy 5 (per-token η).
 
-        Without causal re-injection (default):
-        1. Vortex injection: single batched call for the ENTIRE sequence (no loop)
-           All tokens use the initial H — the same chunked approximation as before.
-        2. Hamiltonian update: sequential loop over chunks (only update_batch,
-           no vortex injection in the loop — much cheaper per iteration).
-
-        With causal re-injection (Strategy 2):
-        1. PASS 1: Compute velocities with initial H, update H chunk-by-chunk.
-        2. PASS 2: Re-compute deflected representations with updated H
-           for each chunk — making each chunk's representations causally
-           accurate (they see the Hamiltonian state from all previous chunks).
+        When ``n_threads > 1``, the Hamiltonian has shape ``[B*n_units, D, D]``
+        where ``n_units = n_heads * n_threads``.  The vortex injection handles
+        thread expansion internally and returns mixed deflected outputs
+        (shape ``[B*n_heads, S, D]``) and per-thread velocities
+        (shape ``[B*n_units, S, D]``).
         """
-        BH = B * self.n_heads  # effective batch size
+        BH = B * self.n_heads  # effective batch size for vortex I/O
+        BU = B * self.n_units  # effective batch size for Hamiltonian (heads × threads)
 
-        # Initialize Hamiltonian for all heads at once
+        # Initialize Hamiltonian for all (head, thread) pairs at once
         H = self.memory.init_hamiltonian(B, device=x_batched.device, dtype=x_batched.dtype)
-        # H shape: [B*n_heads, d_head, d_head]
+        # H shape: [B*n_units, d_head, d_head]
+
+        # --- Expand inputs for threads (for memory updates) ---
+        if self.n_threads > 1:
+            # x_batched: [BH, S, D] → expand to [BU, S, D] for per-thread memory
+            x_expanded = x_batched.view(B, self.n_heads, S, self.d_head)
+            x_expanded = x_expanded.unsqueeze(2).expand(
+                B, self.n_heads, self.n_threads, S, self.d_head
+            )
+            x_threaded = x_expanded.reshape(BU, S, self.d_head)
+        else:
+            x_threaded = x_batched
 
         if self.use_causal_reinjection:
             # --- Strategy 2: Two-pass causal re-injection ---
             # PASS 1: Compute velocities with initial H, update H chunk-by-chunk
             deflected_pass1, velocity_all = self.vortex(
                 x_batched, H, position_ids=position_ids
-            )  # [BH, S, d_head] x2
+            )  # deflected: [BH, S, d_head], velocity: [BU, S, d_head]
 
             # Update H chunk-by-chunk to get the correct H at each chunk boundary
             chunk_size = self._resolve_chunk_size(S)
@@ -328,7 +352,7 @@ class HVNBlock(nn.Module):
             for chunk_start in range(0, S, chunk_size):
                 chunk_end = min(chunk_start + chunk_size, S)
                 velocity_chunk = velocity_all[:, chunk_start:chunk_end, :]
-                input_chunk = x_batched[:, chunk_start:chunk_end, :]
+                input_chunk = x_threaded[:, chunk_start:chunk_end, :]
                 if self.use_per_token_eta:
                     H_current = self.memory.update_batch_per_token(
                         H_current, velocity_chunk, inputs=input_chunk
@@ -341,9 +365,14 @@ class HVNBlock(nn.Module):
 
             # Strategy 3: Cross-head mixing after H updates
             if self.cross_head_mixer is not None:
-                H_mixed = H_current.view(B, self.n_heads, self.d_head, self.d_head)
-                H_mixed = self.cross_head_mixer(H_mixed)
-                H_current = H_mixed.reshape(BH, self.d_head, self.d_head)
+                H_mixed = H_current.view(B, self.n_units, self.d_head, self.d_head)
+                # Cross-head mixing operates on heads, averaging over threads
+                H_heads = H_mixed.view(B, self.n_heads, self.n_threads, self.d_head, self.d_head)
+                H_heads = H_heads.mean(dim=2)  # [B, n_heads, d_head, d_head]
+                H_heads = self.cross_head_mixer(H_heads)
+                # Broadcast back to threads
+                H_heads = H_heads.unsqueeze(2).expand(B, self.n_heads, self.n_threads, self.d_head, self.d_head)
+                H_current = H_heads.reshape(BU, self.d_head, self.d_head)
 
             # PASS 2: Re-compute deflected representations with updated H per chunk
             deflected_all = torch.empty_like(deflected_pass1)
@@ -366,14 +395,14 @@ class HVNBlock(nn.Module):
         # Phase 1: Vortex injection for the ENTIRE sequence in one call
         deflected_all, velocity_all = self.vortex(
             x_batched, H, position_ids=position_ids
-        )  # [BH, S, d_head] x2
+        )  # deflected: [BH, S, d_head], velocity: [BU, S, d_head]
 
         # Phase 2: Hamiltonian update over chunks (sequential, but cheap)
         chunk_size = self._resolve_chunk_size(S)
         for chunk_start in range(0, S, chunk_size):
             chunk_end = min(chunk_start + chunk_size, S)
             velocity_chunk = velocity_all[:, chunk_start:chunk_end, :]
-            input_chunk = x_batched[:, chunk_start:chunk_end, :]
+            input_chunk = x_threaded[:, chunk_start:chunk_end, :]
             if self.use_per_token_eta:
                 H = self.memory.update_batch_per_token(
                     H, velocity_chunk, inputs=input_chunk
@@ -385,9 +414,14 @@ class HVNBlock(nn.Module):
 
         # Strategy 3: Cross-head mixing after H updates
         if self.cross_head_mixer is not None:
-            H_reshaped = H.view(B, self.n_heads, self.d_head, self.d_head)
-            H_reshaped = self.cross_head_mixer(H_reshaped)
-            H = H_reshaped.reshape(BH, self.d_head, self.d_head)
+            H_reshaped = H.view(B, self.n_units, self.d_head, self.d_head)
+            # Cross-head mixing operates on heads, averaging over threads
+            H_heads = H_reshaped.view(B, self.n_heads, self.n_threads, self.d_head, self.d_head)
+            H_heads = H_heads.mean(dim=2)  # [B, n_heads, d_head, d_head]
+            H_heads = self.cross_head_mixer(H_heads)
+            # Broadcast back to threads
+            H_heads = H_heads.unsqueeze(2).expand(B, self.n_heads, self.n_threads, self.d_head, self.d_head)
+            H = H_heads.reshape(BU, self.d_head, self.d_head)
 
         return deflected_all  # [BH, S, d_head]
 
@@ -537,15 +571,19 @@ class HVNBlock(nn.Module):
 
         This is the efficient batched path for multi-sequence generation.  Instead
         of looping over heads (as in forward_step), it uses the batched
-        MultiHeadVortexInjection and MultiHeadHamiltonianMemory modules to
-        process all sequences and all heads simultaneously.
+        vortex injection and Hamiltonian memory modules to process all
+        sequences and all heads simultaneously.
+
+        When ``n_threads > 1``, the Hamiltonian state has shape
+        ``[B*n_units, d_head, d_head]`` where ``n_units = n_heads * n_threads``.
 
         Parameters
         ----------
         x_t : torch.Tensor
             Single token embedding, shape [B, 1, d_model].
         H : torch.Tensor
-            Batched Hamiltonian state, shape [B*n_heads, d_head, d_head].
+            Batched Hamiltonian state, shape [B*n_units, d_head, d_head]
+            (or [B*n_heads, d_head, d_head] when n_threads=1).
         position_idx : int, optional
             Position index for this token (for RoPE).
 
@@ -554,7 +592,7 @@ class HVNBlock(nn.Module):
         output : torch.Tensor
             Output for this token, shape [B, 1, d_model].
         H_new : torch.Tensor
-            Updated Hamiltonian state, shape [B*n_heads, d_head, d_head].
+            Updated Hamiltonian state, same shape as input H.
         """
         B, _, D = x_t.shape
 
@@ -575,16 +613,29 @@ class HVNBlock(nn.Module):
         pos_batched = position_ids.unsqueeze(1).expand(B, self.n_heads, 1).contiguous()
         pos_batched = pos_batched.view(B * self.n_heads, 1)
 
-        # --- Batched vortex injection (all heads at once) ---
+        # --- Batched vortex injection (all heads/threads at once) ---
+        # When n_threads > 1: deflected is [B*n_heads, 1, D] (mixed),
+        #                      velocity is [B*n_units, 1, D] (per-thread, unmixed)
+        # When n_threads = 1: both are [B*n_heads, 1, D]
         deflected_batched, velocity_batched = self.vortex(
             x_batched, H, position_ids=pos_batched
-        )  # [B*n_heads, 1, d_head] x 2
+        )
 
-        # --- Batched Hamiltonian update (all heads at once) ---
-        # velocity_batched: [B*n_heads, 1, d_head] → squeeze to [B*n_heads, d_head]
-        velocity_single = velocity_batched.squeeze(1)  # [B*n_heads, d_head]
-        # input for input-dependent eta, rank-k, nonlinear: x_batched squeezed
-        input_single = x_batched.squeeze(1)  # [B*n_heads, d_head]
+        # --- Batched Hamiltonian update ---
+        # velocity_batched: [B*n_units, 1, d_head] → squeeze to [B*n_units, d_head]
+        velocity_single = velocity_batched.squeeze(1)
+
+        # Expand input for per-thread memory updates
+        if self.n_threads > 1:
+            # x_batched: [B*n_heads, 1, D] → expand to [B*n_units, 1, D]
+            x_expanded = x_batched.view(B, self.n_heads, 1, self.d_head)
+            x_expanded = x_expanded.unsqueeze(2).expand(
+                B, self.n_heads, self.n_threads, 1, self.d_head
+            )
+            input_single = x_expanded.reshape(B * self.n_units, self.d_head)
+        else:
+            input_single = x_batched.squeeze(1)  # [B*n_heads, d_head]
+
         H_new = self.memory.update_single(H, velocity_single, input_vec=input_single)
 
         # --- Reshape back to [B, 1, D] ---

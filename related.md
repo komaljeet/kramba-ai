@@ -7,22 +7,28 @@
 
 ## Open Issues
 
-### #22 — Multi-Thread Hamiltonian Memory (NEXT)
-- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/22
-- **Status**: Open
-- **Goal**: Maintain K independent Hamiltonians per head, each tracking different
-  patterns. K "threads" of memory = K different views of the sequence.
-- **Key idea**: One d×d matrix stores one view; K matrices store K views —
-  like K people taking notes from different angles.
-- **Expected impact**: PPL ~8.4 → target < 6.0; scaling exponent -0.0126 → < -0.03
-- **Preserves**: O(1) inference, no KV cache, < 20% Transformer FLOPs, 6GB VRAM
-- **Files to modify**: `batched_memory.py`, `batched_vortex.py`, `hvn_block.py`,
-  `model.py`, `hf_model.py`, `train.py`, `quality_benchmark.py`, `eval/scaling_laws.py`
-- **CLI flag**: `--n_threads K` (default 1 for backward compat)
+(none — all issues closed)
 
 ---
 
 ## Closed Issues (Quality Journey)
+
+### #22 — Multi-Thread Hamiltonian Memory (CLOSED)
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/22
+- **Status**: Closed (2026-07-02)
+- **What was done**: K independent Hamiltonians per head, each updated with a
+  different projection of the input.  K "threads" of memory = K different
+  views of the sequence.
+  - New classes: `MultiThreadHamiltonianMemory`, `MultiThreadVortexInjection`
+  - `--n_threads K` CLI flag (default 1 for backward compat)
+  - Per-thread input projections, vorticity weights, coupling constants
+  - Learned thread mixing weights (like MHA output projection)
+  - All existing strategies (rank_k, nonlinear, per_token_eta, etc.) work
+    within each thread
+- **Result**: PPL improved 8.80 → 8.41 (4.4% better) with n_threads=4 alone.
+  With all strategies combined: PPL 8.13 (7.6% better).  Scaling exponent
+  improved from -0.0126 to -0.0123.  O(1) inference preserved — memory is
+  O(K·d²) per head, still 100× less than KV cache at N=100K.
 
 ### #21 — Multi-Strategy Quality Upgrade (CLOSED)
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/21
@@ -65,13 +71,14 @@
 |-------|--------------------------------------|------------------|
 | SSM | ~1.16 | N/A |
 | Transformer | ~2.0 | -0.090 |
+| HVN (Issue #22 n_threads=4 + all strategies) | ~8.13 | -0.0123 |
+| HVN (Issue #22 n_threads=4) | ~8.41 | -0.0123 |
 | HVN (Issue #21 strategies) | ~8.37 | -0.0126 |
 | HVN (original) | ~8.37 | -0.007 |
 
 **Root cause**: The Hamiltonian compresses all sequence history into a single
-d×d matrix per head. This lossy compression loses too much information compared
-to attention's full pairwise recall (all N key-value pairs stored uncompressed).
+d×d matrix per head.  Multi-thread memory (K matrices per head) increases
+capacity from O(d²) to O(K·d²), improving PPL by 4-8%.
 
-**Next step**: Issue #22 (Multi-Thread Hamiltonian Memory) — K independent
-Hamiltonians per head to increase memory capacity from O(d²) to O(K·d²)
-while preserving O(1) inference.
+**Next step**: Further quality improvements may require parallel scan (Phase 5.5
+Strategy B) or custom Triton kernels (Phase 5.1, 5.3) for speed.

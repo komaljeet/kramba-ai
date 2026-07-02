@@ -141,11 +141,12 @@ sequences.
 | Nonlinear update | `--nonlinear_update` | MEDIUM-HIGH | Gated nonlinearity in the projector (like attention's softmax) |
 | Per-token η | `--per_token_eta` | MEDIUM | Per-token entanglement rate (like Mamba's selective scan) |
 | SwiGLU FFN | `--swiglu` | LOW-MEDIUM | SwiGLU gated FFN (used by LLaMA) instead of standard GELU FFN |
+| Multi-thread memory | `--n_threads 4` | MEDIUM-HIGH | K independent Hamiltonians per head — K different views of the sequence (Issue #22) |
 
 ```bash
-# Train with all quality strategies enabled
+# Train with all quality strategies + multi-thread memory enabled
 python train.py --epochs 100 --precision bf16 \
-    --rank_k 8 --nonlinear_update --causal_reinjection \
+    --n_threads 4 --rank_k 8 --nonlinear_update --causal_reinjection \
     --cross_head_mixing --swiglu --per_token_eta \
     --generate --prompt "The "
 ```

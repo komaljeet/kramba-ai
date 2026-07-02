@@ -1,0 +1,128 @@
+{
+  "dataset": "shakespeare",
+  "dataset_stats": {
+    "vocab_size": 65,
+    "train_chars": 1003854,
+    "eval_chars": 111540
+  },
+  "hyperparameters": {
+    "d_models": [
+      64,
+      256
+    ],
+    "n_layers": 2,
+    "epochs": 5,
+    "batch_size": 16,
+    "seq_len": 64,
+    "lr": 0.0003,
+    "compile": false
+  },
+  "models": [
+    {
+      "name": "HVN",
+      "params": 105945,
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 2.7078455026725745,
+          "eval_loss": 2.708526611328125,
+          "eval_ppl": 15.007147855909354,
+          "time_s": 24.010119915008545
+        },
+        {
+          "epoch": 2,
+          "train_loss": 2.5079685309854365,
+          "eval_loss": 2.66986083984375,
+          "eval_ppl": 14.437959864246247,
+          "time_s": 21.493327856063843
+        },
+        {
+          "epoch": 3,
+          "train_loss": 2.491767088572184,
+          "eval_loss": 2.67529296875,
+          "eval_ppl": 14.516602127446296,
+          "time_s": 16.464990377426147
+        },
+        {
+          "epoch": 4,
+          "train_loss": 2.4854864848133986,
+          "eval_loss": 2.676513671875,
+          "eval_ppl": 14.534333409141334,
+          "time_s": 16.392523288726807
+        },
+        {
+          "epoch": 5,
+          "train_loss": 2.4830974336793297,
+          "eval_loss": 2.66259765625,
+          "eval_ppl": 14.333474219577578,
+          "time_s": 27.835503101348877
+        }
+      ],
+      "final_eval_loss": 2.66259765625,
+      "final_eval_ppl": 14.333474219577578,
+      "total_time_s": 106.19646453857422,
+      "d_model": 64,
+      "n_layers": 2
+    },
+    {
+      "name": "HVN",
+      "params": 1553241,
+      "history": [
+        {
+          "epoch": 1,
+          "train_loss": 2.533821776251059,
+          "eval_loss": 2.65966796875,
+          "eval_ppl": 14.29154307189601,
+          "time_s": 28.610836505889893
+        },
+        {
+          "epoch": 2,
+          "train_loss": 2.4770195909474846,
+          "eval_loss": 2.615020751953125,
+          "eval_ppl": 13.667500002270277,
+          "time_s": 28.28678607940674
+        },
+        {
+          "epoch": 3,
+          "train_loss": 2.4709665349985603,
+          "eval_loss": 2.604522705078125,
+          "eval_ppl": 13.524768458655926,
+          "time_s": 27.671542644500732
+        },
+        {
+          "epoch": 4,
+          "train_loss": 2.466777388595052,
+          "eval_loss": 2.6346435546875,
+          "eval_ppl": 13.938343320461069,
+          "time_s": 24.598793983459473
+        },
+        {
+          "epoch": 5,
+          "train_loss": 2.4633290288888228,
+          "eval_loss": 2.629608154296875,
+          "eval_ppl": 13.868334589979012,
+          "time_s": 18.73617386817932
+        }
+      ],
+      "final_eval_loss": 2.629608154296875,
+      "final_eval_ppl": 13.868334589979012,
+      "total_time_s": 127.90413308143616,
+      "d_model": 256,
+      "n_layers": 2
+    }
+  ],
+  "analysis": {
+    "summary_lines": [
+      "HVN scaling:      PPL \u2248 16.5230 \u00d7 params^-0.0123",
+      "No wall-clock crossover found within tested sizes \u2014 HVN is slower at all tested d_model values.",
+      "",
+      "Per-size PPL comparison:"
+    ],
+    "hvn_power_law": [
+      16.52298368616334,
+      -0.012285774297978993
+    ],
+    "transformer_power_law": null,
+    "crossover_d_model": null
+  }
+}

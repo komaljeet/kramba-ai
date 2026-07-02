@@ -218,6 +218,7 @@ def train_model(
         "d_model": model.d_model,
         "num_layers": model.num_layers,
         "n_heads": model.n_heads,
+        "n_threads": model.n_threads,
         "chunk_size": model.blocks[0].chunk_size if hasattr(model.blocks[0], 'chunk_size') else 64,
     }, save_path)
     print(f"\n✓ Model saved to {save_path}")
@@ -333,6 +334,8 @@ def main():
     parser.add_argument("--cross_head_mixing", action="store_true", help="Enable cross-head Hamiltonian mixing (Strategy 3)")
     parser.add_argument("--swiglu", action="store_true", help="Use SwiGLU FFN instead of GELU FFN (Strategy 6)")
     parser.add_argument("--per_token_eta", action="store_true", help="Use per-token entanglement rate instead of chunk-averaged (Strategy 5)")
+    # --- Issue #22: Multi-thread Hamiltonian memory ---
+    parser.add_argument("--n_threads", type=int, default=1, help="Number of independent Hamiltonian threads per head (Issue #22). 1=single Hamiltonian (backward-compatible), 4 recommended for better quality.")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -377,6 +380,7 @@ def main():
         use_cross_head_mixing=args.cross_head_mixing,
         use_swiglu=args.swiglu,
         use_per_token_eta=args.per_token_eta,
+        n_threads=args.n_threads,
     )
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {param_count:,}")

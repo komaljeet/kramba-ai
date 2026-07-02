@@ -437,3 +437,473 @@ class MultiHeadHamiltonianMemory(nn.Module):
         hamiltonian_new = hamiltonian_new * gate_expanded.view(BH, 1, 1)
 
         return hamiltonian_new
+
+
+class MultiThreadHamiltonianMemory(nn.Module):
+    """Multi-Thread Hamiltonian Memory (Issue #22).
+
+    Maintains **K independent Hamiltonians per head**, each updated with a
+    different projection of the input.  Different threads learn to track
+    different types of relationships (syntax, semantics, repetition, etc.).
+
+    Architecture::
+
+        Current:   1 head → 1 Hamiltonian (d×d)     → 1 thread of associations
+        Proposed:  1 head → K Hamiltonians (d×d each) → K threads of associations
+
+    Each thread gets its own:
+      - Input projection (W_proj_k: d_head → d_head) — different view of the input
+      - Hamiltonian matrix H_k (d_head × d_head) — independent memory
+      - Velocity computation: v_k = Γ_k · (H_k · ω_k)
+
+    The K thread outputs are combined via a learned mixing weight (like
+    multi-head attention's output projection).
+
+    When ``n_threads=1`` this module is functionally equivalent to
+    :class:`MultiHeadHamiltonianMemory` (backward-compatible).
+
+    Parameters
+    ----------
+    d_head : int
+        Per-head dimensionality.
+    n_heads : int
+        Number of parallel heads.
+    n_threads : int
+        Number of independent Hamiltonian threads per head (K).
+    entanglement_rate : float, optional
+        Initial eta value (one per head).
+    bond_dimension : int, optional
+        SVD truncation rank. None = full rank.
+    rank_k : int, optional
+        Rank-k entanglement update dimension (Issue #21 Strategy 1).
+    use_nonlinear_update : bool, optional
+        Gated nonlinearity in the projector (Issue #21 Strategy 4).
+    use_residual : bool, optional
+        Residual Hamiltonian connection (Issue #13).
+    use_input_dependent_eta : bool, optional
+        Per-token entanglement rate (Issue #21 Strategy 5).
+    """
+
+    def __init__(
+        self,
+        d_head: int,
+        n_heads: int,
+        n_threads: int = 1,
+        entanglement_rate: Optional[float] = None,
+        bond_dimension: Optional[int] = None,
+        use_residual: bool = True,
+        use_input_dependent_eta: bool = True,
+        rank_k: int = 1,
+        use_nonlinear_update: bool = False,
+    ):
+        super().__init__()
+        self.d_head = d_head
+        self.n_heads = n_heads
+        self.n_threads = n_threads
+        self.bond_dimension = bond_dimension
+        self.use_residual = use_residual
+        self.use_input_dependent_eta = use_input_dependent_eta
+        self.rank_k = rank_k
+        self.use_nonlinear_update = use_nonlinear_update
+
+        if entanglement_rate is None:
+            entanglement_rate = 1.0 / math.sqrt(d_head)
+
+        # Effective number of (head, thread) pairs — this is the batch dimension
+        self.n_units = n_heads * n_threads
+
+        # Per-unit entanglement rate (learnable)
+        self.eta = nn.Parameter(torch.full((self.n_units,), entanglement_rate))
+
+        # Per-unit memory gate (learnable)
+        self.memory_gate = nn.Parameter(torch.ones(self.n_units))
+
+        # Input-dependent eta projection: η_t = σ(W_η · x_t)
+        if use_input_dependent_eta:
+            self.eta_proj = nn.Linear(d_head, self.n_units, bias=True)
+            nn.init.zeros_(self.eta_proj.weight)
+            nn.init.zeros_(self.eta_proj.bias)
+
+        # --- Per-thread input projections: W_proj_k · x_t → ω_k ---
+        # Each thread gets a different learned projection from d_head → d_head.
+        # Shape: [n_threads, d_head, d_head]
+        if n_threads > 1:
+            self.thread_proj = nn.Parameter(
+                torch.empty(n_threads, d_head, d_head)
+            )
+            for k in range(n_threads):
+                nn.init.xavier_uniform_(self.thread_proj[k])
+        else:
+            self.thread_proj = None
+
+        # --- Per-thread coupling constant Γ_k ---
+        self.gamma = nn.Parameter(
+            torch.full((self.n_units, 1), 1.0 / math.sqrt(d_head))
+        )
+
+        # --- Thread mixing weights: combine K thread outputs per head ---
+        # mix_weight[h, k] determines how much thread k contributes to head h's output.
+        # Initialized as uniform (equal mixing) so all threads start with equal weight.
+        # Shape: [n_heads, n_threads]
+        if n_threads > 1:
+            self.thread_mix = nn.Parameter(
+                torch.ones(n_heads, n_threads) / n_threads
+            )
+        else:
+            self.thread_mix = None
+
+        # --- Rank-k projector (Issue #21 Strategy 1) ---
+        if rank_k > 1:
+            self.rank_k_proj = nn.Linear(d_head, rank_k * d_head, bias=False)
+            nn.init.xavier_uniform_(self.rank_k_proj.weight)
+
+        # --- Nonlinear gating (Issue #21 Strategy 4) ---
+        if use_nonlinear_update:
+            self.nonlinear_gate = nn.Linear(d_head, d_head, bias=True)
+            nn.init.zeros_(self.nonlinear_gate.weight)
+            nn.init.zeros_(self.nonlinear_gate.bias)
+
+    def init_hamiltonian(self, batch_size: int, device=None, dtype=None) -> torch.Tensor:
+        """Initialize Hamiltonian matrices for all (head, thread) pairs.
+
+        Returns
+        -------
+        H : torch.Tensor, shape [batch * n_heads * n_threads, d_head, d_head]
+            One Hamiltonian per (batch element, head, thread) triple.
+        """
+        if device is None:
+            device = next(self.parameters()).device
+        if dtype is None:
+            dtype = next(self.parameters()).dtype
+
+        BU = batch_size * self.n_units  # batch * heads * threads
+        H = torch.eye(self.d_head, device=device, dtype=dtype)
+        H = H.unsqueeze(0).expand(BU, -1, -1).contiguous()
+        H = H / self.d_head
+        return H
+
+    def project_inputs(self, x: torch.Tensor) -> torch.Tensor:
+        """Project inputs through per-thread projections.
+
+        Parameters
+        ----------
+        x : torch.Tensor, shape [B*n_heads, S, d_head]
+            Input embeddings (already split per head).
+
+        Returns
+        -------
+        x_threaded : torch.Tensor, shape [B*n_heads*n_threads, S, d_head]
+            Each thread's projected view of the input.
+        """
+        BH, S, D = x.shape
+        B = BH // self.n_heads
+
+        if self.thread_proj is not None:
+            # thread_proj: [n_threads, D, D]
+            # x: [BH, S, D] → expand for threads: [BH, n_threads, S, D]
+            # Apply per-thread projection: [BH, n_threads, S, D]
+            # Use einsum: (bh, k, s, d) = (bh, s, d) @ (k, d, d)^T
+            x_expanded = x.unsqueeze(1).expand(BH, self.n_threads, S, D)  # [BH, T, S, D]
+            x_threaded = torch.einsum(
+                "btsd,kde->btse", x_expanded, self.thread_proj
+            )  # [BH, T, S, D]
+        else:
+            # n_threads=1: just repeat the input
+            x_threaded = x.unsqueeze(1).expand(BH, 1, S, D).contiguous()
+
+        # Reshape to [BH*T, S, D]
+        x_threaded = x_threaded.reshape(BH * self.n_threads, S, D)
+        return x_threaded
+
+    def mix_thread_velocities(self, velocities: torch.Tensor, B: int) -> torch.Tensor:
+        """Mix K thread velocities into per-head velocities via learned weights.
+
+        Parameters
+        ----------
+        velocities : torch.Tensor, shape [B*n_heads*n_threads, S, d_head]
+            Velocity vectors from all threads.
+        B : int
+            Batch size.
+
+        Returns
+        -------
+        mixed : torch.Tensor, shape [B*n_heads, S, d_head]
+            Thread-mixed velocity vectors.
+        """
+        if self.n_threads == 1:
+            return velocities
+
+        BH = B * self.n_heads
+        _, S, D = velocities.shape
+
+        # Reshape: [B*n_heads*n_threads, S, D] → [B, n_heads, n_threads, S, D]
+        v = velocities.view(B, self.n_heads, self.n_threads, S, D)
+
+        # Apply learned mixing: mix_weight[h, k] → weighted sum over threads
+        # thread_mix: [n_heads, n_threads]
+        # mixed[b, h, s, d] = Σ_k thread_mix[h, k] * v[b, h, k, s, d]
+        mixed = torch.einsum("hk,bhksd->bhsd", self.thread_mix, v)
+
+        # Reshape to [B*n_heads, S, D]
+        return mixed.reshape(BH, S, D)
+
+    def update_batch(
+        self,
+        hamiltonian: torch.Tensor,
+        velocities: torch.Tensor,
+        inputs: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Batched Hamiltonian update for all (head, thread) pairs simultaneously.
+
+        Parameters
+        ----------
+        hamiltonian : torch.Tensor
+            Per-unit Hamiltonian matrices, shape [B*n_units, d_head, d_head].
+        velocities : torch.Tensor
+            Velocity vectors, shape [B*n_units, seq_len, d_head].
+        inputs : torch.Tensor, optional
+            Input embeddings, shape [B*n_units, seq_len, d_head].
+
+        Returns
+        -------
+        hamiltonian_new : torch.Tensor, shape [B*n_units, d_head, d_head]
+        """
+        BU, S, D = velocities.shape
+
+        # --- Compute eta (entanglement rate) ---
+        if self.use_input_dependent_eta and inputs is not None:
+            eta_raw = self.eta_proj(inputs)  # [BU, S, n_units]
+            eta_avg = torch.sigmoid(eta_raw).mean(dim=1)  # [BU, n_units]
+            unit_indices = torch.arange(BU, device=inputs.device) % self.n_units
+            eta_b = eta_avg.gather(1, unit_indices.unsqueeze(1)).view(BU, 1, 1)
+        else:
+            eta = torch.clamp(self.eta, min=0.0, max=1.0)
+            eta_expanded = eta.repeat_interleave(BU // self.n_units)
+            eta_b = eta_expanded.view(BU, 1, 1)
+
+        # --- Normalise all velocity vectors ---
+        v_norms = velocities.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        v = velocities / v_norms
+
+        # --- Strategy 4: Nonlinear gating ---
+        if self.use_nonlinear_update and inputs is not None:
+            gate = torch.sigmoid(self.nonlinear_gate(inputs))
+            v = v * gate
+
+        # --- Strategy 1: Rank-k projector ---
+        if self.rank_k > 1 and inputs is not None:
+            w = self.rank_k_proj(inputs)
+            w = w.view(BU, S, self.rank_k, D)
+            w_norms = w.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+            w = w / w_norms
+            w_flat = w.view(BU, S * self.rank_k, D)
+            P_sum = torch.bmm(w_flat.transpose(-1, -2), w_flat)
+            P_sum = P_sum / S
+            Hv = torch.bmm(hamiltonian, w_flat.transpose(-1, -2))
+            Ht_v = torch.bmm(hamiltonian.transpose(-1, -2), w_flat.transpose(-1, -2))
+            HPH_sum = torch.bmm(Hv, Ht_v.transpose(-1, -2))
+            HPH_sum = HPH_sum / S
+        else:
+            P_sum = torch.bmm(v.transpose(-1, -2), v)
+            Hv = torch.bmm(hamiltonian, v.transpose(-1, -2))
+            Ht_v = torch.bmm(hamiltonian.transpose(-1, -2), v.transpose(-1, -2))
+            HPH_sum = torch.bmm(Hv, Ht_v.transpose(-1, -2))
+
+        # --- Entanglement update ---
+        if self.use_residual:
+            delta_H = eta_b * (P_sum - HPH_sum)
+            hamiltonian_new = hamiltonian + delta_H
+        else:
+            hamiltonian_new = (1.0 - eta_b) * hamiltonian + eta_b * (P_sum - HPH_sum)
+
+        # --- Spectral norm clamping ---
+        fro_norm = hamiltonian_new.norm(dim=(-1, -2), keepdim=True).clamp(min=1e-8)
+        max_norm = D ** 0.5
+        scale = torch.clamp(max_norm / fro_norm, max=1.0)
+        hamiltonian_new = hamiltonian_new * scale
+
+        # --- Optional: low-rank truncation ---
+        if self.bond_dimension is not None and self.bond_dimension < D:
+            hamiltonian_new = self._svd_truncate_batched(hamiltonian_new)
+
+        # --- Per-unit memory gate ---
+        gate_expanded = self.memory_gate.repeat_interleave(BU // self.n_units)
+        hamiltonian_new = hamiltonian_new * gate_expanded.view(BU, 1, 1)
+
+        return hamiltonian_new
+
+    def update_batch_per_token(
+        self,
+        hamiltonian: torch.Tensor,
+        velocities: torch.Tensor,
+        inputs: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Per-token sequential Hamiltonian update with per-token η (Strategy 5).
+
+        Parameters
+        ----------
+        hamiltonian : torch.Tensor
+            Per-unit Hamiltonian matrices, shape [B*n_units, d_head, d_head].
+        velocities : torch.Tensor
+            Velocity vectors, shape [B*n_units, seq_len, d_head].
+        inputs : torch.Tensor, optional
+            Input embeddings, shape [B*n_units, seq_len, d_head].
+        """
+        BU, S, D = velocities.shape
+        H = hamiltonian
+
+        if self.use_input_dependent_eta and inputs is not None:
+            eta_raw = self.eta_proj(inputs)
+            eta_all = torch.sigmoid(eta_raw)
+            unit_indices = torch.arange(BU, device=inputs.device) % self.n_units
+            idx = unit_indices.view(BU, 1, 1).expand(BU, S, 1)
+            eta_per_token = eta_all.gather(2, idx).squeeze(-1)
+        else:
+            eta = torch.clamp(self.eta, min=0.0, max=1.0)
+            eta_expanded = eta.repeat_interleave(BU // self.n_units)
+            eta_per_token = eta_expanded.view(BU, 1).expand(BU, S)
+
+        for t in range(S):
+            v_t = velocities[:, t, :]
+            x_t = inputs[:, t, :] if inputs is not None else None
+            eta_t = eta_per_token[:, t].view(BU, 1, 1)
+
+            v_norm = v_t.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+            v = v_t / v_norm
+
+            if self.use_nonlinear_update and x_t is not None:
+                gate = torch.sigmoid(self.nonlinear_gate(x_t))
+                v = v * gate
+
+            if self.rank_k > 1 and x_t is not None:
+                w = self.rank_k_proj(x_t).view(BU, self.rank_k, D)
+                w_norms = w.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+                w = w / w_norms
+                P = torch.bmm(w.transpose(-1, -2), w)
+                Hv = torch.bmm(H, w.transpose(-1, -2))
+                Ht_v = torch.bmm(H.transpose(-1, -2), w.transpose(-1, -2))
+                HPH = torch.bmm(Hv, Ht_v.transpose(-1, -2))
+            else:
+                v_col = v.unsqueeze(-1)
+                P = v_col * v_col.transpose(-1, -2)
+                Hv = torch.bmm(H, v_col)
+                Ht_v = torch.bmm(H.transpose(-1, -2), v_col)
+                HPH = Hv * Ht_v.transpose(-1, -2)
+
+            if self.use_residual:
+                H = H + eta_t * (P - HPH)
+            else:
+                H = (1.0 - eta_t) * H + eta_t * (P - HPH)
+
+            fro_norm = H.norm(dim=(-1, -2), keepdim=True).clamp(min=1e-8)
+            max_norm = D ** 0.5
+            scale = torch.clamp(max_norm / fro_norm, max=1.0)
+            H = H * scale
+
+        if self.bond_dimension is not None and self.bond_dimension < D:
+            H = self._svd_truncate_batched(H)
+
+        gate_expanded = self.memory_gate.repeat_interleave(BU // self.n_units)
+        H = H * gate_expanded.view(BU, 1, 1)
+
+        return H
+
+    def _svd_truncate_batched(self, H: torch.Tensor) -> torch.Tensor:
+        """Batched low-rank renormalization via randomized power iteration."""
+        BU, D, _ = H.shape
+        r = min(self.bond_dimension, D)
+        n_iter = 3
+        orig_dtype = H.dtype
+        work_dtype = (
+            torch.float32 if orig_dtype in (torch.float16, torch.bfloat16) else orig_dtype
+        )
+
+        with torch.no_grad():
+            with torch.amp.autocast("cuda", enabled=False):
+                H_f32 = H.to(work_dtype)
+                Omega = torch.randn(BU, D, r, device=H.device, dtype=work_dtype)
+                Omega = Omega / math.sqrt(r)
+                G = torch.bmm(H_f32, H_f32.transpose(-1, -2))
+                G = G + 1e-5 * torch.eye(D, device=H.device, dtype=work_dtype).unsqueeze(0)
+                Q = Omega
+                for _ in range(n_iter):
+                    Q = torch.bmm(G, Q)
+                    Q, _ = torch.linalg.qr(Q)
+
+        with torch.amp.autocast("cuda", enabled=False):
+            H_work = H.to(work_dtype)
+            Qt_H = torch.bmm(Q.transpose(-1, -2), H_work)
+            Qt_H_Q = torch.bmm(Qt_H, Q)
+            H_trunc = torch.bmm(Q, torch.bmm(Qt_H_Q, Q.transpose(-1, -2)))
+        return H_trunc.to(orig_dtype)
+
+    def update_single(
+        self,
+        hamiltonian: torch.Tensor,
+        velocity: torch.Tensor,
+        input_vec: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Update Hamiltonian with a single velocity vector (incremental generation).
+
+        Parameters
+        ----------
+        hamiltonian : torch.Tensor
+            Shape [B*n_units, d_head, d_head].
+        velocity : torch.Tensor
+            Shape [B*n_units, d_head].
+        input_vec : torch.Tensor, optional
+            Input embedding, shape [B*n_units, d_head].
+        """
+        BU, D, _ = hamiltonian.shape
+
+        if self.use_input_dependent_eta and input_vec is not None:
+            eta_raw = self.eta_proj(input_vec)
+            unit_indices = torch.arange(BU, device=hamiltonian.device) % self.n_units
+            eta_t = torch.sigmoid(
+                eta_raw.gather(1, unit_indices.unsqueeze(1))
+            ).view(BU, 1, 1)
+        else:
+            eta = torch.clamp(self.eta, min=0.0, max=1.0)
+            eta_expanded = eta.repeat_interleave(BU // self.n_units)
+            eta_t = eta_expanded.view(BU, 1, 1)
+
+        v_norm = velocity.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        v = velocity / v_norm
+
+        if self.use_nonlinear_update and input_vec is not None:
+            gate = torch.sigmoid(self.nonlinear_gate(input_vec))
+            v = v * gate
+
+        if self.rank_k > 1 and input_vec is not None:
+            w = self.rank_k_proj(input_vec).view(BU, self.rank_k, D)
+            w_norms = w.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+            w = w / w_norms
+            P = torch.bmm(w.transpose(-1, -2), w)
+            Hv = torch.bmm(hamiltonian, w.transpose(-1, -2))
+            Ht_v = torch.bmm(hamiltonian.transpose(-1, -2), w.transpose(-1, -2))
+            HPH = torch.bmm(Hv, Ht_v.transpose(-1, -2))
+        else:
+            v_col = v.unsqueeze(-1)
+            P = v_col * v_col.transpose(-1, -2)
+            Hv = torch.bmm(hamiltonian, v_col)
+            Ht_v = torch.bmm(hamiltonian.transpose(-1, -2), v_col)
+            HPH = Hv * Ht_v.transpose(-1, -2)
+
+        if self.use_residual:
+            delta_H = eta_t * (P - HPH)
+            hamiltonian_new = hamiltonian + delta_H
+        else:
+            hamiltonian_new = (1.0 - eta_t) * hamiltonian + eta_t * (P - HPH)
+
+        fro_norm = hamiltonian_new.norm(dim=(-1, -2), keepdim=True).clamp(min=1e-8)
+        max_norm = D ** 0.5
+        scale = torch.clamp(max_norm / fro_norm, max=1.0)
+        hamiltonian_new = hamiltonian_new * scale
+
+        if self.bond_dimension is not None and self.bond_dimension < D:
+            hamiltonian_new = self._svd_truncate_batched(hamiltonian_new)
+
+        gate_expanded = self.memory_gate.repeat_interleave(BU // self.n_units)
+        hamiltonian_new = hamiltonian_new * gate_expanded.view(BU, 1, 1)
+
+        return hamiltonian_new

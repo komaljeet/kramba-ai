@@ -54,17 +54,19 @@ class HamiltonianVortexNetwork(nn.Module):
         use_cross_head_mixing: bool = False,
         use_swiglu: bool = False,
         use_per_token_eta: bool = False,
+        n_threads: int = 1,
     ):
         super().__init__()
         self.vocab_size = vocab_size
         self.d_model = d_model
         self.num_layers = num_layers
         self.n_heads = n_heads
+        self.n_threads = n_threads
 
         # Token embedding
         self.token_embedding = nn.Embedding(vocab_size, d_model)
 
-        # Stacked HVN blocks (multi-head)
+        # Stacked HVN blocks (multi-head, multi-thread)
         self.blocks = nn.ModuleList([
             HVNBlock(
                 d_model=d_model,
@@ -78,6 +80,7 @@ class HamiltonianVortexNetwork(nn.Module):
                 use_cross_head_mixing=use_cross_head_mixing,
                 use_swiglu=use_swiglu,
                 use_per_token_eta=use_per_token_eta,
+                n_threads=n_threads,
             )
             for _ in range(num_layers)
         ])

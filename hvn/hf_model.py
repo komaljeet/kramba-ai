@@ -38,6 +38,7 @@ class HVNConfig:
         use_cross_head_mixing: bool = False,
         use_swiglu: bool = False,
         use_per_token_eta: bool = False,
+        n_threads: int = 1,
     ) -> None:
         self.vocab_size = vocab_size
         self.d_model = d_model
@@ -53,6 +54,7 @@ class HVNConfig:
         self.use_cross_head_mixing = use_cross_head_mixing
         self.use_swiglu = use_swiglu
         self.use_per_token_eta = use_per_token_eta
+        self.n_threads = n_threads
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -70,6 +72,7 @@ class HVNConfig:
             "use_cross_head_mixing": self.use_cross_head_mixing,
             "use_swiglu": self.use_swiglu,
             "use_per_token_eta": self.use_per_token_eta,
+            "n_threads": self.n_threads,
         }
 
     @classmethod
@@ -109,6 +112,7 @@ class HVNForCausalLM(nn.Module):
             use_cross_head_mixing=self.config.use_cross_head_mixing,
             use_swiglu=self.config.use_swiglu,
             use_per_token_eta=self.config.use_per_token_eta,
+            n_threads=self.config.n_threads,
         )
 
     def forward(

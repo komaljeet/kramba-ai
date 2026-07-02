@@ -1,0 +1,22 @@
+{
+  "n_threads=1 (baseline)": {
+    "ppl": 8.80049991607666,
+    "params": 274789
+  },
+  "n_threads=2": {
+    "ppl": 8.50684928894043,
+    "params": 316861
+  },
+  "n_threads=4": {
+    "ppl": 8.411605834960938,
+    "params": 392765
+  },
+  "n_threads=4 + rank_k=4": {
+    "ppl": 8.518149375915527,
+    "params": 400957
+  },
+  "n_threads=4 + rank_k=4 + nonlinear + per_token_eta + swiglu": {
+    "ppl": 8.131818771362305,
+    "params": 566141
+  }
+}

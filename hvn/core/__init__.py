@@ -21,6 +21,8 @@ model              : Full HVN language model assembling all components.
 
 from .vortex_injection import VortexInjectionLayer
 from .hamiltonian_memory import HamiltonianMemoryBlock
+from .batched_memory import MultiHeadHamiltonianMemory, MultiThreadHamiltonianMemory
+from .batched_vortex import MultiHeadVortexInjection, MultiThreadVortexInjection
 from .hvn_block import HVNBlock
 from .decoder import HVNDecoder
 from .model import HamiltonianVortexNetwork
@@ -28,6 +30,10 @@ from .model import HamiltonianVortexNetwork
 __all__ = [
     "VortexInjectionLayer",
     "HamiltonianMemoryBlock",
+    "MultiHeadHamiltonianMemory",
+    "MultiThreadHamiltonianMemory",
+    "MultiHeadVortexInjection",
+    "MultiThreadVortexInjection",
     "HVNBlock",
     "HVNDecoder",
     "HamiltonianVortexNetwork",
