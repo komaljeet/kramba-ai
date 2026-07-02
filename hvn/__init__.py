@@ -7,6 +7,13 @@ from .core import (
 )
 from .hf_model import HVNConfig, HVNForCausalLM
 from .tokenizer import BPETokenizer
+from .vision import (
+    PatchEmbedding,
+    PositionalEmbedding2D,
+    ImageEncoder,
+    CrossModalProjector,
+    MultimodalHVN,
+)
 from .quantize import (
     quantize_int8,
     dequantize_int8,
@@ -30,6 +37,12 @@ __all__ = [
     "HVNConfig",
     "HVNForCausalLM",
     "BPETokenizer",
+    # Vision / multimodal (Issue #23)
+    "PatchEmbedding",
+    "PositionalEmbedding2D",
+    "ImageEncoder",
+    "CrossModalProjector",
+    "MultimodalHVN",
     # Quantization
     "quantize_int8",
     "dequantize_int8",

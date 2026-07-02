@@ -17,6 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .core import HamiltonianVortexNetwork
+from .vision import ImageEncoder, CrossModalProjector
 
 
 class HVNConfig:
@@ -39,6 +40,11 @@ class HVNConfig:
         use_swiglu: bool = False,
         use_per_token_eta: bool = False,
         n_threads: int = 1,
+        # Vision / multimodal (Issue #23)
+        image_size: int = 224,
+        patch_size: int = 16,
+        in_channels: int = 3,
+        use_cross_modal_proj: bool = True,
     ) -> None:
         self.vocab_size = vocab_size
         self.d_model = d_model
@@ -55,6 +61,11 @@ class HVNConfig:
         self.use_swiglu = use_swiglu
         self.use_per_token_eta = use_per_token_eta
         self.n_threads = n_threads
+        # Vision / multimodal
+        self.image_size = image_size
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.use_cross_modal_proj = use_cross_modal_proj
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +84,10 @@ class HVNConfig:
             "use_swiglu": self.use_swiglu,
             "use_per_token_eta": self.use_per_token_eta,
             "n_threads": self.n_threads,
+            "image_size": self.image_size,
+            "patch_size": self.patch_size,
+            "in_channels": self.in_channels,
+            "use_cross_modal_proj": self.use_cross_modal_proj,
         }
 
     @classmethod
@@ -115,6 +130,20 @@ class HVNForCausalLM(nn.Module):
             n_threads=self.config.n_threads,
         )
 
+        # Vision encoder for multimodal support (Issue #23)
+        self.vision_encoder = ImageEncoder(
+            image_size=self.config.image_size,
+            patch_size=self.config.patch_size,
+            in_channels=self.config.in_channels,
+            d_model=self.config.d_model,
+        )
+        if self.config.use_cross_modal_proj:
+            self.image_proj = CrossModalProjector(
+                self.config.d_model, dropout=self.config.dropout,
+            )
+        else:
+            self.image_proj = None
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -123,6 +152,40 @@ class HVNForCausalLM(nn.Module):
         return_dict: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor | None, torch.Tensor] | SimpleNamespace:
         logits = self.model(input_ids)
+        loss = None
+        if labels is not None:
+            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
+
+        if return_dict:
+            return SimpleNamespace(loss=loss, logits=logits)
+        if loss is not None:
+            return loss, logits
+        return logits
+
+    def forward_multimodal(
+        self,
+        images: torch.Tensor,
+        text_ids: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        return_dict: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor | None, torch.Tensor] | SimpleNamespace:
+        """Multimodal forward: images (+ optional text) → logits.
+
+        Parameters
+        ----------
+        images : torch.Tensor
+            Input images, shape [B, C, H, W].
+        text_ids : torch.Tensor, optional
+            Text token IDs, shape [B, S_text].
+        labels : torch.Tensor, optional
+            Target token IDs for loss computation.
+        return_dict : bool
+            If True, return a SimpleNamespace with loss and logits.
+        """
+        img_embeds = self.vision_encoder(images)
+        if self.image_proj is not None:
+            img_embeds = self.image_proj(img_embeds)
+        logits = self.model.forward_multimodal(img_embeds, text_ids)
         loss = None
         if labels is not None:
             loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))

@@ -150,6 +150,49 @@ class HamiltonianVortexNetwork(nn.Module):
         logits = self.decoder(x)
         return logits
 
+    def forward_multimodal(
+        self,
+        image_embeds: torch.Tensor,
+        text_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Forward pass for multimodal input: image patch embeddings + optional text.
+
+        Image patch embeddings (from the vision encoder) are treated as vortex
+        particles and processed through the same HVN blocks as text tokens.
+        If text IDs are provided, text token embeddings are concatenated after
+        the image patch embeddings, forming a combined sequence.
+
+        Parameters
+        ----------
+        image_embeds : torch.Tensor
+            Image patch embeddings, shape [batch, num_patches, d_model].
+            Produced by ``ImageEncoder`` in ``hvn/vision.py``.
+        text_ids : torch.Tensor, optional
+            Text token IDs, shape [batch, seq_len_text], dtype long.
+            If provided, text embeddings are appended after image patches.
+
+        Returns
+        -------
+        logits : torch.Tensor
+            Vocabulary logits for the combined sequence,
+            shape [batch, num_patches + seq_len_text, vocab_size].
+        """
+        if text_ids is not None:
+            text_embeds = self.token_embedding(text_ids)  # [B, S_text, D]
+            x = torch.cat([image_embeds, text_embeds], dim=1)  # [B, num_patches + S_text, D]
+        else:
+            x = image_embeds  # [B, num_patches, D]
+
+        B, S, _ = x.shape
+        position_ids = torch.arange(S, device=x.device).unsqueeze(0).expand(B, -1)
+
+        for block in self.blocks:
+            x = block(x, position_ids=position_ids)
+
+        x = self.final_norm(x)
+        logits = self.decoder(x)
+        return logits
+
     # ------------------------------------------------------------------
     # Incremental generation: O(1) per token via Hamiltonian state cache
     # ------------------------------------------------------------------

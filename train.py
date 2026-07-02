@@ -336,6 +336,12 @@ def main():
     parser.add_argument("--per_token_eta", action="store_true", help="Use per-token entanglement rate instead of chunk-averaged (Strategy 5)")
     # --- Issue #22: Multi-thread Hamiltonian memory ---
     parser.add_argument("--n_threads", type=int, default=1, help="Number of independent Hamiltonian threads per head (Issue #22). 1=single Hamiltonian (backward-compatible), 4 recommended for better quality.")
+    # --- Issue #23: Vision / multimodal ---
+    parser.add_argument("--vision", action="store_true", help="Enable vision/multimodal mode (Issue #23). Trains image+text with patch embeddings.")
+    parser.add_argument("--image_size", type=int, default=64, help="Image size (square, default 64 for fast demo)")
+    parser.add_argument("--patch_size", type=int, default=16, help="Patch size for image encoding (default 16)")
+    parser.add_argument("--in_channels", type=int, default=3, help="Image channels (3=RGB, 1=grayscale)")
+    parser.add_argument("--num_images", type=int, default=32, help="Number of synthetic images for demo vision training")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -395,6 +401,101 @@ def main():
     tok_path = args.save.replace(".pt", "_tokenizer.json")
     tokenizer.save(tok_path)
     print(f"✓ Tokenizer saved to {tok_path}")
+
+    # --- Vision / multimodal training (Issue #23) ---
+    if args.vision:
+        print("\n" + "=" * 60)
+        print("VISION / MULTIMODAL TRAINING (Issue #23)")
+        print("=" * 60)
+        from hvn.vision import ImageEncoder, CrossModalProjector, MultimodalHVN
+
+        # Build vision encoder
+        vision_encoder = ImageEncoder(
+            image_size=args.image_size,
+            patch_size=args.patch_size,
+            in_channels=args.in_channels,
+            d_model=args.d_model,
+        )
+        multimodal = MultimodalHVN(
+            vision_encoder=vision_encoder,
+            hvn=model,
+            use_cross_modal_proj=True,
+            dropout=0.1,
+        ).to(device)
+
+        num_patches = vision_encoder.num_patches
+        print(f"Vision encoder: {args.image_size}×{args.image_size} → "
+              f"{num_patches} patches of {args.d_model}D")
+
+        # Generate synthetic image-text pairs for demo
+        # Each image is a random tensor; the "caption" is a short random text
+        print(f"Generating {args.num_images} synthetic image-text pairs...")
+        images = torch.randn(args.num_images, args.in_channels,
+                             args.image_size, args.image_size, device=device)
+        captions = []
+        for i in range(args.num_images):
+            # Random caption from the training text
+            start = torch.randint(0, max(1, len(token_ids) - args.seq_len - 1), (1,)).item()
+            cap_ids = token_ids[start:start + args.seq_len]
+            captions.append(cap_ids)
+
+        # Quick multimodal forward pass demo
+        optimizer = torch.optim.AdamW(multimodal.parameters(), lr=args.lr, weight_decay=0.01)
+        criterion = nn.CrossEntropyLoss()
+
+        multimodal.train()
+        vision_epochs = min(args.epochs, 10)  # fewer epochs for demo
+        print(f"\nTraining multimodal for {vision_epochs} epochs...")
+        print("-" * 60)
+
+        for epoch in range(1, vision_epochs + 1):
+            total_loss = 0.0
+            n_batches = 0
+            # Mini-batch over image-text pairs
+            batch_size = min(args.batch_size, args.num_images)
+            for start in range(0, args.num_images, batch_size):
+                end = min(start + batch_size, args.num_images)
+                img_batch = images[start:end]
+                cap_batch = captions[start:end]
+                # Pad captions to same length
+                max_len = max(len(c) for c in cap_batch)
+                text_ids = torch.zeros(len(cap_batch), max_len, dtype=torch.long, device=device)
+                for i, c in enumerate(cap_batch):
+                    text_ids[i, :len(c)] = torch.tensor(c, dtype=torch.long, device=device)
+
+                # Forward: image patches + text → logits
+                logits = multimodal(img_batch, text_ids)  # [B, num_patches + S_text, V]
+                # Target: shifted text tokens (predict next token in text portion)
+                # We only compute loss on the text portion (skip image patch logits)
+                text_logits = logits[:, num_patches:, :]  # [B, S_text, V]
+                # Shift: predict token t+1 from token t
+                pred_logits = text_logits[:, :-1, :]  # [B, S_text-1, V]
+                targets = text_ids[:, 1:]  # [B, S_text-1]
+                loss = criterion(pred_logits.reshape(-1, model.vocab_size), targets.reshape(-1))
+
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(multimodal.parameters(), max_norm=1.0)
+                optimizer.step()
+
+                total_loss += loss.item()
+                n_batches += 1
+
+            avg_loss = total_loss / max(n_batches, 1)
+            ppl = math.exp(min(avg_loss, 20))
+            if epoch % 2 == 0 or epoch == 1:
+                print(f"Epoch {epoch:3d}/{vision_epochs}  |  Loss: {avg_loss:.4f}  |  PPL: {ppl:.2f}")
+
+        # Demo: image captioning
+        print("\n--- Image Captioning Demo ---")
+        test_image = torch.randn(1, args.in_channels, args.image_size,
+                                  args.image_size, device=device)
+        generated_ids = multimodal.generate_caption(
+            test_image, max_new_tokens=50, temperature=0.8, top_k=10, device=device,
+        )
+        caption = tokenizer.decode(generated_ids)
+        print(f"Generated caption: {caption}")
+        print("=" * 60)
 
     # --- Generate text ---
     if args.generate:
