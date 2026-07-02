@@ -39,20 +39,31 @@ class MultiHeadHamiltonianMemory(nn.Module):
         n_heads: int,
         entanglement_rate: Optional[float] = None,
         bond_dimension: Optional[int] = None,
+        use_residual: bool = True,
+        use_input_dependent_eta: bool = True,
     ):
         super().__init__()
         self.d_head = d_head
         self.n_heads = n_heads
         self.bond_dimension = bond_dimension
+        self.use_residual = use_residual
+        self.use_input_dependent_eta = use_input_dependent_eta
 
         if entanglement_rate is None:
             entanglement_rate = 1.0 / math.sqrt(d_head)
 
-        # Per-head entanglement rate (learnable)
+        # Per-head entanglement rate (learnable, used as fallback or base rate)
         self.eta = nn.Parameter(torch.full((n_heads,), entanglement_rate))
 
         # Per-head memory gate (learnable)
         self.memory_gate = nn.Parameter(torch.ones(n_heads))
+
+        # Input-dependent eta projection: η_t = σ(W_η · x_t)
+        # Projects from d_head to n_heads (one eta per head per token)
+        if use_input_dependent_eta:
+            self.eta_proj = nn.Linear(d_head, n_heads, bias=True)
+            nn.init.zeros_(self.eta_proj.weight)
+            nn.init.zeros_(self.eta_proj.bias)  # initial eta ≈ 0.5 after sigmoid
 
     def init_hamiltonian(self, batch_size: int, device=None, dtype=None) -> torch.Tensor:
         """Initialize Hamiltonian matrices for all heads.
@@ -77,6 +88,7 @@ class MultiHeadHamiltonianMemory(nn.Module):
         self,
         hamiltonian: torch.Tensor,
         velocities: torch.Tensor,
+        inputs: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Batched Hamiltonian update for all heads simultaneously.
 
@@ -86,6 +98,9 @@ class MultiHeadHamiltonianMemory(nn.Module):
             Per-head Hamiltonian matrices, shape [B*n_heads, d_head, d_head].
         velocities : torch.Tensor
             Velocity vectors, shape [B*n_heads, seq_len, d_head].
+        inputs : torch.Tensor, optional
+            Input embeddings for input-dependent eta, shape [B*n_heads, seq_len, d_head].
+            Required if use_input_dependent_eta=True.
 
         Returns
         -------
@@ -93,11 +108,22 @@ class MultiHeadHamiltonianMemory(nn.Module):
         """
         BH, S, D = velocities.shape
 
-        # Per-head eta: [n_heads] → [BH] (each head gets its own eta)
-        eta = torch.clamp(self.eta, min=0.0, max=1.0)  # [n_heads]
-        # Expand to match BH: repeat each head's eta for each batch element
-        eta_expanded = eta.repeat_interleave(BH // self.n_heads)  # [BH]
-        eta_b = eta_expanded.view(BH, 1, 1)  # [BH, 1, 1]
+        # --- Compute eta (entanglement rate) ---
+        if self.use_input_dependent_eta and inputs is not None:
+            # Input-dependent: η_t = σ(W_η · x_t) → per-token, per-head
+            # inputs: [BH, S, D] → eta_raw: [BH, S, n_heads]
+            eta_raw = self.eta_proj(inputs)  # [BH, S, n_heads]
+            # Average over sequence to get per-(batch,head) eta for the chunk
+            eta_avg = torch.sigmoid(eta_raw).mean(dim=1)  # [BH, n_heads]
+            # Each batch element bh corresponds to head (bh % n_heads)
+            # Gather the diagonal: eta_b[bh] = eta_avg[bh, bh % n_heads]
+            head_indices = torch.arange(BH, device=inputs.device) % self.n_heads
+            eta_b = eta_avg.gather(1, head_indices.unsqueeze(1)).view(BH, 1, 1)  # [BH, 1, 1]
+        else:
+            # Fallback to learned per-head eta
+            eta = torch.clamp(self.eta, min=0.0, max=1.0)  # [n_heads]
+            eta_expanded = eta.repeat_interleave(BH // self.n_heads)  # [BH]
+            eta_b = eta_expanded.view(BH, 1, 1)  # [BH, 1, 1]
 
         # --- Normalise all velocity vectors ---
         v_norms = velocities.norm(dim=-1, keepdim=True).clamp(min=1e-8)  # [BH, S, 1]
@@ -111,8 +137,15 @@ class MultiHeadHamiltonianMemory(nn.Module):
         Ht_v = torch.bmm(hamiltonian.transpose(-1, -2), v.transpose(-1, -2))  # [BH, D, S]
         HPH_sum = torch.bmm(Hv, Ht_v.transpose(-1, -2))  # [BH, D, D]
 
-        # --- Batched entanglement update ---
-        hamiltonian_new = (1.0 - eta_b) * hamiltonian + eta_b * (P_sum - HPH_sum) / S
+        # --- Entanglement update ---
+        if self.use_residual:
+            # Residual connection: H_new = H_old + η · (P - H·P·H) / S
+            # This preserves long-range information better than the blend
+            delta_H = eta_b * (P_sum - HPH_sum) / S
+            hamiltonian_new = hamiltonian + delta_H
+        else:
+            # Original blend: H_new = (1-η)·H + η·(P - H·P·H) / S
+            hamiltonian_new = (1.0 - eta_b) * hamiltonian + eta_b * (P_sum - HPH_sum) / S
 
         # --- Spectral norm clamping ---
         fro_norm = hamiltonian_new.norm(dim=(-1, -2), keepdim=True).clamp(min=1e-8)

@@ -206,7 +206,8 @@ class HVNBlock(nn.Module):
         for chunk_start in range(0, S, chunk_size):
             chunk_end = min(chunk_start + chunk_size, S)
             velocity_chunk = velocity_all[:, chunk_start:chunk_end, :]
-            H = self.memory.update_batch(H, velocity_chunk)
+            input_chunk = x_batched[:, chunk_start:chunk_end, :]
+            H = self.memory.update_batch(H, velocity_chunk, inputs=input_chunk)
 
         return deflected_all  # [BH, S, d_head]
 
