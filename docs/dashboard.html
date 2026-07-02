@@ -1,0 +1,1104 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HVN — Training Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        /* ===== CSS Variables (Theming) ===== */
+        :root[data-theme="dark"] {
+            --bg: #0d1117;
+            --bg-card: #161b22;
+            --bg-hover: #21262d;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79b8ff;
+            --green: #3fb950;
+            --red: #f85149;
+            --yellow: #d29922;
+            --purple: #bc8cff;
+            --shadow: 0 0 0 1px var(--border);
+        }
+        :root[data-theme="light"] {
+            --bg: #ffffff;
+            --bg-card: #f6f8fa;
+            --bg-hover: #eaeef2;
+            --border: #d0d7de;
+            --text: #1f2328;
+            --text-muted: #656d76;
+            --accent: #0969da;
+            --accent-hover: #0550ae;
+            --green: #1a7f37;
+            --red: #cf222e;
+            --yellow: #9a6700;
+            --purple: #8250df;
+            --shadow: 0 0 0 1px var(--border);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        /* ===== Layout ===== */
+        .app { display: flex; min-height: 100vh; }
+        .sidebar {
+            width: 260px;
+            background: var(--bg-card);
+            border-right: 1px solid var(--border);
+            padding: 20px 0;
+            flex-shrink: 0;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        .main { flex: 1; padding: 32px 40px; max-width: 1100px; }
+        @media (max-width: 768px) {
+            .app { flex-direction: column; }
+            .sidebar { width: 100%; height: auto; position: relative; border-right: none; border-bottom: 1px solid var(--border); }
+            .main { padding: 20px; }
+        }
+
+        /* ===== Sidebar ===== */
+        .logo { padding: 0 20px 20px; border-bottom: 1px solid var(--border); }
+        .logo h1 { font-size: 18px; font-weight: 700; }
+        .logo span { color: var(--accent); }
+        .nav { list-style: none; padding: 12px 0; }
+        .nav li { padding: 8px 20px; cursor: pointer; color: var(--text-muted); font-size: 14px; display: flex; align-items: center; gap: 8px; }
+        .nav li:hover { background: var(--bg-hover); color: var(--text); }
+        .nav li.active { color: var(--accent); background: var(--bg-hover); border-left: 3px solid var(--accent); padding-left: 17px; }
+        .nav li .icon { width: 20px; text-align: center; }
+        .theme-toggle { position: absolute; bottom: 20px; left: 20px; display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-muted); font-size: 13px; }
+        .theme-toggle:hover { color: var(--text); }
+
+        /* ===== Sections ===== */
+        .section { display: none; }
+        .section.active { display: block; }
+        .section h2 { font-size: 28px; margin-bottom: 8px; }
+        .section .subtitle { color: var(--text-muted); margin-bottom: 24px; font-size: 15px; }
+
+        /* ===== Cards ===== */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .card h3 { font-size: 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+        .card h3 .badge { font-size: 11px; padding: 2px 8px; border-radius: 12px; background: var(--bg-hover); color: var(--text-muted); }
+
+        /* ===== Form ===== */
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
+        .form-group { display: flex; flex-direction: column; gap: 4px; }
+        .form-group label { font-size: 13px; color: var(--text-muted); font-weight: 500; }
+        .form-group input, .form-group select {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: var(--text);
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .form-group input:focus, .form-group select:focus { border-color: var(--accent); }
+        .form-group .hint { font-size: 11px; color: var(--text-muted); }
+        .checkbox-group { display: flex; align-items: center; gap: 8px; }
+        .checkbox-group input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
+        .checkbox-group label { cursor: pointer; font-size: 14px; }
+
+        /* ===== CLI Output ===== */
+        .cli-output {
+            background: #010409;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 16px;
+            font-family: "SF Mono", "Fira Code", Consolas, monospace;
+            font-size: 13px;
+            color: #e6edf3;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            position: relative;
+            margin-top: 16px;
+        }
+        .cli-output .copy-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: var(--bg-hover);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 4px 10px;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 12px;
+            font-family: sans-serif;
+        }
+        .cli-output .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+        /* ===== Stats ===== */
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 20px; }
+        .stat-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+        }
+        .stat-box .value { font-size: 28px; font-weight: 700; color: var(--accent); }
+        .stat-box .label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+        /* ===== Tables ===== */
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { font-weight: 600; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+        tr:hover { background: var(--bg-hover); }
+        .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+        .tag-green { background: rgba(63,185,80,0.15); color: var(--green); }
+        .tag-red { background: rgba(248,81,73,0.15); color: var(--red); }
+        .tag-yellow { background: rgba(210,153,34,0.15); color: var(--yellow); }
+        .tag-blue { background: rgba(88,166,255,0.15); color: var(--accent); }
+
+        /* ===== Architecture Diagram ===== */
+        .arch-flow { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+        .arch-box {
+            background: var(--bg-card);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s, transform 0.1s;
+            min-width: 280px;
+        }
+        .arch-box:hover { border-color: var(--accent); transform: scale(1.02); }
+        .arch-box .name { font-weight: 600; font-size: 15px; }
+        .arch-box .desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+        .arch-arrow { color: var(--text-muted); font-size: 20px; }
+        .arch-detail {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 16px;
+            margin-top: 12px;
+            font-size: 13px;
+            display: none;
+        }
+        .arch-detail.show { display: block; }
+
+        /* ===== Chart Container ===== */
+        .chart-container { position: relative; height: 350px; margin: 16px 0; }
+        .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } }
+
+        /* ===== File Upload ===== */
+        .file-upload {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .file-upload:hover { border-color: var(--accent); }
+        .file-upload p { color: var(--text-muted); font-size: 14px; }
+        .file-upload input { display: none; }
+
+        /* ===== Misc ===== */
+        .info-banner {
+            background: rgba(88,166,255,0.08);
+            border: 1px solid rgba(88,166,255,0.3);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: var(--accent);
+        }
+        .pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+        .pill { padding: 4px 12px; border-radius: 16px; font-size: 12px; background: var(--bg-hover); color: var(--text-muted); }
+        .code { font-family: "SF Mono", "Fira Code", Consolas, monospace; font-size: 13px; background: var(--bg-hover); padding: 2px 6px; border-radius: 4px; }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+<div class="app">
+    <!-- ===== Sidebar ===== -->
+    <div class="sidebar">
+        <div class="logo">
+            <h1>⚡ HVN <span>Dashboard</span></h1>
+        </div>
+        <ul class="nav">
+            <li class="active" data-section="overview"><span class="icon">📊</span> Overview</li>
+            <li data-section="train"><span class="icon">🚂</span> Training Config</li>
+            <li data-section="results"><span class="icon">📈</span> Results</li>
+            <li data-section="architecture"><span class="icon">🔧</span> Architecture</li>
+            <li data-section="flops"><span class="icon">🧮</span> FLOP Analysis</li>
+            <li data-section="theory"><span class="icon">📐</span> Theory</li>
+            <li data-section="guide"><span class="icon">📖</span> Training Guide</li>
+            <li data-section="issues"><span class="icon">📋</span> Issues & Roadmap</li>
+        </ul>
+        <div class="theme-toggle" onclick="toggleTheme()">
+            <span id="theme-icon">🌙</span> <span id="theme-label">Dark Mode</span>
+        </div>
+    </div>
+
+    <!-- ===== Main Content ===== -->
+    <div class="main">
+
+        <!-- ===== Overview ===== -->
+        <div class="section active" id="overview">
+            <h2>Hamiltonian Vortex Network</h2>
+            <p class="subtitle">A novel language model architecture with O(1) per-token inference — no KV cache, no attention.</p>
+
+            <div class="info-banner">
+                💡 HVN fuses <strong>Lagrangian Vortex Fluid Dynamics</strong> with <strong>Quantum Matrix Product State Entanglement</strong> to achieve long-range associative recall at &lt;20% of Transformer FLOPs.
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <div class="value">O(1)</div>
+                    <div class="label">Per-Token Inference</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">18.7%</div>
+                    <div class="label">Of Transformer FLOPs</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">6.29 MB</div>
+                    <div class="label">Inference Memory (vs 2.46 GB)</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">43%</div>
+                    <div class="label">Fewer Parameters</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>🏆 Key Results <span class="badge">N=100K, d=512, L=12</span></h3>
+                <table>
+                    <thead>
+                        <tr><th>Metric</th><th>Transformer (MHA)</th><th>HVN (SVD r=128)</th><th>Ratio</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>FLOPs / token</td><td>2,474M</td><td>463M</td><td><span class="tag tag-green">18.7% ✓</span></td></tr>
+                        <tr><td>Inference memory</td><td>2.46 GB</td><td>6.29 MB</td><td><span class="tag tag-green">0.26% ✓</span></td></tr>
+                        <tr><td>Scaling in N</td><td>O(Nd)</td><td>O(d²r) = O(1)</td><td><span class="tag tag-green">Constant ✓</span></td></tr>
+                        <tr><td>Parameters</td><td>461K</td><td>265K</td><td><span class="tag tag-green">57% ✓</span></td></tr>
+                        <tr><td>Quality (PPL, Shakespeare)</td><td>1.90</td><td>8.13</td><td><span class="tag tag-red">4.3× gap</span></td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="card">
+                <h3>📦 What's Implemented</h3>
+                <div class="pill-row">
+                    <span class="pill">✅ Multi-head Hamiltonian</span>
+                    <span class="pill">✅ Multi-thread memory (K threads/head)</span>
+                    <span class="pill">✅ Rotary positional embeddings (RoPE)</span>
+                    <span class="pill">✅ Rank-k entanglement update</span>
+                    <span class="pill">✅ Nonlinear gated update</span>
+                    <span class="pill">✅ Causal re-injection</span>
+                    <span class="pill">✅ Cross-head mixing</span>
+                    <span class="pill">✅ SwiGLU FFN</span>
+                    <span class="pill">✅ Per-token η (selective scan)</span>
+                    <span class="pill">✅ torch.compile (14× speedup)</span>
+                    <span class="pill">✅ Mixed precision (bf16/fp16)</span>
+                    <span class="pill">✅ INT8 + NF4 quantization</span>
+                    <span class="pill">✅ BPE tokenizer</span>
+                    <span class="pill">✅ Batched generation (18× speedup)</span>
+                    <span class="pill">✅ HuggingFace-style wrapper</span>
+                    <span class="pill">✅ Scaling laws evaluation</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== Training Config ===== -->
+        <div class="section" id="train">
+            <h2>Training Configuration</h2>
+            <p class="subtitle">Configure your training run and generate the CLI command.</p>
+
+            <div class="card">
+                <h3>⚙️ Basic Parameters</h3>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>Text file path</label>
+                        <input type="text" id="text" placeholder="(bundled sample text)">
+                        <span class="hint">Path to .txt file. Leave empty for bundled sample.</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Epochs</label>
+                        <input type="number" id="epochs" value="50" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label>d_model (hidden dimension)</label>
+                        <input type="number" id="d_model" value="128" min="16">
+                    </div>
+                    <div class="form-group">
+                        <label>Number of layers</label>
+                        <input type="number" id="num_layers" value="2" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label>Number of heads</label>
+                        <input type="number" id="n_heads" value="4" min="1">
+                        <span class="hint">d_model must be divisible by n_heads</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Bond dimension (SVD rank)</label>
+                        <input type="number" id="bond_dim" value="32" min="1">
+                        <span class="hint">Lower = more compression. d_model//4 recommended.</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Batch size</label>
+                        <input type="number" id="batch_size" value="16" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label>Sequence length</label>
+                        <input type="number" id="seq_len" value="64" min="8">
+                    </div>
+                    <div class="form-group">
+                        <label>Learning rate</label>
+                        <input type="number" id="lr" value="0.0003" step="0.0001">
+                    </div>
+                    <div class="form-group">
+                        <label>Tokenizer</label>
+                        <select id="tokenizer">
+                            <option value="char">Character-level</option>
+                            <option value="bpe">BPE (subword)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>⚡ Performance Options</h3>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>Precision</label>
+                        <select id="precision">
+                            <option value="fp32">FP32 (default)</option>
+                            <option value="bf16" selected>BF16 (recommended for RTX 40-series)</option>
+                            <option value="fp16">FP16 (older GPUs)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Gradient accumulation</label>
+                        <input type="number" id="grad_accum" value="1" min="1">
+                        <span class="hint">Effective batch = batch_size × grad_accum</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Chunk size</label>
+                        <input type="number" id="chunk_size" value="64" min="1">
+                    </div>
+                </div>
+                <div style="margin-top: 12px;">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="compile"><label for="compile">torch.compile (14× per-batch speedup, GPU required)</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>🎯 Quality Strategies <span class="badge">Issue #21 + #22</span></h3>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>Multi-thread memory (n_threads)</label>
+                        <input type="number" id="n_threads" value="1" min="1">
+                        <span class="hint">K independent Hamiltonians per head. 4 recommended.</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Rank-k entanglement</label>
+                        <input type="number" id="rank_k" value="1" min="1">
+                        <span class="hint">4 or 8 recommended for better quality</span>
+                    </div>
+                </div>
+                <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px;">
+                    <div class="checkbox-group"><input type="checkbox" id="nonlinear_update"><label for="nonlinear_update">Nonlinear gated update (Strategy 4)</label></div>
+                    <div class="checkbox-group"><input type="checkbox" id="causal_reinjection"><label for="causal_reinjection">Causal re-injection (Strategy 2)</label></div>
+                    <div class="checkbox-group"><input type="checkbox" id="cross_head_mixing"><label for="cross_head_mixing">Cross-head mixing (Strategy 3)</label></div>
+                    <div class="checkbox-group"><input type="checkbox" id="swiglu"><label for="swiglu">SwiGLU FFN (Strategy 6)</label></div>
+                    <div class="checkbox-group"><input type="checkbox" id="per_token_eta"><label for="per_token_eta">Per-token η (Strategy 5)</label></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>📝 Generation Options</h3>
+                <div class="form-grid">
+                    <div class="checkbox-group"><input type="checkbox" id="generate" checked><label for="generate">Generate text after training</label></div>
+                    <div class="form-group">
+                        <label>Generation prompt</label>
+                        <input type="text" id="prompt" value="The ">
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>📋 Generated CLI Command</h3>
+                <div class="cli-output" id="cli-command">
+                    <button class="copy-btn" onclick="copyCLI()">Copy</button>
+                    <span id="cli-text">python train.py --epochs 50 --precision bf16</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>💾 Estimated Resources</h3>
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div class="value" id="est-params">~265K</div>
+                        <div class="label">Parameters</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="value" id="est-vram">~14 MB</div>
+                        <div class="label">Model Memory</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="value" id="est-hamiltonian">6.29 MB</div>
+                        <div class="label">Hamiltonian State</div>
+                    </div>
+                </div>
+                <p style="font-size: 13px; color: var(--text-muted);">Estimates are approximate. Actual VRAM usage depends on batch size, sequence length, and training activations.</p>
+            </div>
+        </div>
+
+        <!-- ===== Results ===== -->
+        <div class="section" id="results">
+            <h2>Benchmark Results</h2>
+            <p class="subtitle">HVN vs Transformer vs SSM on Shakespeare (d_model=128, RTX 4050).</p>
+
+            <div class="card">
+                <h3>📊 Quality Comparison (PPL)</h3>
+                <div class="chart-container">
+                    <canvas id="chart-ppl"></canvas>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>⚡ Speed Comparison (tokens/sec)</h3>
+                <div class="chart-container">
+                    <canvas id="chart-speed"></canvas>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>📈 Forward Pass Scaling (ms/token vs sequence length)</h3>
+                <div class="chart-container">
+                    <canvas id="chart-scaling"></canvas>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>💾 Memory Scaling (MB vs sequence length)</h3>
+                <div class="chart-container">
+                    <canvas id="chart-memory"></canvas>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>📂 Load Your Own Results</h3>
+                <div class="file-upload" onclick="document.getElementById('file-input').click()">
+                    <p>📁 Click to load a results JSON file (from quality_benchmark.py or scaling_laws.py)</p>
+                    <input type="file" id="file-input" accept=".json">
+                </div>
+                <div id="loaded-results" style="margin-top: 16px;"></div>
+            </div>
+        </div>
+
+        <!-- ===== Architecture ===== -->
+        <div class="section" id="architecture">
+            <h2>Architecture</h2>
+            <p class="subtitle">Click any component to see details.</p>
+
+            <div class="card">
+                <h3>🔧 HVN Pipeline</h3>
+                <div class="arch-flow">
+                    <div class="arch-box" onclick="toggleArchDetail('embedding')">
+                        <div class="name">Token Embedding</div>
+                        <div class="desc">input_ids [B, S] → embeddings [B, S, d_model]</div>
+                    </div>
+                    <div class="arch-arrow">↓</div>
+                    <div class="arch-box" onclick="toggleArchDetail('vortex')">
+                        <div class="name">VortexInjectionLayer</div>
+                        <div class="desc">Token → vortex particle → velocity field via Biot-Savart</div>
+                    </div>
+                    <div class="arch-arrow">↓</div>
+                    <div class="arch-box" onclick="toggleArchDetail('hamiltonian')">
+                        <div class="name">HamiltonianMemoryBlock</div>
+                        <div class="desc">Fixed-size MPS with entanglement renormalization</div>
+                    </div>
+                    <div class="arch-arrow">↓</div>
+                    <div class="arch-box" onclick="toggleArchDetail('block')">
+                        <div class="name">HVNBlock</div>
+                        <div class="desc">Causal wrapper: vortex injection + H update + FFN</div>
+                    </div>
+                    <div class="arch-arrow">↓ × N layers</div>
+                    <div class="arch-box" onclick="toggleArchDetail('decoder')">
+                        <div class="name">HVNDecoder</div>
+                        <div class="desc">Shallow projection: hidden state → vocabulary logits</div>
+                    </div>
+                </div>
+
+                <div class="arch-detail" id="detail-embedding">
+                    <strong>Token Embedding</strong> — Standard nn.Embedding layer. Maps each token ID to a dense vector in ℝ<sup>d_model</sup>. This is the same as in a Transformer.
+                </div>
+                <div class="arch-detail" id="detail-vortex">
+                    <strong>VortexInjectionLayer</strong> — Each token embedding is projected into a vorticity vector ω<sub>t</sub> = W<sub>ω</sub> · x<sub>t</sub>. The Biot-Savart law computes velocity: v<sub>t</sub> = Γ · (H · ω<sub>t</sub>). This is a single matrix-vector product — O(d²), constant in N. The token's representation is deflected: r̃<sub>t</sub> = x<sub>t</sub> + g<sub>t</sub> ⊙ v<sub>t</sub> where g<sub>t</sub> is a learned gate.
+                </div>
+                <div class="arch-detail" id="detail-hamiltonian">
+                    <strong>HamiltonianMemoryBlock</strong> — A fixed d×d matrix that evolves via quantum entanglement renormalization: H ← (1-η)·H + η·(P<sub>t</sub> - H·P<sub>t</sub>·H). The P<sub>t</sub> = v<sub>t</sub> ⊗ v<sub>t</sub><sup>T</sup> term is the interaction projector (rank-1). SVD truncation to rank-r discards noise modes. This is deterministic — no gradient descent at inference.
+                </div>
+                <div class="arch-detail" id="detail-block">
+                    <strong>HVNBlock</strong> — Wraps vortex injection + Hamiltonian update + FFN in a parallel residual: x = x + vortex(norm(x)) + ffn(norm(x)). Uses RMSNorm (like LLaMA). Supports multi-head (parallel H matrices), multi-thread (K H per head), chunked parallel processing, and all quality strategies.
+                </div>
+                <div class="arch-detail" id="detail-decoder">
+                    <strong>HVNDecoder</strong> — A shallow linear projection from d_model to vocab_size. Optionally includes a small MLP. The decoder probes the final hidden state to produce vocabulary logits.
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>🧩 Components Table</h3>
+                <table>
+                    <thead><tr><th>Component</th><th>File</th><th>Role</th></tr></thead>
+                    <tbody>
+                        <tr><td>VortexInjectionLayer</td><td><span class="code">vortex_injection.py</span></td><td>Token → vortex particle → velocity field via Biot-Savart</td></tr>
+                        <tr><td>HamiltonianMemoryBlock</td><td><span class="code">hamiltonian_memory.py</span></td><td>Fixed-size MPS with entanglement renormalization</td></tr>
+                        <tr><td>MultiHeadHamiltonianMemory</td><td><span class="code">batched_memory.py</span></td><td>Batched multi-head + multi-thread memory</td></tr>
+                        <tr><td>MultiThreadHamiltonianMemory</td><td><span class="code">batched_memory.py</span></td><td>K independent Hamiltonians per head (Issue #22)</td></tr>
+                        <tr><td>HVNBlock</td><td><span class="code">hvn_block.py</span></td><td>Causal wrapper: vortex + H update + FFN</td></tr>
+                        <tr><td>HVNDecoder</td><td><span class="code">decoder.py</span></td><td>Shallow projection: hidden → vocab logits</td></tr>
+                        <tr><td>HamiltonianVortexNetwork</td><td><span class="code">model.py</span></td><td>Full model: embedding + N×HVNBlock + decoder</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ===== FLOP Analysis ===== -->
+        <div class="section" id="flops">
+            <h2>FLOP Analysis</h2>
+            <p class="subtitle">Computational cost comparison: HVN vs standard Multi-Head Attention.</p>
+
+            <div class="card">
+                <h3>🧮 Per-Token FLOPs at N=100,000 <span class="badge">d=512, L=12, r=128</span></h3>
+                <table>
+                    <thead><tr><th>Architecture</th><th>Per-Layer FLOPs</th><th>Total (12 layers)</th><th>vs Transformer</th></tr></thead>
+                    <tbody>
+                        <tr><td>MHA (no KV cache)</td><td>207.2M</td><td>2,486M</td><td>100%</td></tr>
+                        <tr><td>MHA (with KV cache)</td><td>206.2M</td><td>2,474M</td><td>100%</td></tr>
+                        <tr><td><strong>HVN (SVD r=128)</strong></td><td>38.6M</td><td>463M</td><td><span class="tag tag-green">18.7% ✓</span></tr>
+                        <tr><td>HVN (no SVD)</td><td>139.2M</td><td>1,670M</td><td>67.5%</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="card">
+                <h3>📈 Scaling Comparison</h3>
+                <table>
+                    <thead><tr><th>Architecture</th><th>Per-Token FLOP Scaling</th><th>Inference Memory</th></tr></thead>
+                    <tbody>
+                        <tr><td>MHA (with KV cache)</td><td>O(Nd) — grows linearly with N</td><td>O(Nd) — KV cache grows</td></tr>
+                        <tr><td><strong>HVN</strong></td><td><strong>O(d²r) — constant in N</strong></td><td><strong>O(d²) — fixed-size</strong></td></tr>
+                    </tbody>
+                </table>
+                <p style="margin-top: 12px; font-size: 13px; color: var(--text-muted);">
+                    At N=100,000, the 4Nd term dominates MHA's cost (99.3% of FLOPs), while HVN has <strong>zero N-dependent terms</strong>.
+                </p>
+            </div>
+
+            <div class="card">
+                <h3>💾 Memory Comparison</h3>
+                <table>
+                    <thead><tr><th>Component</th><th>Transformer</th><th>HVN</th></tr></thead>
+                    <tbody>
+                        <tr><td>Per-layer state</td><td>2·N·d (KV cache)</td><td>d² (Hamiltonian)</td></tr>
+                        <tr><td>N=100K, d=512, fp16</td><td>200 MB / layer</td><td>0.5 MB / layer</td></tr>
+                        <tr><td>12 layers total</td><td><span class="tag tag-red">2.46 GB</span></td><td><span class="tag tag-green">6.29 MB</span></td></tr>
+                        <tr><td>Multi-thread (K=4)</td><td>—</td><td><span class="tag tag-green">25.2 MB</span></td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ===== Theory ===== -->
+        <div class="section" id="theory">
+            <h2>Theoretical Framework</h2>
+            <p class="subtitle">The mathematical formalism behind HVN.</p>
+
+            <div class="card">
+                <h3>🌊 Lagrangian Vortex Particle Mapping</h3>
+                <p>Each token embedding <span class="code">x_t ∈ ℝ^d</span> is interpreted as a <strong>Lagrangian vortex particle</strong> with:</p>
+                <ul style="margin: 12px 0; padding-left: 24px; font-size: 14px;">
+                    <li><strong>Position</strong>: r<sub>t</sub> — the token's embedding vector</li>
+                    <li><strong>Vorticity</strong>: ω<sub>t</sub> = W<sub>ω</sub> · x<sub>t</sub> — learned projection</li>
+                    <li><strong>Velocity</strong>: v<sub>t</sub> = Γ · (H · ω<sub>t</sub>) — Biot-Savart local approximation</li>
+                </ul>
+                <p>The classical Biot-Savart law is a global O(N) integral. HVN replaces it with a <strong>local, fixed-size approximation</strong>: a single matrix-vector product against the Hamiltonian H — O(d²), constant in N.</p>
+            </div>
+
+            <div class="card">
+                <h3>⚛️ Quantum Entanglement Renormalization</h3>
+                <p>The Hamiltonian H is a fixed d×d matrix that evolves via DMRG-style renormalization:</p>
+                <div style="background: #010409; border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin: 12px 0; font-family: monospace; font-size: 13px; color: #e6edf3;">
+                    H_new = (1 - η) · H + η · (P_t - H · P_t · H)
+                </div>
+                <ul style="margin: 12px 0; padding-left: 24px; font-size: 14px;">
+                    <li><strong>P<sub>t</sub> = v<sub>t</sub> ⊗ v<sub>t</sub><sup>T</sup></strong> — interaction projector (rank-1)</li>
+                    <li><strong>Destructive interference</strong>: H·P<sub>t</sub>·H cancels already-aligned components</li>
+                    <li><strong>Associative alignment</strong>: P<sub>t</sub> reinforces new associations</li>
+                    <li><strong>Renormalization</strong>: (1-η)·H preserves prior memory</li>
+                    <li><strong>SVD truncation</strong>: keep top-r singular values (discard noise)</li>
+                </ul>
+                <p>This is a <strong>deterministic, single-pass update</strong> — no optimization step, no gradient descent. It runs in O(d²) time, independent of sequence length.</p>
+            </div>
+
+            <div class="card">
+                <h3>🔗 Why This Achieves Long-Range Recall</h3>
+                <ul style="padding-left: 24px; font-size: 14px; line-height: 2;">
+                    <li>The Hamiltonian <strong>H</strong> is a compressed summary of all past tokens' vorticity — like a KV cache but in fixed O(d²) space</li>
+                    <li><strong>Entanglement renormalization</strong> ensures correlated concepts reinforce while noise cancels</li>
+                    <li>The <strong>Biot-Savart local approximation</strong> means each token "feels" the entire history through H without scanning it</li>
+                    <li>Analogous to how a fluid's velocity field at any point encodes the integrated effect of all upstream vortices</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- ===== Training Guide ===== -->
+        <div class="section" id="guide">
+            <h2>Training Guide</h2>
+            <p class="subtitle">How to train and use the HVN model.</p>
+
+            <div class="card">
+                <h3>🚀 Quick Start</h3>
+                <div class="cli-output"><span class="copy-btn" onclick="copyText('python train.py --epochs 50 --precision bf16 --generate --prompt \"The \"')">Copy</span>
+# Install dependencies (CUDA GPU version)
+pip install torch --index-url https://download.pytorch.org/whl/cu126
+pip install numpy
+
+# Run the architecture demo
+python demo.py
+
+# Train on bundled sample text
+python train.py --epochs 50 --precision bf16 --generate --prompt "The "
+
+# Generate text from a trained checkpoint
+python generate.py --prompt "The " --tokens 200 --temp 0.7</div>
+            </div>
+
+            <div class="card">
+                <h3>🖥️ 6GB VRAM Configurations</h3>
+                <table>
+                    <thead><tr><th>Config</th><th>d_model</th><th>Layers</th><th>Params</th><th>VRAM</th><th>Fits 6GB?</th></tr></thead>
+                    <tbody>
+                        <tr><td>Small (default)</td><td>128</td><td>2</td><td>~265K</td><td>~14 MB</td><td><span class="tag tag-green">✓ Easily</span></td></tr>
+                        <tr><td>Medium</td><td>256</td><td>4</td><td>~1M</td><td>~50-100 MB</td><td><span class="tag tag-green">✓ Easily</span></td></tr>
+                        <tr><td>Large</td><td>512</td><td>8</td><td>~5-10M</td><td>~200-500 MB</td><td><span class="tag tag-green">✓ Yes</span></td></tr>
+                        <tr><td>Very Large</td><td>512</td><td>12</td><td>~15M</td><td>~1-2 GB</td><td><span class="tag tag-green">✓ Yes</span></td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="card">
+                <h3>🎯 Recommended Commands</h3>
+                <div class="cli-output"><span class="copy-btn" onclick="copyText('python train.py --d_model 256 --num_layers 4 --bond_dim 64 --batch_size 16 --seq_len 128 --precision bf16 --compile --epochs 100 --generate --prompt \"Chapter 1 \"')">Copy</span>
+# Best balance (medium model, mixed precision, compiled)
+python train.py \
+    --d_model 256 --num_layers 4 --bond_dim 64 \
+    --batch_size 16 --seq_len 128 \
+    --precision bf16 --compile \
+    --epochs 100 --generate --prompt "Chapter 1 "</div>
+                <br>
+                <div class="cli-output"><span class="copy-btn" onclick="copyText('python train.py --epochs 100 --precision bf16 --n_threads 4 --rank_k 8 --nonlinear_update --causal_reinjection --cross_head_mixing --swiglu --per_token_eta --generate --prompt \"The \"')">Copy</span>
+# All quality strategies + multi-thread memory
+python train.py \
+    --epochs 100 --precision bf16 \
+    --n_threads 4 --rank_k 8 --nonlinear_update \
+    --causal_reinjection --cross_head_mixing \
+    --swiglu --per_token_eta \
+    --generate --prompt "The "</div>
+            </div>
+
+            <div class="card">
+                <h3>🌡️ Temperature Guide</h3>
+                <table>
+                    <thead><tr><th>Temperature</th><th>Effect</th></tr></thead>
+                    <tbody>
+                        <tr><td>0.1 - 0.3</td><td>Very deterministic, repetitive</td></tr>
+                        <tr><td>0.5 - 0.7</td><td>Focused, coherent</td></tr>
+                        <tr><td>0.8 - 1.0</td><td>Balanced creativity</td></tr>
+                        <tr><td>1.0+</td><td>Wild, random</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="card">
+                <h3>💾 Memory-Saving Techniques</h3>
+                <table>
+                    <thead><tr><th>Technique</th><th>Flag</th><th>Memory Saved</th><th>Speed Gain</th></tr></thead>
+                    <tbody>
+                        <tr><td>Mixed precision (bf16)</td><td><span class="code">--precision bf16</span></td><td>~50%</td><td>2-3×</td></tr>
+                        <tr><td>Gradient accumulation</td><td><span class="code">--grad_accum N</span></td><td>Use smaller batch</td><td>—</td></tr>
+                        <tr><td>torch.compile</td><td><span class="code">--compile</span></td><td>—</td><td>14×</td></tr>
+                        <tr><td>Smaller batch size</td><td><span class="code">--batch_size 4</span></td><td>Up to 4×</td><td>—</td></tr>
+                        <tr><td>Shorter sequences</td><td><span class="code">--seq_len 64</span></td><td>~2×</td><td>Slightly faster</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ===== Issues & Roadmap ===== -->
+        <div class="section" id="issues">
+            <h2>Issues & Roadmap</h2>
+            <p class="subtitle">GitLab issues tracking HVN development.</p>
+
+            <div class="card">
+                <h3>✅ Completed Issues (1-22)</h3>
+                <table>
+                    <thead><tr><th>#</th><th>Title</th><th>Status</th></tr></thead>
+                    <tbody id="closed-issues"></tbody>
+                </table>
+            </div>
+
+            <div class="card">
+                <h3>📋 Open Issues (Future Work)</h3>
+                <table>
+                    <thead><tr><th>#</th><th>Title</th><th>Category</th><th>GitLab</th></tr></thead>
+                    <tbody>
+                        <tr>
+                            <td>23</td>
+                            <td>Vision: Image Encoding via Vortex-Projected Patch Embeddings</td>
+                            <td><span class="tag tag-blue">Multimodal</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/23" target="_blank">View ↗</a></td>
+                        </tr>
+                        <tr>
+                            <td>24</td>
+                            <td>Tool Calling: Structured Output and Function Invocation</td>
+                            <td><span class="tag tag-yellow">Agentic</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/24" target="_blank">View ↗</a></td>
+                        </tr>
+                        <tr>
+                            <td>25</td>
+                            <td>Agentic Mode: Multi-Step Reasoning, Planning, and Self-Correction</td>
+                            <td><span class="tag tag-yellow">Agentic</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/25" target="_blank">View ↗</a></td>
+                        </tr>
+                        <tr>
+                            <td>26</td>
+                            <td>Training Dashboard: Interactive HTML GUI</td>
+                            <td><span class="tag tag-purple">UX</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/26" target="_blank">View ↗</a></td>
+                        </tr>
+                        <tr>
+                            <td>27</td>
+                            <td>Multimodal Fusion: Joint Image-Text Training</td>
+                            <td><span class="tag tag-blue">Multimodal</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/27" target="_blank">View ↗</a></td>
+                        </tr>
+                        <tr>
+                            <td>28</td>
+                            <td>Conversation Memory: Multi-Turn Chat with Persistent State</td>
+                            <td><span class="tag tag-yellow">Agentic</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/28" target="_blank">View ↗</a></td>
+                        </tr>
+                        <tr>
+                            <td>29</td>
+                            <td>Fine-Tuning: LoRA, QLoRA, and Instruction Tuning</td>
+                            <td><span class="tag tag-green">Training</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/29" target="_blank">View ↗</a></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="card">
+                <h3>🗺️ Dependency Graph</h3>
+                <div style="font-family: monospace; font-size: 13px; line-height: 2; color: var(--text-muted);">
+                    <strong>Phase 1 (Done):</strong> #1-22 — Core architecture, training, quality strategies<br>
+                    <strong>Phase 2 (Foundation):</strong> #26 (Dashboard) — standalone<br>
+                    <strong>Phase 3 (Multimodal):</strong> #23 (Vision) → #27 (Multimodal Fusion)<br>
+                    <strong>Phase 4 (Agentic):</strong> #24 (Tools) → #28 (Chat) → #25 (Agents)<br>
+                    <strong>Phase 5 (Fine-tuning):</strong> #29 (LoRA) — enables all agentic features
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+// ===== Navigation =====
+document.querySelectorAll('.nav li').forEach(li => {
+    li.addEventListener('click', () => {
+        document.querySelectorAll('.nav li').forEach(l => l.classList.remove('active'));
+        document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+        li.classList.add('active');
+        document.getElementById(li.dataset.section).classList.add('active');
+    });
+});
+
+// ===== Theme Toggle =====
+function toggleTheme() {
+    const html = document.documentElement;
+    const current = html.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    html.setAttribute('data-theme', next);
+    document.getElementById('theme-icon').textContent = next === 'dark' ? '🌙' : '☀️';
+    document.getElementById('theme-label').textContent = next === 'dark' ? 'Dark Mode' : 'Light Mode';
+    // Re-render charts with new theme colors
+    if (typeof Chart !== 'undefined') renderCharts();
+}
+
+// ===== CLI Command Generator =====
+function generateCLI() {
+    const parts = ['python train.py'];
+    const text = document.getElementById('text').value.trim();
+    if (text) parts.push(`--text "${text}"`);
+    parts.push(`--epochs ${document.getElementById('epochs').value}`);
+    parts.push(`--d_model ${document.getElementById('d_model').value}`);
+    parts.push(`--num_layers ${document.getElementById('num_layers').value}`);
+    parts.push(`--n_heads ${document.getElementById('n_heads').value}`);
+    parts.push(`--bond_dim ${document.getElementById('bond_dim').value}`);
+    parts.push(`--batch_size ${document.getElementById('batch_size').value}`);
+    parts.push(`--seq_len ${document.getElementById('seq_len').value}`);
+    parts.push(`--lr ${document.getElementById('lr').value}`);
+    const tok = document.getElementById('tokenizer').value;
+    if (tok === 'bpe') parts.push('--tokenizer bpe');
+    const prec = document.getElementById('precision').value;
+    if (prec !== 'fp32') parts.push(`--precision ${prec}`);
+    const ga = parseInt(document.getElementById('grad_accum').value);
+    if (ga > 1) parts.push(`--grad_accum ${ga}`);
+    const cs = parseInt(document.getElementById('chunk_size').value);
+    if (cs !== 64) parts.push(`--chunk_size ${cs}`);
+    if (document.getElementById('compile').checked) parts.push('--compile');
+    const nt = parseInt(document.getElementById('n_threads').value);
+    if (nt > 1) parts.push(`--n_threads ${nt}`);
+    const rk = parseInt(document.getElementById('rank_k').value);
+    if (rk > 1) parts.push(`--rank_k ${rk}`);
+    if (document.getElementById('nonlinear_update').checked) parts.push('--nonlinear_update');
+    if (document.getElementById('causal_reinjection').checked) parts.push('--causal_reinjection');
+    if (document.getElementById('cross_head_mixing').checked) parts.push('--cross_head_mixing');
+    if (document.getElementById('swiglu').checked) parts.push('--swiglu');
+    if (document.getElementById('per_token_eta').checked) parts.push('--per_token_eta');
+    if (document.getElementById('generate').checked) {
+        parts.push('--generate');
+        parts.push(`--prompt "${document.getElementById('prompt').value}"`);
+    }
+    document.getElementById('cli-text').textContent = parts.join(' ');
+    updateEstimates();
+}
+
+// ===== Resource Estimates =====
+function updateEstimates() {
+    const d = parseInt(document.getElementById('d_model').value);
+    const L = parseInt(document.getElementById('num_layers').value);
+    const H = parseInt(document.getElementById('n_heads').value);
+    const K = parseInt(document.getElementById('n_threads').value);
+    const V = 1000; // approx vocab
+    // Rough param estimate: embedding + blocks + decoder
+    const embed = V * d;
+    const perBlock = d * d * 4 + d * (d / H) * (d / H) * H * K; // rough
+    const decoder = d * V;
+    const total = embed + perBlock * L + decoder;
+    document.getElementById('est-params').textContent = total > 1e6 ? `~${(total/1e6).toFixed(1)}M` : `~${Math.round(total/1e3)}K`;
+    // Hamiltonian memory: L * H * K * (d/H)^2 * 2 bytes (bf16)
+    const hamMem = L * H * K * Math.pow(d/H, 2) * 2;
+    document.getElementById('est-hamiltonian').textContent = hamMem > 1e6 ? `${(hamMem/1e6).toFixed(1)} MB` : `${(hamMem/1e3).toFixed(0)} KB`;
+    // Model memory (rough: params * 2 bytes for bf16)
+    const modelMem = total * 2;
+    document.getElementById('est-vram').textContent = modelMem > 1e6 ? `~${(modelMem/1e6).toFixed(1)} MB` : `~${(modelMem/1e3).toFixed(0)} KB`;
+}
+
+// Attach listeners
+document.querySelectorAll('#train input, #train select').forEach(el => {
+    el.addEventListener('input', generateCLI);
+    el.addEventListener('change', generateCLI);
+});
+generateCLI();
+
+// ===== Copy Functions =====
+function copyCLI() {
+    const text = document.getElementById('cli-text').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        const btn = document.querySelector('.copy-btn');
+        const orig = btn.textContent;
+        btn.textContent = '✓ Copied!';
+        setTimeout(() => btn.textContent = orig, 2000);
+    });
+}
+function copyText(text) {
+    navigator.clipboard.writeText(text);
+}
+
+// ===== Architecture Details =====
+function toggleArchDetail(id) {
+    const el = document.getElementById('detail-' + id);
+    el.classList.toggle('show');
+}
+
+// ===== Charts =====
+let charts = {};
+function getChartColors() {
+    const style = getComputedStyle(document.documentElement);
+    return {
+        text: style.getPropertyValue('--text').trim(),
+        muted: style.getPropertyValue('--text-muted').trim(),
+        border: style.getPropertyValue('--border').trim(),
+        accent: style.getPropertyValue('--accent').trim(),
+        green: style.getPropertyValue('--green').trim(),
+        red: style.getPropertyValue('--red').trim(),
+        yellow: style.getPropertyValue('--yellow').trim(),
+        purple: style.getPropertyValue('--purple').trim(),
+    };
+}
+
+function renderCharts() {
+    const c = getChartColors();
+    // Destroy existing charts
+    Object.values(charts).forEach(ch => ch.destroy());
+    charts = {};
+
+    Chart.defaults.color = c.muted;
+    Chart.defaults.borderColor = c.border;
+
+    // PPL Comparison
+    charts.ppl = new Chart(document.getElementById('chart-ppl'), {
+        type: 'bar',
+        data: {
+            labels: ['HVN (n_threads=1)', 'HVN (n_threads=4)', 'HVN (n_threads=4 + all)', 'Transformer', 'SSM'],
+            datasets: [{
+                label: 'Eval PPL (lower is better)',
+                data: [8.80, 8.41, 8.13, 1.90, 1.12],
+                backgroundColor: [c.accent, c.accent + '99', c.accent + '66', c.green, c.purple],
+                borderRadius: 6,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, title: { text: 'Perplexity', display: true } } },
+        }
+    });
+
+    // Speed Comparison
+    charts.speed = new Chart(document.getElementById('chart-speed'), {
+        type: 'bar',
+        data: {
+            labels: ['HVN (incremental)', 'HVN (full context)', 'Transformer', 'SSM'],
+            datasets: [{
+                label: 'tokens/sec (higher is better)',
+                data: [106.5, 75.6, 780.6, 40.0],
+                backgroundColor: [c.accent, c.accent + '99', c.green, c.purple],
+                borderRadius: 6,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, title: { text: 'Tokens / sec', display: true } } },
+        }
+    });
+
+    // Forward Pass Scaling
+    charts.scaling = new Chart(document.getElementById('chart-scaling'), {
+        type: 'line',
+        data: {
+            labels: ['N=256', 'N=512', 'N=1024', 'N=2048', 'N=4096'],
+            datasets: [
+                { label: 'HVN', data: [5.06, 4.98, 4.97, 5.03, 5.05], borderColor: c.accent, backgroundColor: c.accent + '20', tension: 0.3, fill: true },
+                { label: 'SSM', data: [0.43, 0.42, 0.43, 0.46, 0.43], borderColor: c.purple, tension: 0.3 },
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { position: 'top' } },
+            scales: { y: { title: { text: 'ms / token', display: true } } },
+        }
+    });
+
+    // Memory Scaling
+    charts.memory = new Chart(document.getElementById('chart-memory'), {
+        type: 'line',
+        data: {
+            labels: ['N=256', 'N=512', 'N=1024', 'N=2048', 'N=4096'],
+            datasets: [
+                { label: 'HVN', data: [14.2, 15.6, 18.9, 25.4, 38.4], borderColor: c.accent, backgroundColor: c.accent + '20', tension: 0.3, fill: true },
+                { label: 'Transformer', data: [14.5, 16.8, 21.3, 30.3, 48.3], borderColor: c.green, tension: 0.3 },
+                { label: 'SSM', data: [13.8, 15.3, 18.3, 24.3, 36.3], borderColor: c.purple, tension: 0.3 },
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { position: 'top' } },
+            scales: { y: { title: { text: 'Memory (MB)', display: true } } },
+        }
+    });
+}
+
+// Render charts when results section is first shown
+let chartsRendered = false;
+document.querySelector('[data-section="results"]').addEventListener('click', () => {
+    if (!chartsRendered) {
+        setTimeout(renderCharts, 100);
+        chartsRendered = true;
+    }
+});
+
+// ===== File Upload =====
+document.getElementById('file-input').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const text = await file.text();
+    try {
+        const data = JSON.parse(text);
+        const container = document.getElementById('loaded-results');
+        container.innerHTML = `<div class="info-banner">✓ Loaded ${file.name}</div><pre style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;overflow-x:auto;">${JSON.stringify(data, null, 2).substring(0, 2000)}...</pre>`;
+    } catch (err) {
+        document.getElementById('loaded-results').innerHTML = `<div class="info-banner" style="color:var(--red);">✗ Invalid JSON: ${err.message}</div>`;
+    }
+});
+
+// ===== Closed Issues Table =====
+const closedIssues = [
+    [1, 'Rotary positional embeddings (RoPE)'],
+    [2, 'Real-dataset evaluation harness'],
+    [3, 'Hugging Face-style wrapper'],
+    [4, 'Chunk-size tuning'],
+    [6, 'HF wrapper (merged with #3)'],
+    [7, 'Chunk-size tuning (merged with #4)'],
+    [8, 'Parallel multi-head processing'],
+    [9, 'Investigation: repeat_interleave optimal'],
+    [10, 'torch.compile integration'],
+    [11, 'BPE tokenizer support'],
+    [12, 'Higher-rank Hamiltonian update'],
+    [13, 'Residual Hamiltonian connection'],
+    [14, 'Learned input-dependent entanglement rate'],
+    [15, 'RMSNorm + parallel residual'],
+    [16, 'Per-head vorticity frequency projections'],
+    [17, 'Batched generation for multiple sequences'],
+    [18, 'Scaling laws evaluation'],
+    [19, 'Mixed-precision training'],
+    [20, 'Hamiltonian quantization (INT8 + NF4)'],
+    [21, 'Multi-strategy quality upgrade'],
+    [22, 'Multi-Thread Hamiltonian Memory'],
+];
+const tbody = document.getElementById('closed-issues');
+closedIssues.forEach(([num, title]) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${num}</td><td>${title}</td><td><span class="tag tag-green">✓ Closed</span></td>`;
+    tbody.appendChild(tr);
+});
+</script>
+</body>
+</html>

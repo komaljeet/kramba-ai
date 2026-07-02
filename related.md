@@ -7,7 +7,48 @@
 
 ## Open Issues
 
-(none — all issues closed)
+### #23 — Vision: Image Encoding via Vortex-Projected Patch Embeddings
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/23
+- **Status**: Open
+- **Goal**: Treat image patches as vortex particles — split image into grid, project to d_model, process through HVN blocks.
+- **Key idea**: HVN already processes arbitrary embedding vectors — patches are just another embedding source.
+- **Expected impact**: Image captioning, visual QA, multimodal HVN
+
+### #24 — Tool Calling: Structured Output and Function Invocation
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/24
+- **Status**: Open
+- **Goal**: Add special tokens ([TOOL_CALL], [TOOL_RESULT]) and constrained decoding for JSON tool calls.
+- **Key idea**: Tool calling is a prompting/training feature, not an architectural change.
+
+### #25 — Agentic Mode: Multi-Step Reasoning, Planning, and Self-Correction
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/25
+- **Status**: Open
+- **Goal**: ReAct-style agentic loop with planning, tool chaining, and self-correction.
+- **Depends on**: #24 (Tool Calling)
+
+### #26 — Training Dashboard: Interactive HTML GUI
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/26
+- **Status**: Open
+- **Goal**: Single-page HTML dashboard for training config, results visualization, and documentation.
+- **Key idea**: No server required — pure HTML/CSS/JS with Chart.js via CDN.
+- **Note**: Initial dashboard.html created in docs/ — issue covers refinement and full feature set.
+
+### #27 — Multimodal Fusion: Joint Image-Text Training
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/27
+- **Status**: Open
+- **Goal**: Joint training on image-text pairs with cross-modal retrieval.
+- **Depends on**: #23 (Vision)
+
+### #28 — Conversation Memory: Multi-Turn Chat with Persistent State
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/28
+- **Status**: Open
+- **Goal**: ChatSession with persistent Hamiltonian state, conversation formatting, state checkpointing.
+- **Depends on**: #24 (Tool Calling), #25 (Agentic Mode)
+
+### #29 — Fine-Tuning: LoRA, QLoRA, and Instruction Tuning
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/29
+- **Status**: Open
+- **Goal**: Parameter-efficient fine-tuning (LoRA/QLoRA) on 6GB VRAM, instruction tuning for agentic features.
 
 ---
 
