@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .core import HamiltonianVortexNetwork
-from .vision import ImageEncoder, CrossModalProjector
+from .vision import ImageEncoder, CrossModalProjector, MultimodalFusionHVN
 
 
 class HVNConfig:
@@ -45,6 +45,11 @@ class HVNConfig:
         patch_size: int = 16,
         in_channels: int = 3,
         use_cross_modal_proj: bool = True,
+        # Multimodal fusion (Issue #27)
+        use_gated_fusion: bool = True,
+        use_modality_embed: bool = True,
+        use_retrieval_head: bool = True,
+        retrieval_dim: int | None = None,
     ) -> None:
         self.vocab_size = vocab_size
         self.d_model = d_model
@@ -66,6 +71,11 @@ class HVNConfig:
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.use_cross_modal_proj = use_cross_modal_proj
+        # Multimodal fusion (Issue #27)
+        self.use_gated_fusion = use_gated_fusion
+        self.use_modality_embed = use_modality_embed
+        self.use_retrieval_head = use_retrieval_head
+        self.retrieval_dim = retrieval_dim
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -88,6 +98,10 @@ class HVNConfig:
             "patch_size": self.patch_size,
             "in_channels": self.in_channels,
             "use_cross_modal_proj": self.use_cross_modal_proj,
+            "use_gated_fusion": self.use_gated_fusion,
+            "use_modality_embed": self.use_modality_embed,
+            "use_retrieval_head": self.use_retrieval_head,
+            "retrieval_dim": self.retrieval_dim,
         }
 
     @classmethod
@@ -143,6 +157,20 @@ class HVNForCausalLM(nn.Module):
             )
         else:
             self.image_proj = None
+
+        # Multimodal fusion components (Issue #27)
+        self.multimodal_fusion: MultimodalFusionHVN | None = None
+        if self.config.use_gated_fusion or self.config.use_modality_embed or self.config.use_retrieval_head:
+            self.multimodal_fusion = MultimodalFusionHVN(
+                vision_encoder=self.vision_encoder,
+                hvn=self.model,
+                use_cross_modal_proj=self.config.use_cross_modal_proj,
+                use_gated_fusion=self.config.use_gated_fusion,
+                use_modality_embed=self.config.use_modality_embed,
+                use_retrieval_head=self.config.use_retrieval_head,
+                retrieval_dim=self.config.retrieval_dim,
+                dropout=self.config.dropout,
+            )
 
     def forward(
         self,
@@ -247,6 +275,89 @@ class HVNForCausalLM(nn.Module):
             device=next(self.parameters()).device,
         )
         return torch.tensor([generated_ids], dtype=torch.long, device=next(self.parameters()).device)
+
+
+    def generate_multimodal(
+        self,
+        images: torch.Tensor,
+        max_new_tokens: int = 50,
+        temperature: float = 0.8,
+        top_k: int = 10,
+        **_: Any,
+    ) -> list[int]:
+        """Generate a caption for the given image (Issue #27).
+
+        Uses the multimodal fusion model if available, otherwise falls back
+        to the basic vision encoder + HVN.
+
+        Parameters
+        ----------
+        images : torch.Tensor
+            Input images, shape ``[B, C, H, W]`` (B=1 for single caption).
+        max_new_tokens : int
+            Maximum tokens to generate.
+        temperature : float
+            Sampling temperature.
+        top_k : int
+            Top-k sampling.
+
+        Returns
+        -------
+        generated : list[int]
+            Generated token IDs.
+        """
+        device = next(self.parameters()).device
+        if self.multimodal_fusion is not None:
+            return self.multimodal_fusion.generate_caption(
+                images, max_new_tokens=max_new_tokens, temperature=temperature, top_k=top_k, device=device,
+            )
+        # Fallback: use basic MultimodalHVN path
+        from .vision import MultimodalHVN
+        basic = MultimodalHVN(
+            vision_encoder=self.vision_encoder,
+            hvn=self.model,
+            use_cross_modal_proj=self.config.use_cross_modal_proj,
+        ).to(device)
+        return basic.generate_caption(
+            images, max_new_tokens=max_new_tokens, temperature=temperature, top_k=top_k, device=device,
+        )
+
+    def answer_question_multimodal(
+        self,
+        images: torch.Tensor,
+        question_ids: list[int],
+        max_new_tokens: int = 50,
+        temperature: float = 0.8,
+        top_k: int = 10,
+        **_: Any,
+    ) -> list[int]:
+        """Visual question answering: image + question → answer (Issue #27).
+
+        Parameters
+        ----------
+        images : torch.Tensor
+            Input images, shape ``[1, C, H, W]``.
+        question_ids : list[int]
+            Question token IDs.
+        max_new_tokens : int
+            Maximum answer tokens.
+        temperature : float
+            Sampling temperature.
+        top_k : int
+            Top-k sampling.
+
+        Returns
+        -------
+        answer_ids : list[int]
+            Generated answer token IDs.
+        """
+        device = next(self.parameters()).device
+        if self.multimodal_fusion is not None:
+            return self.multimodal_fusion.answer_question(
+                images, question_ids, max_new_tokens=max_new_tokens,
+                temperature=temperature, top_k=top_k, device=device,
+            )
+        raise NotImplementedError("VQA requires multimodal fusion model (use_gated_fusion=True)")
 
 
 __all__ = ["HVNConfig", "HVNForCausalLM"]
