@@ -20,11 +20,33 @@
 
 ### #32 — Extreme Weight Compression: 10B → <2GB, 1T → <200GB
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/issues/32
-- **Status**: Open
+- **Status**: Open (Phase 1 of 5 done, 2026-07-03)
 - **Goal**: 15 compression techniques across 5 phases (GPTQ-style quantization, Hadamard
   pre-rotation, ternary weights, tensor-train decomposition, NVMe streaming for 1T+ models).
 - **Depends on**: #33 (dtype-agnostic Triton kernel, closed — ready for #32's new dtype branches)
 - **See**: `EXECUTION_PLAN.md` for the full phased plan.
+- **Phase 1 — Foundational Compression (done 2026-07-03)**:
+  - `hvn/compress.py` (new) — `GPTQQuantizer` (Hessian-based 4-bit quantization
+    with sequential error compensation, Frantar et al. 2022), `HadamardQuantizer`
+    (QuIP#-style random-sign Hadamard pre-rotation for 2-bit quantization),
+    `RateDistortionAllocator` (water-filling per-layer bit allocation from
+    calibration-Hessian sensitivity), plus calibration utilities
+    (`gather_layer_inputs`, `collect_calibration_hessian`) and a model-level
+    convenience (`compress_linear_layers_gptq`)
+  - `hvn/sparse.py` (new) — `BlockSparseLinear` (2:4 structured sparsity,
+    `nn.Linear` drop-in), `apply_2_4_sparsity`, `convert_model_to_block_sparse`
+  - `test_issue32_phase1.py`: 5-test suite verifying all components on GPU —
+    GPTQ reduces Hessian-weighted output distortion 50% vs naive round-to-nearest;
+    Hadamard rotation reduces 2-bit outlier error 50% vs unrotated; rate-distortion
+    allocator correctly ranks layers by sensitivity while holding the bit budget;
+    `BlockSparseLinear` achieves exact 50% 2:4 sparsity
+  - **End-to-end result**: GPTQ 4-bit compression of a trained HVN model's
+    `nn.Linear` layers gives **5.33× weight-storage compression with only
+    +0.02% perplexity degradation** (acceptance criterion: <5%)
+  - All quantization is inference-only (training stays full precision), per
+    the issue's acceptance criteria
+  - **Next**: Phase 2 (ternary BitNet training, low-rank+sparse decomposition,
+    tensor-train Hamiltonian, ALBERT-style weight sharing) — not started
 
 ### #26 — Training Dashboard: Interactive HTML GUI
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/26
