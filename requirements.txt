@@ -4,3 +4,5 @@ torch>=2.0.0
 numpy>=1.24.0
 tokenizers>=0.15.0
 triton-windows>=3.0.0  # For torch.compile on Windows GPU
+fastapi>=0.110.0        # OpenAI-compatible API server (Issue #31)
+uvicorn>=0.27.0         # ASGI server for hvn/server.py

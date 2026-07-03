@@ -155,6 +155,49 @@ to support the extreme weight compression techniques planned in Issue #32.
 
 📖 **Full results**: [docs/BENCHMARK_RESULTS.md](docs/BENCHMARK_RESULTS.md) § 5
 
+## OpenAI-Compatible API Server (Issue #31)
+
+HVN can be served over a standard OpenAI-compatible REST API — `/v1/chat/completions`,
+`/v1/completions`, `/v1/models`, `/v1/health` — so it works with the OpenAI Python SDK,
+curl, LangChain, OpenWebUI, LibreChat, etc. Ollama/llama.cpp is not an option (GGUF only
+supports Transformer-family architectures), so this is a lightweight FastAPI server built
+directly on HVN's existing `forward_step` / Hamiltonian-state-cache inference — no KV
+cache, O(1) per-token cost is preserved end to end.
+
+```bash
+# Install server dependencies
+pip install fastapi uvicorn
+
+# Start the server
+python -m hvn.server --checkpoint hvn_checkpoint.pt --port 8000
+
+# With a LoRA adapter loaded at startup
+python -m hvn.server --checkpoint hvn_checkpoint.pt --lora hvn_checkpoint_lora.pt --port 8000
+
+# Use with the OpenAI Python SDK
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="hvn")
+response = client.chat.completions.create(
+    model="hvn",
+    messages=[{"role": "user", "content": "Hello!"}],
+    stream=True,  # SSE token streaming also supported
+)
+
+# Or with curl
+curl http://localhost:8000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{"model": "hvn", "messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+Tool calling (Issue #24) is exposed via the standard `tools`/`functions` request field —
+the server injects tool schemas into the prompt and returns any `[TOOL_CALL]` blocks the
+model emits as OpenAI-format `tool_calls` (execution is left to the client, matching the
+OpenAI API's own contract).
+
+**Scope note**: a single model is loaded per server process — `/v1/models` lists that one
+model, no dynamic multi-checkpoint hot-swapping. Verified with `test_server.py` (6/6
+checks: health, models, completions, chat completions, SSE streaming, tool calling).
+
 ## Quality Improvement Strategies (Issue #21)
 
 HVN's perplexity can be improved by enabling one or more quality strategies.
