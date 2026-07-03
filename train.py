@@ -36,24 +36,75 @@ class CharTokenizer:
 
     Maps each unique character in the training text to an integer ID.
     This keeps the vocabulary small so we can train quickly on CPU.
+
+    Special tool-calling tokens (Issue #24) are added automatically
+    if ``add_tool_tokens=True`` (default).  These tokens are multi-character
+    strings that are treated as single tokens.
     """
 
-    def __init__(self, text: str):
+    # Special tool-calling tokens (Issue #24)
+    TOOL_SPECIAL_TOKENS = [
+        "[TOOL_CALL]", "[/TOOL_CALL]",
+        "[TOOL_RESULT]", "[/TOOL_RESULT]",
+        "[THINK]", "[/THINK]",
+    ]
+
+    def __init__(self, text: str, add_tool_tokens: bool = True):
         chars = sorted(set(text))
         self.char_to_id = {ch: i for i, ch in enumerate(chars)}
         self.id_to_char = {i: ch for i, ch in enumerate(chars)}
         self.vocab_size = len(chars)
 
+        # Add special tool tokens (Issue #24)
+        self.special_tokens = {}
+        if add_tool_tokens:
+            for token in self.TOOL_SPECIAL_TOKENS:
+                # Assign a new ID for each special token
+                new_id = self.vocab_size
+                self.char_to_id[token] = new_id
+                self.id_to_char[new_id] = token
+                self.special_tokens[token] = new_id
+                self.vocab_size += 1
+
     def encode(self, text: str) -> list[int]:
-        return [self.char_to_id[ch] for ch in text if ch in self.char_to_id]
+        """Encode text to token IDs.
+
+        Handles multi-character special tokens (e.g. [TOOL_CALL]) by
+        scanning for them before falling back to single characters.
+        """
+        ids = []
+        i = 0
+        while i < len(text):
+            # Check for special tokens (longest match first)
+            matched = False
+            if self.special_tokens:
+                for token in sorted(self.special_tokens.keys(), key=len, reverse=True):
+                    if text[i:i+len(token)] == token:
+                        ids.append(self.char_to_id[token])
+                        i += len(token)
+                        matched = True
+                        break
+            if matched:
+                continue
+            # Single character
+            ch = text[i]
+            if ch in self.char_to_id:
+                ids.append(self.char_to_id[ch])
+            i += 1
+        return ids
 
     def decode(self, ids: list[int]) -> str:
-        return "".join(self.id_to_char[i] for i in ids)
+        """Decode a list of token IDs back to text."""
+        return "".join(self.id_to_char.get(i, "") for i in ids)
 
     def save(self, path: str):
         import json
         with open(path, "w") as f:
-            json.dump({"char_to_id": self.char_to_id, "id_to_char": {str(k): v for k, v in self.id_to_char.items()}}, f)
+            json.dump({
+                "char_to_id": self.char_to_id,
+                "id_to_char": {str(k): v for k, v in self.id_to_char.items()},
+                "special_tokens": self.special_tokens,
+            }, f)
 
     @classmethod
     def load(cls, path: str):
@@ -64,6 +115,7 @@ class CharTokenizer:
         tok.char_to_id = data["char_to_id"]
         tok.id_to_char = {int(k): v for k, v in data["id_to_char"].items()}
         tok.vocab_size = len(tok.char_to_id)
+        tok.special_tokens = data.get("special_tokens", {})
         return tok
 
 
@@ -342,6 +394,11 @@ def main():
     parser.add_argument("--patch_size", type=int, default=16, help="Patch size for image encoding (default 16)")
     parser.add_argument("--in_channels", type=int, default=3, help="Image channels (3=RGB, 1=grayscale)")
     parser.add_argument("--num_images", type=int, default=32, help="Number of synthetic images for demo vision training")
+    # --- Issue #24: Tool calling ---
+    parser.add_argument("--tool_training", action="store_true",
+                        help="Enable tool-calling training data (Issue #24). Adds synthetic tool-call examples to the training data.")
+    parser.add_argument("--tool_examples", type=int, default=50,
+                        help="Number of tool-calling training examples to generate (only used with --tool_training)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -362,11 +419,30 @@ def main():
         tokenizer = BPETokenizer.train(text, vocab_size=args.bpe_vocab)
         print(f"Vocabulary size: {tokenizer.vocab_size} BPE tokens")
     else:
-        tokenizer = CharTokenizer(text)
+        tokenizer = CharTokenizer(text, add_tool_tokens=args.tool_training)
         print(f"Vocabulary size: {tokenizer.vocab_size} characters")
+        if args.tool_training:
+            print(f"  (includes {len(tokenizer.special_tokens)} tool-calling special tokens)")
 
     # --- Prepare dataset ---
     token_ids = tokenizer.encode(text)
+
+    # --- Tool-calling training data (Issue #24) ---
+    if args.tool_training:
+        from hvn.tools import generate_tool_training_data, TOOL_TOKENS
+        print(f"\nGenerating {args.tool_examples} tool-calling training examples...")
+        tool_examples = generate_tool_training_data(num_examples=args.tool_examples)
+        tool_token_ids = []
+        for ex in tool_examples:
+            # Encode prompt + response as a single training sequence
+            full_text = ex["prompt"] + ex["response"]
+            ex_ids = tokenizer.encode(full_text)
+            tool_token_ids.extend(ex_ids)
+        # Append tool-calling data to the main training data
+        token_ids = token_ids + tool_token_ids
+        print(f"  Added {len(tool_token_ids)} tool-calling tokens to training data")
+        print(f"  Total training tokens: {len(token_ids)}")
+
     dataset = TextDataset(token_ids, seq_len=args.seq_len)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=False)
     print(f"Dataset: {len(dataset)} samples | DataLoader: {len(dataloader)} batches")

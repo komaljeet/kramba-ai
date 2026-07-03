@@ -36,6 +36,9 @@ from tokenizers.trainers import BpeTrainer
 from tokenizers.pre_tokenizers import Whitespace, ByteLevel
 from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 
+# Special tool-calling tokens (Issue #24)
+from .tools import SPECIAL_TOKEN_STRINGS as TOOL_SPECIAL_TOKENS
+
 
 class BPETokenizer:
     """BPE tokenizer wrapper with CharTokenizer-compatible interface.
@@ -76,18 +79,21 @@ class BPETokenizer:
             tokenizer = Tokenizer(BPE(unk_token="<unk>"))
             tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
             tokenizer.decoder = ByteLevelDecoder()
+            # Include tool-calling special tokens (Issue #24)
+            special_tokens = ["<pad>", "<bos>", "<eos>", "<unk>"] + TOOL_SPECIAL_TOKENS
             trainer = BpeTrainer(
                 vocab_size=vocab_size,
-                special_tokens=["<pad>", "<bos>", "<eos>", "<unk>"],
+                special_tokens=special_tokens,
                 show_progress=False,
                 initial_alphabet=ByteLevel.alphabet(),
             )
         else:
             tokenizer = Tokenizer(BPE(unk_token="<unk>"))
             tokenizer.pre_tokenizer = Whitespace()
+            special_tokens = ["<pad>", "<bos>", "<eos>", "<unk>"] + TOOL_SPECIAL_TOKENS
             trainer = BpeTrainer(
                 vocab_size=vocab_size,
-                special_tokens=["<pad>", "<bos>", "<eos>", "<unk>"],
+                special_tokens=special_tokens,
                 show_progress=False,
             )
 

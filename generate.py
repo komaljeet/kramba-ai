@@ -16,6 +16,10 @@ import torch
 
 from hvn.core import HamiltonianVortexNetwork
 from train import CharTokenizer, generate_text
+from hvn.tools import (
+    ToolRegistry, ToolCallParser, ToolExecutor, ToolCallingSession,
+    create_demo_registry, TOOL_TOKENS,
+)
 
 
 def load_model(checkpoint_path: str, tokenizer_path: str, device: torch.device):
@@ -67,6 +71,10 @@ def main():
     parser.add_argument("--tokens", type=int, default=200, help="Max new tokens to generate")
     parser.add_argument("--temp", type=float, default=0.8, help="Sampling temperature")
     parser.add_argument("--top_k", type=int, default=10, help="Top-k sampling (0 = disabled)")
+    parser.add_argument("--tools", action="store_true",
+                        help="Enable tool-calling mode (Issue #24). Uses demo tools (calculator, web_search, etc.)")
+    parser.add_argument("--max_turns", type=int, default=5,
+                        help="Maximum tool-calling turns (only used with --tools)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -78,7 +86,7 @@ def main():
     model, tokenizer = load_model(args.checkpoint, tok_path, device)
 
     # --- Batched generation mode ---
-    if args.prompts or args.batch > 1:
+    if not args.tools and (args.prompts or args.batch > 1):
         if args.prompts:
             prompt_strs = [p.strip() for p in args.prompts.split("||") if p.strip()]
         else:
@@ -113,8 +121,53 @@ def main():
               f"in {elapsed:.2f}s ({total_tokens/elapsed:.1f} tokens/sec)")
         print(f"Method: batched incremental O(1) per-token ({len(prompt_strs)} parallel sequences)")
 
+    # --- Tool-calling mode (Issue #24) ---
+    if args.tools:
+        print("\n" + "=" * 60)
+        print("TOOL-CALLING MODE (Issue #24)")
+        print("=" * 60)
+
+        # Create demo tool registry and executor
+        registry = create_demo_registry()
+        executor = ToolExecutor(registry)
+
+        print(f"Registered tools: {registry.list_names()}")
+        print(f"Prompt: \"{args.prompt}\"")
+        print("-" * 60)
+
+        # Create tool-calling session
+        session = ToolCallingSession(
+            model=model,
+            tokenizer=tokenizer,
+            executor=executor,
+            device=device,
+            max_turns=args.max_turns,
+            temperature=args.temp,
+            top_k=args.top_k,
+            max_tokens_per_turn=args.tokens,
+        )
+
+        result = session.run(args.prompt)
+
+        print(f"\n--- Tool Calls ({len(result['tool_calls'])}) ---")
+        for i, tc in enumerate(result["tool_calls"]):
+            print(f"  Call {i+1}: {tc['name']}({tc['arguments']})")
+
+        print(f"\n--- Tool Results ({len(result['tool_results'])}) ---")
+        for i, tr in enumerate(result["tool_results"]):
+            print(f"  Result {i+1}: {tr[:200]}")
+
+        if result["thinking"]:
+            print(f"\n--- Thinking ({len(result['thinking'])}) ---")
+            for i, th in enumerate(result["thinking"]):
+                print(f"  Think {i+1}: {th[:200]}")
+
+        print(f"\n--- Final Answer (turns: {result['n_turns']}) ---")
+        print(result["answer"])
+        print("=" * 60)
+
     # --- Single-sequence generation (default) ---
-    else:
+    elif not args.prompts and args.batch <= 1:
         # Generate using fast incremental generation (O(1) per token)
         print(f"\nPrompt: \"{args.prompt}\"")
         print("-" * 60)

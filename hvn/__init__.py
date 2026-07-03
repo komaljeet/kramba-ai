@@ -27,6 +27,17 @@ from .quantize import (
     QuantizedHVNInference,
     estimate_memory_savings,
 )
+from .tools import (
+    ToolRegistry,
+    ToolCallParser,
+    ToolExecutor,
+    ConstrainedJSONDecoder,
+    ToolCallingSession,
+    TOOL_TOKENS,
+    SPECIAL_TOKEN_STRINGS,
+    create_demo_registry,
+    generate_tool_training_data,
+)
 
 __all__ = [
     "VortexInjectionLayer",
@@ -55,4 +66,14 @@ __all__ = [
     "QuantizedHamiltonian",
     "QuantizedHVNInference",
     "estimate_memory_savings",
+    # Tool calling (Issue #24)
+    "ToolRegistry",
+    "ToolCallParser",
+    "ToolExecutor",
+    "ConstrainedJSONDecoder",
+    "ToolCallingSession",
+    "TOOL_TOKENS",
+    "SPECIAL_TOKEN_STRINGS",
+    "create_demo_registry",
+    "generate_tool_training_data",
 ]
