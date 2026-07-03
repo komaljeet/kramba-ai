@@ -38,6 +38,14 @@ from .tools import (
     create_demo_registry,
     generate_tool_training_data,
 )
+from .chat import (
+    CHAT_TOKENS,
+    CHAT_SPECIAL_TOKEN_STRINGS,
+    ConversationFormatter,
+    ChatSession,
+    StateCheckpoint,
+    generate_chat_training_data,
+)
 
 __all__ = [
     "VortexInjectionLayer",
@@ -76,4 +84,11 @@ __all__ = [
     "SPECIAL_TOKEN_STRINGS",
     "create_demo_registry",
     "generate_tool_training_data",
+    # Chat / conversation memory (Issue #28)
+    "CHAT_TOKENS",
+    "CHAT_SPECIAL_TOKEN_STRINGS",
+    "ConversationFormatter",
+    "ChatSession",
+    "StateCheckpoint",
+    "generate_chat_training_data",
 ]
