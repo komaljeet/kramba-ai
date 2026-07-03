@@ -27,9 +27,22 @@
 
 ### #27 — Multimodal Fusion: Joint Image-Text Training
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/27
-- **Status**: Open
+- **Status**: Closed (2026-07-03)
 - **Goal**: Joint training on image-text pairs with cross-modal retrieval.
 - **Depends on**: #23 (Vision)
+- **What was done**: Added multimodal fusion components for joint image-text training:
+  - `GatedFusionLayer`: Learned gate mixes image and text representations before HVN processing
+  - `ModalityEmbedding`: Learned [IMAGE]/[TEXT] type embeddings for modality distinction
+  - `CrossModalRetriever`: Shared embedding space with InfoNCE contrastive loss for cross-modal retrieval
+  - `MultimodalFusionHVN`: Full multimodal model with gated fusion, modality embeddings, retrieval head, VQA, and captioning
+  - `ImagePreprocessor`: Image preprocessing utilities (resize, normalize)
+  - `generate_synthetic_image_text_pairs()`: Synthetic correlated image-text dataset generator
+  - `train.py`: `--image_text` flag for joint multimodal training (LM + contrastive loss)
+  - `eval/multimodal.py`: Full multimodal evaluation harness (captioning, VQA, retrieval, O(1) verification, memory)
+  - `demo_multimodal.py`: 11-test demo verifying all components (all pass on GPU)
+  - `hvn/hf_model.py`: `generate_multimodal()` and `answer_question_multimodal()` methods on HVNForCausalLM
+  - O(1) inference preserved: Hamiltonian memory is fixed d×d, constant in num_patches and seq_len
+  - All tests pass on GPU (RTX 4050)
 
 ### #28 — Conversation Memory: Multi-Turn Chat with Persistent State
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/28

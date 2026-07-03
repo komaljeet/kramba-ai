@@ -394,6 +394,17 @@ def main():
     parser.add_argument("--patch_size", type=int, default=16, help="Patch size for image encoding (default 16)")
     parser.add_argument("--in_channels", type=int, default=3, help="Image channels (3=RGB, 1=grayscale)")
     parser.add_argument("--num_images", type=int, default=32, help="Number of synthetic images for demo vision training")
+    # --- Issue #27: Multimodal fusion ---
+    parser.add_argument("--image_text", action="store_true",
+                        help="Enable multimodal fusion training (Issue #27). Joint image-text training with gated fusion, modality embeddings, and contrastive retrieval.")
+    parser.add_argument("--retrieval_weight", type=float, default=0.5,
+                        help="Weight for contrastive retrieval loss in multimodal training (0=LM only, 1=retrieval only)")
+    parser.add_argument("--use_gated_fusion", action="store_true", default=True,
+                        help="Use gated cross-modal fusion layer (Issue #27)")
+    parser.add_argument("--use_modality_embed", action="store_true", default=True,
+                        help="Add learned modality type embeddings [IMAGE]/[TEXT] (Issue #27)")
+    parser.add_argument("--use_retrieval_head", action="store_true", default=True,
+                        help="Add cross-modal retrieval head for contrastive learning (Issue #27)")
     # --- Issue #24: Tool calling ---
     parser.add_argument("--tool_training", action="store_true",
                         help="Enable tool-calling training data (Issue #24). Adds synthetic tool-call examples to the training data.")
@@ -571,6 +582,174 @@ def main():
         )
         caption = tokenizer.decode(generated_ids)
         print(f"Generated caption: {caption}")
+        print("=" * 60)
+
+    # --- Multimodal fusion training (Issue #27) ---
+    if args.image_text:
+        print("\n" + "=" * 60)
+        print("MULTIMODAL FUSION TRAINING (Issue #27)")
+        print("=" * 60)
+        from hvn.vision import (
+            ImageEncoder,
+            MultimodalFusionHVN,
+            generate_synthetic_image_text_pairs,
+        )
+
+        # Build vision encoder
+        vision_encoder = ImageEncoder(
+            image_size=args.image_size,
+            patch_size=args.patch_size,
+            in_channels=args.in_channels,
+            d_model=args.d_model,
+        )
+        multimodal_fusion = MultimodalFusionHVN(
+            vision_encoder=vision_encoder,
+            hvn=model,
+            use_cross_modal_proj=True,
+            use_gated_fusion=args.use_gated_fusion,
+            use_modality_embed=args.use_modality_embed,
+            use_retrieval_head=args.use_retrieval_head,
+            retrieval_dim=args.d_model,
+            dropout=0.1,
+        ).to(device)
+
+        num_patches = vision_encoder.num_patches
+        print(f"Vision encoder: {args.image_size}×{args.image_size} → "
+              f"{num_patches} patches of {args.d_model}D")
+        print(f"Gated fusion: {args.use_gated_fusion} | Modality embed: {args.use_modality_embed} | "
+              f"Retrieval head: {args.use_retrieval_head}")
+        print(f"Retrieval weight: {args.retrieval_weight}")
+
+        # Generate synthetic image-text pairs with correlated patterns
+        print(f"Generating {args.num_images} synthetic image-text pairs (correlated patterns)...")
+        images, text_ids_batch = generate_synthetic_image_text_pairs(
+            num_pairs=args.num_images,
+            image_size=args.image_size,
+            in_channels=args.in_channels,
+            text_vocab_size=model.vocab_size,
+            text_seq_len=args.seq_len,
+            seed=42,
+        )
+        images = images.to(device)
+        text_ids_batch = text_ids_batch.to(device)
+        print(f"Images: {images.shape} | Text: {text_ids_batch.shape}")
+
+        # Training loop: joint LM + contrastive retrieval loss
+        optimizer = torch.optim.AdamW(multimodal_fusion.parameters(), lr=args.lr, weight_decay=0.01)
+
+        multimodal_fusion.train()
+        fusion_epochs = min(args.epochs, 10)
+        print(f"\nTraining multimodal fusion for {fusion_epochs} epochs...")
+        print("-" * 60)
+
+        for epoch in range(1, fusion_epochs + 1):
+            total_loss = 0.0
+            total_lm_loss = 0.0
+            total_ret_loss = 0.0
+            n_batches = 0
+            batch_size = min(args.batch_size, args.num_images)
+
+            for start in range(0, args.num_images, batch_size):
+                end = min(start + batch_size, args.num_images)
+                img_batch = images[start:end]
+                txt_batch = text_ids_batch[start:end]
+
+                loss_dict = multimodal_fusion.compute_loss(
+                    img_batch, txt_batch,
+                    retrieval_weight=args.retrieval_weight,
+                )
+
+                loss = loss_dict["total"]
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(multimodal_fusion.parameters(), max_norm=1.0)
+                optimizer.step()
+
+                total_loss += loss.item()
+                total_lm_loss += loss_dict["lm"].item()
+                total_ret_loss += loss_dict["retrieval"].item()
+                n_batches += 1
+
+            avg_loss = total_loss / max(n_batches, 1)
+            avg_lm = total_lm_loss / max(n_batches, 1)
+            avg_ret = total_ret_loss / max(n_batches, 1)
+            ppl = math.exp(min(avg_lm, 20))
+            if epoch % 2 == 0 or epoch == 1:
+                print(f"Epoch {epoch:3d}/{fusion_epochs}  |  Total: {avg_loss:.4f}  |  "
+                      f"LM: {avg_lm:.4f} (PPL {ppl:.2f})  |  Ret: {avg_ret:.4f}")
+
+        # Demo 1: Image captioning
+        print("\n--- Image Captioning Demo ---")
+        test_image = images[:1]
+        generated_ids = multimodal_fusion.generate_caption(
+            test_image, max_new_tokens=50, temperature=0.8, top_k=10, device=device,
+        )
+        caption = tokenizer.decode(generated_ids)
+        print(f"Generated caption: {caption}")
+
+        # Demo 2: Visual Question Answering
+        print("\n--- Visual QA Demo ---")
+        question_ids = token_ids[:args.seq_len]  # Use first seq_len tokens as "question"
+        answer_ids = multimodal_fusion.answer_question(
+            test_image, question_ids, max_new_tokens=30, temperature=0.8, top_k=10, device=device,
+        )
+        answer = tokenizer.decode(answer_ids)
+        print(f"Q: {tokenizer.decode(question_ids)}")
+        print(f"A: {answer}")
+
+        # Demo 3: Cross-modal retrieval
+        if args.use_retrieval_head:
+            print("\n--- Cross-Modal Retrieval Demo ---")
+            # Text-to-image retrieval
+            query_ids = text_ids_batch[0].tolist()
+            candidate_images = images[:8]
+            indices, sims = multimodal_fusion.retrieve_images(
+                query_ids, candidate_images, top_k=3, device=device,
+            )
+            print(f"Text-to-image retrieval (query=text[0]):")
+            for rank, (idx, sim) in enumerate(zip(indices.tolist(), sims.tolist())):
+                print(f"  Rank {rank+1}: image[{idx}] (sim={sim:.4f})")
+
+            # Image-to-text retrieval
+            query_img = images[:1]
+            text_candidates = [text_ids_batch[i].tolist() for i in range(8)]
+            indices, sims = multimodal_fusion.retrieve_text(
+                query_img, text_candidates, top_k=3, device=device,
+            )
+            print(f"Image-to-text retrieval (query=image[0]):")
+            for rank, (idx, sim) in enumerate(zip(indices.tolist(), sims.tolist())):
+                print(f"  Rank {rank+1}: text[{idx}] (sim={sim:.4f})")
+
+        # Save multimodal model
+        mm_save_path = args.save.replace(".pt", "_multimodal.pt")
+        torch.save({
+            "model_state": multimodal_fusion.state_dict(),
+            "hvn_config": {
+                "vocab_size": model.vocab_size,
+                "d_model": args.d_model,
+                "num_layers": args.num_layers,
+                "n_heads": args.n_heads,
+                "bond_dimension": args.bond_dim,
+                "chunk_size": args.chunk_size,
+                "rank_k": args.rank_k,
+                "use_nonlinear_update": args.nonlinear_update,
+                "use_causal_reinjection": args.causal_reinjection,
+                "use_cross_head_mixing": args.cross_head_mixing,
+                "use_swiglu": args.swiglu,
+                "use_per_token_eta": args.per_token_eta,
+                "n_threads": args.n_threads,
+            },
+            "vision_config": {
+                "image_size": args.image_size,
+                "patch_size": args.patch_size,
+                "in_channels": args.in_channels,
+                "use_cross_modal_proj": True,
+                "use_gated_fusion": args.use_gated_fusion,
+                "use_modality_embed": args.use_modality_embed,
+                "use_retrieval_head": args.use_retrieval_head,
+            },
+        }, mm_save_path)
+        print(f"\n✓ Multimodal model saved to {mm_save_path}")
         print("=" * 60)
 
     # --- Generate text ---
