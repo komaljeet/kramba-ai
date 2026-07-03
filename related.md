@@ -12,12 +12,6 @@
 
 ## Open Issues
 
-### #24 — Tool Calling: Structured Output and Function Invocation
-- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/24
-- **Status**: Open
-- **Goal**: Add special tokens ([TOOL_CALL], [TOOL_RESULT]) and constrained decoding for JSON tool calls.
-- **Key idea**: Tool calling is a prompting/training feature, not an architectural change.
-
 ### #25 — Agentic Mode: Multi-Step Reasoning, Planning, and Self-Correction
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/25
 - **Status**: Open
@@ -51,6 +45,26 @@
 ---
 
 ## Closed Issues (Quality Journey)
+
+### #24 — Tool Calling: Structured Output and Function Invocation (CLOSED)
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/24
+- **Status**: Closed (2026-07-02)
+- **What was done**: Added tool-calling protocol with special tokens, constrained
+  decoding, and multi-turn agentic loop.
+  - New module: `hvn/tools.py` — `ToolRegistry`, `ToolCallParser`, `ToolExecutor`,
+    `ConstrainedJSONDecoder`, `ToolCallingSession`
+  - `hvn/tokenizer.py`: BPE trainer includes tool special tokens
+  - `train.py`: `CharTokenizer` gains `add_tool_tokens` param (6 special tokens:
+    `[TOOL_CALL]`, `[/TOOL_CALL]`, `[TOOL_RESULT]`, `[/TOOL_RESULT]`, `[THINK]`, `[/THINK]`)
+  - `train.py`: `--tool_training` and `--tool_examples` CLI flags for tool-calling training data
+  - `hvn/core/model.py`: `generate_with_tools()` method with `allowed_token_ids`
+    (JSON-constrained decoding) and `stop_token_ids` (stop at `[/TOOL_CALL]`)
+  - `generate.py`: `--tools` and `--max_turns` CLI flags for tool-augmented generation
+  - `demo_tool_calling.py`: 8-test demo verifying all components (all pass on GPU)
+  - Built-in demo tools: `calculator`, `web_search`, `string_reverse`, `word_count`
+  - `generate_tool_training_data()`: synthetic tool-call training examples
+  - O(1) inference preserved — tool calling is a prompting/training feature,
+    not an architectural change
 
 ### #23 — Vision: Image Encoding via Vortex-Projected Patch Embeddings (CLOSED)
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/23

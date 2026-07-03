@@ -494,3 +494,111 @@ class HamiltonianVortexNetwork(nn.Module):
             next_logits = logits_step[0, -1, :] / temperature
 
         return generated
+
+    # ------------------------------------------------------------------
+    # Tool-calling generation (Issue #24)
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def generate_with_tools(
+        self,
+        prompt_ids: list[int],
+        max_new_tokens: int = 200,
+        temperature: float = 0.8,
+        top_k: int = 10,
+        device: torch.device | None = None,
+        allowed_token_ids: list[int] | None = None,
+        stop_token_ids: list[int] | None = None,
+    ) -> list[int]:
+        """Autoregressive generation with tool-calling support.
+
+        Extends ``generate_incremental`` with:
+          - ``allowed_token_ids``: restrict sampling to a subset of tokens
+            (for JSON-constrained decoding when inside [TOOL_CALL] blocks).
+          - ``stop_token_ids``: stop generation when any of these tokens
+            is emitted (e.g. ``[/TOOL_CALL]``).
+
+        Both constraints are optional — if None, behaves like
+        ``generate_incremental``.
+
+        Parameters
+        ----------
+        prompt_ids : list[int]
+            Token IDs for the prompt.
+        max_new_tokens : int
+            Maximum new tokens to generate.
+        temperature : float
+            Sampling temperature.
+        top_k : int
+            Top-k sampling (0 = disabled).
+        device : torch.device
+            Device to run on.
+        allowed_token_ids : list[int], optional
+            If provided, only these token IDs can be sampled.  Used for
+            JSON-constrained decoding inside [TOOL_CALL] blocks.
+        stop_token_ids : list[int], optional
+            If provided, generation stops when any of these tokens is emitted.
+            Used to detect [/TOOL_CALL] or [/TOOL_RESULT] end markers.
+
+        Returns
+        -------
+        generated : list[int]
+            Full token list (prompt + generated).
+        """
+        if device is None:
+            device = next(self.parameters()).device
+
+        self.eval()
+        B = 1
+
+        if len(prompt_ids) == 0:
+            prompt_ids = [0]
+
+        # Initialize states and process prompt
+        states = self.init_generation_state(B, device=device, dtype=next(self.parameters()).dtype)
+
+        for t in range(len(prompt_ids)):
+            tok = torch.tensor([[prompt_ids[t]]], dtype=torch.long, device=device)
+            logits_step, states = self.forward_step(tok, states, position_idx=t)
+
+        next_logits = logits_step[0, -1, :] / temperature
+
+        generated = list(prompt_ids)
+        stop_set = set(stop_token_ids) if stop_token_ids else set()
+
+        # Build allowed mask if provided
+        allowed_mask = None
+        if allowed_token_ids is not None:
+            allowed_mask = torch.full((self.vocab_size,), False, device=device)
+            for tid in allowed_token_ids:
+                if 0 <= tid < self.vocab_size:
+                    allowed_mask[tid] = True
+
+        for step_idx in range(max_new_tokens):
+            # Apply allowed-token constraint (JSON-constrained decoding)
+            if allowed_mask is not None:
+                next_logits = next_logits.clone()
+                next_logits[~allowed_mask] = float("-inf")
+
+            # Top-k filtering
+            if top_k > 0:
+                top_k_val = min(top_k, next_logits.size(-1))
+                values, _ = torch.topk(next_logits, top_k_val)
+                next_logits = next_logits.clone()
+                next_logits[next_logits < values[-1]] = float("-inf")
+
+            # Sample
+            probs = torch.softmax(next_logits, dim=-1)
+            next_id = torch.multinomial(probs, num_samples=1).item()
+            generated.append(next_id)
+
+            # Check stop condition
+            if next_id in stop_set:
+                break
+
+            # Forward step: O(d²) — no context reprocessing!
+            tok = torch.tensor([[next_id]], dtype=torch.long, device=device)
+            logits_step, states = self.forward_step(tok, states, position_idx=len(prompt_ids) + step_idx)
+            next_logits = logits_step[0, -1, :] / temperature
+
+        return generated
