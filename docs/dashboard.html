@@ -5,12 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HVN — Training Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
     <style>
         /* ===== CSS Variables (Theming) ===== */
         :root[data-theme="dark"] {
             --bg: #0d1117;
             --bg-card: #161b22;
             --bg-hover: #21262d;
+            --bg-code: #010409;
             --border: #30363d;
             --text: #e6edf3;
             --text-muted: #8b949e;
@@ -26,6 +28,7 @@
             --bg: #ffffff;
             --bg-card: #f6f8fa;
             --bg-hover: #eaeef2;
+            --bg-code: #f6f8fa;
             --border: #d0d7de;
             --text: #1f2328;
             --text-muted: #656d76;
@@ -59,6 +62,8 @@
             top: 0;
             height: 100vh;
             overflow-y: auto;
+            display: flex;
+            flex-direction: column;
         }
         .main { flex: 1; padding: 32px 40px; max-width: 1100px; }
         @media (max-width: 768px) {
@@ -71,12 +76,12 @@
         .logo { padding: 0 20px 20px; border-bottom: 1px solid var(--border); }
         .logo h1 { font-size: 18px; font-weight: 700; }
         .logo span { color: var(--accent); }
-        .nav { list-style: none; padding: 12px 0; }
+        .nav { list-style: none; padding: 12px 0; flex: 1; }
         .nav li { padding: 8px 20px; cursor: pointer; color: var(--text-muted); font-size: 14px; display: flex; align-items: center; gap: 8px; }
         .nav li:hover { background: var(--bg-hover); color: var(--text); }
         .nav li.active { color: var(--accent); background: var(--bg-hover); border-left: 3px solid var(--accent); padding-left: 17px; }
         .nav li .icon { width: 20px; text-align: center; }
-        .theme-toggle { position: absolute; bottom: 20px; left: 20px; display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-muted); font-size: 13px; }
+        .theme-toggle { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-muted); font-size: 13px; }
         .theme-toggle:hover { color: var(--text); }
 
         /* ===== Sections ===== */
@@ -119,7 +124,7 @@
 
         /* ===== CLI Output ===== */
         .cli-output {
-            background: #010409;
+            background: var(--bg-code);
             border: 1px solid var(--border);
             border-radius: 6px;
             padding: 16px;
@@ -169,6 +174,7 @@
         .tag-red { background: rgba(248,81,73,0.15); color: var(--red); }
         .tag-yellow { background: rgba(210,153,34,0.15); color: var(--yellow); }
         .tag-blue { background: rgba(88,166,255,0.15); color: var(--accent); }
+        .tag-purple { background: rgba(188,140,255,0.15); color: var(--purple); }
 
         /* ===== Architecture Diagram ===== */
         .arch-flow { display: flex; flex-direction: column; gap: 12px; align-items: center; }
@@ -215,6 +221,87 @@
         .file-upload p { color: var(--text-muted); font-size: 14px; }
         .file-upload input { display: none; }
 
+        /* ===== Search ===== */
+        .search-box {
+            width: 100%;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px 16px;
+            color: var(--text);
+            font-size: 14px;
+            outline: none;
+            margin-bottom: 16px;
+            transition: border-color 0.2s;
+        }
+        .search-box:focus { border-color: var(--accent); }
+        .search-box::placeholder { color: var(--text-muted); }
+
+        /* ===== Doc Hub ===== */
+        .doc-tabs { display: flex; gap: 4px; margin-bottom: 20px; flex-wrap: wrap; }
+        .doc-tab {
+            padding: 8px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-muted);
+            transition: all 0.2s;
+        }
+        .doc-tab:hover { color: var(--text); border-color: var(--accent); }
+        .doc-tab.active { color: var(--accent); border-color: var(--accent); background: var(--bg-hover); }
+        .doc-content {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 32px;
+            line-height: 1.8;
+            font-size: 15px;
+            max-height: none;
+        }
+        .doc-content h1 { font-size: 24px; margin: 24px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+        .doc-content h2 { font-size: 20px; margin: 20px 0 10px; }
+        .doc-content h3 { font-size: 16px; margin: 16px 0 8px; }
+        .doc-content h4 { font-size: 14px; margin: 12px 0 6px; color: var(--text-muted); }
+        .doc-content p { margin: 8px 0; }
+        .doc-content ul, .doc-content ol { margin: 8px 0; padding-left: 28px; }
+        .doc-content li { margin: 4px 0; }
+        .doc-content code {
+            font-family: "SF Mono", "Fira Code", Consolas, monospace;
+            font-size: 13px;
+            background: var(--bg-hover);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .doc-content pre {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 16px;
+            overflow-x: auto;
+            margin: 12px 0;
+        }
+        .doc-content pre code {
+            background: none;
+            padding: 0;
+            font-size: 13px;
+            color: #e6edf3;
+        }
+        .doc-content table { margin: 12px 0; }
+        .doc-content blockquote {
+            border-left: 3px solid var(--accent);
+            padding-left: 16px;
+            margin: 12px 0;
+            color: var(--text-muted);
+        }
+        .doc-content strong { font-weight: 600; }
+        .doc-content a { color: var(--accent); text-decoration: none; }
+        .doc-content a:hover { text-decoration: underline; }
+        .doc-content hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+        .doc-search-highlight { background: rgba(210,153,34,0.3); border-radius: 3px; padding: 1px 2px; }
+        .doc-section-hidden { display: none; }
+
         /* ===== Misc ===== */
         .info-banner {
             background: rgba(88,166,255,0.08);
@@ -230,6 +317,53 @@
         .code { font-family: "SF Mono", "Fira Code", Consolas, monospace; font-size: 13px; background: var(--bg-hover); padding: 2px 6px; border-radius: 4px; }
         a { color: var(--accent); text-decoration: none; }
         a:hover { text-decoration: underline; }
+        .btn {
+            background: var(--accent);
+            color: var(--bg);
+            border: none;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-size: 14px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .btn:hover { background: var(--accent-hover); }
+        .btn-secondary {
+            background: var(--bg-hover);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+        .result-file-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        .result-file-card .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .result-file-card .header h4 { font-size: 14px; }
+        .result-file-card .header .close-btn { cursor: pointer; color: var(--text-muted); font-size: 18px; background: none; border: none; }
+        .result-file-card .header .close-btn:hover { color: var(--red); }
+        .chart-type-selector { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+        .chart-type-btn {
+            padding: 6px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+        .chart-type-btn:hover { border-color: var(--accent); }
+        .chart-type-btn.active { border-color: var(--accent); color: var(--accent); background: var(--bg-hover); }
     </style>
 </head>
 <body>
@@ -247,6 +381,7 @@
             <li data-section="flops"><span class="icon">🧮</span> FLOP Analysis</li>
             <li data-section="theory"><span class="icon">📐</span> Theory</li>
             <li data-section="guide"><span class="icon">📖</span> Training Guide</li>
+            <li data-section="docs"><span class="icon">📚</span> Documentation Hub</li>
             <li data-section="issues"><span class="icon">📋</span> Issues & Roadmap</li>
         </ul>
         <div class="theme-toggle" onclick="toggleTheme()">
@@ -320,6 +455,8 @@
                     <span class="pill">✅ Batched generation (18× speedup)</span>
                     <span class="pill">✅ HuggingFace-style wrapper</span>
                     <span class="pill">✅ Scaling laws evaluation</span>
+                    <span class="pill">✅ Vision: Image encoding</span>
+                    <span class="pill">✅ Tool calling: Function invocation</span>
                 </div>
             </div>
         </div>
@@ -506,11 +643,22 @@
 
             <div class="card">
                 <h3>📂 Load Your Own Results</h3>
+                <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                    Load JSON result files from <span class="code">quality_benchmark.py</span>, <span class="code">scaling_laws.py</span>, or <span class="code">benchmark.py</span>.
+                    The dashboard auto-detects the file type and renders appropriate charts.
+                </p>
                 <div class="file-upload" onclick="document.getElementById('file-input').click()">
-                    <p>📁 Click to load a results JSON file (from quality_benchmark.py or scaling_laws.py)</p>
-                    <input type="file" id="file-input" accept=".json">
+                    <p>📁 Click to load one or more JSON result files</p>
+                    <input type="file" id="file-input" accept=".json" multiple>
                 </div>
-                <div id="loaded-results" style="margin-top: 16px;"></div>
+                <div id="loaded-results-list" style="margin-top: 16px;"></div>
+            </div>
+
+            <div class="card">
+                <h3>📈 Custom Charts from Loaded Data</h3>
+                <div id="custom-charts-area">
+                    <p style="color: var(--text-muted); font-size: 14px;">Load result files above to see interactive charts here.</p>
+                </div>
             </div>
         </div>
 
@@ -577,6 +725,9 @@
                         <tr><td>HVNBlock</td><td><span class="code">hvn_block.py</span></td><td>Causal wrapper: vortex + H update + FFN</td></tr>
                         <tr><td>HVNDecoder</td><td><span class="code">decoder.py</span></td><td>Shallow projection: hidden → vocab logits</td></tr>
                         <tr><td>HamiltonianVortexNetwork</td><td><span class="code">model.py</span></td><td>Full model: embedding + N×HVNBlock + decoder</td></tr>
+                        <tr><td>Vision Encoder</td><td><span class="code">vision.py</span></td><td>Image patches → vortex particles (Issue #23)</td></tr>
+                        <tr><td>Tool Calling</td><td><span class="code">tools.py</span></td><td>Structured output + function invocation (Issue #24)</td></tr>
+                        <tr><td>Quantization</td><td><span class="code">quantize.py</span></td><td>INT8 + NF4 4-bit Hamiltonian quantization (Issue #20)</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -626,6 +777,24 @@
                     </tbody>
                 </table>
             </div>
+
+            <div class="card">
+                <h3>📊 FLOP Scaling Table</h3>
+                <table>
+                    <thead><tr><th>N (seq len)</th><th>MHA (KV cache)</th><th>HVN (SVD r=128)</th><th>Ratio</th></tr></thead>
+                    <tbody>
+                        <tr><td>1,000</td><td>36M</td><td>463M</td><td><span class="tag tag-red">12.8×</span></td></tr>
+                        <tr><td>10,000</td><td>258M</td><td>463M</td><td><span class="tag tag-yellow">0.56×</span></td></tr>
+                        <tr><td>50,000</td><td>1,241M</td><td>463M</td><td><span class="tag tag-green">0.37×</span></td></tr>
+                        <tr><td>100,000</td><td>2,474M</td><td>463M</td><td><span class="tag tag-green">0.187×</span></td></tr>
+                        <tr><td>500,000</td><td>12,300M</td><td>463M</td><td><span class="tag tag-green">0.038×</span></td></tr>
+                        <tr><td>1,000,000</td><td>24,588M</td><td>463M</td><td><span class="tag tag-green">0.019×</span></td></tr>
+                    </tbody>
+                </table>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--text-muted);">
+                    Crossover point ≈ N=5,000. HVN's advantage grows unboundedly as N increases.
+                </p>
+            </div>
         </div>
 
         <!-- ===== Theory ===== -->
@@ -647,7 +816,7 @@
             <div class="card">
                 <h3>⚛️ Quantum Entanglement Renormalization</h3>
                 <p>The Hamiltonian H is a fixed d×d matrix that evolves via DMRG-style renormalization:</p>
-                <div style="background: #010409; border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin: 12px 0; font-family: monospace; font-size: 13px; color: #e6edf3;">
+                <div style="background: var(--bg-code); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin: 12px 0; font-family: monospace; font-size: 13px; color: #e6edf3;">
                     H_new = (1 - η) · H + η · (P_t - H · P_t · H)
                 </div>
                 <ul style="margin: 12px 0; padding-left: 24px; font-size: 14px;">
@@ -754,13 +923,36 @@ python train.py \
             </div>
         </div>
 
+        <!-- ===== Documentation Hub ===== -->
+        <div class="section" id="docs">
+            <h2>Documentation Hub</h2>
+            <p class="subtitle">All project documentation rendered as searchable HTML.</p>
+
+            <div class="card">
+                <h3>🔍 Search Documentation</h3>
+                <input type="text" class="search-box" id="doc-search" placeholder="Search across all documentation... (e.g. 'perplexity', 'Biot-Savart', 'quantization')">
+                <p id="search-count" style="font-size: 12px; color: var(--text-muted); margin-top: 4px;"></p>
+            </div>
+
+            <div class="doc-tabs" id="doc-tabs">
+                <div class="doc-tab active" data-doc="training-guide">📖 Training Guide</div>
+                <div class="doc-tab" data-doc="benchmark-results">📊 Benchmark Results</div>
+                <div class="doc-tab" data-doc="flop-analysis">🧮 FLOP Analysis</div>
+                <div class="doc-tab" data-doc="theoretical-framework">📐 Theoretical Framework</div>
+            </div>
+
+            <div class="doc-content" id="doc-render-area">
+                <p style="color: var(--text-muted);">Loading documentation...</p>
+            </div>
+        </div>
+
         <!-- ===== Issues & Roadmap ===== -->
         <div class="section" id="issues">
             <h2>Issues & Roadmap</h2>
             <p class="subtitle">GitLab issues tracking HVN development.</p>
 
             <div class="card">
-                <h3>✅ Completed Issues (1-22)</h3>
+                <h3>✅ Completed Issues (1-24)</h3>
                 <table>
                     <thead><tr><th>#</th><th>Title</th><th>Status</th></tr></thead>
                     <tbody id="closed-issues"></tbody>
@@ -772,18 +964,6 @@ python train.py \
                 <table>
                     <thead><tr><th>#</th><th>Title</th><th>Category</th><th>GitLab</th></tr></thead>
                     <tbody>
-                        <tr>
-                            <td>23</td>
-                            <td>Vision: Image Encoding via Vortex-Projected Patch Embeddings</td>
-                            <td><span class="tag tag-blue">Multimodal</span></td>
-                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/23" target="_blank">View ↗</a></td>
-                        </tr>
-                        <tr>
-                            <td>24</td>
-                            <td>Tool Calling: Structured Output and Function Invocation</td>
-                            <td><span class="tag tag-yellow">Agentic</span></td>
-                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/24" target="_blank">View ↗</a></td>
-                        </tr>
                         <tr>
                             <td>25</td>
                             <td>Agentic Mode: Multi-Step Reasoning, Planning, and Self-Correction</td>
@@ -822,10 +1002,11 @@ python train.py \
                 <h3>🗺️ Dependency Graph</h3>
                 <div style="font-family: monospace; font-size: 13px; line-height: 2; color: var(--text-muted);">
                     <strong>Phase 1 (Done):</strong> #1-22 — Core architecture, training, quality strategies<br>
-                    <strong>Phase 2 (Foundation):</strong> #26 (Dashboard) — standalone<br>
-                    <strong>Phase 3 (Multimodal):</strong> #23 (Vision) → #27 (Multimodal Fusion)<br>
-                    <strong>Phase 4 (Agentic):</strong> #24 (Tools) → #28 (Chat) → #25 (Agents)<br>
-                    <strong>Phase 5 (Fine-tuning):</strong> #29 (LoRA) — enables all agentic features
+                    <strong>Phase 2 (Done):</strong> #23 (Vision), #24 (Tool Calling) — Foundation features<br>
+                    <strong>Phase 3 (UX):</strong> #26 (Dashboard) — standalone<br>
+                    <strong>Phase 4 (Multimodal):</strong> #27 (Multimodal Fusion) — depends on #23<br>
+                    <strong>Phase 5 (Agentic):</strong> #25 (Agents) → #28 (Chat) — depends on #24<br>
+                    <strong>Phase 6 (Fine-tuning):</strong> #29 (LoRA) — enables all agentic features
                 </div>
             </div>
         </div>
@@ -841,6 +1022,8 @@ document.querySelectorAll('.nav li').forEach(li => {
         document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
         li.classList.add('active');
         document.getElementById(li.dataset.section).classList.add('active');
+        // Re-render charts when switching to results section
+        if (li.dataset.section === 'results') renderCharts();
     });
 });
 
@@ -852,7 +1035,6 @@ function toggleTheme() {
     html.setAttribute('data-theme', next);
     document.getElementById('theme-icon').textContent = next === 'dark' ? '🌙' : '☀️';
     document.getElementById('theme-label').textContent = next === 'dark' ? 'Dark Mode' : 'Light Mode';
-    // Re-render charts with new theme colors
     if (typeof Chart !== 'undefined') renderCharts();
 }
 
@@ -901,22 +1083,18 @@ function updateEstimates() {
     const L = parseInt(document.getElementById('num_layers').value);
     const H = parseInt(document.getElementById('n_heads').value);
     const K = parseInt(document.getElementById('n_threads').value);
-    const V = 1000; // approx vocab
-    // Rough param estimate: embedding + blocks + decoder
+    const V = 1000;
     const embed = V * d;
-    const perBlock = d * d * 4 + d * (d / H) * (d / H) * H * K; // rough
+    const perBlock = d * d * 4 + d * (d / H) * (d / H) * H * K;
     const decoder = d * V;
     const total = embed + perBlock * L + decoder;
     document.getElementById('est-params').textContent = total > 1e6 ? `~${(total/1e6).toFixed(1)}M` : `~${Math.round(total/1e3)}K`;
-    // Hamiltonian memory: L * H * K * (d/H)^2 * 2 bytes (bf16)
     const hamMem = L * H * K * Math.pow(d/H, 2) * 2;
     document.getElementById('est-hamiltonian').textContent = hamMem > 1e6 ? `${(hamMem/1e6).toFixed(1)} MB` : `${(hamMem/1e3).toFixed(0)} KB`;
-    // Model memory (rough: params * 2 bytes for bf16)
     const modelMem = total * 2;
     document.getElementById('est-vram').textContent = modelMem > 1e6 ? `~${(modelMem/1e6).toFixed(1)} MB` : `~${(modelMem/1e3).toFixed(0)} KB`;
 }
 
-// Attach listeners
 document.querySelectorAll('#train input, #train select').forEach(el => {
     el.addEventListener('input', generateCLI);
     el.addEventListener('change', generateCLI);
@@ -927,7 +1105,7 @@ generateCLI();
 function copyCLI() {
     const text = document.getElementById('cli-text').textContent;
     navigator.clipboard.writeText(text).then(() => {
-        const btn = document.querySelector('.copy-btn');
+        const btn = document.querySelector('#cli-command .copy-btn');
         const orig = btn.textContent;
         btn.textContent = '✓ Copied!';
         setTimeout(() => btn.textContent = orig, 2000);
@@ -945,6 +1123,9 @@ function toggleArchDetail(id) {
 
 // ===== Charts =====
 let charts = {};
+let loadedResults = []; // Array of {name, data, type}
+let customCharts = {};
+
 function getChartColors() {
     const style = getComputedStyle(document.documentElement);
     return {
@@ -961,8 +1142,7 @@ function getChartColors() {
 
 function renderCharts() {
     const c = getChartColors();
-    // Destroy existing charts
-    Object.values(charts).forEach(ch => ch.destroy());
+    Object.values(charts).forEach(ch => { if (ch) ch.destroy(); });
     charts = {};
 
     Chart.defaults.color = c.muted;
@@ -981,8 +1161,7 @@ function renderCharts() {
             }]
         },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
+            responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display: false } },
             scales: { y: { beginAtZero: true, title: { text: 'Perplexity', display: true } } },
         }
@@ -1001,8 +1180,7 @@ function renderCharts() {
             }]
         },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
+            responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display: false } },
             scales: { y: { beginAtZero: true, title: { text: 'Tokens / sec', display: true } } },
         }
@@ -1019,8 +1197,7 @@ function renderCharts() {
             ]
         },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
+            responsive: true, maintainAspectRatio: false,
             plugins: { legend: { position: 'top' } },
             scales: { y: { title: { text: 'ms / token', display: true } } },
         }
@@ -1038,36 +1215,1112 @@ function renderCharts() {
             ]
         },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
+            responsive: true, maintainAspectRatio: false,
             plugins: { legend: { position: 'top' } },
             scales: { y: { title: { text: 'Memory (MB)', display: true } } },
         }
     });
+
+    // Re-render custom charts from loaded data
+    renderCustomCharts();
 }
 
-// Render charts when results section is first shown
-let chartsRendered = false;
-document.querySelector('[data-section="results"]').addEventListener('click', () => {
-    if (!chartsRendered) {
-        setTimeout(renderCharts, 100);
-        chartsRendered = true;
+// ===== Result File Type Detection =====
+function detectResultType(data) {
+    // Scaling laws: has "models" array + "analysis" object
+    if (data.models && Array.isArray(data.models) && data.analysis) return 'scaling_laws';
+    // Quality benchmark: has "models" object (not array) with model keys
+    if (data.models && typeof data.models === 'object' && !Array.isArray(data.models)) return 'quality_benchmark';
+    // Quality benchmark variant: top-level keys are model names (e.g. "HVN", "Transformer")
+    if (!data.models && !data.analysis) {
+        const keys = Object.keys(data);
+        const hasHistory = keys.some(k => data[k] && data[k].history && Array.isArray(data[k].history));
+        if (hasHistory) return 'quality_benchmark_top';
+        // Multithread: keys are strategy names with ppl/params
+        const hasPpl = keys.every(k => data[k] && typeof data[k].ppl === 'number');
+        if (hasPpl) return 'multithread';
     }
+    return 'unknown';
+}
+
+// ===== File Upload Handler =====
+document.getElementById('file-input').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    for (const file of files) {
+        try {
+            const text = await file.text();
+            const data = JSON.parse(text);
+            const type = detectResultType(data);
+            loadedResults.push({ name: file.name, data, type });
+        } catch (err) {
+            loadedResults.push({ name: file.name, error: err.message });
+        }
+    }
+    renderLoadedResultsList();
+    renderCustomCharts();
 });
 
-// ===== File Upload =====
-document.getElementById('file-input').addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const text = await file.text();
-    try {
-        const data = JSON.parse(text);
-        const container = document.getElementById('loaded-results');
-        container.innerHTML = `<div class="info-banner">✓ Loaded ${file.name}</div><pre style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;overflow-x:auto;">${JSON.stringify(data, null, 2).substring(0, 2000)}...</pre>`;
-    } catch (err) {
-        document.getElementById('loaded-results').innerHTML = `<div class="info-banner" style="color:var(--red);">✗ Invalid JSON: ${err.message}</div>`;
+// ===== Render Loaded Results List =====
+function renderLoadedResultsList() {
+    const container = document.getElementById('loaded-results-list');
+    if (loadedResults.length === 0) {
+        container.innerHTML = '';
+        return;
     }
+    container.innerHTML = loadedResults.map((r, i) => {
+        if (r.error) {
+            return `<div class="result-file-card"><div class="header"><h4>❌ ${r.name}</h4><button class="close-btn" onclick="removeResult(${i})">×</button></div><p style="color: var(--red); font-size: 13px;">Invalid JSON: ${r.error}</p></div>`;
+        }
+        const typeLabel = {
+            'quality_benchmark': 'Quality Benchmark',
+            'quality_benchmark_top': 'Quality Benchmark (top-level)',
+            'scaling_laws': 'Scaling Laws',
+            'multithread': 'Multi-thread Comparison',
+            'unknown': 'Unknown Format'
+        }[r.type] || r.type;
+        return `<div class="result-file-card"><div class="header"><h4>✓ ${r.name}</h4><button class="close-btn" onclick="removeResult(${i})">×</button></div><p style="font-size: 13px; color: var(--text-muted);">Type: <span class="tag tag-blue">${typeLabel}</span></p></div>`;
+    }).join('');
+}
+
+function removeResult(idx) {
+    loadedResults.splice(idx, 1);
+    renderLoadedResultsList();
+    renderCustomCharts();
+}
+
+// ===== Render Custom Charts from Loaded Data =====
+function renderCustomCharts() {
+    const area = document.getElementById('custom-charts-area');
+    const c = getChartColors();
+
+    // Destroy existing custom charts
+    Object.values(customCharts).forEach(ch => { if (ch) ch.destroy(); });
+    customCharts = {};
+
+    if (loadedResults.length === 0) {
+        area.innerHTML = '<p style="color: var(--text-muted); font-size: 14px;">Load result files above to see interactive charts here.</p>';
+        return;
+    }
+
+    let html = '';
+    let chartIdx = 0;
+
+    loadedResults.forEach((r, ri) => {
+        if (r.error) return;
+
+        if (r.type === 'quality_benchmark' || r.type === 'quality_benchmark_top') {
+            // Extract models
+            let models;
+            if (r.type === 'quality_benchmark') {
+                models = r.data.models;
+            } else {
+                models = r.data;
+            }
+            const modelNames = Object.keys(models);
+
+            // --- Loss curves chart ---
+            html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+            html += `<h4 style="margin-bottom: 8px;">📉 Training Loss Curves — ${r.name}</h4>`;
+            html += `<div class="chart-container"><canvas id="custom-chart-${chartIdx}"></canvas></div></div>`;
+            chartIdx++;
+
+            // --- Eval PPL curves chart ---
+            html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+            html += `<h4 style="margin-bottom: 8px;">📈 Eval PPL Curves — ${r.name}</h4>`;
+            html += `<div class="chart-container"><canvas id="custom-chart-${chartIdx}"></canvas></div></div>`;
+            chartIdx++;
+
+            // --- Final PPL bar chart ---
+            html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+            html += `<h4 style="margin-bottom: 8px;">📊 Final PPL Comparison — ${r.name}</h4>`;
+            html += `<div class="chart-container"><canvas id="custom-chart-${chartIdx}"></canvas></div></div>`;
+            chartIdx++;
+
+            // --- Params comparison ---
+            html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+            html += `<h4 style="margin-bottom: 8px;">🔢 Parameter Count — ${r.name}</h4>`;
+            html += `<div class="chart-container"><canvas id="custom-chart-${chartIdx}"></canvas></div></div>`;
+            chartIdx++;
+
+            // --- Summary table ---
+            html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+            html += `<h4 style="margin-bottom: 8px;">📋 Summary — ${r.name}</h4><table><thead><tr><th>Model</th><th>Params</th><th>Final PPL</th><th>Total Time</th></tr></thead><tbody>`;
+            modelNames.forEach(name => {
+                const m = models[name];
+                const ppl = m.final_eval_ppl !== undefined ? m.final_eval_ppl.toFixed(2) : (m.history && m.history.length > 0 ? m.history[m.history.length-1].eval_ppl.toFixed(2) : 'N/A');
+                const time = m.total_time_s !== undefined ? m.total_time_s.toFixed(1) + 's' : 'N/A';
+                const params = m.params !== undefined ? (m.params > 1e6 ? (m.params/1e6).toFixed(1)+'M' : Math.round(m.params/1e3)+'K') : 'N/A';
+                html += `<tr><td>${name}</td><td>${params}</td><td>${ppl}</td><td>${time}</td></tr>`;
+            });
+            html += `</tbody></table></div>`;
+
+            area.innerHTML = html;
+
+            // Now create the charts
+            const colors = [c.accent, c.green, c.purple, c.yellow, c.red];
+            let ci = 0;
+
+            // Loss curves
+            const lossDatasets = modelNames.map((name, i) => ({
+                label: name,
+                data: models[name].history.map(h => h.train_loss),
+                borderColor: colors[i % colors.length],
+                tension: 0.3,
+                fill: false,
+            }));
+            const lossLabels = models[modelNames[0]].history.map(h => `Epoch ${h.epoch}`);
+            customCharts['loss_' + ri] = new Chart(document.getElementById('custom-chart-' + ci), {
+                type: 'line',
+                data: { labels: lossLabels, datasets: lossDatasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'top' } },
+                    scales: { y: { title: { text: 'Train Loss', display: true } } },
+                }
+            });
+            ci++;
+
+            // PPL curves
+            const pplDatasets = modelNames.map((name, i) => ({
+                label: name,
+                data: models[name].history.map(h => h.eval_ppl),
+                borderColor: colors[i % colors.length],
+                tension: 0.3,
+                fill: false,
+            }));
+            customCharts['ppl_' + ri] = new Chart(document.getElementById('custom-chart-' + ci), {
+                type: 'line',
+                data: { labels: lossLabels, datasets: pplDatasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'top' } },
+                    scales: { y: { title: { text: 'Eval PPL', display: true } } },
+                }
+            });
+            ci++;
+
+            // Final PPL bar
+            const finalPplData = modelNames.map(name => {
+                const m = models[name];
+                return m.final_eval_ppl !== undefined ? m.final_eval_ppl : (m.history && m.history.length > 0 ? m.history[m.history.length-1].eval_ppl : 0);
+            });
+            customCharts['finalppl_' + ri] = new Chart(document.getElementById('custom-chart-' + ci), {
+                type: 'bar',
+                data: {
+                    labels: modelNames,
+                    datasets: [{
+                        label: 'Final Eval PPL',
+                        data: finalPplData,
+                        backgroundColor: modelNames.map((_, i) => colors[i % colors.length]),
+                        borderRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, title: { text: 'PPL (lower is better)', display: true } } },
+                }
+            });
+            ci++;
+
+            // Params bar
+            const paramsData = modelNames.map(name => models[name].params || 0);
+            customCharts['params_' + ri] = new Chart(document.getElementById('custom-chart-' + ci), {
+                type: 'bar',
+                data: {
+                    labels: modelNames,
+                    datasets: [{
+                        label: 'Parameters',
+                        data: paramsData,
+                        backgroundColor: modelNames.map((_, i) => colors[i % colors.length]),
+                        borderRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, title: { text: 'Parameters', display: true } } },
+                }
+            });
+            ci++;
+
+        } else if (r.type === 'scaling_laws') {
+            const modelsArr = r.data.models;
+            // Group by model name
+            const modelGroups = {};
+            modelsArr.forEach(m => {
+                if (!modelGroups[m.name]) modelGroups[m.name] = [];
+                modelGroups[m.name].push(m);
+            });
+            const modelNames = Object.keys(modelGroups);
+            const colors = [c.accent, c.green, c.purple, c.yellow, c.red];
+
+            // --- PPL vs params (log-log) ---
+            html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+            html += `<h4 style="margin-bottom: 8px;">📈 Scaling Laws: PPL vs Parameters — ${r.name}</h4>`;
+            html += `<div class="chart-container"><canvas id="custom-chart-${chartIdx}"></canvas></div></div>`;
+            chartIdx++;
+
+            // --- Training time vs d_model ---
+            html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+            html += `<h4 style="margin-bottom: 8px;">⏱️ Training Time vs d_model — ${r.name}</h4>`;
+            html += `<div class="chart-container"><canvas id="custom-chart-${chartIdx}"></canvas></div></div>`;
+            chartIdx++;
+
+            // --- Analysis summary ---
+            if (r.data.analysis && r.data.analysis.summary_lines) {
+                html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+                html += `<h4 style="margin-bottom: 8px;">📋 Scaling Analysis — ${r.name}</h4>`;
+                html += `<pre style="background: var(--bg-code); border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-size: 13px; overflow-x: auto; color: #e6edf3;">${r.data.analysis.summary_lines.join('\n')}</pre>`;
+                html += `</div>`;
+            }
+
+            // --- Per-size PPL table ---
+            html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+            html += `<h4 style="margin-bottom: 8px;">📋 Per-Size Comparison — ${r.name}</h4>`;
+            html += `<table><thead><tr><th>d_model</th>`;
+            modelNames.forEach(n => html += `<th>${n} PPL</th><th>${n} Params</th><th>${n} Time</th>`);
+            html += `</tr></thead><tbody>`;
+            // Get all unique d_models
+            const allDSizes = [...new Set(modelsArr.map(m => m.d_model))].sort((a,b) => a-b);
+            allDSizes.forEach(d => {
+                html += `<tr><td>${d}</td>`;
+                modelNames.forEach(n => {
+                    const m = modelGroups[n].find(x => x.d_model === d);
+                    if (m) {
+                        html += `<td>${m.final_eval_ppl.toFixed(2)}</td><td>${m.params > 1e6 ? (m.params/1e6).toFixed(1)+'M' : Math.round(m.params/1e3)+'K'}</td><td>${m.total_time_s.toFixed(1)}s</td>`;
+                    } else {
+                        html += `<td>—</td><td>—</td><td>—</td>`;
+                    }
+                });
+                html += `</tr>`;
+            });
+            html += `</tbody></table></div>`;
+
+            area.innerHTML = html;
+
+            // Create scaling law chart (PPL vs params, log-log)
+            let ci = 0;
+            const scalingDatasets = modelNames.map((name, i) => ({
+                label: name,
+                data: modelGroups[name].map(m => ({ x: m.params, y: m.final_eval_ppl })),
+                borderColor: colors[i % colors.length],
+                backgroundColor: colors[i % colors.length] + '20',
+                tension: 0.3,
+                fill: false,
+            }));
+            customCharts['scaling_' + ri] = new Chart(document.getElementById('custom-chart-' + ci), {
+                type: 'scatter',
+                data: { datasets: scalingDatasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'top' }, tooltip: { callbacks: {
+                        label: (ctx) => `${ctx.dataset.label}: params=${ctx.parsed.x}, PPL=${ctx.parsed.y.toFixed(2)}`
+                    }}},
+                    scales: {
+                        x: { type: 'logarithmic', title: { text: 'Parameters', display: true } },
+                        y: { type: 'logarithmic', title: { text: 'Eval PPL', display: true } },
+                    },
+                }
+            });
+            ci++;
+
+            // Training time vs d_model
+            const timeDatasets = modelNames.map((name, i) => ({
+                label: name,
+                data: modelGroups[name].map(m => m.total_time_s),
+                borderColor: colors[i % colors.length],
+                backgroundColor: colors[i % colors.length] + '20',
+                tension: 0.3,
+                fill: false,
+            }));
+            const timeLabels = modelGroups[modelNames[0]].map(m => `d=${m.d_model}`);
+            customCharts['time_' + ri] = new Chart(document.getElementById('custom-chart-' + ci), {
+                type: 'line',
+                data: { labels: timeLabels, datasets: timeDatasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'top' } },
+                    scales: { y: { title: { text: 'Training Time (s)', display: true } } },
+                }
+            });
+            ci++;
+
+        } else if (r.type === 'multithread') {
+            const keys = Object.keys(r.data);
+            const labels = keys;
+            const pplData = keys.map(k => r.data[k].ppl);
+            const paramsData = keys.map(k => r.data[k].params);
+            const colors = [c.accent, c.green, c.purple, c.yellow, c.red];
+
+            // --- PPL bar chart ---
+            html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+            html += `<h4 style="margin-bottom: 8px;">📊 PPL by Strategy — ${r.name}</h4>`;
+            html += `<div class="chart-container"><canvas id="custom-chart-${chartIdx}"></canvas></div></div>`;
+            chartIdx++;
+
+            // --- Params bar chart ---
+            html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+            html += `<h4 style="margin-bottom: 8px;">🔢 Parameters by Strategy — ${r.name}</h4>`;
+            html += `<div class="chart-container"><canvas id="custom-chart-${chartIdx}"></canvas></div></div>`;
+            chartIdx++;
+
+            // --- Table ---
+            html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+            html += `<h4 style="margin-bottom: 8px;">📋 Strategy Comparison — ${r.name}</h4>`;
+            html += `<table><thead><tr><th>Strategy</th><th>PPL</th><th>Params</th></tr></thead><tbody>`;
+            keys.forEach(k => {
+                html += `<tr><td>${k}</td><td>${r.data[k].ppl.toFixed(2)}</td><td>${r.data[k].params > 1e6 ? (r.data[k].params/1e6).toFixed(1)+'M' : Math.round(r.data[k].params/1e3)+'K'}</td></tr>`;
+            });
+            html += `</tbody></table></div>`;
+
+            area.innerHTML = html;
+
+            let ci = 0;
+            customCharts['mt_ppl_' + ri] = new Chart(document.getElementById('custom-chart-' + ci), {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Eval PPL',
+                        data: pplData,
+                        backgroundColor: labels.map((_, i) => colors[i % colors.length]),
+                        borderRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, title: { text: 'PPL (lower is better)', display: true } } },
+                }
+            });
+            ci++;
+
+            customCharts['mt_params_' + ri] = new Chart(document.getElementById('custom-chart-' + ci), {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Parameters',
+                        data: paramsData,
+                        backgroundColor: labels.map((_, i) => colors[i % colors.length]),
+                        borderRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, title: { text: 'Parameters', display: true } } },
+                }
+            });
+            ci++;
+
+        } else {
+            // Unknown type — show raw JSON
+            html += `<div class="card" style="margin-bottom: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">`;
+            html += `<h4 style="margin-bottom: 8px;">📄 ${r.name} (unknown format)</h4>`;
+            html += `<pre style="background: var(--bg-code); border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-size: 13px; overflow-x: auto; max-height: 400px; color: #e6edf3;">${JSON.stringify(r.data, null, 2).substring(0, 3000)}</pre>`;
+            html += `</div>`;
+            area.innerHTML = html;
+        }
+    });
+}
+
+// ===== Documentation Hub =====
+const docsData = {};
+
+// Embedded markdown content (loaded on demand)
+const docsMarkdown = {
+    'training-guide': null, // Will be fetched
+    'benchmark-results': null,
+    'flop-analysis': null,
+    'theoretical-framework': null,
+};
+
+// Pre-embedded markdown content (so it works without a server)
+const embeddedDocs = {
+    'training-guide': `# HVN Training & Usage Guide
+
+This guide covers everything you need to train and use the Hamiltonian Vortex Network.
+
+## HVN vs Transformer: Architecture Comparison
+
+HVN is **not** a Transformer. It replaces Self-Attention with a fixed-size quantum-fluid dynamical system.
+
+| Aspect | **Transformer (MHA)** | **HVN** |
+|--------|----------------------|---------|
+| **Core mechanism** | Self-Attention — every token attends to all others | Fluid dynamics + quantum mechanics — fixed-size Hamiltonian memory |
+| **Memory of past tokens** | KV Cache — grows with N | Hamiltonian Matrix H — fixed d×d, constant size |
+| **Per-token inference cost** | O(N·d) — must scan all N cached keys | O(d²·r) — single matrix-vector product, **constant in N** |
+| **Inference memory** | O(N·d) — KV cache grows linearly | O(d²) — Hamiltonian is fixed-size |
+| **Positional encoding** | RoPE / learned / sinusoidal | RoPE (rotary) in vortex injection layer |
+
+## Prerequisites
+
+### GPU Setup
+
+\`\`\`bash
+pip install torch --index-url https://download.pytorch.org/whl/cu126
+\`\`\`
+
+### CPU-Only (Fallback)
+
+\`\`\`bash
+pip install torch numpy
+\`\`\`
+
+## Training on a 6 GB VRAM GPU (e.g. RTX 4050 Laptop)
+
+HVN is **very memory-efficient** because it has no KV cache.
+
+| Config | d_model | Layers | Approx. Params | VRAM Usage | Fits 6 GB? |
+|--------|---------|--------|----------------|------------|------------|
+| **Small (default)** | 128 | 2 | ~265K | ~14 MB | ✅ Easily |
+| **Medium** | 256 | 4 | ~1M | ~50–100 MB | ✅ Easily |
+| **Large** | 512 | 8 | ~5–10M | ~200–500 MB | ✅ Yes |
+| **Very Large** | 512 | 12 | ~15M | ~1–2 GB | ✅ Yes |
+
+### Recommended Commands for 6 GB VRAM
+
+**Best balance (medium model, mixed precision, compiled):**
+
+\`\`\`bash
+python train.py \\
+    --text my_corpus.txt \\
+    --d_model 256 --num_layers 4 --bond_dim 64 \\
+    --batch_size 16 --seq_len 128 \\
+    --precision bf16 --compile \\
+    --epochs 100 --generate --prompt "Chapter 1 "
+\`\`\`
+
+**If you hit OOM, reduce in order:**
+1. \`--batch_size 8\` (or 4) — biggest single VRAM saver
+2. \`--seq_len 64\` — shorter sequences = less activation memory
+3. \`--d_model 128\` — smaller model dimension
+4. Add \`--grad_accum 4\` to recover effective batch size
+
+### Memory-Saving Techniques
+
+| Technique | Flag | Memory Saved | Speed Gain |
+|-----------|------|-------------|------------|
+| Mixed precision (bf16) | \`--precision bf16\` | ~50% | 2–3× |
+| Gradient accumulation | \`--grad_accum N\` | Use smaller batch | — |
+| torch.compile | \`--compile\` | — | 14× per-batch |
+| Smaller batch size | \`--batch_size 4\` | Up to 4× | — |
+| Shorter sequences | \`--seq_len 64\` | ~2× | Slightly faster |
+
+## All Training Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| \`--text\` | (sample) | Path to your training text file |
+| \`--epochs\` | 30 | Number of training epochs |
+| \`--lr\` | 3e-4 | Learning rate (AdamW) |
+| \`--batch_size\` | 16 | Batch size |
+| \`--seq_len\` | 64 | Sequence length per training sample |
+| \`--d_model\` | 128 | Model hidden dimension |
+| \`--num_layers\` | 2 | Number of HVN blocks |
+| \`--bond_dim\` | 32 | SVD truncation rank |
+| \`--compile\` | (flag) | Use torch.compile for faster training |
+| \`--precision\` | fp32 | Mixed-precision: fp32, fp16, or bf16 |
+| \`--grad_accum\` | 1 | Gradient accumulation steps |
+| \`--tokenizer\` | char | Tokenizer: char or bpe |
+| \`--rank_k\` | 1 | Rank-k entanglement update |
+| \`--nonlinear_update\` | (flag) | Nonlinear gated Hamiltonian update |
+| \`--causal_reinjection\` | (flag) | Multi-chunk causal re-injection |
+| \`--cross_head_mixing\` | (flag) | Cross-head Hamiltonian mixing |
+| \`--swiglu\` | (flag) | SwiGLU FFN |
+| \`--per_token_eta\` | (flag) | Per-token entanglement rate |
+| \`--n_threads\` | 1 | Independent Hamiltonian threads per head |
+
+## Quality Improvement Strategies (Issue #21)
+
+| Strategy | Flag | Impact | Description |
+|---------|------|--------|-------------|
+| Rank-k entanglement | \`--rank_k 4\` or \`--rank_k 8\` | HIGH | Rank-k projector — k× more expressive per token |
+| Causal re-injection | \`--causal_reinjection\` | MEDIUM | 2-pass chunked: re-compute with updated H |
+| Cross-head mixing | \`--cross_head_mixing\` | MEDIUM | Learned mixing of H states across heads |
+| Nonlinear update | \`--nonlinear_update\` | MEDIUM-HIGH | Gated nonlinearity in the projector |
+| Per-token η | \`--per_token_eta\` | MEDIUM | Per-token entanglement rate (like Mamba) |
+| SwiGLU FFN | \`--swiglu\` | LOW-MEDIUM | SwiGLU gated FFN (used by LLaMA) |
+| Multi-thread memory | \`--n_threads 4\` | MEDIUM-HIGH | K independent Hamiltonians per head |
+
+**Recommended combination (all strategies + multi-thread):**
+
+\`\`\`bash
+python train.py \\
+    --epochs 100 --precision bf16 \\
+    --n_threads 4 --rank_k 8 --nonlinear_update \\
+    --causal_reinjection --cross_head_mixing \\
+    --swiglu --per_token_eta \\
+    --generate --prompt "The "
+\`\`\`
+
+## Generation (Inference)
+
+\`\`\`bash
+# Basic generation
+python generate.py --prompt "The "
+
+# Custom parameters
+python generate.py --prompt "Hamiltonian " --tokens 300 --temp 0.5 --top_k 5
+\`\`\`
+
+### Temperature Guide
+
+| Temperature | Effect |
+|-------------|--------|
+| 0.1 - 0.3 | Very deterministic, repetitive |
+| 0.5 - 0.7 | Focused, coherent |
+| 0.8 - 1.0 | Balanced creativity |
+| 1.0+ | Wild, random |
+
+## Honest Assessment & Known Limitations
+
+### The Quality Gap
+
+| Model | Eval PPL | Train Time |
+|-------|----------|------------|
+| HVN (multi-head) | 8.37 | 467.8s |
+| Transformer | 1.90 | 3.4s |
+| SSM | 1.12 | 68.6s |
+
+The gap is significant. Main reasons:
+1. **Rank-1 entanglement update** — less expressive than attention's full QK^T
+2. **Chunked approximation** — tokens within a chunk share the same H state
+3. **Poor scaling** — HVN PPL barely improves with size
+4. **Small training data** — 34K characters
+
+### The Scaling Problem
+
+| Metric | HVN | Transformer |
+|--------|-----|------------|
+| Scaling exponent | PPL ∝ params^-0.007 | PPL ∝ params^-0.090 |
+| PPL at smallest | 14.24 | 9.12 |
+| PPL at largest | 13.82 | 6.91 |
+
+HVN's perplexity barely improves when the model is made larger. This is the fundamental open research challenge.`,
+
+    'benchmark-results': `# Benchmark Results: HVN vs Transformer vs SSM
+
+## Test Configuration
+
+- **GPU**: NVIDIA GeForce RTX 4050 Laptop GPU (6GB VRAM)
+- **PyTorch**: 2.12.1+cu126
+- **Model**: d_model=128, 2 layers, vocab=256
+- **Date**: 2026-07-01
+
+## 1. Speed Benchmark Results
+
+### Generation Speed (50 tokens, prompt=32 tokens)
+
+| Model | tokens/sec | ms/token | Peak Memory | Parameters |
+|-------|-----------|----------|-------------|------------|
+| **HVN (incremental)** | 106.5 | 9.4 | 13.6 MB | 264,966 |
+| **HVN (old, full context)** | 75.6 | 13.2 | 13.6 MB | 264,966 |
+| **Transformer** | 780.6 | 1.28 | 13.0 MB | 461,312 |
+| **SSM** | 40.0 | 25.0 | 12.8 MB | 362,496 |
+
+**Key finding**: HVN's incremental generation is **2.7× faster** than the SSM and **40% faster** than HVN's old full-context generation.
+
+### Forward Pass Scaling (ms/token, batch=1)
+
+| Model | N=256 | N=512 | N=1024 | N=2048 | N=4096 | Scaling |
+|-------|-------|-------|--------|--------|--------|---------|
+| **HVN** | 5.06 | 4.98 | 4.97 | 5.03 | 5.05 | **O(1) ✓** (flat) |
+| **Transformer** | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | O(1)* |
+| **SSM** | 0.43 | 0.42 | 0.43 | 0.46 | 0.43 | O(1) ✓ |
+
+*Transformer uses Flash Attention (highly optimized CUDA kernel).
+
+### Peak Memory Scaling (MB, forward pass)
+
+| Model | N=256 | N=512 | N=1024 | N=2048 | N=4096 | Growth |
+|-------|-------|-------|--------|--------|--------|--------|
+| **HVN** | 14.2 | 15.6 | 18.9 | 25.4 | 38.4 | **2.7×** |
+| **Transformer** | 14.5 | 16.8 | 21.3 | 30.3 | 48.3 | 3.3× |
+| **SSM** | 13.8 | 15.3 | 18.3 | 24.3 | 36.3 | 2.6× |
+
+**Key finding**: HVN uses **20% less memory** than the Transformer at N=4096.
+
+## 2. Parameter Efficiency
+
+| Model | Parameters | Relative Size |
+|-------|-----------|---------------|
+| **HVN** | 264,966 | 1.0× (baseline) |
+| **SSM** | 362,496 | 1.37× |
+| **Transformer** | 461,312 | 1.74× |
+
+HVN uses **43% fewer parameters** than the Transformer.
+
+## 3. Quality Benchmark Results
+
+### Larger model (d_model=128, 2 layers, 20 epochs)
+
+| Model | Parameters | Eval PPL | Train Time | PPL/1K params |
+|-------|-----------|----------|------------|---------------|
+| **HVN (multi-head)** | 241,725 | 8.37 | 467.8s | 0.035 |
+| **Transformer** | 405,248 | 1.90 | 3.4s | 0.005 |
+| **SSM** | 306,432 | 1.12 | 68.6s | 0.004 |
+
+### Training Loss Curves (d_model=128, 20 epochs)
+
+\`\`\`
+HVN (multi-head):
+  Epoch  1: PPL=12.19  ████████████
+  Epoch  5: PPL= 8.87  ████████
+  Epoch 10: PPL= 8.43  ████████
+  Epoch 20: PPL= 8.37  ████████  ← converged
+
+Transformer:
+  Epoch  1: PPL=12.25  ████████████
+  Epoch  5: PPL= 5.58  █████
+  Epoch 10: PPL= 2.78  ██
+  Epoch 20: PPL= 1.90  █
+
+SSM:
+  Epoch  1: PPL=13.07  █████████████
+  Epoch  5: PPL= 2.29  ██
+  Epoch 10: PPL= 1.18  █
+  Epoch 20: PPL= 1.12  █
+\`\`\`
+
+## 4. Optimizations Applied
+
+### ✅ Multi-Head Hamiltonian
+- **Before**: Single H matrix per block — limited expressiveness
+- **After**: \`n_heads\` parallel H matrices, each on \`d_model // n_heads\` dimensions
+- **Impact**: PPL improved 9.48 → 8.37 (12% better)
+
+### ✅ Gated Vortex Injection
+- **After**: \`r̃_t = x_t + g_t ⊙ (Γ · v_t)\` where \`g_t = σ(W_g · [x_t ; v_t])\`
+- **Impact**: Model selectively controls how much the velocity field deflects each token
+
+### ✅ Chunked Parallel Processing
+- **Before**: Python loop over every token — slow, poor GPU utilization
+- **After**: Process \`chunk_size\` tokens in parallel, update H between chunks
+- **Impact**: Forward pass 35% faster (5.05ms → 3.28ms), training 27% faster
+
+### ✅ Incremental Generation (Hamiltonian State Cache)
+- **After**: Maintain Hamiltonian state, process only 1 token per step — true O(1) generation
+- **Impact**: 40% faster generation (75.6 → 106.5 tokens/sec)
+
+## 5. Honest Assessment
+
+### Where HVN Wins
+1. **Memory efficiency**: Lowest memory at long sequences (O(1) Hamiltonian vs O(N) KV cache)
+2. **Parameter efficiency**: 43% fewer params than Transformer
+3. **Theoretical scaling**: True O(1) per-token — confirmed flat from N=256 to N=4096
+4. **Incremental generation**: No context reprocessing needed
+
+### Where HVN Loses
+1. **Raw speed**: Transformer's Flash Attention is 7× faster (optimized CUDA kernels)
+2. **No custom kernels**: HVN uses Python loops + standard PyTorch ops
+3. **Quality unproven**: Needs benchmarking on real datasets (WikiText, etc.)
+
+### What Would Make HVN Competitive
+1. **Custom CUDA kernel** for the Hamiltonian update
+2. **Triton kernel** for fused vortex injection + memory update
+3. **Larger model benchmark** (d_model=512+) where the O(1) advantage matters more
+4. **Real dataset evaluation** (not just 34K chars of sample text)`,
+
+    'flop-analysis': `# FLOP Analysis: HVN vs Standard Multi-Head Attention
+
+## 1. Setup & Notation
+
+| Symbol | Meaning | Typical Value |
+|--------|---------|---------------|
+| N | Sequence length (tokens) | up to 100,000 |
+| d | d_model (hidden dimension) | 512 |
+| h | Number of attention heads | 8 |
+| d_h | Per-head dimension (d / h) | 64 |
+| r | SVD bond dimension (HVN truncation rank) | 32 |
+| L | Number of layers | 12 |
+| V | Vocabulary size | 32,000 |
+
+All FLOP counts are for **inference** (forward pass only), per token, per layer.
+
+## 2. Standard Multi-Head Attention (MHA) — Baseline
+
+### 2.1 Without KV Cache (Full Recomputation)
+
+Per token, per layer:
+
+| Operation | FLOPs |
+|-----------|-------|
+| Q = X · W_Q | 2d² |
+| K = X · W_K | 2d² |
+| V = X · W_V | 2d² |
+| Attention scores: Q · K^T (over all N) | 2Nd |
+| Softmax | ~3N |
+| Attention output: scores · V | 2Nd |
+| Output projection: O · W_O | 2d² |
+| **Total per token** | **8d² + 4Nd + 3N** |
+
+### 2.2 With KV Cache (Incremental Decoding)
+
+| Operation | FLOPs |
+|-----------|-------|
+| Q_t = x_t · W_Q | 2d² |
+| Attention: Q_t · K_cache^T | 2Nd |
+| Softmax | ~3N |
+| Attention output: scores · V_cache | 2Nd |
+| Output projection | 2d² |
+| **Total per token** | **4d² + 4Nd + 3N** |
+
+**Key observation**: Even with a KV cache, the per-token cost is **O(Nd)**.
+
+### 2.3 Memory Cost of KV Cache
+
+\`\`\`
+KV cache memory = 2 · N · d · (bytes per element)
+\`\`\`
+
+For N = 100,000, d = 512, fp16: 2 × 100,000 × 512 × 2 = **~200 MB per layer**.
+For L = 12 layers: **~2.4 GB** just for the KV cache.
+
+## 3. Hamiltonian Vortex Network (HVN)
+
+### 3.1 Per-Token, Per-Layer Cost
+
+| Operation | FLOPs | Notes |
+|-----------|-------|-------|
+| Vorticity: ω_t = W_ω · x_t | 2d² | Linear projection |
+| Biot-Savart velocity: v_t = Γ · (H · ω_t) | 2d² | Matrix-vector product |
+| Deflection: r̃_t = x_t + Γ · v_t | d | Elementwise add |
+| Output projection: W_o · r̃_t | 2d² | Linear projection |
+| **Vortex subtotal** | **6d² + 3d** | |
+| Interaction projector: P_t = v_t ⊗ v_t^T | d² | Outer product |
+| H · v_t (for destructive interference) | 2d² | |
+| H^T · v_t (for destructive interference) | 2d² | |
+| Outer product (Hv ⊗ (H^Tv)^T) | d² | |
+| Renormalization blend | 2d² | |
+| SVD truncation (optional, rank r) | O(d²r) | |
+| FFN sub-layer (2x expansion) | 6d² | |
+| **Total per token per layer** | **~19d² + O(d²r)** | |
+
+### 3.2 Memory Cost of HVN
+
+\`\`\`
+HVN memory = d² · (bytes per element) per layer
+\`\`\`
+
+For d = 512, fp16: 512 × 512 × 2 = **~0.5 MB per layer**.
+For L = 12 layers: **~6 MB** — **constant in N**.
+
+## 4. Head-to-Head Comparison at N = 100,000
+
+Using d = 512, L = 12 layers, h = 8, r = 128.
+
+### 4.1 Per-Token FLOPs (single layer)
+
+| Architecture | Per-Token FLOPs (one layer) |
+|---|---|
+| **MHA without KV cache** | 8d² + 4Nd + 3N ≈ **207.2M** |
+| **MHA with KV cache** | 4d² + 4Nd + 3N ≈ **206.2M** |
+| **HVN (with SVD, r=128)** | 19d² + d²r ≈ **38.6M** |
+| **HVN (no SVD, full rank)** | 19d² + d³ ≈ **139.2M** |
+
+### 4.2 Per-Token FLOPs (all 12 layers)
+
+| Architecture | Total Per-Token FLOPs |
+|---|---|
+| **MHA with KV cache** | 12 × 206.2M ≈ **2,474M** |
+| **HVN (with SVD, r=128)** | 12 × 38.6M ≈ **463M** |
+| **HVN (no SVD)** | 12 × 139.2M ≈ **1,670M** |
+
+### 4.3 Ratio (HVN / MHA)
+
+| Variant | Ratio at N=100K |
+|---|---|
+| HVN with SVD (r=128) | 463 / 2,474 ≈ **18.7%** ✓ (< 20% target!) |
+| HVN without SVD | 1,670 / 2,474 ≈ 67.5% |
+
+**The HVN with SVD truncation achieves <20% of MHA's FLOP cost at N=100,000.**
+
+## 5. Scaling Table: FLOPs per Token vs Sequence Length
+
+d = 512, L = 12, r = 128
+
+| N | MHA (KV cache) | HVN (SVD r=128) | Ratio |
+|---|---|---|---|
+| 1,000 | 36M | 463M | 12.8x |
+| 10,000 | 258M | 463M | 0.56x |
+| 50,000 | 1,241M | 463M | 0.37x |
+| 100,000 | 2,474M | 463M | 0.187x |
+| 500,000 | 12,300M | 463M | 0.038x |
+| 1,000,000 | 24,588M | 463M | 0.019x |
+
+> Note: At very short N (e.g., 1,000), the constant overhead of HVN's d²r term makes it *more* expensive than MHA. The crossover point is around N ≈ 5,000. HVN's advantage grows unboundedly as N increases.
+
+## 6. Memory Comparison
+
+| Architecture | Inference Memory (N=100K, d=512, L=12, fp16) |
+|---|---|
+| MHA KV Cache | 2 × N × d × L × 2 bytes = **2.46 GB** |
+| HVN Hamiltonian | d² × L × 2 bytes = **6.29 MB** |
+
+**HVN uses ~390× less memory** at N=100,000.
+
+## 7. Conclusion
+
+The Hamiltonian Vortex Network achieves **O(1) per-token inference cost** by replacing the O(N) attention scan with a fixed-size Hamiltonian matrix.
+
+- **FLOP ratio**: HVN / MHA ≈ **18.7%** (well under the 20% target)
+- **Memory ratio**: HVN / MHA ≈ **0.26%** (390× reduction)
+- **Scaling**: HVN is constant in N; MHA grows linearly in N
+
+The key architectural insight is that the Hamiltonian matrix H acts as a *compressed holographic summary* of the entire sequence — like a velocity field in fluid dynamics that encodes the integrated effect of all upstream vortices without explicitly storing each one.`,
+
+    'theoretical-framework': `# Hamiltonian Vortex Network (HVN) — Theoretical Framework & Mathematical Formalism
+
+## 1. Overview
+
+The Hamiltonian Vortex Network (HVN) is a novel sequence-modeling architecture that replaces standard Self-Attention with a **fixed-size quantum-fluid dynamical system**. The design goal is to achieve long-range associative recall comparable to Attention while maintaining **O(1) inference cost per token** — no KV cache, no quadratic scan, no gradient-descent test-time-training loop.
+
+The architecture fuses two theoretical pillars:
+
+| Pillar | Source Field | Role in HVN |
+|--------|-------------|-------------|
+| **Lagrangian Vortex Particles** | Fluid Dynamics | Translates each token into a discrete vortex particle that interacts *locally* with a background velocity field via a modified Biot-Savart law. |
+| **Matrix Product State (MPS) Entanglement Hamiltonian** | Quantum Mechanics | A fixed-size tensor-train state that evolves deterministically on every forward pass, absorbing vortex vectors through quantum entanglement renormalization. |
+
+## 2. Lagrangian Vortex Particle Mapping
+
+### 2.1 Token → Vortex Particle
+
+Each input token embedding **x**_t ∈ ℝ^{d_model} is interpreted as a **Lagrangian vortex particle** characterized by:
+
+- **Position**: r_t ∈ ℝ^{d_model} — the token's embedding vector (static within a step).
+- **Vorticity (circulation)**: ω_t ∈ ℝ^{d_model} — derived from the token via a learned linear projection.
+- **Velocity**: v_t ∈ ℝ^{d_model} — the velocity field induced at the particle's location by all *previously absorbed* vorticity stored in the Hamiltonian memory.
+
+### 2.2 Modified Biot-Savart Law (Local O(1) Approximation)
+
+In classical fluid dynamics, the Biot-Savart law computes the velocity induced at a point by a continuous vorticity distribution:
+
+\`\`\`
+v(r) = (1/4π) ∫ (ω(r') × (r - r')) / |r - r'|³  dV'
+\`\`\`
+
+This is a global integral — O(N) over all prior particles. HVN replaces it with a **local, fixed-size approximation**:
+
+\`\`\`
+v_t = Γ · (H · ω_t)
+\`\`\`
+
+where:
+
+- **H** ∈ ℝ^{d_model × d_model} is the **Entanglement Hamiltonian** — a fixed-size matrix that *summarizes* the entire history of absorbed vorticity.
+- **Γ** is a learned scalar coupling constant (initialized to 1/√d_model).
+- **ω_t** is the current token's vorticity vector.
+
+Because **H** has fixed shape (d_model × d_model), the velocity computation is a single matrix-vector product: **O(d_model²)** regardless of sequence length N. This is the key to O(1) per-token inference.
+
+### 2.3 Vortex Deflection
+
+The new token's velocity **v_t** deflects its position, producing the *interacted* representation:
+
+\`\`\`
+r̃_t = r_t + Γ · v_t
+\`\`\`
+
+This deflection encodes *how the existing memory field alters the new token* — the fluid-dynamical analogue of the query-key interaction in Attention, but computed in constant time against a summary rather than against all keys.
+
+## 3. Entanglement Hamiltonian Matrix (Fixed-Size Quantum Memory)
+
+### 3.1 Matrix Product State (Tensor Train) Structure
+
+The Hamiltonian memory is stored as a **Matrix Product State (MPS)** — a tensor train of fixed bond dimension χ:
+
+\`\`\`
+H = A_1 · A_2 · ... · A_K      (K = d_model / χ)
+\`\`\`
+
+Each **A_k** ∈ ℝ^{χ × χ} is a core tensor. The full reconstructed matrix is:
+
+\`\`\`
+H_reconstructed = A_1 ⊗ A_2 ⊗ ... · A_K   (Kronecker product chain)
+\`\`\`
+
+However, HVN **never explicitly reconstructs** the full d_model × d_model matrix. All operations are performed on the **compressed MPS cores** directly, keeping the memory footprint at O(K · χ²) = O(d_model · χ) rather than O(d_model²).
+
+### 3.2 Quantum Entanglement Renormalization
+
+When a new vortex vector **v_t** arrives, it must be *absorbed* into the Hamiltonian. In quantum mechanics, this is analogous to a **density-matrix renormalization group (DMRG)** step.
+
+The update rule is:
+
+\`\`\`
+H_new = (1 - η) · H_old + η · (v_t ⊗ v_t^T - H_old · v_t ⊗ v_t^T · H_old)
+\`\`\`
+
+Decomposed:
+
+1. **Outer product**: P_t = v_t ⊗ v_t^T  — the "interaction projector" (rank-1).
+2. **Destructive interference**: subtract H_old · P_t · H_old — this term cancels components of H that are *already aligned* with v_t, preventing redundant reinforcement.
+3. **Associative alignment**: add P_t — this reinforces the new association.
+4. **Renormalization**: blend with (1 - η) · H_old to preserve prior memory.
+
+This is a **deterministic, single-pass update** — no optimization step, no gradient descent. It runs in O(d_model²) time, independent of sequence length.
+
+### 3.3 Low-Rank MPS Compression
+
+To prevent H from growing unboundedly in spectral norm, after each update we apply a **truncated SVD renormalization**:
+
+\`\`\`
+H = U · S · V^T   →   keep top-r singular values   →   H = U_r · S_r · V_r^T
+\`\`\`
+
+where r is the **entanglement bond dimension** (hyperparameter). This is the quantum renormalization step: high-energy (noise) modes are truncated, preserving only the top-r entangled modes. Cost: O(d_model² · r) — still O(1) in N.
+
+## 4. Putting It Together: The HVN Block
+
+For each token t in the sequence:
+
+\`\`\`
+1. VortexInjection:
+   ω_t = W_ω · x_t                    (vorticity projection)
+   v_t = Γ · (H · ω_t)                (Biot-Savart local velocity)
+   r̃_t = x_t + Γ · v_t                (deflected representation)
+
+2. HamiltonianMemoryUpdate:
+   P_t = v_t ⊗ v_t^T                  (rank-1 interaction projector)
+   H ← (1-η)·H + η·(P_t - H·P_t·H)    (entanglement renormalization)
+   [optional: SVD truncation to rank r]
+
+3. Output:
+   y_t = W_o · r̃_t                    (project back to d_model)
+\`\`\`
+
+**Total per-token cost**: O(d_model²) — constant in N.
+
+## 5. Why This Achieves Long-Range Associative Recall
+
+- The Hamiltonian **H** is a *compressed summary* of all past tokens' vorticity interactions. Like a KV cache, it stores associations — but in fixed O(d_model²) space rather than O(N · d_model).
+- The **entanglement renormalization** ensures that correlated concepts reinforce each other (associative alignment via the P_t term) while uncorrelated noise cancels out (destructive interference via the H·P_t·H term).
+- The **Biot-Savart local approximation** means each new token "feels" the entire history through H without scanning it — the velocity field H·ω_t is a global summary computed in one matmul.
+
+This is analogous to how a fluid's velocity field at any point encodes the integrated effect of all upstream vortices — you don't need to re-sum every vortex; the field already contains their cumulative influence.`,
+};
+
+let currentDoc = 'training-guide';
+let docSearchTerm = '';
+
+// Render markdown to HTML
+function renderDoc(docKey) {
+    const md = embeddedDocs[docKey];
+    if (!md) {
+        document.getElementById('doc-render-area').innerHTML = '<p style="color: var(--text-muted);">Documentation not available.</p>';
+        return;
+    }
+    const html = marked.parse(md);
+    document.getElementById('doc-render-area').innerHTML = html;
+    currentDoc = docKey;
+    applySearchHighlight();
+}
+
+// Tab switching
+document.querySelectorAll('.doc-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('.doc-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        renderDoc(tab.dataset.doc);
+    });
 });
+
+// Search functionality
+document.getElementById('doc-search').addEventListener('input', (e) => {
+    docSearchTerm = e.target.value.trim().toLowerCase();
+    applySearchHighlight();
+    updateSearchCount();
+});
+
+function applySearchHighlight() {
+    if (!docSearchTerm) {
+        // Remove all highlights
+        document.querySelectorAll('.doc-search-highlight').forEach(el => {
+            const parent = el.parentNode;
+            parent.replaceChild(document.createTextNode(el.textContent), el);
+            parent.normalize();
+        });
+        return;
+    }
+
+    // Simple search: highlight matching text and show/hide sections
+    const docArea = document.getElementById('doc-render-area');
+    const allText = docArea.textContent.toLowerCase();
+    const hasMatch = allText.includes(docSearchTerm);
+
+    if (hasMatch) {
+        // Highlight all occurrences
+        highlightSearchTerm(docArea, docSearchTerm);
+    }
+}
+
+function highlightSearchTerm(element, term) {
+    const walker = document.createTreeWalker(
+        element,
+        NodeFilter.SHOW_TEXT,
+        null,
+        false
+    );
+
+    const textNodes = [];
+    let node;
+    while (node = walker.nextNode()) {
+        if (node.textContent.toLowerCase().includes(term)) {
+            textNodes.push(node);
+        }
+    }
+
+    textNodes.forEach(textNode => {
+        const text = textNode.textContent;
+        const lowerText = text.toLowerCase();
+        const idx = lowerText.indexOf(term);
+        if (idx === -1) return;
+
+        const before = text.substring(0, idx);
+        const match = text.substring(idx, idx + term.length);
+        const after = text.substring(idx + term.length);
+
+        const span = document.createElement('span');
+        span.className = 'doc-search-highlight';
+        span.textContent = match;
+
+        const parent = textNode.parentNode;
+        parent.insertBefore(document.createTextNode(before), textNode);
+        parent.insertBefore(span, textNode);
+        parent.insertBefore(document.createTextNode(after), textNode);
+        parent.removeChild(textNode);
+    });
+}
+
+function updateSearchCount() {
+    const countEl = document.getElementById('search-count');
+    if (!docSearchTerm) {
+        countEl.textContent = '';
+        return;
+    }
+
+    // Count matches across all docs
+    let totalMatches = 0;
+    Object.keys(embeddedDocs).forEach(key => {
+        const md = embeddedDocs[key];
+        if (md && md.toLowerCase().includes(docSearchTerm)) {
+            totalMatches++;
+        }
+    });
+
+    if (totalMatches === 0) {
+        countEl.innerHTML = '<span style="color: var(--red);">No matches found.</span>';
+    } else {
+        countEl.innerHTML = `<span style="color: var(--green);">Found in ${totalMatches} document(s). Current doc highlighted.</span>`;
+    }
+}
+
+// Initialize documentation hub
+renderDoc('training-guide');
 
 // ===== Closed Issues Table =====
 const closedIssues = [
@@ -1092,6 +2345,8 @@ const closedIssues = [
     [20, 'Hamiltonian quantization (INT8 + NF4)'],
     [21, 'Multi-strategy quality upgrade'],
     [22, 'Multi-Thread Hamiltonian Memory'],
+    [23, 'Vision: Image Encoding via Vortex-Projected Patch Embeddings'],
+    [24, 'Tool Calling: Structured Output and Function Invocation'],
 ];
 const tbody = document.getElementById('closed-issues');
 closedIssues.forEach(([num, title]) => {
@@ -1099,6 +2354,9 @@ closedIssues.forEach(([num, title]) => {
     tr.innerHTML = `<td>${num}</td><td>${title}</td><td><span class="tag tag-green">✓ Closed</span></td>`;
     tbody.appendChild(tr);
 });
+
+// ===== Initial Chart Render =====
+renderCharts();
 </script>
 </body>
 </html>
