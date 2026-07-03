@@ -1,0 +1,120 @@
+# Local development. All published ports are bound to 127.0.0.1 only -
+# see ISSUE_30_PLAN.md "Session Decisions" #4 (applies in dev too, not just prod).
+# Build context is the repo root so the image can vendor ../hvn - run this
+# compose file with `docker compose -f web/docker-compose.yml up` from the
+# repo root, or `cd web && docker compose up` (context: .. handles the rest).
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app-web:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    command: ["web"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: web.settings.dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - checkpoints:/data/checkpoints
+      # Dev hot-reload: bind-mount the Django project over the image's copy
+      # so code edits (and generated migrations) land on the host, not just
+      # inside the container's writable layer.
+      - .:/srv/web
+      - ../hvn:/srv/hvn
+
+  app-worker:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    command: ["worker"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: web.settings.dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - checkpoints:/data/checkpoints
+      - .:/srv/web
+      - ../hvn:/srv/hvn
+      - ../train.py:/srv/train.py:ro
+      # Dev stand-in for the rsync/scp-to-server workflow (see
+      # ISSUE_30_PLAN.md / prior session discussion): in production the
+      # checkpoint is copied onto the `checkpoints` volume out of band, not
+      # baked into the image. Locally, bind-mounting the repo's existing
+      # trained checkpoint achieves the same thing without needing an actual
+      # rsync round-trip.
+      - ../hvn_checkpoint.pt:/data/checkpoints/hvn_checkpoint.pt:ro
+      - ../hvn_checkpoint_tokenizer.json:/data/checkpoints/hvn_checkpoint_tokenizer.json:ro
+    # GPU access for the HVN model - requires the NVIDIA Container Toolkit
+    # on the Docker host. Remove this block to fall back to CPU inference.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  app-beat:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    command: ["beat"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: web.settings.dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/srv/web
+      - ../hvn:/srv/hvn
+    # Only schedules the daily purge task (api.tasks.purge_expired_conversations)
+    # onto the queue - the actual task body runs in app-worker, so no GPU
+    # needed here.
+
+volumes:
+  postgres_data:
+  checkpoints:

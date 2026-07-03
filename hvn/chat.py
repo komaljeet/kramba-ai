@@ -605,6 +605,76 @@ class ChatSession:
 
         return response_clean
 
+    def user_turn_streaming(self, user_message: str):
+        """Generator variant of ``user_turn()`` — yields incremental text
+        deltas as the assistant response is generated, token by token, then
+        updates ``conv_state``/``turns`` exactly like ``user_turn()`` once
+        generation completes (Issue #30's WebSocket streaming needs this;
+        ``user_turn()`` only returns the finished response).
+
+        Decodes the full generated-id sequence at each step and yields only
+        the new suffix, the same incremental-decode technique
+        ``stream_text_chunks`` in ``hvn/server.py`` uses — this avoids
+        emitting malformed partial-BPE-token text.
+
+        Yields
+        ------
+        str
+            Non-empty text deltas, in order.
+        """
+        user_formatted = self.formatter.format_user(user_message)
+        user_ids = self.tokenizer.encode(user_formatted)
+        assistant_open = self.formatter.format_assistant_open()
+        assistant_open_ids = self.tokenizer.encode(assistant_open)
+        all_input_ids = user_ids + assistant_open_ids
+
+        with torch.no_grad():
+            states = self.conv_state["hamiltonian_states"]
+            pos = self.conv_state["position"]
+
+            logits_step = None
+            for tok_id in all_input_ids:
+                tok = torch.tensor([[tok_id]], dtype=torch.long, device=self.device)
+                logits_step, states = self.model.forward_step(tok, states, position_idx=pos)
+                pos += 1
+
+            temp = max(self.temperature, 1e-5)
+            next_logits = logits_step[0, -1, :] / temp
+
+            response_ids: list[int] = []
+            prev_text = ""
+            for _ in range(self.max_new_tokens):
+                if self.top_k > 0:
+                    k = min(self.top_k, next_logits.size(-1))
+                    values, _ = torch.topk(next_logits, k)
+                    next_logits = next_logits.clone()
+                    next_logits[next_logits < values[-1]] = float("-inf")
+
+                probs = torch.softmax(next_logits, dim=-1)
+                next_id = torch.multinomial(probs, num_samples=1).item()
+                response_ids.append(next_id)
+
+                full_text = self.tokenizer.decode(response_ids)
+                delta = full_text[len(prev_text):]
+                prev_text = full_text
+                if delta:
+                    yield delta
+
+                tok = torch.tensor([[next_id]], dtype=torch.long, device=self.device)
+                logits_step, states = self.model.forward_step(tok, states, position_idx=pos)
+                pos += 1
+                next_logits = logits_step[0, -1, :] / temp
+
+            self.conv_state["hamiltonian_states"] = states
+            self.conv_state["position"] = pos
+            self.conv_state["history_ids"].extend(all_input_ids)
+            self.conv_state["history_ids"].extend(response_ids)
+
+        response_clean = self.formatter.parse_response(prev_text)
+        self.turns.append({"role": "user", "content": user_message})
+        self.turns.append({"role": "assistant", "content": response_clean})
+        self._manage_context_window()
+
     def add_system_message(self, system_message: str) -> None:
         """Add a system message to the conversation.
 
