@@ -23,6 +23,8 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "channels",
+    "django_otp",
+    "django_otp.plugins.otp_totp",
     "api",
     "chat",
 ]
@@ -84,6 +86,7 @@ AUTH_PASSWORD_VALIDATORS = [
     },
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+    {"NAME": "web.validators.BreachedPasswordValidator"},
 ]
 
 LANGUAGE_CODE = "en-us"
@@ -119,6 +122,15 @@ CELERY_TASK_TRACK_STARTED = True
 # worker process avoids fighting over the same model/GPU memory.
 CELERY_WORKER_CONCURRENCY = int(os.environ.get("CELERY_WORKER_CONCURRENCY", "1"))
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# One fixed daily job - a static schedule is enough, no need for
+# django-celery-beat's DB-backed dynamic scheduling for a single task.
+CELERY_BEAT_SCHEDULE = {
+    "purge-expired-conversations": {
+        "task": "api.tasks.purge_expired_conversations",
+        "schedule": timedelta(hours=24),
+    },
+}
 
 # --- DRF ---
 REST_FRAMEWORK = {

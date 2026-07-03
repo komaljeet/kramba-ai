@@ -1,13 +1,17 @@
+from unittest.mock import patch
+
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from django.test import override_settings
 from django.urls import reverse
 
 from api.models import Conversation, ModelVersion
-from api.security import contains_injection_markers, sanitize_output
+from api.security import contains_injection_markers, filter_profanity, sanitize_output
+from web.validators import BreachedPasswordValidator
 
 User = get_user_model()
 STRONG_PASSWORD = "correct-horse-battery-staple-9"
@@ -28,6 +32,62 @@ class SanitizationUnitTests(APITestCase):
         self.assertNotIn("<b>", clean)
         self.assertIn("hello", clean)
         self.assertIn("world", clean)
+
+    def test_filter_profanity_censors_known_words(self):
+        # better-profanity's default word list - this isn't testing the
+        # library's word list quality, just that filter_profanity() is
+        # actually wired up to it.
+        self.assertNotEqual(filter_profanity("you are a bitch"), "you are a bitch")
+
+    def test_filter_profanity_leaves_clean_text_unchanged(self):
+        clean = "hello, how can I help you today"
+        self.assertEqual(filter_profanity(clean), clean)
+
+
+class BreachedPasswordValidatorTests(APITestCase):
+    """Unit tests for web/validators.py, with the HIBP HTTP call mocked out -
+    both so tests don't depend on outbound network access and so they're
+    deterministic regardless of what's actually in the real breach database."""
+
+    def setUp(self):
+        self.validator = BreachedPasswordValidator()
+
+    @staticmethod
+    def _fake_response(body: str):
+        class _CM:
+            def __enter__(self_inner):
+                class _Resp:
+                    def read(self_resp):
+                        return body.encode("utf-8")
+
+                return _Resp()
+
+            def __exit__(self_inner, *args):
+                return False
+
+        return _CM()
+
+    def test_raises_when_hash_suffix_found_in_response(self):
+        # SHA-1("correct-horse-battery-staple-9") = prefix 6C6D5... - rather
+        # than hardcode the real hash, mock urlopen to return a response
+        # containing whatever suffix the validator computes, by capturing it.
+        import hashlib
+
+        password = "some-test-password-123"
+        sha1 = hashlib.sha1(password.encode()).hexdigest().upper()
+        suffix = sha1[5:]
+
+        with patch("web.validators.urllib.request.urlopen", return_value=self._fake_response(f"{suffix}:42")):
+            with self.assertRaises(ValidationError):
+                self.validator.validate(password)
+
+    def test_allows_password_not_in_response(self):
+        with patch("web.validators.urllib.request.urlopen", return_value=self._fake_response("AAAAA:1\nBBBBB:2")):
+            self.validator.validate("some-other-password-456")  # must not raise
+
+    def test_fails_open_on_network_error(self):
+        with patch("web.validators.urllib.request.urlopen", side_effect=OSError("network down")):
+            self.validator.validate("irrelevant-password")  # must not raise
 
 
 class MessageSecurityTests(APITestCase):

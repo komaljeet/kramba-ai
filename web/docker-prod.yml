@@ -105,6 +105,23 @@ services:
               count: 1
               capabilities: [gpu]
 
+  app-beat:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    command: ["beat"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: web.settings.prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Only schedules the daily purge task onto the queue - the task body
+    # runs in app-worker, so no GPU/checkpoints volume needed here.
+
 volumes:
   postgres_data:
   checkpoints:

@@ -1,11 +1,18 @@
 import hashlib
+import logging
+import os
 
 from asgiref.sync import async_to_sync
 from celery import shared_task
 from channels.layers import get_channel_layer
 
+from django.conf import settings
+from django.utils import timezone
+
 from .models import AuditLog, Conversation, Message
-from .security import sanitize_output
+from .security import filter_profanity, sanitize_output
+
+logger = logging.getLogger(__name__)
 
 
 def conversation_group_name(conversation_id) -> str:
@@ -51,8 +58,9 @@ def generate_response(conversation_id: str, user_message_id: str) -> str:
     # the attacker doesn't control model output directly (only the prompt,
     # which is itself guarded by MessageCreateSerializer's injection check).
     # Accepted as a known limitation rather than a gap silently left in.
+    clean_content = filter_profanity(sanitize_output(result["content"]))
     assistant_message = Message.objects.create(
-        conversation=conversation, role=Message.Role.ASSISTANT, content=sanitize_output(result["content"])
+        conversation=conversation, role=Message.Role.ASSISTANT, content=clean_content
     )
 
     async_to_sync(channel_layer.group_send)(
@@ -70,3 +78,30 @@ def generate_response(conversation_id: str, user_message_id: str) -> str:
     )
 
     return str(assistant_message.id)
+
+
+@shared_task
+def purge_expired_conversations() -> int:
+    """Deletes conversations (and their messages, via the FK cascade) whose
+    `updated_at` is older than settings.CONVERSATION_RETENTION_DAYS, plus
+    their on-disk Hamiltonian state files - Issue #30 Phase 8.6, PII
+    auto-purge, run daily via Celery beat (see CELERY_BEAT_SCHEDULE in
+    web/settings/base.py). Returns the number of conversations purged.
+    """
+    from hvn_worker.inference import _state_path
+
+    cutoff = timezone.now() - timezone.timedelta(days=settings.CONVERSATION_RETENTION_DAYS)
+    expired = Conversation.objects.filter(updated_at__lt=cutoff)
+
+    count = 0
+    for conversation in expired:
+        state_path = _state_path(conversation.id)
+        if os.path.exists(state_path):
+            try:
+                os.remove(state_path)
+            except OSError:
+                logger.warning("Failed to remove state file %s during purge", state_path)
+        conversation.delete()
+        count += 1
+
+    return count

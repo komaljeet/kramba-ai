@@ -5,3 +5,4 @@ __pycache__
 web/.env
 web/staticfiles/
 web/db.sqlite3
+web/celerybeat-schedule*

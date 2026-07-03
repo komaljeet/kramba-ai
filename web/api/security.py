@@ -3,8 +3,11 @@ Security helpers for the generation pipeline - Issue #30's "Input/Output
 Security" checklist items that don't belong on a model/serializer/view.
 """
 import bleach
+from better_profanity import profanity
 
 from hvn.chat import CHAT_SPECIAL_TOKEN_STRINGS
+
+profanity.load_censor_words()
 
 # HVN-specific prompt injection: ConversationFormatter delimits turns with
 # literal [SYSTEM]/[USER]/[ASSISTANT] tag text in the raw string fed to the
@@ -30,3 +33,15 @@ def sanitize_output(text: str) -> str:
     source rather than trusting every future client to do it.
     """
     return bleach.clean(text, tags=[], attributes={}, strip=True)
+
+
+def filter_profanity(text: str) -> str:
+    """Best-effort content filter on generated output (Issue #30 Phase 8.3,
+    only needed once public registration is in scope). Word-list based, not
+    a real toxicity classifier - HVN's current output quality is often
+    letter-salad rather than real words (see docs/TRAINING_GUIDE.md's honest
+    assessment), so this rarely triggers today, but it's the requested
+    baseline and is swappable for a real classifier later without changing
+    the call site (api/tasks.py).
+    """
+    return profanity.censor(text)

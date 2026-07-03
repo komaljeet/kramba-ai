@@ -94,6 +94,27 @@ services:
               count: 1
               capabilities: [gpu]
 
+  app-beat:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    command: ["beat"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: web.settings.dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/srv/web
+      - ../hvn:/srv/hvn
+    # Only schedules the daily purge task (api.tasks.purge_expired_conversations)
+    # onto the queue - the actual task body runs in app-worker, so no GPU
+    # needed here.
+
 volumes:
   postgres_data:
   checkpoints:

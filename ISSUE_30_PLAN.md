@@ -2,8 +2,8 @@
 
 > Created: 2026-07-03
 > GitLab: https://gitlab.com/komalbarun/kramba-ai/-/issues/30
-> Status: ✅ All planned phases done (Phase 2's CRUD scope was absorbed into Phase 1). Remaining work is genuinely deferred scope, not left over from this plan — see "Explicit Non-Goals" and "Open Questions" below (2FA, retention-purge job, agentic mode, host-level reverse-proxy config itself).
-> Branch (when work begins): `issue-30-web-interface` (not yet created — work so far is uncommitted in `web/`)
+> Status: ✅ Phases 0-8 done, MR !5 open (`issue-30-web-interface`, closes #30 on merge). Phase 8 (public-launch readiness) was added after the user confirmed intent to open public registration.
+> Branch: `issue-30-web-interface` (pushed, MR !5 open — closes #30 on merge)
 
 This plan exists so work can resume from a fresh chat session with full context.
 See the issue body (`glab issue view 30 --repo komalbarun/kramba-ai`) for the
@@ -361,6 +361,67 @@ still outstanding but low priority — isolation is already covered by
     traceback page — confirms `DEBUG=False` is actually in effect, not just
     configured
   - `docker port kramba-prod-app-web-1` → `127.0.0.1:8000` only
+
+---
+
+## Phase 8: Public-Launch Readiness (added 2026-07-04) — ✅ Done
+
+Triggered by confirming the deployment intent is public registration, not
+just private/team use — at that point several items left unchecked on the
+issue stop being optional. Not a full rewrite of the earlier "not needed"
+judgment call, just the subset that only matters once strangers can sign up:
+content filtering, GDPR export/deletion, and PII auto-purge become real
+requirements; 2FA and breach-checking were already recommended regardless of
+scale (admin-account compromise is a risk either way).
+
+Explicitly still out of scope even for public launch (infra-level, not
+app-level — see the earlier discussion): DDoS protection beyond request-size
+limits (belongs at the reverse-proxy/CDN layer), and DB/Redis
+encryption-at-rest (revisit once there's real user data at meaningful scale).
+
+- **8.1 2FA/TOTP for admin accounts** — `django-otp` (`TOTPDevice`).
+  `POST /api/auth/2fa/setup/` (staff only) creates/returns an unconfirmed
+  device's provisioning URI; `POST /api/auth/2fa/confirm/` activates it after
+  the admin proves they can generate a valid code. Login (`TokenObtainPairView`
+  replaced with a custom view) requires a valid `otp_token` in the same
+  request for any user with a confirmed device — staff accounts in practice,
+  since only admins can create one via the setup endpoint.
+- **8.2 Password breach checking** — HaveIBeenPwned's k-anonymity range API
+  (only a SHA-1 prefix ever leaves the server, not the password) via a custom
+  `AUTH_PASSWORD_VALIDATORS` entry. Stdlib `urllib.request`, not a new HTTP
+  client dependency. Fails open (allows registration, logs a warning) on
+  network error — a third-party API outage must not be able to block
+  registration entirely.
+- **8.3 Content filtering on model output** — `better-profanity` (lightweight,
+  pure Python, no ML dependency) applied alongside `sanitize_output()` in
+  `api/tasks.py`. Given HVN's actual output quality (often letter-salad, not
+  real words — see `docs/TRAINING_GUIDE.md`'s honest-assessment section), a
+  word-list filter will rarely trigger today, but it's the requested baseline
+  and is swappable for a real classifier later without changing the call site.
+- **8.4 GDPR data export** — `GET /api/account/export/` returns the
+  requesting user's account + all conversations + all messages as JSON.
+- **8.5 GDPR data deletion** — `DELETE /api/account/` deletes the account
+  (cascades to conversations/messages via the existing FK). Requires
+  re-entering the password in the request body — irreversible action, and a
+  15-minute-lived access token alone shouldn't be sufcient to trigger it.
+- **8.6 PII auto-purge job** — Celery beat periodic task, static
+  `CELERY_BEAT_SCHEDULE` (no `django-celery-beat` needed for one fixed daily
+  job), deletes conversations whose `updated_at` is older than
+  `CONVERSATION_RETENTION_DAYS`. New `app-beat` service in both compose files
+  (`docker-entrypoint.sh` already supports a `beat` role from Phase 0/7, just
+  unused until now).
+
+**Verified**: `web/tests/test_2fa.py`, `test_account.py`, `test_purge.py`,
+plus additions to `test_security.py` — 22 new tests, 51/51 total passing.
+Notable cases: unconfirmed TOTP device does NOT gate login (only a confirmed
+one does — otherwise calling setup without following through would lock an
+account out); breach validator fails open on a mocked network error;
+purge task removes both the DB row and its on-disk Hamiltonian state file,
+and leaves conversations within the retention window untouched; deleted
+account's still-live access token is rejected on the very next request
+(no separate blacklisting needed — JWT auth re-fetches the user from the DB
+every request). Also manually booted `app-beat` in the dev stack and
+confirmed it picks up the `purge-expired-conversations` schedule cleanly.
 
 ---
 
