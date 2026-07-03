@@ -46,6 +46,22 @@ from .chat import (
     StateCheckpoint,
     generate_chat_training_data,
 )
+from .lora import (
+    LoRAAdapter,
+    LoRALinear,
+    QLoRALinear,
+    QLoRAConfig,
+    apply_lora,
+    apply_qlora,
+    merge_lora_weights,
+    freeze_base_model,
+    get_lora_params,
+    count_lora_params,
+    save_lora_checkpoint,
+    load_lora_checkpoint,
+    generate_instruction_training_data,
+    format_instruction_example,
+)
 
 __all__ = [
     "VortexInjectionLayer",
@@ -91,4 +107,19 @@ __all__ = [
     "ChatSession",
     "StateCheckpoint",
     "generate_chat_training_data",
+    # LoRA / QLoRA (Issue #29)
+    "LoRAAdapter",
+    "LoRALinear",
+    "QLoRALinear",
+    "QLoRAConfig",
+    "apply_lora",
+    "apply_qlora",
+    "merge_lora_weights",
+    "freeze_base_model",
+    "get_lora_params",
+    "count_lora_params",
+    "save_lora_checkpoint",
+    "load_lora_checkpoint",
+    "generate_instruction_training_data",
+    "format_instruction_example",
 ]

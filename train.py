@@ -172,6 +172,7 @@ def train_model(
     compile: bool = False,
     precision: str = "fp32",
     grad_accum_steps: int = 1,
+    use_lora: bool = False,
 ):
     """Train the HVN model with next-token prediction (cross-entropy loss).
 
@@ -184,13 +185,22 @@ def train_model(
     grad_accum_steps : int
         Number of micro-batches to accumulate gradients over before each
         optimizer step.  Effective batch size = batch_size × grad_accum_steps.
+    use_lora : bool
+        If True, only train LoRA parameters (the base model is frozen).
+        The optimizer will only receive LoRA parameters.
     """
 
     if compile:
         print("Compiling model with torch.compile (first epoch will be slower)...")
         model = torch.compile(model, mode="reduce-overhead")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    # --- Optimizer: use only trainable (LoRA) params if use_lora ---
+    if use_lora:
+        trainable_params = [p for p in model.parameters() if p.requires_grad]
+        optimizer = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=0.01)
+        print(f"Optimizer: training only {len(trainable_params)} LoRA parameter tensors")
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     # Cosine LR schedule for smooth convergence
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = nn.CrossEntropyLoss()
@@ -418,6 +428,23 @@ def main():
                         help="Enable tool-calling training data (Issue #24). Adds synthetic tool-call examples to the training data.")
     parser.add_argument("--tool_examples", type=int, default=50,
                         help="Number of tool-calling training examples to generate (only used with --tool_training)")
+    # --- Issue #29: LoRA / QLoRA / Instruction tuning ---
+    parser.add_argument("--lora", action="store_true",
+                        help="Enable LoRA fine-tuning (Issue #29). Freezes base model, trains low-rank adapters.")
+    parser.add_argument("--qlora", action="store_true",
+                        help="Enable QLoRA fine-tuning (Issue #29). Quantizes base model to NF4 + LoRA adapters.")
+    parser.add_argument("--lora_rank", type=int, default=8,
+                        help="LoRA rank (r). Higher = more expressive but more parameters. Default 8.")
+    parser.add_argument("--lora_alpha", type=float, default=16.0,
+                        help="LoRA scaling factor. Effective LR scaling = alpha / rank. Default 16.")
+    parser.add_argument("--lora_dropout", type=float, default=0.0,
+                        help="LoRA dropout rate. Default 0.")
+    parser.add_argument("--instruction", action="store_true",
+                        help="Enable instruction tuning (Issue #29). Adds instruction-formatted training data.")
+    parser.add_argument("--instruction_examples", type=int, default=50,
+                        help="Number of instruction-tuning examples to generate (only used with --instruction).")
+    parser.add_argument("--merge_lora", action="store_true",
+                        help="Merge LoRA weights back into base model after training (for zero-overhead inference).")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -462,6 +489,20 @@ def main():
         print(f"  Added {len(tool_token_ids)} tool-calling tokens to training data")
         print(f"  Total training tokens: {len(token_ids)}")
 
+    # --- Instruction tuning data (Issue #29) ---
+    if args.instruction:
+        from hvn.lora import generate_instruction_training_data, format_instruction_example
+        print(f"\nGenerating {args.instruction_examples} instruction-tuning examples...")
+        instruction_examples = generate_instruction_training_data(num_examples=args.instruction_examples)
+        instruction_token_ids = []
+        for ex in instruction_examples:
+            formatted = format_instruction_example(ex)
+            ex_ids = tokenizer.encode(formatted)
+            instruction_token_ids.extend(ex_ids)
+        token_ids = token_ids + instruction_token_ids
+        print(f"  Added {len(instruction_token_ids)} instruction-tuning tokens to training data")
+        print(f"  Total training tokens: {len(token_ids)}")
+
     dataset = TextDataset(token_ids, seq_len=args.seq_len)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=False)
     print(f"Dataset: {len(dataset)} samples | DataLoader: {len(dataloader)} batches")
@@ -486,16 +527,63 @@ def main():
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {param_count:,}")
 
+    # --- Apply LoRA / QLoRA (Issue #29) ---
+    if args.qlora:
+        from hvn.lora import QLoRAConfig, apply_qlora, count_lora_params
+        qlora_config = QLoRAConfig(
+            lora_rank=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            quant_bits=4,
+        )
+        model = apply_qlora(model, config=qlora_config)
+        param_info = count_lora_params(model)
+        print(f"QLoRA: {param_info['trainable']:,} trainable / {param_info['total']:,} total "
+              f"({param_info['trainable_pct']:.1f}%)")
+    elif args.lora:
+        from hvn.lora import apply_lora, count_lora_params
+        model = apply_lora(model, rank=args.lora_rank, alpha=args.lora_alpha,
+                           dropout=args.lora_dropout)
+        param_info = count_lora_params(model)
+        print(f"LoRA: {param_info['trainable']:,} trainable / {param_info['total']:,} total "
+              f"({param_info['trainable_pct']:.1f}%)")
+
     # --- Train ---
     train_model(
         model, dataloader, args.epochs, args.lr, device, args.save,
         compile=args.compile, precision=args.precision, grad_accum_steps=args.grad_accum,
+        use_lora=(args.lora or args.qlora),
     )
 
     # --- Save tokenizer ---
     tok_path = args.save.replace(".pt", "_tokenizer.json")
     tokenizer.save(tok_path)
     print(f"✓ Tokenizer saved to {tok_path}")
+
+    # --- Merge LoRA weights if requested (Issue #29) ---
+    if (args.lora or args.qlora) and args.merge_lora:
+        print("\nMerging LoRA weights into base model...")
+        model = model.merge_lora()
+        # Re-save the merged model
+        torch.save({
+            "model_state_dict": model.state_dict(),
+            "vocab_size": model.vocab_size,
+            "d_model": model.d_model,
+            "num_layers": model.num_layers,
+            "n_heads": model.n_heads,
+            "n_threads": model.n_threads,
+            "chunk_size": model.blocks[0].chunk_size if hasattr(model.blocks[0], 'chunk_size') else 64,
+        }, args.save)
+        print(f"✓ Merged model saved to {args.save}")
+    elif args.lora or args.qlora:
+        # Save LoRA adapter separately
+        lora_path = args.save.replace(".pt", "_lora.pt")
+        model.save_lora(lora_path, extra_metadata={
+            "lora_rank": args.lora_rank,
+            "lora_alpha": args.lora_alpha,
+            "qlora": args.qlora,
+        })
+        print(f"✓ LoRA adapter saved to {lora_path}")
 
     # --- Vision / multimodal training (Issue #23) ---
     if args.vision:

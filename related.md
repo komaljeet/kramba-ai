@@ -66,8 +66,25 @@
 
 ### #29 — Fine-Tuning: LoRA, QLoRA, and Instruction Tuning
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/29
-- **Status**: Open
+- **Status**: Closed (2026-07-03)
 - **Goal**: Parameter-efficient fine-tuning (LoRA/QLoRA) on 6GB VRAM, instruction tuning for agentic features.
+- **What was done**: Added LoRA, QLoRA, and instruction tuning support:
+  - `LoRAAdapter`: Low-rank adapter ΔW = B@A with zero-init B, scaling = α/r
+  - `LoRALinear`: Frozen nn.Linear + LoRA adapter, computes y = W_frozen(x) + lora(x)
+  - `QLoRALinear`: NF4/INT8 quantized base weight + LoRA adapter (QLoRA recipe)
+  - `apply_lora()`: Injects LoRA into all nn.Linear layers in an HVN model, freezes base
+  - `apply_qlora()`: Quantizes base model to NF4 + applies LoRA adapters
+  - `merge_lora_weights()`: Folds LoRA deltas back into base weights (zero inference overhead)
+  - `freeze_base_model()`, `get_lora_params()`, `count_lora_params()`: utility functions
+  - `save_lora_checkpoint()` / `load_lora_checkpoint()`: save/load only LoRA adapter weights
+  - `generate_instruction_training_data()`: Synthetic instruction examples (Alpaca format)
+  - `format_instruction_example()`: Alpaca prompt formatting (### Instruction / ### Input / ### Response)
+  - `hvn/core/model.py`: `apply_lora()`, `apply_qlora()`, `merge_lora()`, `save_lora()`, `load_lora()` methods
+  - `train.py`: `--lora`, `--qlora`, `--lora_rank`, `--lora_alpha`, `--lora_dropout`, `--instruction`, `--instruction_examples`, `--merge_lora` CLI flags
+  - `eval/instruction.py`: Instruction evaluation harness (PPL + instruction following accuracy)
+  - `demo_lora.py`: 11-test demo verifying all components (all pass on GPU)
+  - O(1) inference preserved: LoRA adds O(r·d) per layer, dominated by O(d²) Hamiltonian
+  - All tests pass on GPU (RTX 4050)
 
 ---
 

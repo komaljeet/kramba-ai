@@ -274,6 +274,43 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
 
 ---
 
+## Phase 8: Fine-Tuning & Instruction Tuning (✅ Complete)
+
+### 8.1 LoRA (Low-Rank Adaptation)
+- [x] Add **LoRA adapters** to all nn.Linear layers in HVN (Issue #29, closed)
+  - `LoRAAdapter`: ΔW = B@A, zero-init B, scaling = α/r
+  - `LoRALinear`: frozen base + LoRA, y = W_frozen(x) + lora(x)
+  - `apply_lora()`: injects LoRA into model, freezes base weights
+  - `merge_lora_weights()`: folds LoRA back into base (zero inference overhead)
+  - File: `hvn/lora.py` (new)
+
+### 8.2 QLoRA (Quantized LoRA)
+- [x] Add **QLoRA** — NF4 quantized base + LoRA adapters (Issue #29, closed)
+  - `QLoRALinear`: stores NF4/INT8 quantized weight, dequantizes on-the-fly
+  - `QLoRAConfig`: configuration container
+  - `apply_qlora()`: quantizes base model + applies LoRA
+  - Enables fine-tuning larger models on 6GB VRAM
+
+### 8.3 Instruction Tuning
+- [x] Add **instruction-formatted training data** (Issue #29, closed)
+  - `generate_instruction_training_data()`: synthetic Alpaca-format examples
+  - `format_instruction_example()`: ### Instruction / ### Input / ### Response format
+  - `train.py`: `--instruction` and `--instruction_examples` CLI flags
+  - `eval/instruction.py`: instruction evaluation harness (PPL + following accuracy)
+
+### 8.4 LoRA Save/Load
+- [x] Add **LoRA checkpoint save/load** (Issue #29, closed)
+  - `save_lora_checkpoint()`: saves only trainable LoRA weights (small checkpoint)
+  - `load_lora_checkpoint()`: loads LoRA weights into model with LoRA applied
+  - `train.py`: `--merge_lora` flag to merge after training
+
+### 8.5 Demo
+- [x] `demo_lora.py`: 11-test demo verifying all components (all pass on GPU)
+  - Tests: LoRAAdapter, LoRALinear, apply_lora, LoRA training, merge, QLoRA,
+    instruction data, instruction tuning, save/load, O(1) inference, VRAM usage
+
+---
+
 ## Current Benchmark Snapshot
 
 ### Speed (d_model=128, 2 layers, GPU)

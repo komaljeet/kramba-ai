@@ -782,3 +782,122 @@ class HamiltonianVortexNetwork(nn.Module):
             next_logits = logits_step[0, -1, :] / temperature
 
         return generated
+
+    # ------------------------------------------------------------------
+    # LoRA / QLoRA support (Issue #29)
+    # ------------------------------------------------------------------
+
+    def apply_lora(
+        self,
+        rank: int = 8,
+        alpha: float = 16.0,
+        dropout: float = 0.0,
+        target_modules: list[str] | None = None,
+    ) -> "HamiltonianVortexNetwork":
+        """Apply LoRA adapters to this model's linear layers.
+
+        Freezes all base model weights and adds trainable low-rank adapters.
+        Only LoRA parameters will have ``requires_grad=True`` after this call.
+
+        Parameters
+        ----------
+        rank : int
+            LoRA rank (r).  Default 8.
+        alpha : float
+            LoRA scaling factor.  Default 16.
+        dropout : float
+            LoRA dropout.  Default 0.
+        target_modules : list[str], optional
+            Module name patterns to target.  If None, targets all linear layers.
+
+        Returns
+        -------
+        self : HamiltonianVortexNetwork
+            The model with LoRA applied (in-place).
+        """
+        from ..lora import apply_lora as _apply_lora
+        return _apply_lora(self, rank=rank, alpha=alpha, dropout=dropout,
+                           target_modules=target_modules)
+
+    def apply_qlora(
+        self,
+        config=None,
+    ) -> "HamiltonianVortexNetwork":
+        """Apply QLoRA: quantize base model to NF4 + add LoRA adapters.
+
+        Parameters
+        ----------
+        config : QLoRAConfig, optional
+            QLoRA configuration.  If None, uses defaults (rank=8, NF4).
+
+        Returns
+        -------
+        self : HamiltonianVortexNetwork
+            The model with QLoRA applied (in-place).
+        """
+        from ..lora import apply_qlora as _apply_qlora
+        return _apply_qlora(self, config=config)
+
+    def merge_lora(self) -> "HamiltonianVortexNetwork":
+        """Merge all LoRA/QLoRA adapters back into the base model weights.
+
+        After merging, the model has zero LoRA overhead and can be used
+        for inference exactly like a standard model.
+
+        Returns
+        -------
+        self : HamiltonianVortexNetwork
+            The model with all adapters merged (in-place).
+        """
+        from ..lora import merge_lora_weights as _merge
+        return _merge(self)
+
+    def count_trainable_params(self) -> dict:
+        """Count trainable vs. total parameters.
+
+        Returns
+        -------
+        dict
+            Dictionary with 'total', 'trainable', 'frozen', 'trainable_pct'.
+        """
+        from ..lora import count_lora_params
+        return count_lora_params(self)
+
+    def get_lora_parameters(self) -> list[torch.nn.Parameter]:
+        """Return only the trainable (LoRA) parameters.
+
+        Use this to configure the optimizer to only update LoRA weights.
+        """
+        from ..lora import get_lora_params
+        return get_lora_params(self)
+
+    def save_lora(self, path: str, extra_metadata: dict | None = None) -> None:
+        """Save only the LoRA adapter weights to a checkpoint file.
+
+        Parameters
+        ----------
+        path : str
+            Save path for the LoRA checkpoint.
+        extra_metadata : dict, optional
+            Additional metadata to save (e.g. model config, training info).
+        """
+        from ..lora import save_lora_checkpoint
+        save_lora_checkpoint(self, path, extra_metadata=extra_metadata)
+
+    def load_lora(self, path: str, strict: bool = False) -> dict:
+        """Load LoRA adapter weights from a checkpoint file.
+
+        Parameters
+        ----------
+        path : str
+            Path to the LoRA checkpoint.
+        strict : bool
+            If True, all LoRA keys must match exactly.
+
+        Returns
+        -------
+        metadata : dict
+            Metadata from the checkpoint (if any).
+        """
+        from ..lora import load_lora_checkpoint
+        return load_lora_checkpoint(self, path, strict=strict)
