@@ -126,6 +126,35 @@ output = q_infer.generate_incremental(
 | INT8 | ~4× (75% saved) | <1% | General inference |
 | NF4 4-bit | ~8× (87% saved) | <10% | Memory-constrained inference |
 
+## Custom Kernels & Parallel Processing (Issue #33)
+
+HVN supports optional CUDA/Triton kernels for faster generation and parallel
+Hamiltonian processing for faster training. All are opt-in via CLI flags,
+backward compatible, and preserve O(1) inference.
+
+```bash
+# Faster generation: CUDA Graph capture (2.8× speedup)
+python generate.py --prompt "The " --cuda_graph
+
+# Faster generation: fused Triton kernel (2.1-7.2× speedup)
+python generate.py --prompt "The " --fused_kernel
+
+# Faster training: parallel scan Hamiltonian update (1.6× speedup, zero logit diff)
+python train.py --epochs 100 --precision bf16 --use_parallel_scan --generate --prompt "The "
+```
+
+| Technique | Flag | Speedup | Applies to |
+|-----------|------|---------|------------|
+| CUDA Graph capture | `--cuda_graph` | 2.82× (78 → 220 tok/s) | Generation |
+| Fused Triton kernel | `--fused_kernel` | 2.14-7.2× (78 → 167-340 tok/s) | Generation |
+| Parallel scan (associative Hamiltonian update) | `--use_parallel_scan` | 1.59× (7.63 → 4.79 ms/fwd) | Training |
+| Multi-chunk barrier sync | (enabled internally via `parallel_forward()`) | 1.14× (7.74 → 6.77 ms/fwd) | Training |
+
+The fused Triton kernel is dtype-agnostic (fp16/fp32/int8/ternary), designed
+to support the extreme weight compression techniques planned in Issue #32.
+
+📖 **Full results**: [docs/BENCHMARK_RESULTS.md](docs/BENCHMARK_RESULTS.md) § 5
+
 ## Quality Improvement Strategies (Issue #21)
 
 HVN's perplexity can be improved by enabling one or more quality strategies.

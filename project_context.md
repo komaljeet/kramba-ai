@@ -94,9 +94,18 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - #19 — Mixed-precision training (fp16/bf16 via torch.cuda.amp + gradient accumulation, --precision/--grad_accum flags in train.py, quality_benchmark.py, eval/run_eval.py, eval/scaling_laws.py; fixed QR dtype issue in batched_memory.py and hamiltonian_memory.py)
 - #20 — Hamiltonian quantization (INT8 + NF4 4-bit, hvn/quantize.py: QuantizedHamiltonian, QuantizedHVNInference, quantize_int8, quantize_nf4, estimate_memory_savings; test_quantize.py: 8 tests all passing; INT8 ~4× compression <1% error, NF4 ~7× compression <10% error)
 - #21 — Multi-strategy quality upgrade (6 strategies: rank-k entanglement, causal re-injection, cross-head mixing, nonlinear update, per-token η, SwiGLU FFN; new CLI flags in train.py, quality_benchmark.py, eval/scaling_laws.py; all strategies preserve O(1) inference)
+- #22 — Multi-Thread Hamiltonian Memory (K independent Hamiltonians per head, hvn/core/batched_memory.py: MultiThreadHamiltonianMemory, MultiThreadVortexInjection; --n_threads flag; PPL improved 8.80 → 8.41 alone, 8.13 with all strategies)
+- #23 — Vision: Image encoding via vortex-projected patch embeddings (hvn/vision.py: PatchEmbedding, ImageEncoder, MultimodalHVN; --vision flag; O(1) inference preserved)
+- #24 — Tool calling: structured output and function invocation (hvn/tools.py: ToolRegistry, ToolCallParser, ToolExecutor; generate_with_tools() with JSON-constrained decoding)
+- #27 — Multimodal fusion: joint image-text training (GatedFusionLayer, ModalityEmbedding, CrossModalRetriever, MultimodalFusionHVN; --image_text flag)
+- #28 — Conversation memory: multi-turn chat with persistent Hamiltonian state (ChatSession, ConversationFormatter, StateCheckpoint; --chat, --save_chat, --load_chat flags)
+- #29 — Fine-tuning: LoRA, QLoRA, and instruction tuning (hvn/lora.py: LoRAAdapter, LoRALinear, QLoRALinear; --lora, --qlora, --instruction flags)
+- #33 — Custom kernels & parallel processing (4/6 fixes: CUDA Graph capture, fused Triton kernel, parallel scan, multi-chunk barrier sync; see "Speed Results" below and `docs/BENCHMARK_RESULTS.md` § 5)
 
 ### Remaining Open Issues
-- (none — all issues closed)
+- #25 — Agentic mode: multi-step reasoning, planning, and self-correction (depends on #24, which is done; #25 itself still open)
+- #26 — Training dashboard: interactive HTML GUI (initial `docs/dashboard.html` built, issue covers refinement)
+- #32 — Extreme weight compression (10B → <2GB, 1T → <200GB; see `EXECUTION_PLAN.md`; depends on #33's dtype-agnostic kernel, which is done)
 
 ### Key Architecture Files (current state on main)
 - `hvn/core/hvn_block.py` — HVNBlock with batched multi-head processing, RMSNorm (in progress on branch)
@@ -118,6 +127,13 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - Transformer: 34.5s total, 3.4s/epoch, PPL 8.46
 - SSM: 114.6s total, 10.6s/epoch, PPL 4.28
 
+### Custom Kernel & Parallel Processing Results (Issue #33, RTX 4050, 2026-07-03)
+- CUDA Graph capture (generation): 78 → 220 tok/s (2.82×), `--cuda_graph`
+- Fused Triton kernel (generation): 78 → 167 tok/s, up to 340 tok/s warmed up (2.14–7.2×), `--fused_kernel`
+- Parallel scan (training forward): 7.63 → 4.79 ms/fwd (1.59×), zero logit diff vs sequential, `--use_parallel_scan`
+- Multi-chunk barrier sync (training forward): 7.74 → 6.77 ms/fwd (1.14×)
+- Deferred: Fix 2 (Flash-style tiling, needed only when d_model > 1024), Fix 5 (fully parallel positional injection, research-level)
+
 ### Scaling Laws Results (Shakespeare, 20 epochs, d_model={64,128,256,512}, RTX 4050)
 - HVN scaling exponent: PPL ∝ params^-0.007 (nearly flat — poor scaling)
 - Transformer scaling exponent: PPL ∝ params^-0.090 (steep improvement)
@@ -127,8 +143,11 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - Key finding: HVN's rank-1 entanglement update lacks expressiveness to benefit from scale
 
 ### How to Continue
-1. All planned issues are complete. Future work may include:
-   - Custom Triton kernels (Phase 5.1, 5.3)
-   - Parallel scan Hamiltonian update (Phase 5.5 Strategy B)
+1. Issue #33 (Custom Kernels & Parallel Processing) closed 2026-07-03 — 4/6 fixes done
+   (CUDA Graph capture, fused Triton kernel, parallel scan, multi-chunk barrier sync).
+   See `EXECUTION_PLAN.md` for the full #32/#33 plan. Remaining/future work:
+   - Issue #32 — Extreme weight compression (10B → <2GB, 1T → <200GB), next per `EXECUTION_PLAN.md`
+   - Fix 2 — Flash-style tiled Hamiltonian computation (Phase 5.3, needed when d_model > 1024)
+   - Fix 5 — Fully parallel with learned positional injection (Phase 5.5 Strategy D, research-level)
    - Real-dataset evaluation at scale (WikiText-103, code corpora)
    - Addressing HVN's poor scaling exponent (PPL ∝ params^-0.007)

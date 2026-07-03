@@ -18,6 +18,36 @@
 - **Goal**: ReAct-style agentic loop with planning, tool chaining, and self-correction.
 - **Depends on**: #24 (Tool Calling)
 
+### #32 — Extreme Weight Compression: 10B → <2GB, 1T → <200GB
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/issues/32
+- **Status**: Open (Phase 1 of 5 done, 2026-07-03)
+- **Goal**: 15 compression techniques across 5 phases (GPTQ-style quantization, Hadamard
+  pre-rotation, ternary weights, tensor-train decomposition, NVMe streaming for 1T+ models).
+- **Depends on**: #33 (dtype-agnostic Triton kernel, closed — ready for #32's new dtype branches)
+- **See**: `EXECUTION_PLAN.md` for the full phased plan.
+- **Phase 1 — Foundational Compression (done 2026-07-03)**:
+  - `hvn/compress.py` (new) — `GPTQQuantizer` (Hessian-based 4-bit quantization
+    with sequential error compensation, Frantar et al. 2022), `HadamardQuantizer`
+    (QuIP#-style random-sign Hadamard pre-rotation for 2-bit quantization),
+    `RateDistortionAllocator` (water-filling per-layer bit allocation from
+    calibration-Hessian sensitivity), plus calibration utilities
+    (`gather_layer_inputs`, `collect_calibration_hessian`) and a model-level
+    convenience (`compress_linear_layers_gptq`)
+  - `hvn/sparse.py` (new) — `BlockSparseLinear` (2:4 structured sparsity,
+    `nn.Linear` drop-in), `apply_2_4_sparsity`, `convert_model_to_block_sparse`
+  - `test_issue32_phase1.py`: 5-test suite verifying all components on GPU —
+    GPTQ reduces Hessian-weighted output distortion 50% vs naive round-to-nearest;
+    Hadamard rotation reduces 2-bit outlier error 50% vs unrotated; rate-distortion
+    allocator correctly ranks layers by sensitivity while holding the bit budget;
+    `BlockSparseLinear` achieves exact 50% 2:4 sparsity
+  - **End-to-end result**: GPTQ 4-bit compression of a trained HVN model's
+    `nn.Linear` layers gives **5.33× weight-storage compression with only
+    +0.02% perplexity degradation** (acceptance criterion: <5%)
+  - All quantization is inference-only (training stays full precision), per
+    the issue's acceptance criteria
+  - **Next**: Phase 2 (ternary BitNet training, low-rank+sparse decomposition,
+    tensor-train Hamiltonian, ALBERT-style weight sharing) — not started
+
 ### #26 — Training Dashboard: Interactive HTML GUI
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/26
 - **Status**: Open
@@ -85,6 +115,33 @@
   - `demo_lora.py`: 11-test demo verifying all components (all pass on GPU)
   - O(1) inference preserved: LoRA adds O(r·d) per layer, dominated by O(d²) Hamiltonian
   - All tests pass on GPU (RTX 4050)
+
+### #33 — Custom Kernels & Parallel Processing
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/issues/33
+- **Status**: Closed (2026-07-03)
+- **Goal**: 106 → 500+ tok/s via custom CUDA/Triton kernels and parallel Hamiltonian processing.
+- **What was done**: 4 of 6 planned fixes implemented and verified on GPU (RTX 4050):
+  - **Fix 6** — CUDA Graph capture: `CUDAGraphRunner` class, `generate_incremental_graph()` in
+    `hvn/core/model.py`. Eliminates ~800 kernel launches → 1 graph replay per token.
+    Result: 78 → 220 tok/s (2.82×). CLI flag: `--cuda_graph` (generate.py)
+  - **Fix 1** — Fused Triton kernel: `hvn/kernels/hamiltonian_kernel.py` (new) —
+    `fused_vortex_step`, `fused_hamiltonian_update`, `FusedHVNStep`. Fuses 25 PyTorch ops
+    into 2 Triton kernel launches per token. Dtype-agnostic (fp16/fp32/int8/ternary) for
+    #32 forward-compatibility. Result: 78 → 167 tok/s (2.14×, up to 340 tok/s / 7.2× warmed
+    up). CLI flag: `--fused_kernel` (generate.py)
+  - **Fix 3** — Parallel scan: `parallel_update()` in `HamiltonianMemoryBlock` and
+    `MultiHeadHamiltonianMemory` — linearized recurrence `H_t = α·H_{t-1} + η·P_t` is
+    associative (O(log S) depth), with a correction pass re-applying the `H·P·H`
+    destructive interference term. Zero logit diff vs sequential. Result: training forward
+    7.63 → 4.79 ms (1.59×). CLI flag: `--use_parallel_scan` (train.py, quality_benchmark.py)
+  - **Fix 4** — Multi-chunk parallel with barrier sync: `parallel_forward()` in `HVNBlock`,
+    `forward_parallel()` in `model.py` — K chunks processed in parallel, ΔH merged at
+    barrier. Result: training forward 7.74 → 6.77 ms (1.14×)
+  - `test_issue33.py`: 5-test demo verifying all components (all pass on GPU)
+  - Backward compatible: `demo.py` and `test_quantize.py` still pass
+  - Deferred to Phase 5: Fix 2 (Flash-style tiling, needed only when d_model > 1024) and
+    Fix 5 (fully parallel positional injection, research-level moonshot)
+  - See `EXECUTION_PLAN.md` and `docs/BENCHMARK_RESULTS.md` § 5 for full details
 
 ---
 
