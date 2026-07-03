@@ -18,10 +18,14 @@ Usage:
 """
 
 import argparse
+import sys
 import time
 import torch
 import torch.nn as nn
 import math
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
