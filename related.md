@@ -47,6 +47,28 @@
     the issue's acceptance criteria
   - **Next**: Phase 2 (ternary BitNet training, low-rank+sparse decomposition,
     tensor-train Hamiltonian, ALBERT-style weight sharing) — not started
+- **Full remaining scope (Phases 2-5) — `edge-devices` branch (done 2026-07-03)**:
+  - Implemented as a separate `hvn/edge/` sub-package (edge-deployment
+    architecture variant) rather than layered onto `hvn/core`, since several
+    techniques (ternary training, weight sharing) change training dynamics
+    and would risk the reference model's benchmarked quality
+  - `hvn/edge/ternary.py` (`TernaryLinear`/`TernaryHamiltonian`, BitNet
+    b1.58 STE), `hvn/edge/decomposition.py` (`LowRankSparseWeights`,
+    `TTMatrix`, `MERAMatrix`, `KroneckerLinear`, `CirculantLinear`,
+    `ToeplitzLinear`), `hvn/edge/shared.py` (`SharedWeightHVN`),
+    `hvn/edge/entropy.py` (`EntropyCoder`, `LDPCCoder`),
+    `hvn/edge/transform.py` (`WaveletCompressor`, `DCTCompressor`),
+    `hvn/edge/holographic.py` (`HolographicWeights`, `SuperpositionWeights`,
+    `PhaseEncodedComplexWeights`), `hvn/edge/streaming.py`
+    (`StreamingHVNInference`, `MMapWeightStore`, `SuccinctWeights`,
+    `TaskSpecificLoader`), `hvn/edge/recovery.py` (`AnnealingPruner`,
+    `TopologicalPruner`, `FreeEnergyQuantizer`, `PopulationCoding`,
+    `recovery_finetune_step`), `hvn/edge/model.py` (`EdgeHVN`)
+  - `test_edge_devices.py`: 12/12 test groups pass on GPU (RTX 4050)
+  - End-to-end: `EdgeHVN` (4 shared layers, 3.62x parameter reduction) +
+    GPTQ 4-bit gives **2.33x additional weight compression at +0.37% PPL**
+  - See `EXECUTION_PLAN.md` for the full technique list and honest scope
+    notes on which techniques are simplified vs. literature-exact
 
 ### #26 — Training Dashboard: Interactive HTML GUI
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/26
