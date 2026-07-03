@@ -496,6 +496,136 @@ class HamiltonianVortexNetwork(nn.Module):
         return generated
 
     # ------------------------------------------------------------------
+    # Conversation state management (Issue #25 — Agentic Mode)
+    # ------------------------------------------------------------------
+
+    def init_conversation_state(
+        self,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> dict:
+        """Initialize conversation state for multi-turn chat.
+
+        Returns a state dict containing:
+          - ``hamiltonian_states``: per-block Hamiltonian states
+          - ``position``: current position index (for RoPE)
+          - ``history_ids``: list of all token IDs processed so far
+
+        This enables multi-turn conversations where the Hamiltonian memory
+        carries context across turns — O(1) per token, no KV cache.
+
+        Parameters
+        ----------
+        device : torch.device
+            Device for the Hamiltonian states.
+        dtype : torch.dtype
+            Data type for the Hamiltonian states.
+
+        Returns
+        -------
+        conv_state : dict
+            Conversation state to pass to ``chat_step``.
+        """
+        if device is None:
+            device = next(self.parameters()).device
+        if dtype is None:
+            dtype = next(self.parameters()).dtype
+
+        return {
+            "hamiltonian_states": self.init_generation_state(1, device=device, dtype=dtype),
+            "position": 0,
+            "history_ids": [],
+        }
+
+    @torch.no_grad()
+    def chat_step(
+        self,
+        input_ids: list[int],
+        conv_state: dict,
+        max_new_tokens: int = 200,
+        temperature: float = 0.8,
+        top_k: int = 10,
+        device: torch.device | None = None,
+    ) -> tuple[list[int], dict]:
+        """Process a conversation turn incrementally.
+
+        Feeds the input tokens through the model using the existing
+        Hamiltonian state (carrying context from previous turns), then
+        generates a response.  The Hamiltonian state is updated in-place.
+
+        This is the multi-turn chat equivalent of ``generate_incremental``
+        — it preserves O(1) per-token inference by reusing the Hamiltonian
+        state cache across conversation turns.
+
+        Parameters
+        ----------
+        input_ids : list[int]
+            Token IDs for this turn's user input.
+        conv_state : dict
+            Conversation state from ``init_conversation_state`` or previous
+            ``chat_step`` call.
+        max_new_tokens : int
+            Maximum new tokens to generate.
+        temperature : float
+            Sampling temperature.
+        top_k : int
+            Top-k sampling (0 = disabled).
+        device : torch.device
+            Device to run on.
+
+        Returns
+        -------
+        response_ids : list[int]
+            Generated response token IDs (new tokens only).
+        conv_state : dict
+            Updated conversation state.
+        """
+        if device is None:
+            device = next(self.parameters()).device
+
+        self.eval()
+        states = conv_state["hamiltonian_states"]
+        pos = conv_state["position"]
+
+        # Feed input tokens through the model (updating Hamiltonian state)
+        for tok_id in input_ids:
+            tok = torch.tensor([[tok_id]], dtype=torch.long, device=device)
+            logits_step, states = self.forward_step(tok, states, position_idx=pos)
+            pos += 1
+
+        # Sample first response token
+        next_logits = logits_step[0, -1, :] / temperature
+        response_ids = []
+
+        # Generate response tokens
+        for step_idx in range(max_new_tokens):
+            # Top-k filtering
+            if top_k > 0:
+                top_k_val = min(top_k, next_logits.size(-1))
+                values, _ = torch.topk(next_logits, top_k_val)
+                next_logits = next_logits.clone()
+                next_logits[next_logits < values[-1]] = float("-inf")
+
+            # Sample
+            probs = torch.softmax(next_logits, dim=-1)
+            next_id = torch.multinomial(probs, num_samples=1).item()
+            response_ids.append(next_id)
+
+            # Forward step
+            tok = torch.tensor([[next_id]], dtype=torch.long, device=device)
+            logits_step, states = self.forward_step(tok, states, position_idx=pos)
+            pos += 1
+            next_logits = logits_step[0, -1, :] / temperature
+
+        # Update conversation state
+        conv_state["hamiltonian_states"] = states
+        conv_state["position"] = pos
+        conv_state["history_ids"].extend(input_ids)
+        conv_state["history_ids"].extend(response_ids)
+
+        return response_ids, conv_state
+
+    # ------------------------------------------------------------------
     # Tool-calling generation (Issue #24)
     # ------------------------------------------------------------------
 

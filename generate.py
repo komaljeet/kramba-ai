@@ -20,6 +20,7 @@ from hvn.tools import (
     ToolRegistry, ToolCallParser, ToolExecutor, ToolCallingSession,
     create_demo_registry, TOOL_TOKENS,
 )
+from hvn.agent import AgentRuntime, ConversationState
 
 
 def load_model(checkpoint_path: str, tokenizer_path: str, device: torch.device):
@@ -75,6 +76,14 @@ def main():
                         help="Enable tool-calling mode (Issue #24). Uses demo tools (calculator, web_search, etc.)")
     parser.add_argument("--max_turns", type=int, default=5,
                         help="Maximum tool-calling turns (only used with --tools)")
+    parser.add_argument("--agent", action="store_true",
+                        help="Enable agentic mode (Issue #25). Multi-step reasoning, planning, self-correction.")
+    parser.add_argument("--max_iterations", type=int, default=10,
+                        help="Maximum ReAct iterations per subtask (only used with --agent)")
+    parser.add_argument("--no_planning", action="store_true",
+                        help="Disable planning phase in agentic mode")
+    parser.add_argument("--no_correction", action="store_true",
+                        help="Disable self-correction in agentic mode")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -121,8 +130,78 @@ def main():
               f"in {elapsed:.2f}s ({total_tokens/elapsed:.1f} tokens/sec)")
         print(f"Method: batched incremental O(1) per-token ({len(prompt_strs)} parallel sequences)")
 
+    # --- Agentic mode (Issue #25) ---
+    if args.agent:
+        print("\n" + "=" * 60)
+        print("AGENTIC MODE (Issue #25)")
+        print("=" * 60)
+
+        # Create demo tool registry and executor
+        registry = create_demo_registry()
+        executor = ToolExecutor(registry)
+
+        print(f"Registered tools: {registry.list_names()}")
+        print(f"Planning: {'enabled' if not args.no_planning else 'disabled'}")
+        print(f"Self-correction: {'enabled' if not args.no_correction else 'disabled'}")
+        print(f"Max iterations: {args.max_iterations}")
+        print(f"Prompt: \"{args.prompt}\"")
+        print("-" * 60)
+
+        # Create agent runtime
+        agent = AgentRuntime(
+            model=model,
+            tokenizer=tokenizer,
+            executor=executor,
+            device=device,
+            temperature=args.temp,
+            top_k=args.top_k,
+            max_tokens_per_turn=args.tokens,
+            enable_planning=not args.no_planning,
+            enable_self_correction=not args.no_correction,
+            verbose=True,
+        )
+
+        result = agent.run(args.prompt, max_iterations=args.max_iterations)
+
+        print("\n" + "=" * 60)
+        print("AGENT RESULT")
+        print("=" * 60)
+
+        if result["plan"]:
+            print(f"\n--- Plan ({len(result['plan'])} subtasks) ---")
+            for i, st in enumerate(result["plan"], 1):
+                print(f"  {i}. {st}")
+
+            if result["plan_progress"]:
+                pp = result["plan_progress"]
+                print(f"\n--- Plan Progress ---")
+                print(f"  Completed: {pp['completed']}/{pp['total']}")
+                print(f"  Failed: {pp['failed']}/{pp['total']}")
+                print(f"  Revisions: {pp['n_revisions']}")
+
+        print(f"\n--- Tool Calls ({len(result['tool_calls'])}) ---")
+        for i, tc in enumerate(result["tool_calls"]):
+            print(f"  Call {i+1}: {tc['name']}({tc['arguments']})")
+
+        print(f"\n--- Tool Results ({len(result['tool_results'])}) ---")
+        for i, tr in enumerate(result["tool_results"]):
+            print(f"  Result {i+1}: {tr[:200]}")
+
+        if result["corrections"]:
+            print(f"\n--- Corrections ({len(result['corrections'])}) ---")
+            for i, corr in enumerate(result["corrections"]):
+                print(f"  Correction {i+1}: {corr.get('type', 'unknown')} - {corr.get('error', corr.get('reason', ''))[:200]}")
+
+        print(f"\n--- Reasoning Steps ({len(result['steps'])}) ---")
+        for i, step in enumerate(result["steps"]):
+            print(f"  Step {i+1} [{step['step_type']}]: {step['content'][:200]}")
+
+        print(f"\n--- Final Answer (iterations: {result['n_iterations']}, success: {result['success']}) ---")
+        print(result["answer"])
+        print("=" * 60)
+
     # --- Tool-calling mode (Issue #24) ---
-    if args.tools:
+    elif args.tools:
         print("\n" + "=" * 60)
         print("TOOL-CALLING MODE (Issue #24)")
         print("=" * 60)
