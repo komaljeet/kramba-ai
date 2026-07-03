@@ -46,9 +46,23 @@
 
 ### #28 — Conversation Memory: Multi-Turn Chat with Persistent State
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/28
-- **Status**: Open
+- **Status**: Closed (2026-07-03)
 - **Goal**: ChatSession with persistent Hamiltonian state, conversation formatting, state checkpointing.
 - **Depends on**: #24 (Tool Calling), #25 (Agentic Mode)
+- **What was done**: Added multi-turn chat with persistent Hamiltonian state:
+  - `ChatSession`: multi-turn chat leveraging `model.chat_step()` — Hamiltonian state
+    persists across turns at O(1) per-token cost (no KV cache)
+  - `ConversationFormatter`: [SYSTEM]/[USER]/[ASSISTANT] special token formatting
+  - `StateCheckpoint`: save/load/fork conversation state (Hamiltonian matrices) to disk
+  - Context window management: truncate old turns when exceeding `max_context_tokens`
+  - Interactive terminal chat mode with `/save`, `/load`, `/reset`, `/history`, `/fork` commands
+  - `generate_chat_training_data()`: synthetic chat-formatted training examples
+  - `hvn/tokenizer.py`: BPE trainer includes chat special tokens
+  - `train.py`: `CharTokenizer` gains `CHAT_SPECIAL_TOKENS` (6 tokens)
+  - `hvn/core/model.py`: `chat()` method (alias for `chat_step`)
+  - `generate.py`: `--chat`, `--system_prompt`, `--save_chat`, `--load_chat` CLI flags
+  - `demo_chat.py`: 10-test demo verifying all components (all pass on GPU)
+  - O(1) inference preserved: Hamiltonian memory is fixed d×d, constant in conversation length
 
 ### #29 — Fine-Tuning: LoRA, QLoRA, and Instruction Tuning
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/29
