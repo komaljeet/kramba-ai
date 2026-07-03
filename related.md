@@ -12,6 +12,42 @@
 
 ## Open Issues
 
+### #31 — OpenAI-Compatible API Server: Serve HVN via REST API for ecosystem integration
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/31
+- **Status**: Closed (2026-07-03)
+- **Goal**: REST API matching the OpenAI schema so HVN works with LangChain, OpenWebUI,
+  LibreChat, the OpenAI SDK, curl, etc. Ollama/llama.cpp ruled out (GGUF is
+  Transformer-only); custom FastAPI server chosen over vLLM/TGI/sglang (also
+  Transformer-only) and LocalAI (unnecessary complexity).
+- **What was done**:
+  - `hvn/server.py` (new) — FastAPI app with `/v1/chat/completions`,
+    `/v1/completions`, `/v1/models`, `/v1/health`
+  - `stream_token_ids()` / `generate_text()` / `stream_text_chunks()` — token-by-token
+    generator built directly on `forward_step` + the Hamiltonian state cache (same
+    algorithm as `model.generate_incremental`, refactored to yield per token for SSE)
+  - Streaming responses use Server-Sent Events (`data: {...}\n\n`, terminated by
+    `data: [DONE]\n\n`), matching the OpenAI streaming chunk format exactly
+  - Chat formatting reuses `hvn.chat.ConversationFormatter` ([SYSTEM]/[USER]/[ASSISTANT])
+  - Tool calling (Issue #24): `tools`/`functions` request field is injected into the
+    prompt as schema text; any `[TOOL_CALL]` blocks the model emits are parsed via
+    `hvn.tools.ToolCallParser` and returned as OpenAI-format `tool_calls` — execution is
+    left to the client, matching the OpenAI API's own contract (the API never executes
+    functions itself)
+  - `--lora` CLI flag applies a LoRA checkpoint (Issue #29) at server startup via
+    `apply_lora()` + `load_lora_checkpoint()`
+  - `requirements.txt`: added `fastapi`, `uvicorn`
+  - `README.md`: new "OpenAI-Compatible API Server" section with usage examples
+  - `test_server.py` (new): boots the server as a subprocess against the bundled
+    checkpoint and exercises all 4 endpoints (health, models, completions, chat
+    completions) plus SSE streaming and tool-call requests — **6/6 checks pass**
+  - Manually verified against the real `openai` Python SDK (non-streaming chat,
+    streaming chat, text completions) and `curl`
+  - O(1) inference preserved — server uses the same Hamiltonian-state-cache generation
+    path as `generate_incremental`, no KV cache introduced
+  - **Scope note**: single model loaded per server process (no dynamic multi-checkpoint
+    hot-swapping) — `/v1/models` lists that one model, which satisfies the OpenAI
+    models-list contract without the added complexity
+
 ### #25 — Agentic Mode: Multi-Step Reasoning, Planning, and Self-Correction
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/25
 - **Status**: Open
