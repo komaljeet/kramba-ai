@@ -49,16 +49,24 @@ class CharTokenizer:
         "[THINK]", "[/THINK]",
     ]
 
+    # Special chat tokens (Issue #28)
+    CHAT_SPECIAL_TOKENS = [
+        "[SYSTEM]", "[/SYSTEM]",
+        "[USER]", "[/USER]",
+        "[ASSISTANT]", "[/ASSISTANT]",
+    ]
+
     def __init__(self, text: str, add_tool_tokens: bool = True):
         chars = sorted(set(text))
         self.char_to_id = {ch: i for i, ch in enumerate(chars)}
         self.id_to_char = {i: ch for i, ch in enumerate(chars)}
         self.vocab_size = len(chars)
 
-        # Add special tool tokens (Issue #24)
+        # Add special tool tokens (Issue #24) + chat tokens (Issue #28)
         self.special_tokens = {}
         if add_tool_tokens:
-            for token in self.TOOL_SPECIAL_TOKENS:
+            all_special = self.TOOL_SPECIAL_TOKENS + self.CHAT_SPECIAL_TOKENS
+            for token in all_special:
                 # Assign a new ID for each special token
                 new_id = self.vocab_size
                 self.char_to_id[token] = new_id

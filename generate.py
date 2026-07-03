@@ -21,6 +21,7 @@ from hvn.tools import (
     create_demo_registry, TOOL_TOKENS,
 )
 from hvn.agent import AgentRuntime, ConversationState
+from hvn.chat import ChatSession, ConversationFormatter
 
 
 def load_model(checkpoint_path: str, tokenizer_path: str, device: torch.device):
@@ -84,6 +85,14 @@ def main():
                         help="Disable planning phase in agentic mode")
     parser.add_argument("--no_correction", action="store_true",
                         help="Disable self-correction in agentic mode")
+    parser.add_argument("--chat", action="store_true",
+                        help="Enable interactive chat mode (Issue #28). Multi-turn conversation with persistent Hamiltonian state.")
+    parser.add_argument("--system_prompt", type=str, default="You are a helpful assistant.",
+                        help="System prompt for chat mode (only used with --chat)")
+    parser.add_argument("--save_chat", type=str, default=None,
+                        help="Save conversation state to this path when exiting chat mode")
+    parser.add_argument("--load_chat", type=str, default=None,
+                        help="Load conversation state from this path to resume chat")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -130,8 +139,65 @@ def main():
               f"in {elapsed:.2f}s ({total_tokens/elapsed:.1f} tokens/sec)")
         print(f"Method: batched incremental O(1) per-token ({len(prompt_strs)} parallel sequences)")
 
+    # --- Chat mode (Issue #28) ---
+    if args.chat:
+        print("\n" + "=" * 60)
+        print("CHAT MODE (Issue #28 — Conversation Memory)")
+        print("=" * 60)
+
+        if args.load_chat:
+            try:
+                session = ChatSession.load(
+                    args.load_chat, model, tokenizer, device=device,
+                    max_new_tokens=args.tokens,
+                    temperature=args.temp,
+                    top_k=args.top_k,
+                )
+                print(f"✓ Loaded conversation from {args.load_chat}")
+                print(f"  Turns restored: {len(session.get_history())}")
+            except Exception as e:
+                print(f"✗ Load failed: {e}, starting fresh session")
+                session = ChatSession(
+                    model=model,
+                    tokenizer=tokenizer,
+                    device=device,
+                    system_prompt=args.system_prompt,
+                    max_new_tokens=args.tokens,
+                    temperature=args.temp,
+                    top_k=args.top_k,
+                )
+        else:
+            session = ChatSession(
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                system_prompt=args.system_prompt,
+                max_new_tokens=args.tokens,
+                temperature=args.temp,
+                top_k=args.top_k,
+            )
+
+        print(f"System: {args.system_prompt}")
+        print(f"Max tokens/turn: {args.tokens}, Temperature: {args.temp}, Top-k: {args.top_k}")
+        print("=" * 60)
+
+        # If a prompt is provided (not default), send it as the first user message
+        if args.prompt and args.prompt != "The ":
+            print(f"You> {args.prompt}")
+            print("Assistant> ", end="", flush=True)
+            response = session.user_turn(args.prompt)
+            print(response)
+
+        # Enter interactive loop
+        session.interactive()
+
+        # Save on exit if requested
+        if args.save_chat:
+            session.save(args.save_chat)
+            print(f"✓ Conversation saved to {args.save_chat}")
+
     # --- Agentic mode (Issue #25) ---
-    if args.agent:
+    elif args.agent:
         print("\n" + "=" * 60)
         print("AGENTIC MODE (Issue #25)")
         print("=" * 60)

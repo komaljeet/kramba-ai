@@ -39,6 +39,9 @@ from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 # Special tool-calling tokens (Issue #24)
 from .tools import SPECIAL_TOKEN_STRINGS as TOOL_SPECIAL_TOKENS
 
+# Special chat tokens (Issue #28)
+from .chat import CHAT_SPECIAL_TOKEN_STRINGS as CHAT_SPECIAL_TOKENS
+
 
 class BPETokenizer:
     """BPE tokenizer wrapper with CharTokenizer-compatible interface.
@@ -79,8 +82,8 @@ class BPETokenizer:
             tokenizer = Tokenizer(BPE(unk_token="<unk>"))
             tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
             tokenizer.decoder = ByteLevelDecoder()
-            # Include tool-calling special tokens (Issue #24)
-            special_tokens = ["<pad>", "<bos>", "<eos>", "<unk>"] + TOOL_SPECIAL_TOKENS
+            # Include tool-calling special tokens (Issue #24) + chat tokens (Issue #28)
+            special_tokens = ["<pad>", "<bos>", "<eos>", "<unk>"] + TOOL_SPECIAL_TOKENS + CHAT_SPECIAL_TOKENS
             trainer = BpeTrainer(
                 vocab_size=vocab_size,
                 special_tokens=special_tokens,
@@ -90,7 +93,7 @@ class BPETokenizer:
         else:
             tokenizer = Tokenizer(BPE(unk_token="<unk>"))
             tokenizer.pre_tokenizer = Whitespace()
-            special_tokens = ["<pad>", "<bos>", "<eos>", "<unk>"] + TOOL_SPECIAL_TOKENS
+            special_tokens = ["<pad>", "<bos>", "<eos>", "<unk>"] + TOOL_SPECIAL_TOKENS + CHAT_SPECIAL_TOKENS
             trainer = BpeTrainer(
                 vocab_size=vocab_size,
                 special_tokens=special_tokens,

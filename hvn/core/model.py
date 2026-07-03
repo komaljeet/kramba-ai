@@ -626,6 +626,56 @@ class HamiltonianVortexNetwork(nn.Module):
         return response_ids, conv_state
 
     # ------------------------------------------------------------------
+    # Chat method (Issue #28 — Conversation Memory)
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def chat(
+        self,
+        input_ids: list[int],
+        conv_state: dict,
+        max_new_tokens: int = 200,
+        temperature: float = 0.8,
+        top_k: int = 10,
+        device: torch.device | None = None,
+    ) -> tuple[list[int], dict]:
+        """Alias for ``chat_step`` — process a conversation turn.
+
+        This is a convenience method that delegates to ``chat_step``.
+        It exists so users can call ``model.chat()`` directly (Issue #28).
+
+        Parameters
+        ----------
+        input_ids : list[int]
+            Token IDs for this turn's input.
+        conv_state : dict
+            Conversation state from ``init_conversation_state``.
+        max_new_tokens : int
+            Maximum new tokens to generate.
+        temperature : float
+            Sampling temperature.
+        top_k : int
+            Top-k sampling (0 = disabled).
+        device : torch.device
+            Device to run on.
+
+        Returns
+        -------
+        response_ids : list[int]
+            Generated response token IDs (new tokens only).
+        conv_state : dict
+            Updated conversation state.
+        """
+        return self.chat_step(
+            input_ids=input_ids,
+            conv_state=conv_state,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            device=device,
+        )
+
+    # ------------------------------------------------------------------
     # Tool-calling generation (Issue #24)
     # ------------------------------------------------------------------
 
