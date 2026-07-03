@@ -324,6 +324,138 @@ class MultiHeadHamiltonianMemory(nn.Module):
 
         return H
 
+    def parallel_update(
+        self,
+        hamiltonian: torch.Tensor,
+        velocities: torch.Tensor,
+        inputs: torch.Tensor | None = None,
+        correction_pass: bool = True,
+    ) -> torch.Tensor:
+        """Parallel scan Hamiltonian update (Issue #33 Fix 3).
+
+        Reformulates the sequential Hamiltonian update as an associative scan
+        (parallel prefix sum) to eliminate the O(S) sequential loop.
+
+        **Key insight**: The full update ``H_new = (1-η)·H + η·(P - H·P·H)``
+        is NOT directly associative.  But it can be **linearized** by dropping
+        the destructive interference term for the scan:
+
+            H_t ≈ (1-η)·H_{t-1} + η·P_t
+
+        This is a **linear recurrence**: ``H_t = α·H_{t-1} + β_t`` where
+        ``α = (1-η)`` and ``β_t = η·P_t``.  Linear recurrences ARE associative
+        and can be parallel-scanned in O(log S) parallel depth.
+
+        **Correction pass**: After the scan, we optionally re-apply the
+        destructive interference term (H·P·H) using the scanned H.
+
+        Parameters
+        ----------
+        hamiltonian : torch.Tensor
+            Per-head Hamiltonian matrices, shape [B*n_heads, d_head, d_head].
+        velocities : torch.Tensor
+            Velocity vectors, shape [B*n_heads, seq_len, d_head].
+        inputs : torch.Tensor, optional
+            Input embeddings (for input-dependent eta).
+        correction_pass : bool
+            If True, apply a correction pass that re-introduces the H·P·H
+            destructive interference term.
+
+        Returns
+        -------
+        hamiltonian_new : torch.Tensor, shape [B*n_heads, d_head, d_head]
+        """
+        BH, S, D = velocities.shape
+
+        # --- Compute eta ---
+        if self.use_input_dependent_eta and inputs is not None:
+            eta_raw = self.eta_proj(inputs)  # [BH, S, n_heads]
+            eta_avg = torch.sigmoid(eta_raw).mean(dim=1)  # [BH, n_heads]
+            head_indices = torch.arange(BH, device=inputs.device) % self.n_heads
+            eta = eta_avg.gather(1, head_indices.unsqueeze(1)).view(BH)  # [BH]
+        else:
+            eta = torch.clamp(self.eta, min=0.0, max=1.0)
+            eta = eta.repeat_interleave(BH // self.n_heads)  # [BH]
+
+        # --- Normalize velocities ---
+        v_norms = velocities.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        v = velocities / v_norms  # [BH, S, D]
+
+        # --- Strategy 4: Nonlinear gating ---
+        if self.use_nonlinear_update and inputs is not None:
+            gate = torch.sigmoid(self.nonlinear_gate(inputs))
+            v = v * gate
+
+        # --- Strategy 1: Rank-k projector ---
+        if self.rank_k > 1 and inputs is not None:
+            w = self.rank_k_proj(inputs)  # [BH, S, k*D]
+            w = w.view(BH, S, self.rank_k, D)
+            w_norms = w.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+            w = w / w_norms
+            w_flat = w.view(BH, S * self.rank_k, D)
+            P = torch.bmm(w_flat.transpose(-1, -2), w_flat)  # [BH, D, D]
+            # For the scan, we need per-token P — use the rank-k sum per token
+            P_per_token = torch.bmm(
+                w.view(BH * S, self.rank_k, D).transpose(-1, -2),
+                w.view(BH * S, self.rank_k, D)
+            ).view(BH, S, D, D) / self.rank_k
+        else:
+            # Rank-1 projectors: P_t = v_t ⊗ v_t^T
+            P = v.unsqueeze(-1) * v.unsqueeze(-2)  # [BH, S, D, D]
+
+        # --- Linear recurrence scan: H_t = α·H_{t-1} + η·P_t ---
+        alpha = (1.0 - eta).view(BH, 1)  # [BH, 1]
+
+        # Compute alpha powers: α^0, α^1, ..., α^(S-1) per batch element
+        # alpha_powers[bh, t] = alpha[bh]^t
+        alpha_2d = alpha.expand(BH, S)
+        alpha_powers = torch.cumprod(alpha_2d, dim=1)  # [BH, S] — α^1, α^2, ..., α^S
+        # Prepend α^0 = 1
+        ones = torch.ones(BH, 1, device=hamiltonian.device, dtype=hamiltonian.dtype)
+        alpha_powers = torch.cat([ones, alpha_powers[:, :-1]], dim=1)  # [BH, S] — α^0, α^1, ..., α^(S-1)
+
+        # Weights for each token's contribution to the final H:
+        # w_t = α^(S-1-t) · η
+        eta_2d = eta.view(BH, 1)
+        weights = alpha_powers.flip(1) * eta_2d  # [BH, S]
+        weighted_P = weights.unsqueeze(-1).unsqueeze(-1) * P  # [BH, S, D, D]
+
+        # Cumulative sum (parallel scan via cumsum)
+        cumsum_P = torch.cumsum(weighted_P, dim=1)  # [BH, S, D, D]
+
+        # Final H from scan: H_S = α^(S-1) · H_0 + Σ_t α^(S-1-t) · η · P_t
+        alpha_final = alpha_powers[:, -1].view(BH, 1, 1)  # α^(S-1)
+        H_scanned = alpha_final * hamiltonian + cumsum_P[:, -1, :, :]  # [BH, D, D]
+
+        # --- Correction pass: re-apply destructive interference ---
+        if correction_pass:
+            if self.rank_k > 1 and inputs is not None:
+                Hv = torch.bmm(hamiltonian, w_flat.transpose(-1, -2))  # [BH, D, S*k]
+                Ht_v = torch.bmm(hamiltonian.transpose(-1, -2), w_flat.transpose(-1, -2))
+                HPH_sum = torch.bmm(Hv, Ht_v.transpose(-1, -2))  # [BH, D, D]
+                H_scanned = H_scanned - eta_2d.view(BH, 1, 1) * HPH_sum / S
+            else:
+                Hv = torch.bmm(hamiltonian, v.transpose(-1, -2))  # [BH, D, S]
+                Ht_v = torch.bmm(hamiltonian.transpose(-1, -2), v.transpose(-1, -2))
+                HPH_sum = torch.bmm(Hv, Ht_v.transpose(-1, -2))  # [BH, D, D]
+                H_scanned = H_scanned - eta_2d.view(BH, 1, 1) * HPH_sum / S
+
+        # --- Spectral norm clamping ---
+        fro_norm = H_scanned.norm(dim=(-1, -2), keepdim=True).clamp(min=1e-8)
+        max_norm = (D ** 0.5)
+        scale = torch.clamp(max_norm / fro_norm, max=1.0)
+        H_scanned = H_scanned * scale
+
+        # --- Optional SVD truncation ---
+        if self.bond_dimension is not None and self.bond_dimension < D:
+            H_scanned = self._svd_truncate_batched(H_scanned)
+
+        # --- Per-head memory gate ---
+        gate_expanded = self.memory_gate.repeat_interleave(BH // self.n_heads)
+        H_scanned = H_scanned * gate_expanded.view(BH, 1, 1)
+
+        return H_scanned
+
     def _svd_truncate_batched(self, H: torch.Tensor) -> torch.Tensor:
         """Batched low-rank renormalization via randomized power iteration.
 

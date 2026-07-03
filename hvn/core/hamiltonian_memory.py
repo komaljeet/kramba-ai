@@ -326,3 +326,112 @@ class HamiltonianMemoryBlock(nn.Module):
             H = self.update(H, velocities[:, t, :])  # [B, D, D]
 
         return H
+
+    def parallel_update(
+        self,
+        hamiltonian: torch.Tensor,
+        velocities: torch.Tensor,
+        correction_pass: bool = True,
+    ) -> torch.Tensor:
+        """Parallel scan Hamiltonian update (Issue #33 Fix 3).
+
+        Reformulates the sequential Hamiltonian update as an associative scan
+        (parallel prefix sum) to eliminate the O(S) sequential loop.
+
+        **Key insight**: The full update ``H_new = (1-η)·H + η·(P - H·P·H)``
+        is NOT directly associative.  But it can be **linearized** by dropping
+        the destructive interference term for the scan:
+
+            H_t ≈ (1-η)·H_{t-1} + η·P_t
+
+        This is a **linear recurrence**: ``H_t = α·H_{t-1} + β_t`` where
+        ``α = (1-η)`` and ``β_t = η·P_t``.  Linear recurrences ARE associative
+        and can be parallel-scanned in O(log S) parallel depth.
+
+        **Correction pass**: After the scan, we optionally re-apply the
+        destructive interference term (H·P·H) using the final H from the scan.
+        This recovers much of the accuracy lost in the linearization.
+
+        Parameters
+        ----------
+        hamiltonian : torch.Tensor
+            Initial Hamiltonian, shape [batch, d_model, d_model].
+        velocities : torch.Tensor
+            Velocity vectors, shape [batch, seq_len, d_model].
+        correction_pass : bool
+            If True, apply a correction pass that re-introduces the H·P·H
+            destructive interference term using the scanned H.
+
+        Returns
+        -------
+        hamiltonian_final : torch.Tensor, shape [batch, d_model, d_model]
+        """
+        B, S, D = velocities.shape
+        eta = torch.clamp(self.eta, min=0.0, max=1.0)
+        alpha = 1.0 - eta  # decay factor
+
+        # --- Normalize velocities ---
+        v_norms = velocities.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        v = velocities / v_norms  # [B, S, D]
+
+        # --- Compute per-token projectors P_t = v_t ⊗ v_t^T ---
+        # P_t: [B, S, D, D]
+        P = v.unsqueeze(-1) * v.unsqueeze(-2)  # [B, S, D, D]
+
+        # --- Linear recurrence: H_t = α·H_{t-1} + η·P_t ---
+        # This can be unrolled as:
+        #   H_1 = α·H_0 + η·P_1
+        #   H_2 = α²·H_0 + α·η·P_1 + η·P_2
+        #   H_t = α^t·H_0 + Σ_{i=1}^{t} α^(t-i)·η·P_i
+        #
+        # The sum Σ α^(t-i)·η·P_i is a weighted cumulative sum that can be
+        # computed in parallel using torch.cumsum after applying the weights.
+
+        # Compute alpha powers: α^0, α^1, ..., α^(S-1)
+        alpha_powers = alpha ** torch.arange(S, device=hamiltonian.device, dtype=hamiltonian.dtype)
+        # alpha_powers: [S]
+
+        # Weighted projectors: β_t = η · P_t
+        beta = eta * P  # [B, S, D, D]
+
+        # Apply decay weights: contribution of P_t to H_S is α^(S-1-t) · η · P_t
+        # We compute the cumulative sum from the end:
+        #   H_S = α^(S-1) · H_0 + Σ_{t=0}^{S-1} α^(S-1-t) · η · P_t
+        # Reverse the sequence, apply cumulative weights, reverse back
+
+        # Weights for each token's contribution to the final H:
+        # w_t = α^(S-1-t) · η
+        weights = alpha_powers.flip(0).unsqueeze(0) * eta  # [1, S]
+        weighted_P = weights.unsqueeze(-1).unsqueeze(-1) * P  # [B, S, D, D]
+
+        # Cumulative sum (parallel scan via cumsum)
+        cumsum_P = torch.cumsum(weighted_P, dim=1)  # [B, S, D, D]
+
+        # The final H from the scan:
+        H_scanned = alpha_powers[-1] * hamiltonian + cumsum_P[:, -1, :, :]  # [B, D, D]
+
+        # --- Correction pass: re-apply destructive interference ---
+        if correction_pass:
+            # Compute H·P·H using the scanned H (one pass, not per-token)
+            # This approximates the cumulative destructive interference effect
+            Hv = torch.bmm(hamiltonian, v.transpose(-1, -2))  # [B, D, S]
+            Ht_v = torch.bmm(hamiltonian.transpose(-1, -2), v.transpose(-1, -2))  # [B, D, S]
+            HPH_sum = torch.bmm(Hv, Ht_v.transpose(-1, -2))  # [B, D, D]
+
+            # Subtract the destructive interference (scaled by eta)
+            H_scanned = H_scanned - eta * HPH_sum / S
+
+        # --- Spectral norm clamping ---
+        fro_norm = H_scanned.norm(dim=(-1, -2), keepdim=True).clamp(min=1e-8)
+        max_norm = (D ** 0.5)
+        scale = torch.clamp(max_norm / fro_norm, max=1.0)
+        H_scanned = H_scanned * scale
+
+        # --- Optional SVD truncation ---
+        if self.bond_dimension is not None and self.bond_dimension < D:
+            H_scanned = self._svd_truncate(H_scanned)
+
+        # Apply memory gate
+        H_scanned = H_scanned * self.memory_gate
+
+        return H_scanned

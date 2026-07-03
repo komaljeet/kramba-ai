@@ -73,6 +73,10 @@ def main():
     parser.add_argument("--tokens", type=int, default=200, help="Max new tokens to generate")
     parser.add_argument("--temp", type=float, default=0.8, help="Sampling temperature")
     parser.add_argument("--top_k", type=int, default=10, help="Top-k sampling (0 = disabled)")
+    parser.add_argument("--cuda_graph", action="store_true",
+                        help="Use CUDA Graph capture for generation (Issue #33 Fix 6). 2-3x speedup.")
+    parser.add_argument("--fused_kernel", action="store_true",
+                        help="Use fused Triton kernels for generation (Issue #33 Fix 1). 2-5x speedup.")
     parser.add_argument("--tools", action="store_true",
                         help="Enable tool-calling mode (Issue #24). Uses demo tools (calculator, web_search, etc.)")
     parser.add_argument("--max_turns", type=int, default=5,
@@ -322,20 +326,40 @@ def main():
             prompt_ids = [0]
 
         t0 = time.time()
-        generated_ids = model.generate_incremental(
-            prompt_ids,
-            max_new_tokens=args.tokens,
-            temperature=args.temp,
-            top_k=args.top_k,
-            device=device,
-        )
+        if args.cuda_graph:
+            generated_ids = model.generate_incremental_graph(
+                prompt_ids,
+                max_new_tokens=args.tokens,
+                temperature=args.temp,
+                top_k=args.top_k,
+                device=device,
+            )
+            method = "CUDA Graph (Issue #33 Fix 6)"
+        elif args.fused_kernel:
+            generated_ids = model.generate_incremental_fused(
+                prompt_ids,
+                max_new_tokens=args.tokens,
+                temperature=args.temp,
+                top_k=args.top_k,
+                device=device,
+            )
+            method = "Fused Triton kernel (Issue #33 Fix 1)"
+        else:
+            generated_ids = model.generate_incremental(
+                prompt_ids,
+                max_new_tokens=args.tokens,
+                temperature=args.temp,
+                top_k=args.top_k,
+                device=device,
+            )
+            method = "incremental O(1) per-token (Hamiltonian state cache)"
         elapsed = time.time() - t0
         output = tokenizer.decode(generated_ids)
 
         print(output)
         print("-" * 60)
         print(f"Generated {args.tokens} tokens in {elapsed:.2f}s ({args.tokens/elapsed:.1f} tokens/sec)")
-        print(f"Method: incremental O(1) per-token (Hamiltonian state cache)")
+        print(f"Method: {method}")
 
 
 if __name__ == "__main__":

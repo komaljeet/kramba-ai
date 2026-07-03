@@ -312,6 +312,14 @@ def main():
         num_layers=args.n_layers, bond_dimension=args.d_model // 4,
     ).to(device)
 
+    # HVN with parallel scan (Issue #33 Fix 3)
+    hvn_parallel = HamiltonianVortexNetwork(
+        vocab_size=args.vocab_size, d_model=args.d_model,
+        num_layers=args.n_layers, bond_dimension=args.d_model // 4,
+        use_parallel_scan=True,
+    ).to(device)
+    hvn_parallel.load_state_dict(hvn.state_dict())
+
     transformer = TransformerLM(
         vocab_size=args.vocab_size, d_model=args.d_model,
         n_layers=args.n_layers, n_heads=4,
@@ -322,7 +330,7 @@ def main():
         n_layers=args.n_layers,
     ).to(device)
 
-    models = {"HVN": hvn, "Transformer": transformer, "SSM": ssm}
+    models = {"HVN": hvn, "HVN+ParScan": hvn_parallel, "Transformer": transformer, "SSM": ssm}
 
     # --- Parameter counts ---
     print("=" * 70)
@@ -336,12 +344,14 @@ def main():
     print("=" * 70)
     print(f"GENERATION SPEED ({args.gen_tokens} tokens, prompt={args.prompt_len})")
     print("=" * 70)
-    print(f"{'Model':15s} | {'tokens/sec':>12s} | {'ms/token':>10s} | {'peak_mem':>10s}")
-    print("-" * 55)
+    print(f"{'Model':20s} | {'tokens/sec':>12s} | {'ms/token':>10s} | {'peak_mem':>10s}")
+    print("-" * 60)
 
     gen_results = {}
     for name, model in models.items():
         if name == "HVN":
+            gen_fn = lambda m, p, **kw: m.generate_incremental(p, **kw)
+        elif name == "HVN+ParScan":
             gen_fn = lambda m, p, **kw: m.generate_incremental(p, **kw)
         else:
             gen_fn = lambda m, p, **kw: m.generate(p, **kw)
@@ -353,7 +363,48 @@ def main():
         )
         gen_results[name] = result
         mem_str = f"{result['peak_memory_mb']:.1f} MB" if result['peak_memory_mb'] > 0 else "N/A"
-        print(f"{name:15s} | {result['tokens_per_sec']:>10.1f}  | {result['ms_per_token']:>8.2f}  | {mem_str:>10s}")
+        print(f"{name:20s} | {result['tokens_per_sec']:>10.1f}  | {result['ms_per_token']:>8.2f}  | {mem_str:>10s}")
+
+    # --- Issue #33 kernel-enabled generation benchmarks ---
+    if device.type == "cuda":
+        print()
+        print("=" * 70)
+        print("ISSUE #33 KERNEL-ENABLED GENERATION (CUDA Graph + Fused Triton)")
+        print("=" * 70)
+        print(f"{'Method':25s} | {'tokens/sec':>12s} | {'ms/token':>10s} | {'speedup':>8s}")
+        print("-" * 65)
+
+        # Baseline
+        baseline_tps = gen_results["HVN"]["tokens_per_sec"]
+        print(f"{'HVN (baseline)':25s} | {baseline_tps:>10.1f}  | {1000/baseline_tps:>8.2f}  | {'1.00x':>8s}")
+
+        # CUDA Graph (Fix 6)
+        try:
+            t0 = time.time()
+            _ = hvn.generate_incremental_graph(
+                list(range(args.prompt_len)), max_new_tokens=args.gen_tokens,
+                temperature=0.8, top_k=10, device=device,
+            )
+            torch.cuda.synchronize(device)
+            graph_time = time.time() - t0
+            graph_tps = args.gen_tokens / graph_time
+            print(f"{'HVN + CUDA Graph':25s} | {graph_tps:>10.1f}  | {1000/graph_tps:>8.2f}  | {graph_tps/baseline_tps:>7.2f}x")
+        except Exception as e:
+            print(f"{'HVN + CUDA Graph':25s} | {'FAILED':>12s} | {'N/A':>10s} | {'N/A':>8s}")
+
+        # Fused Triton (Fix 1)
+        try:
+            t0 = time.time()
+            _ = hvn.generate_incremental_fused(
+                list(range(args.prompt_len)), max_new_tokens=args.gen_tokens,
+                temperature=0.8, top_k=10, device=device,
+            )
+            torch.cuda.synchronize(device)
+            fused_time = time.time() - t0
+            fused_tps = args.gen_tokens / fused_time
+            print(f"{'HVN + Fused Triton':25s} | {fused_tps:>10.1f}  | {1000/fused_tps:>8.2f}  | {fused_tps/baseline_tps:>7.2f}x")
+        except Exception as e:
+            print(f"{'HVN + Fused Triton':25s} | {'FAILED':>12s} | {'N/A':>10s} | {'N/A':>8s}")
     print()
 
     # --- Forward pass scaling benchmark ---

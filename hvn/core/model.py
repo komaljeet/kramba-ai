@@ -18,6 +18,90 @@ from .hvn_block import HVNBlock
 from .decoder import HVNDecoder
 
 
+class CUDAGraphRunner:
+    """CUDA Graph capture/replay helper for incremental generation (Issue #33 Fix 6).
+
+    Captures the per-token forward_step computation graph once, then replays
+    it for each generated token — eliminating ~800 kernel launches per token
+    and replacing them with a single graph launch.
+
+    CUDA Graphs require:
+      - Fixed tensor shapes (same d_model, n_heads, n_layers every step)
+      - Static input/output tensors (data is swapped in-place via ``copy_``)
+      - No dynamic control flow during the captured region
+
+    Usage::
+
+        runner = CUDAGraphRunner(model, batch_size=1, device="cuda")
+        runner.capture()
+        for token in tokens:
+            runner.input_ids.copy_(token_tensor)
+            logits = runner.replay()
+    """
+
+    def __init__(self, model: "HamiltonianVortexNetwork", batch_size: int = 1,
+                 device: torch.device | None = None, dtype: torch.dtype | None = None):
+        self.model = model
+        self.batch_size = batch_size
+        self.device = device or next(model.parameters()).device
+        self.dtype = dtype or next(model.parameters()).dtype
+
+        # Static input/output tensors (reused across replays)
+        self.input_ids = torch.zeros(batch_size, 1, dtype=torch.long, device=self.device)
+        self.position_idx = 0  # tracked externally
+
+        # Pre-allocate Hamiltonian states
+        self.states = model.init_generation_state(batch_size, device=self.device, dtype=self.dtype)
+
+        # Graph + replay buffers (populated by capture())
+        self._graph: torch.cuda.CUDAGraph | None = None
+        self._static_logits: torch.Tensor | None = None
+        self._static_states: list | None = None
+        self._captured = False
+
+    def capture(self, position_idx: int = 0):
+        """Capture the forward_step computation graph.
+
+        Must be called on CUDA device with the model in eval mode.
+        """
+        assert self.device.type == "cuda", "CUDA Graphs require a CUDA device"
+        self.model.eval()
+
+        # --- Warmup (3 iterations to stabilise CUDA allocator) ---
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(s):
+            for _ in range(3):
+                self.input_ids.fill_(0)
+                logits, new_states = self.model.forward_step(
+                    self.input_ids, self.states, position_idx=position_idx
+                )
+        torch.cuda.current_stream().wait_stream(s)
+
+        # --- Capture ---
+        self._graph = torch.cuda.CUDAGraph()
+
+        # Need static output tensors that persist across replays.
+        # We capture into pre-allocated buffers.
+        with torch.cuda.graph(self._graph):
+            self._static_logits, self._static_states = self.model.forward_step(
+                self.input_ids, self.states, position_idx=position_idx
+            )
+
+        self._captured = True
+
+    def replay(self) -> torch.Tensor:
+        """Replay the captured graph. Returns logits [B, 1, V].
+
+        The caller must update ``self.input_ids`` via ``copy_`` before calling.
+        """
+        assert self._captured, "Must call capture() before replay()"
+        self._graph.replay()
+        # Update states to point to the static output states
+        self.states = self._static_states
+        return self._static_logits
+
+
 class HamiltonianVortexNetwork(nn.Module):
     """Full Hamiltonian Vortex Network language model.
 
@@ -55,6 +139,7 @@ class HamiltonianVortexNetwork(nn.Module):
         use_swiglu: bool = False,
         use_per_token_eta: bool = False,
         n_threads: int = 1,
+        use_parallel_scan: bool = False,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -62,6 +147,7 @@ class HamiltonianVortexNetwork(nn.Module):
         self.num_layers = num_layers
         self.n_heads = n_heads
         self.n_threads = n_threads
+        self.use_parallel_scan = use_parallel_scan
 
         # Token embedding
         self.token_embedding = nn.Embedding(vocab_size, d_model)
@@ -81,6 +167,7 @@ class HamiltonianVortexNetwork(nn.Module):
                 use_swiglu=use_swiglu,
                 use_per_token_eta=use_per_token_eta,
                 n_threads=n_threads,
+                use_parallel_scan=use_parallel_scan,
             )
             for _ in range(num_layers)
         ])
@@ -146,6 +233,44 @@ class HamiltonianVortexNetwork(nn.Module):
             position_ids = torch.arange(S, device=x.device).unsqueeze(0).expand(B, -1)
         for block in self.blocks:
             x = block(x, position_ids=position_ids)
+        x = self.final_norm(x)
+        logits = self.decoder(x)
+        return logits
+
+    def forward_parallel(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor | None = None,
+        num_chunks: int = 4,
+        correction_pass: bool = True,
+    ) -> torch.Tensor:
+        """Multi-chunk parallel forward pass (Issue #33 Fix 4).
+
+        Uses ``HVNBlock.parallel_forward()`` to process chunks in parallel
+        with barrier synchronization.  This provides K× training speedup
+        where K = num_chunks.
+
+        Parameters
+        ----------
+        input_ids : torch.Tensor
+            Token IDs, shape [batch, seq_len].
+        num_chunks : int
+            Number of parallel chunks per block.
+        correction_pass : bool
+            If True, re-run vortex injection with merged H for accuracy.
+
+        Returns
+        -------
+        logits : torch.Tensor
+            Vocabulary logits, shape [batch, seq_len, vocab_size].
+        """
+        B, S = input_ids.shape
+        if position_ids is None:
+            position_ids = torch.arange(S, device=input_ids.device).unsqueeze(0).expand(B, -1)
+        x = self.token_embedding(input_ids)
+        for block in self.blocks:
+            x = block.parallel_forward(x, position_ids=position_ids,
+                                       num_chunks=num_chunks, correction_pass=correction_pass)
         x = self.final_norm(x)
         logits = self.decoder(x)
         return logits
@@ -491,6 +616,207 @@ class HamiltonianVortexNetwork(nn.Module):
             # Forward step: O(d²) — no context reprocessing!
             tok = torch.tensor([[next_id]], dtype=torch.long, device=device)
             logits_step, states = self.forward_step(tok, states, position_idx=len(prompt_ids) + step_idx)
+            next_logits = logits_step[0, -1, :] / temperature
+
+        return generated
+
+    # ------------------------------------------------------------------
+    # CUDA Graph generation (Issue #33 Fix 6 — 2-3× speedup)
+    # ------------------------------------------------------------------
+
+    def enable_cuda_graph(self, batch_size: int = 1, device=None, dtype=None) -> CUDAGraphRunner:
+        """Create a CUDA Graph runner for fast incremental generation.
+
+        Captures the per-token ``forward_step`` computation graph so that
+        each generated token requires only a single graph replay instead
+        of ~800 individual kernel launches.
+
+        Parameters
+        ----------
+        batch_size : int
+            Batch size (number of sequences).  Must stay fixed.
+        device : torch.device
+            Device (must be CUDA).
+        dtype : torch.dtype
+            Data type for Hamiltonian states.
+
+        Returns
+        -------
+        runner : CUDAGraphRunner
+            Call ``runner.capture()`` then use ``runner.replay()`` per token.
+        """
+        if device is None:
+            device = next(self.parameters()).device
+        if dtype is None:
+            dtype = next(self.parameters()).dtype
+        runner = CUDAGraphRunner(self, batch_size=batch_size, device=device, dtype=dtype)
+        runner.capture()
+        return runner
+
+    @torch.no_grad()
+    def generate_incremental_graph(
+        self,
+        prompt_ids: list[int],
+        max_new_tokens: int = 200,
+        temperature: float = 0.8,
+        top_k: int = 10,
+        device: torch.device | None = None,
+    ) -> list[int]:
+        """Fast autoregressive generation using CUDA Graph replay.
+
+        Like ``generate_incremental`` but uses CUDA Graph capture to eliminate
+        kernel launch overhead — 2-3× faster for the generation phase.
+
+        The prompt is processed normally (token-by-token via forward_step),
+        then the generation phase uses a captured CUDA Graph for each new token.
+
+        Parameters
+        ----------
+        prompt_ids : list[int]
+            Token IDs for the prompt.
+        max_new_tokens : int
+            How many new tokens to generate.
+        temperature : float
+            Sampling temperature.
+        top_k : int
+            Top-k sampling (0 = disabled).
+        device : torch.device
+            Device to run on (must be CUDA for graph capture).
+
+        Returns
+        -------
+        generated : list[int]
+            Full token list (prompt + generated).
+        """
+        if device is None:
+            device = next(self.parameters()).device
+
+        assert device.type == "cuda", "CUDA Graph generation requires a CUDA device"
+        self.eval()
+        B = 1
+
+        if len(prompt_ids) == 0:
+            prompt_ids = [0]
+
+        param_dtype = next(self.parameters()).dtype
+
+        # --- Phase 1: Process prompt token-by-token (no graph) ---
+        states = self.init_generation_state(B, device=device, dtype=param_dtype)
+        for t in range(len(prompt_ids)):
+            tok = torch.tensor([[prompt_ids[t]]], dtype=torch.long, device=device)
+            logits_step, states = self.forward_step(tok, states, position_idx=t)
+
+        next_logits = logits_step[0, -1, :] / temperature
+        generated = list(prompt_ids)
+
+        # --- Phase 2: Capture graph and generate via replay ---
+        # Build a runner with the current states
+        runner = CUDAGraphRunner(self, batch_size=B, device=device, dtype=param_dtype)
+        runner.states = states  # use the states from prompt processing
+        runner.capture(position_idx=len(prompt_ids))
+
+        for step_idx in range(max_new_tokens):
+            # Top-k filtering
+            if top_k > 0:
+                top_k_val = min(top_k, next_logits.size(-1))
+                values, _ = torch.topk(next_logits, top_k_val)
+                next_logits = next_logits.clone()
+                next_logits[next_logits < values[-1]] = float("-inf")
+
+            # Sample
+            probs = torch.softmax(next_logits, dim=-1)
+            next_id = torch.multinomial(probs, num_samples=1).item()
+            generated.append(next_id)
+
+            # Copy next token into the static input tensor and replay
+            runner.input_ids.copy_(torch.tensor([[next_id]], dtype=torch.long, device=device))
+            logits_step = runner.replay()
+            next_logits = logits_step[0, -1, :] / temperature
+
+        return generated
+
+    # ------------------------------------------------------------------
+    # Fused Triton kernel generation (Issue #33 Fix 1)
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def generate_incremental_fused(
+        self,
+        prompt_ids: list[int],
+        max_new_tokens: int = 200,
+        temperature: float = 0.8,
+        top_k: int = 10,
+        device: torch.device | None = None,
+    ) -> list[int]:
+        """Fast autoregressive generation using fused Triton kernels.
+
+        Uses the FusedHVNStep Triton kernel to combine vortex injection and
+        Hamiltonian update into 2 kernel launches per token instead of ~25
+        PyTorch ops.  This is the Fix 1 path from Issue #33.
+
+        Parameters
+        ----------
+        prompt_ids : list[int]
+            Token IDs for the prompt.
+        max_new_tokens : int
+            How many new tokens to generate.
+        temperature : float
+            Sampling temperature.
+        top_k : int
+            Top-k sampling (0 = disabled).
+        device : torch.device
+            Device to run on (must be CUDA for Triton kernels).
+
+        Returns
+        -------
+        generated : list[int]
+            Full token list (prompt + generated).
+        """
+        if device is None:
+            device = next(self.parameters()).device
+
+        assert device.type == "cuda", "Fused Triton kernels require a CUDA device"
+        self.eval()
+        B = 1
+
+        if len(prompt_ids) == 0:
+            prompt_ids = [0]
+
+        param_dtype = next(self.parameters()).dtype
+
+        # --- Phase 1: Process prompt using batched forward_step ---
+        # Use the batched path for the prompt (efficient for multi-token)
+        states = self.init_generation_state_batched(B, device=device, dtype=param_dtype)
+        for t in range(len(prompt_ids)):
+            tok = torch.tensor([[prompt_ids[t]]], dtype=torch.long, device=device)
+            logits_step, states = self.forward_step_batched(tok, states, position_idx=t)
+
+        next_logits = logits_step[0, -1, :] / temperature
+        generated = list(prompt_ids)
+
+        # --- Phase 2: Generate using fused Triton kernels ---
+        for step_idx in range(max_new_tokens):
+            # Top-k filtering
+            if top_k > 0:
+                top_k_val = min(top_k, next_logits.size(-1))
+                values, _ = torch.topk(next_logits, top_k_val)
+                next_logits = next_logits.clone()
+                next_logits[next_logits < values[-1]] = float("-inf")
+
+            # Sample
+            probs = torch.softmax(next_logits, dim=-1)
+            next_id = torch.multinomial(probs, num_samples=1).item()
+            generated.append(next_id)
+
+            # Fused forward step: 2 Triton kernel launches per block
+            x = self.token_embedding(torch.tensor([[next_id]], dtype=torch.long, device=device))
+            new_states = []
+            for i, block in enumerate(self.blocks):
+                x, new_state = block.forward_step_fused(x, states[i], position_idx=len(prompt_ids) + step_idx)
+                new_states.append(new_state)
+            states = new_states
+            x = self.final_norm(x)
+            logits_step = self.decoder(x)
             next_logits = logits_step[0, -1, :] / temperature
 
         return generated

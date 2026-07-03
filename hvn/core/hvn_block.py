@@ -167,6 +167,7 @@ class HVNBlock(nn.Module):
         use_swiglu: bool = False,
         use_per_token_eta: bool = False,
         n_threads: int = 1,
+        use_parallel_scan: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -181,6 +182,7 @@ class HVNBlock(nn.Module):
         self.use_per_token_eta = use_per_token_eta
         self.n_threads = n_threads
         self.n_units = n_heads * n_threads  # total (head, thread) pairs
+        self.use_parallel_scan = use_parallel_scan  # Issue #33 Fix 3
 
         # Batched multi-head vortex injection
         # Use MultiThreadVortexInjection when n_threads > 1, else MultiHeadVortexInjection
@@ -397,20 +399,30 @@ class HVNBlock(nn.Module):
             x_batched, H, position_ids=position_ids
         )  # deflected: [BH, S, d_head], velocity: [BU, S, d_head]
 
-        # Phase 2: Hamiltonian update over chunks (sequential, but cheap)
-        chunk_size = self._resolve_chunk_size(S)
-        for chunk_start in range(0, S, chunk_size):
-            chunk_end = min(chunk_start + chunk_size, S)
-            velocity_chunk = velocity_all[:, chunk_start:chunk_end, :]
-            input_chunk = x_threaded[:, chunk_start:chunk_end, :]
-            if self.use_per_token_eta:
-                H = self.memory.update_batch_per_token(
-                    H, velocity_chunk, inputs=input_chunk
-                )
-            else:
-                H = self.memory.update_batch(
-                    H, velocity_chunk, inputs=input_chunk
-                )
+        # Phase 2: Hamiltonian update
+        if self.use_parallel_scan and hasattr(self.memory, 'parallel_update'):
+            # Issue #33 Fix 3: Parallel scan (associative Hamiltonian update)
+            # Replaces the sequential chunk loop with a single parallel scan.
+            # O(log S) parallel depth instead of O(S/chunk_size) sequential steps.
+            H = self.memory.parallel_update(
+                H, velocity_all, inputs=x_threaded,
+                correction_pass=True,
+            )
+        else:
+            # Original chunked sequential update
+            chunk_size = self._resolve_chunk_size(S)
+            for chunk_start in range(0, S, chunk_size):
+                chunk_end = min(chunk_start + chunk_size, S)
+                velocity_chunk = velocity_all[:, chunk_start:chunk_end, :]
+                input_chunk = x_threaded[:, chunk_start:chunk_end, :]
+                if self.use_per_token_eta:
+                    H = self.memory.update_batch_per_token(
+                        H, velocity_chunk, inputs=input_chunk
+                    )
+                else:
+                    H = self.memory.update_batch(
+                        H, velocity_chunk, inputs=input_chunk
+                    )
 
         # Strategy 3: Cross-head mixing after H updates
         if self.cross_head_mixer is not None:
@@ -424,6 +436,158 @@ class HVNBlock(nn.Module):
             H = H_heads.reshape(BU, self.d_head, self.d_head)
 
         return deflected_all  # [BH, S, d_head]
+
+    def parallel_forward(
+        self,
+        x: torch.Tensor,
+        position_ids: torch.Tensor | None = None,
+        num_chunks: int = 4,
+        correction_pass: bool = True,
+    ) -> torch.Tensor:
+        """Multi-chunk parallel forward with barrier sync (Issue #33 Fix 4).
+
+        Splits the sequence into K independent chunks, processes all K in
+        parallel, then merges their Hamiltonian updates at a barrier.
+
+        Phase 1 (parallel): Each chunk computes velocities using H_0 (initial state)
+        Phase 2 (parallel): Each chunk computes its ΔH_k (Hamiltonian delta)
+        Phase 3 (barrier):  Merge: H_final = H_0 + Σ_k ΔH_k
+        Phase 4 (optional): Re-run chunks with updated H_final for better accuracy
+
+        This provides K× speedup where K = num_chunks, at the cost of chunks
+        not seeing each other's updates during Phase 1.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input embeddings, shape [batch, seq_len, d_model].
+        position_ids : torch.Tensor, optional
+            Position IDs, shape [batch, seq_len].
+        num_chunks : int
+            Number of parallel chunks (K).
+        correction_pass : bool
+            If True, re-run vortex injection with the merged H for accuracy.
+
+        Returns
+        -------
+        output : torch.Tensor
+            Output representations, shape [batch, seq_len, d_model].
+        """
+        B, S, D = x.shape
+
+        if position_ids is None:
+            position_ids = torch.arange(S, device=x.device).unsqueeze(0).expand(B, -1)
+
+        x_norm = self.norm(x)
+        x_proj = self.input_proj(x_norm)  # [B, S, D]
+        x_heads = x_proj.view(B, S, self.n_heads, self.d_head)
+        x_batched = x_heads.permute(0, 2, 1, 3).contiguous().view(B * self.n_heads, S, self.d_head)
+
+        pos_batched = position_ids.unsqueeze(1).expand(B, self.n_heads, S).contiguous()
+        pos_batched = pos_batched.view(B * self.n_heads, S)
+
+        BH = B * self.n_heads
+        BU = B * self.n_units
+        H_0 = self.memory.init_hamiltonian(B, device=x_batched.device, dtype=x_batched.dtype)
+
+        # Expand inputs for threads
+        if self.n_threads > 1:
+            x_expanded = x_batched.view(B, self.n_heads, S, self.d_head)
+            x_expanded = x_expanded.unsqueeze(2).expand(B, self.n_heads, self.n_threads, S, self.d_head)
+            x_threaded = x_expanded.reshape(BU, S, self.d_head)
+        else:
+            x_threaded = x_batched
+
+        # --- Phase 1: Compute velocities for ALL chunks using H_0 ---
+        # All tokens see the same initial H — fully parallel
+        deflected_all, velocity_all = self.vortex(
+            x_batched, H_0, position_ids=pos_batched
+        )
+
+        # --- Phase 2: Compute ΔH_k for each chunk in parallel ---
+        chunk_size = max(1, S // num_chunks)
+        chunks = []
+        for chunk_start in range(0, S, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, S)
+            velocity_chunk = velocity_all[:, chunk_start:chunk_end, :]
+            input_chunk = x_threaded[:, chunk_start:chunk_end, :]
+            chunks.append((velocity_chunk, input_chunk))
+
+        # Process all chunks simultaneously by stacking them into a batch
+        # Each chunk uses H_0 as base → ΔH_k = update(H_0, chunk_k) - H_0
+        # We batch all chunks together for a single update_batch call
+        if len(chunks) > 1:
+            # Stack all velocity chunks: [BU * K, chunk_len, D]
+            # But chunks may have different lengths — pad to max
+            max_chunk_len = max(vc.shape[1] for vc, _ in chunks)
+            K = len(chunks)
+            velocity_stacked = torch.zeros(BU, K, max_chunk_len, self.d_head,
+                                          device=x_batched.device, dtype=x_batched.dtype)
+            input_stacked = torch.zeros(BU, K, max_chunk_len, self.d_head,
+                                        device=x_batched.device, dtype=x_batched.dtype)
+            for k, (vc, ic) in enumerate(chunks):
+                cl = vc.shape[1]
+                velocity_stacked[:, k, :cl, :] = vc
+                input_stacked[:, k, :cl, :] = ic
+
+            # Reshape to [BU * K, max_chunk_len, D] for batched update
+            velocity_flat = velocity_stacked.view(BU * K, max_chunk_len, self.d_head)
+            input_flat = input_stacked.view(BU * K, max_chunk_len, self.d_head)
+
+            # Expand H_0 for K chunks: [BU * K, D, D]
+            H_0_expanded = H_0.unsqueeze(1).expand(BU, K, self.d_head, self.d_head)
+            H_0_expanded = H_0_expanded.reshape(BU * K, self.d_head, self.d_head)
+
+            # Single batched update for all K chunks
+            if self.use_per_token_eta:
+                H_chunks = self.memory.update_batch_per_token(
+                    H_0_expanded, velocity_flat, inputs=input_flat
+                )
+            else:
+                H_chunks = self.memory.update_batch(
+                    H_0_expanded, velocity_flat, inputs=input_flat
+                )
+
+            # Compute ΔH_k = H_chunk_k - H_0 and sum
+            H_chunks = H_chunks.view(BU, K, self.d_head, self.d_head)
+            delta_H_sum = (H_chunks - H_0.unsqueeze(1)).sum(dim=1)  # [BU, D, D]
+        else:
+            # Single chunk — just do a regular update
+            vc, ic = chunks[0]
+            if self.use_per_token_eta:
+                H_final = self.memory.update_batch_per_token(H_0, vc, inputs=ic)
+            else:
+                H_final = self.memory.update_batch(H_0, vc, inputs=ic)
+            delta_H_sum = H_final - H_0
+
+        # --- Phase 3: Barrier merge ---
+        H_final = H_0 + delta_H_sum
+
+        # Spectral norm clamping on the merged H
+        fro_norm = H_final.norm(dim=(-1, -2), keepdim=True).clamp(min=1e-8)
+        max_norm = (self.d_head ** 0.5)
+        scale = torch.clamp(max_norm / fro_norm, max=1.0)
+        H_final = H_final * scale
+
+        # --- Phase 4: Optional correction pass ---
+        if correction_pass:
+            # Re-run vortex injection with the merged H_final
+            deflected_all, _ = self.vortex(
+                x_batched, H_final, position_ids=pos_batched
+            )
+
+        # Reshape back to [B, S, D]
+        deflected = deflected_all.view(B, self.n_heads, S, self.d_head).permute(0, 2, 1, 3).contiguous()
+        deflected = deflected.view(B, S, self.n_heads * self.d_head)
+        deflected = self.output_proj(deflected)
+
+        # FFN branch
+        ffn_out = self.ffn(x_norm)
+
+        # Parallel residual
+        x = x + self.dropout(deflected) + ffn_out
+
+        return x
 
     def _resolve_chunk_size(self, seq_len: int) -> int:
         """Choose a chunk size that balances parallelism and accuracy."""
@@ -560,6 +724,71 @@ class HVNBlock(nn.Module):
         x_t = x_t + self.dropout(deflected) + self.ffn(x_norm)
 
         return x_t, new_state
+
+    def forward_step_fused(
+        self,
+        x_t: torch.Tensor,
+        H: torch.Tensor,
+        position_idx: int | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Fused single-token forward step using Triton kernels (Issue #33 Fix 1).
+
+        Uses the FusedHVNStep Triton kernel to combine vortex injection and
+        Hamiltonian update into 2 kernel launches instead of ~25 PyTorch ops.
+
+        This is the fast path for incremental generation — same math as
+        ``forward_step_batched`` but with fused Triton kernels.
+
+        Parameters
+        ----------
+        x_t : torch.Tensor
+            Single token embedding, shape [B, 1, d_model].
+        H : torch.Tensor
+            Batched Hamiltonian state, shape [B*n_heads, d_head, d_head].
+        position_idx : int, optional
+            Position index for RoPE.
+
+        Returns
+        -------
+        output : torch.Tensor
+            Output for this token, shape [B, 1, d_model].
+        H_new : torch.Tensor
+            Updated Hamiltonian state, same shape as input H.
+        """
+        from ..kernels import FusedHVNStep
+
+        B, _, D = x_t.shape
+
+        if position_idx is None:
+            position_ids = torch.arange(1, device=x_t.device).unsqueeze(0).expand(B, -1)
+        else:
+            position_ids = torch.full((B, 1), int(position_idx), device=x_t.device, dtype=torch.long)
+
+        # Single shared norm for parallel residual (matches forward())
+        x_norm = self.norm(x_t)  # [B, 1, D]
+        x_proj = self.input_proj(x_norm)  # [B, 1, D]
+        x_heads = x_proj.view(B, 1, self.n_heads, self.d_head)  # [B, 1, n_heads, d_head]
+
+        # Reshape to [B*n_heads, 1, d_head] for batched processing
+        x_batched = x_heads.permute(0, 2, 1, 3).contiguous().view(B * self.n_heads, 1, self.d_head)
+
+        # Use fused Triton kernel
+        if not hasattr(self, '_fused_step'):
+            self._fused_step = FusedHVNStep(self)
+
+        deflected_batched, velocity_batched, H_new = self._fused_step.step(
+            x_batched, H, position_idx=position_idx or 0
+        )
+
+        # --- Reshape back to [B, 1, D] ---
+        deflected = deflected_batched.view(B, self.n_heads, 1, self.d_head).permute(0, 2, 1, 3).contiguous()
+        deflected = deflected.view(B, 1, self.n_heads * self.d_head)  # [B, 1, D]
+        deflected = self.output_proj(deflected)
+
+        # Parallel residual: x = x + vortex(norm(x)) + ffn(norm(x))
+        x_t = x_t + self.dropout(deflected) + self.ffn(x_norm)
+
+        return x_t, H_new
 
     def forward_step_batched(
         self,
