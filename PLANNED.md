@@ -88,14 +88,17 @@ These changes are needed to close the perplexity gap with Transformer (PPL 1.90)
 
 ---
 
-## Phase 5: Speed & Kernel Optimizations (⬜ Planned)
+## Phase 5: Speed & Kernel Optimizations (🔄 In Progress — 4/6 fixes done, Issue #33 closed)
 
 ### 5.1 Custom Triton Kernel for Hamiltonian Update
-- [ ] Write a **fused Triton kernel** that combines vortex injection + Hamiltonian update
-  - Currently: Python `for t in range(S)` loop with separate PyTorch ops
-  - Proposed: single fused kernel that processes all tokens in a chunk
-  - File: `hvn/kernels/hamiltonian_kernel.py` (new)
-  - Expected impact: 5-10× faster forward pass (eliminate Python overhead)
+- [x] Write a **fused Triton kernel** that combines vortex injection + Hamiltonian update (Issue #33 Fix 1, closed)
+  - File: `hvn/kernels/hamiltonian_kernel.py` — `fused_vortex_step`, `fused_hamiltonian_update`, `FusedHVNStep`
+  - Fuses vorticity projection + RoPE + Biot-Savart + gate + output + LayerNorm into 1 kernel
+  - Fuses velocity normalization + projector + H·P·H + entanglement + Frobenius clamp into 1 kernel
+  - 25 PyTorch ops → 2 Triton kernel launches per token
+  - Dtype-agnostic (fp16/fp32/int8/ternary) for Issue #32 forward-compatibility
+  - CLI flag: `--fused_kernel` (generate.py)
+  - Result: 78 → 167 tok/s (2.14×), up to 340 tok/s with warmup (7.2×)
 
 ### 5.2 torch.compile Integration
 - [x] Add `torch.compile(model, mode="reduce-overhead")` support (Issue #10, closed)
@@ -118,6 +121,13 @@ These changes are needed to close the perplexity gap with Transformer (PPL 1.90)
   - File: `hvn/core/model.py`
   - Expected impact: better GPU utilization for multi-sequence generation
 
+### 5.6 CUDA Graph Capture for Incremental Generation
+- [x] Use `torch.cuda.CUDAGraph` to capture the per-token computation graph and replay it (Issue #33 Fix 6, closed)
+  - File: `hvn/core/model.py` — `CUDAGraphRunner` class, `generate_incremental_graph()` method
+  - Eliminates ~800 kernel launches → 1 graph replay per token
+  - CLI flag: `--cuda_graph` (generate.py)
+  - Result: 78 → 220 tok/s (2.82×)
+
 ### 5.5 Parallel Hamiltonian Processing (⬜ Major — Eliminate Sequential Bottleneck)
 
 This is the **single biggest speed bottleneck** in HVN. Currently the forward pass
@@ -131,7 +141,12 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
   - File: `hvn/core/hvn_block.py` — default chunk_size=64, adaptive fallback
 
 #### Strategy B: Parallel Scan with Associative Hamiltonian Update (Medium — algorithmic change)
-- [ ] Reformulate the Hamiltonian update as an **associative scan** (parallel prefix sum)
+- [x] Reformulate the Hamiltonian update as an **associative scan** (parallel prefix sum) (Issue #33 Fix 3, closed)
+  - Implemented in `parallel_update()`, `hvn/core/hamiltonian_memory.py` and `hvn/core/hvn_block.py`
+  - Correction pass re-applies the `H·P·H` destructive interference term after the linear scan
+  - **Zero logit diff vs sequential** (exact match) — the linearization risk below did not materialize
+  - CLI flag: `--use_parallel_scan` (train.py, quality_benchmark.py)
+  - Result: training forward 7.63 → 4.79 ms (1.59×)
   - Currently: `H_t = f(H_{t-1}, v_t)` — sequential, each step depends on previous
   - Key insight: if the update rule is **associative** (like `(a ⊗ b) ⊗ c = a ⊗ (b ⊗ c)`),
     then it can be parallelized using a prefix-scan algorithm (Blelloch scan)
@@ -148,7 +163,9 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
   - Risk: the linearized approximation drops the destructive interference term
 
 #### Strategy C: Multi-Chunk Parallel with Barrier Sync (Medium — architectural change)
-- [ ] Process **multiple chunks in parallel** with periodic barrier synchronization
+- [x] Process **multiple chunks in parallel** with periodic barrier synchronization (Issue #33 Fix 4, closed)
+  - Implemented in `parallel_forward()` (`hvn/core/hvn_block.py`) and `forward_parallel()` (`hvn/core/model.py`)
+  - Result: training forward 7.74 → 6.77 ms (1.14×)
   - Currently: chunk_0 → update H → chunk_1 → update H → chunk_2 → ... (fully sequential)
   - Proposed: split sequence into K independent chunks, process all K in parallel,
     then merge their Hamiltonian updates at a barrier:
@@ -185,18 +202,18 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
 
 #### Parallel Processing Comparison Table
 
-| Strategy | Parallelism | Speedup | Quality Risk | Difficulty |
-|----------|------------|---------|-------------|------------|
-| A: Larger chunks | Within chunk | 2-4× | Low (stale H) | Easy |
-| B: Associative scan | O(log S) depth | 10-50× | Medium (linearized) | Medium |
-| C: Multi-chunk barrier | Across chunks | K× | Medium (no cross-chunk) | Medium |
-| D: Fully parallel | All tokens | 100×+ | High (loses causality) | Hard |
+| Strategy | Parallelism | Speedup (expected) | Speedup (measured) | Quality Risk | Difficulty | Status |
+|----------|------------|---------|---------|-------------|------------|--------|
+| A: Larger chunks | Within chunk | 2-4× | — | Low (stale H) | Easy | ✅ Done (#4/#7) |
+| B: Associative scan | O(log S) depth | 10-50× | 1.59× (training fwd) | Medium (linearized) | Medium | ✅ Done (#33 Fix 3) — zero logit diff |
+| C: Multi-chunk barrier | Across chunks | K× | 1.14× (training fwd) | Medium (no cross-chunk) | Medium | ✅ Done (#33 Fix 4) |
+| D: Fully parallel | All tokens | 100×+ | — | High (loses causality) | Hard | ⬜ Deferred (research) |
 
 #### Recommended Implementation Order
-1. **Strategy A** first (1 hour — just change chunk_size, benchmark the tradeoff)
-2. **Strategy B** second (1-2 days — implement parallel scan, biggest bang-for-buck)
-3. **Strategy C** third (2-3 days — multi-chunk with barrier merge)
-4. **Strategy D** last (research — needs experimentation to validate quality)
+1. ~~**Strategy A** first (1 hour — just change chunk_size, benchmark the tradeoff)~~ ✅ Done (#4/#7)
+2. ~~**Strategy B** second (1-2 days — implement parallel scan, biggest bang-for-buck)~~ ✅ Done (#33 Fix 3)
+3. ~~**Strategy C** third (2-3 days — multi-chunk with barrier merge)~~ ✅ Done (#33 Fix 4)
+4. **Strategy D** last (research — needs experimentation to validate quality) — still deferred
 
 ---
 
@@ -339,6 +356,17 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
 | + Parallel heads | 33.9s | 22.5x | 2.3x slower |
 | + torch.compile | 45.2s (10ep) | 14x per-batch | 1.3x slower |
 
+### Custom Kernels & Parallel Processing Results (Issue #33, closed 2026-07-03)
+
+| Fix | Technique | Before | After | Speedup |
+|-----|-----------|--------|-------|---------|
+| Fix 6 | CUDA Graph capture (generation) | 78 tok/s | 220 tok/s | 2.82× |
+| Fix 1 | Fused Triton kernel (generation) | 78 tok/s | 167 tok/s (340 warmed) | 2.14× (up to 7.2×) |
+| Fix 3 | Parallel scan (training forward) | 7.63 ms/fwd | 4.79 ms/fwd | 1.59× |
+| Fix 4 | Multi-chunk barrier sync (training forward) | 7.74 ms/fwd | 6.77 ms/fwd | 1.14× |
+
+See `docs/BENCHMARK_RESULTS.md` § 5 for full details. Fixes 2 and 5 deferred (Phase 5 of `EXECUTION_PLAN.md`).
+
 ### Priority Order for Next Changes
 
 1. ~~Larger chunk size~~ ✅ Done (Issue #4/#7)
@@ -362,6 +390,9 @@ There are **4 strategies** to parallelize, ordered by implementation difficulty:
     - Strategy 4: Nonlinear Hamiltonian update (`--nonlinear_update`)
     - Strategy 5: Per-token entanglement rate (`--per_token_eta`)
     - Strategy 6: SwiGLU FFN (`--swiglu`)
-16. **Triton kernel** ⬜ Planned (no issue yet)
-17. **Associative parallel scan** ⬜ Planned (no issue yet)
-18. **Multi-chunk barrier sync** ⬜ Planned (no issue yet)
+16. ~~**Triton kernel**~~ ✅ Done (Issue #33, Fix 1) — 78 → 167 tok/s (up to 340 warmed)
+17. ~~**Associative parallel scan**~~ ✅ Done (Issue #33, Fix 3) — training fwd 1.59×, zero logit diff
+18. ~~**Multi-chunk barrier sync**~~ ✅ Done (Issue #33, Fix 4) — training fwd 1.14×
+19. ~~**CUDA Graph capture**~~ ✅ Done (Issue #33, Fix 6) — 78 → 220 tok/s
+20. **Flash-style tiled Hamiltonian computation** ⬜ Deferred (Issue #33, Fix 2 — needed only when d_model > 1024)
+21. **Extreme weight compression** ⬜ Open (Issue #32 — 10B → <2GB, 1T → <200GB)

@@ -1,7 +1,7 @@
 # Execution Plan: Issues #32 & #33
 
 > Created: 2026-07-03
-> Status: Planning — not yet started
+> Status: **#33 closed (2026-07-03)** — Phases 1-3 done (4/6 fixes). Phase 4 (#32) not yet started. Phase 5 (Fixes 2 & 5) deferred.
 > Decision: **#33 first**, then #32
 
 ---
@@ -45,45 +45,51 @@ This way kernel infrastructure is built once; #32 just adds new dtype branches.
 
 ## Execution Order
 
-### Phase 1: Quick Win (~1 day)
+### Phase 1: Quick Win (~1 day) — ✅ Done (2026-07-03)
 **#33 Fix 6: CUDA Graph Capture for Incremental Generation**
 - **What**: Use `torch.cuda.CUDAGraph` to capture the per-token computation graph, replay it for each generated token
 - **Why first**: Zero weight dependency, easy to implement, 2-3× immediate speedup
-- **Files**: `hvn/core/model.py` — add `enable_cuda_graph()` method
+- **Files**: `hvn/core/model.py` — `CUDAGraphRunner` class, `enable_cuda_graph()` and `generate_incremental_graph()` methods
 - **Expected**: 106 → 250-300 tok/s
+- **Result**: 78 → 220 tok/s (**2.82×**) — CLI flag `--cuda_graph` (generate.py)
 - **Difficulty**: Easy-Medium
-- **Verify**: Run `benchmark.py`, confirm speedup, confirm output identical to non-graph version
+- **Verified**: `benchmark.py` updated with kernel-enabled vs baseline comparison; output identical to non-graph version
 
-### Phase 2: Biggest Impact (~2-3 days)
+### Phase 2: Biggest Impact (~2-3 days) — ✅ Done (2026-07-03)
 **#33 Fix 1: Fused Triton Kernel for Vortex Injection + Hamiltonian Update**
 - **What**: Single Triton kernel that fuses the entire per-token HVN computation (vorticity → velocity → deflection → projector → Hamiltonian update → SVD)
 - **Why second**: Eliminates ~800 kernel launches → 1 per token, 5-10× speedup
-- **Files**: `hvn/kernels/hamiltonian_kernel.py` (new), `hvn/core/hvn_block.py` (integration)
+- **Files**: `hvn/kernels/hamiltonian_kernel.py` (new: `fused_vortex_step`, `fused_hamiltonian_update`, `FusedHVNStep`), `hvn/core/hvn_block.py` (`forward_step_fused()`), `hvn/core/model.py` (`generate_incremental_fused()`)
 - **Expected**: 250-300 → 500-1000 tok/s
+- **Result**: 78 → 167 tok/s (**2.14×**), up to 340 tok/s with warmup (**7.2×**) — CLI flag `--fused_kernel` (generate.py)
 - **Difficulty**: Medium-Hard
-- **Critical**: Design kernel to accept `dtype` parameter (fp16/ternary/int8) for #32 forward-compatibility
+- **Critical**: Kernel accepts dtype parameter (fp16/fp32/int8/ternary) for #32 forward-compatibility — done
 - **Dependencies**: `triton-windows` (already installed)
-- **Verify**: Correctness test against reference PyTorch implementation, benchmark speedup
+- **Verified**: `test_issue33.py` correctness tests pass on GPU; within 0.06 numerical tolerance vs reference PyTorch implementation
 
 **#33 Fix 3: Parallel Scan with Associative Hamiltonian Update**
 - **What**: Reformulate Hamiltonian update as associative scan (parallel prefix sum) to eliminate sequential loop for training
 - **Why third**: 10-50× training speedup, algorithmic change (no weight dependency)
-- **Files**: `hvn/core/hamiltonian_memory.py` — `parallel_update()`, `hvn/core/hvn_block.py` — replace loop with scan
+- **Files**: `hvn/core/hamiltonian_memory.py` and `hvn/core/batched_memory.py` — `parallel_update()`, `hvn/core/hvn_block.py` — `use_parallel_scan` flag
 - **Expected**: Training 4.0 → 0.5-1.0 s/epoch
+- **Result**: Forward pass 7.63 → 4.79 ms/forward (**1.59×**) — CLI flag `--use_parallel_scan` (train.py, quality_benchmark.py)
 - **Difficulty**: Medium
-- **Risk**: Linearized approximation drops H·P·H term — validate PPL doesn't regress >2%
-- **Verify**: PPL within 2% of sequential version, training speed benchmark
+- **Risk**: Linearized approximation drops H·P·H term — **did not materialize**: correction pass re-applies it, zero logit diff vs sequential (exact match)
+- **Verified**: PPL/logits exact match vs sequential version, training speed benchmark
 
-### Phase 3: Complementary (~1-2 days)
+### Phase 3: Complementary (~1-2 days) — ✅ Done (2026-07-03)
 **#33 Fix 4: Multi-Chunk Parallel with Barrier Sync**
 - **What**: Split sequence into K chunks, process in parallel, merge Hamiltonian deltas at barrier
 - **Why fourth**: Complements parallel scan, additional K× training speedup
-- **Files**: `hvn/core/hvn_block.py` — `parallel_forward()` method
+- **Files**: `hvn/core/hvn_block.py` — `parallel_forward()` method, `hvn/core/model.py` — `forward_parallel()`
 - **Expected**: Additional 2-4× training speedup
+- **Result**: Forward pass 7.74 → 6.77 ms/forward (**1.14×**)
 - **Difficulty**: Medium
-- **Verify**: PPL within 2% of sequential, training speed benchmark
+- **Verified**: PPL within tolerance of sequential, training speed benchmark
 
-### Phase 4: Start #32 (~weeks)
+**Verification summary**: `test_issue33.py` — 5/5 tests pass on GPU (RTX 4050). Backward compatible — `demo.py` and `test_quantize.py` still pass.
+
+### Phase 4: Start #32 (~weeks) — ⬜ Next up (not yet started)
 **#32 Phase 1: Foundational Compression (10B → 5 GB → 2.5 GB)**
 - **4.1** GPTQ-style Hessian-based 4-bit quantization with error compensation
   - File: `hvn/compress.py` — `GPTQQuantizer`
@@ -112,7 +118,7 @@ This way kernel infrastructure is built once; #32 just adds new dtype branches.
 - **Verify**: 10B model at 2 GB, PPL within 5% of fp16
 
 ### Phase 5: Scale (ongoing)
-**#33 Fix 2: Flash-Style Tiled Hamiltonian Computation**
+**#33 Fix 2: Flash-Style Tiled Hamiltonian Computation** — ⬜ Deferred
 - **When**: Needed when d_model > 1024 (large models)
 - **What**: Tile the Hamiltonian matmul to fit in SRAM, minimize HBM traffic
 - **Files**: `hvn/kernels/flash_hamiltonian.py` (new)
@@ -129,7 +135,7 @@ This way kernel infrastructure is built once; #32 just adds new dtype branches.
 - **4.5** On-demand weight loading (task-specific subsets)
 - **Verify**: 1T model at <200 GB storage, <16 GB VRAM with streaming
 
-**#33 Fix 5: Fully Parallel with Learned Positional Injection**
+**#33 Fix 5: Fully Parallel with Learned Positional Injection** — ⬜ Deferred
 - **When**: Long-term research moonshot
 - **What**: Eliminate sequential dependency via learned positional Hamiltonian
 - **Files**: `hvn/core/vortex_injection.py`, `hvn/core/hvn_block.py`
@@ -140,15 +146,17 @@ This way kernel infrastructure is built once; #32 just adds new dtype branches.
 
 ## Expected Outcome Timeline
 
-| Phase | Generation Speed | Training Speed | 10B Memory | 1T Memory |
-|-------|------------------|----------------|------------|-----------|
-| **Current** | 106 tok/s | 4.0 s/epoch | 20 GB (fp16) | 2 TB |
-| **After Phase 1** | 250-300 tok/s | 4.0 s/epoch | 20 GB | 2 TB |
-| **After Phase 2** | 500-1000 tok/s | 0.5-1.0 s/epoch | 20 GB | 2 TB |
-| **After Phase 3** | 500-1000 tok/s | 0.3-0.5 s/epoch | 20 GB | 2 TB |
-| **After Phase 4.1** | 500-1000 tok/s | 0.3-0.5 s/epoch | 2.5 GB | 250 GB |
-| **After Phase 4.2** | 500-1000 tok/s | 0.3-0.5 s/epoch | **2.0 GB** | **200 GB** |
-| **After Phase 5** | 1000+ tok/s | 0.1-0.2 s/epoch | 2.0 GB | **<200 GB storage, <16 GB VRAM** |
+| Phase | Generation Speed (Expected) | Generation Speed (Measured) | Training Speed | 10B Memory | 1T Memory |
+|-------|------------------|------------------|----------------|------------|-----------|
+| **Current (pre-#33)** | 106 tok/s | 78 tok/s* | 4.0 s/epoch | 20 GB (fp16) | 2 TB |
+| **After Phase 1** (Fix 6) | 250-300 tok/s | **220 tok/s (2.82×)** | 4.0 s/epoch | 20 GB | 2 TB |
+| **After Phase 2** (Fix 1, 3) | 500-1000 tok/s | **167 tok/s (340 warmed, 2.14-7.2×)** | **4.79 ms/fwd (1.59×)** | 20 GB | 2 TB |
+| **After Phase 3** (Fix 4) | 500-1000 tok/s | (gen unaffected) | **6.77 ms/fwd (1.14×, stacks with Fix 3)** | 20 GB | 2 TB |
+| **After Phase 4.1** | 500-1000 tok/s | not started | 0.3-0.5 s/epoch | 2.5 GB | 250 GB |
+| **After Phase 4.2** | 500-1000 tok/s | not started | 0.3-0.5 s/epoch | **2.0 GB** | **200 GB** |
+| **After Phase 5** | 1000+ tok/s | deferred | 0.1-0.2 s/epoch | 2.0 GB | **<200 GB storage, <16 GB VRAM** |
+
+*Baseline measured at 78 tok/s on the benchmark harness used for Issue #33 (differs from the earlier 106.5 tok/s figure in `docs/BENCHMARK_RESULTS.md`, which used a different prompt/token-count configuration).
 
 ---
 
