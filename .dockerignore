@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.pytest_cache/
+*.egg-info/
+
+# Trained checkpoints - these live on a volume / are rsynced in, never baked
+# into the image (see ISSUE_30_PLAN.md Phase 6 / prior session discussion).
+*.pt
+*.pth
+*_checkpoint*
+
+# web/ app's own dev artifacts
+web/.env
+web/staticfiles/
+web/__pycache__/
+web/**/__pycache__/
+
+# docs/scratch, not needed at build time
+docs/
+*.md

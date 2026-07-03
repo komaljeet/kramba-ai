@@ -1,0 +1,45 @@
+# Single image for the whole Django/Celery/Channels app. The same image runs
+# as different roles (web / worker / beat) via docker-entrypoint.sh + $ROLE -
+# see ISSUE_30_PLAN.md "Session Decisions" #3. Postgres/Redis are NOT in this
+# image; they're separate official images in docker-compose.yml / docker-prod.yml.
+#
+# Build context is the REPO ROOT (not web/), so this image can also vendor the
+# existing hvn/ package that the worker role needs to load the model:
+#   docker build -f web/Dockerfile -t kramba-web .
+FROM pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DJANGO_SETTINGS_MODULE=web.settings.prod \
+    PYTHONPATH=/srv
+
+WORKDIR /srv
+
+# hvn/ dependencies (torch is already in the base image; root requirements.txt
+# pins triton-windows which is Windows-only, so this container uses a
+# Linux-appropriate subset instead - see hvn-requirements-docker.txt)
+COPY web/hvn-requirements-docker.txt /srv/hvn-requirements.txt
+RUN pip install --no-cache-dir -r /srv/hvn-requirements.txt
+
+# Django/Celery/Channels dependencies
+COPY web/requirements.txt /srv/web-requirements.txt
+RUN pip install --no-cache-dir -r /srv/web-requirements.txt
+
+# Existing HVN architecture package (hvn/core, hvn/chat.py, hvn/server.py, ...).
+# train.py is vendored too because CharTokenizer lives there (not under hvn/) -
+# hvn_worker/worker.py reuses it rather than duplicating a tokenizer class.
+COPY hvn/ /srv/hvn/
+COPY train.py /srv/train.py
+
+# Django project
+COPY web/ /srv/web/
+WORKDIR /srv/web
+
+RUN useradd --create-home --uid 10001 appuser \
+    && chown -R appuser:appuser /srv \
+    && mkdir -p /data/checkpoints \
+    && chown -R appuser:appuser /data/checkpoints
+USER appuser
+
+ENTRYPOINT ["/srv/web/docker-entrypoint.sh"]
+CMD ["web"]

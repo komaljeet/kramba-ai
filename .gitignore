@@ -1,2 +1,7 @@
 __pycache__
 .venv
+
+# Django web/ app (Issue #30) - real secrets/generated files, never commit
+web/.env
+web/staticfiles/
+web/db.sqlite3

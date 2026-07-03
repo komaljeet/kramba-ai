@@ -1,0 +1,110 @@
+# Production. Every published port is bound to 127.0.0.1 - see
+# ISSUE_30_PLAN.md "Session Decisions" #4/#5. Nothing in this file is meant
+# to be reachable from the internet directly; a host-level reverse proxy
+# (existing nginx/Caddy, or a cloud load balancer - config not part of this
+# repo, it's environment-specific) terminates TLS and forwards to
+# 127.0.0.1:8000. Deploying this without such a proxy in front means the
+# app is simply unreachable from outside the host - that's intentional.
+#
+# `app-web`/`app-worker` are the SAME image (see web/Dockerfile), started
+# with different commands ("web" vs "worker") - see Session Decision #3.
+#
+# Run from the repo root: `docker compose -f web/docker-prod.yml up -d`
+# (context: .. resolves relative to this file's directory either way). Named
+# distinctly from the dev stack (`name:` below) so the two never collide if
+# both happen to be brought up on the same host.
+#
+name: kramba-prod
+
+# Note on `build:` below: for a real deployment, build this image in CI, push
+# it to a registry, and replace `build:` with `image: registry/kramba-web:tag`
+# here instead - building on the production host itself works (and is what
+# this plan verifies), but isn't the recommended long-term pattern (no
+# reproducible artifact, ships full source + Dockerfile to prod, burns
+# prod CPU/memory on the build).
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app-web:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    command: ["web"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: web.settings.prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Populated out of band (rsync/scp onto the host path backing this
+      # volume, or directly onto the volume) - never bind-mounted from a
+      # repo-relative path the way dev's docker-compose.yml does, since
+      # there's no assumption of a repo checkout sitting next to this file
+      # in a real deployment.
+      - checkpoints:/data/checkpoints
+    # No dev bind mounts (.:/srv/web etc.) - the image is self-contained,
+    # built once, deployed as-is. Code changes mean a new image, not a
+    # live-edited volume.
+
+  app-worker:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    command: ["worker"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: web.settings.prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - checkpoints:/data/checkpoints
+    # GPU access for the HVN model - requires the NVIDIA Container Toolkit
+    # on the Docker host. Remove this block to fall back to CPU inference.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  postgres_data:
+  checkpoints:

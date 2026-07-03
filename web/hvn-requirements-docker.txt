@@ -1,0 +1,8 @@
+# Linux-container subset of the root requirements.txt for the hvn/ package.
+# torch is already present in the pytorch/pytorch base image. triton-windows
+# (root requirements.txt) is Windows-only and cannot install here; regular
+# `triton` ships with the base image's torch install already for
+# torch.compile/--fused_kernel use on Linux. fastapi/uvicorn (Issue #31's
+# standalone server) aren't needed by this web app's worker role.
+numpy>=1.24.0
+tokenizers>=0.15.0
