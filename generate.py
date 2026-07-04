@@ -34,6 +34,8 @@ def load_model(checkpoint_path: str, tokenizer_path: str, device: torch.device):
     num_layers = ckpt["num_layers"]
     n_heads = ckpt.get("n_heads", 4)  # backward compat
     chunk_size = ckpt.get("chunk_size", 64)  # backward compat
+    use_deltanet = ckpt.get("use_deltanet", False)  # Issue #34
+    deltanet_conv_kernel = ckpt.get("deltanet_conv_kernel", 4)
 
     # Rebuild model with saved hyperparameters
     model = HamiltonianVortexNetwork(
@@ -42,6 +44,8 @@ def load_model(checkpoint_path: str, tokenizer_path: str, device: torch.device):
         num_layers=num_layers,
         n_heads=n_heads,
         chunk_size=chunk_size,
+        use_deltanet=use_deltanet,
+        deltanet_conv_kernel=deltanet_conv_kernel,
     )
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)

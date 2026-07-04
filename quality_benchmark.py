@@ -206,6 +206,9 @@ def main():
     # --- Issue #22: Multi-thread Hamiltonian memory ---
     parser.add_argument("--n_threads", type=int, default=1, help="Number of independent Hamiltonian threads per head (Issue #22). 1=single Hamiltonian (backward-compatible), 4 recommended for better quality.")
     parser.add_argument("--use_parallel_scan", action="store_true", help="Use parallel scan for Hamiltonian update (Issue #33 Fix 3). Eliminates sequential loop for training.")
+    # --- Issue #34: Gated-DeltaNet readout/update dynamics ---
+    parser.add_argument("--use_deltanet", action="store_true", help="Use Gated-DeltaNet blocks (Issue #34): fixes readout/update dynamics to close the PPL gap. Preserves O(1) inference.")
+    parser.add_argument("--deltanet_conv_kernel", type=int, default=4, help="Kernel size of the short causal depthwise conv in DeltaNet blocks (Issue #34).")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -256,6 +259,8 @@ def main():
             use_per_token_eta=args.per_token_eta,
             n_threads=args.n_threads,
             use_parallel_scan=args.use_parallel_scan,
+            use_deltanet=args.use_deltanet,
+            deltanet_conv_kernel=args.deltanet_conv_kernel,
         ),
         "Transformer": TransformerLM(
             vocab_size=vocab_size, d_model=args.d_model,
