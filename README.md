@@ -224,9 +224,12 @@ python train.py --epochs 20 --use_deltanet --generate --prompt "The "
 **Result** (tiny-Shakespeare, d_model=128, 2 layers, controlled A/B, same seed/data):
 eval PPL **8.81 → 3.42 — 61% better** (target ≥30%), reaching PPL <4 by epoch 3.
 **O(1) inference is fully preserved** (fixed `d_head×d_head` state, no KV cache — flat
-2.6 ms/token from N=256→4096). Verified by `test_issue34.py` (5/5 on GPU). The delta-rule
-training forward is a sequential scan (~9× slower/epoch — *training only*); the
-chunked-parallel delta rule is a drop-in follow-up speedup.
+2.6 ms/token from N=256→4096). Verified by `test_issue34.py` (5/5 on GPU). Training uses
+the **chunked-parallel delta rule** (Yang et al. 2024) — the recurrence is reassociated so
+only `S/C` steps are sequential (intra-chunk closed-form triangular solve + batched
+matmuls), numerically identical to the token-by-token scan (max|diff| 4.8e-7). This keeps
+training throughput on par with the baseline HVN path (~3.7 vs ~3.1 s/epoch); inference
+still uses the exact sequential recurrence.
 
 ## Quality Improvement Strategies (Issue #21)
 

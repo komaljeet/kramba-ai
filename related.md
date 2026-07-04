@@ -33,10 +33,12 @@
   - **Result**: controlled A/B on tiny-Shakespeare (d=128, 2L, 15 ep, same seed/data):
     baseline HVN best PPL **8.81 → DeltaNet 3.42 = 61.1% better** (target ≥30%). DeltaNet
     reached PPL <4 by epoch 3.
-  - **Cost/caveat**: training forward uses a sequential delta-rule scan (~27.5 vs
-    3.1 s/epoch — training only). **Inference O(1) is fully preserved** (no KV cache,
-    fixed d×d state). The training slowdown is not fundamental — the chunked-parallel
-    delta rule (Yang et al. 2024) is a drop-in speedup left as follow-up.
+  - **Training speed**: uses the **chunked-parallel delta rule** (Yang et al. 2024) —
+    the recurrence is reassociated (intra-chunk closed-form triangular solve + batched
+    matmuls; only S/C sequential cross-chunk carries), numerically identical to the
+    token-by-token scan (max|diff| 4.8e-7). Training **27.5 → 3.7 s/epoch (~7.4×)**, on
+    par with the baseline HVN path. Inference still uses the exact sequential recurrence;
+    **O(1) inference preserved** throughout. Set `train_chunk=0` to force the sequential scan.
   - Mirrored into the `edge-devices` branch (`EdgeHVN(use_deltanet=True)`).
 - **Key insight (why prior work stalled)**: The "fixed d×d matrix is a fundamental
   compression bottleneck" narrative is contradicted by the project's own benchmark —

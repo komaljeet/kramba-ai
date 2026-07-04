@@ -422,8 +422,11 @@ See `docs/BENCHMARK_RESULTS.md` § 5 for full details. Fixes 2 and 5 deferred (P
   default off). GPU A/B on tiny-Shakespeare (d=128, 2L): PPL **8.81 → 3.42 = 61% better**
   (target ≥30%). O(1) inference preserved (flat 2.6 ms/tok N=256→4096); 1500-token
   stability with no clamp. `test_issue34.py` 5/5. Mirrored to `edge-devices`.
-  Caveat: sequential training scan (~9× slower/epoch, training only) — chunked-parallel
-  delta rule is a follow-up speedup.
+- **Training speed**: chunked-parallel delta rule (Yang et al. 2024) — reassociated
+  recurrence (intra-chunk triangular solve + batched matmuls, only S/C sequential
+  carries), numerically identical to the sequential scan (max|diff| 4.8e-7). Training
+  27.5 → 3.7 s/epoch (~7.4×), on par with baseline HVN. Inference keeps the exact
+  sequential recurrence; O(1) preserved.
 
 ### 9.2 Real-scale scaling validation (Issue #35)
 - [ ] Wire WikiText-103 (≥100M tokens) into `eval/scaling_laws.py`; compute-matched sweep
