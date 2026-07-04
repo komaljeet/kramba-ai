@@ -83,6 +83,14 @@ class DeltaNetBlock(nn.Module):
         True.  When False the state uses no decay (pure DeltaNet).
     use_swiglu : bool
         Use a SwiGLU FFN instead of the standard GELU FFN.
+    train_chunk : int
+        Chunk length ``C`` for the chunked-parallel delta rule used in the
+        training forward.  The recurrence is reassociated so only ``S/C``
+        steps are sequential (the rest is batched matmuls + one triangular
+        solve per chunk), giving a large speedup over the token-by-token scan
+        while computing the *identical* result.  Kept modest (32) for numerical
+        stability of the intra-chunk decay reparameterization.  Set to 0/1 to
+        force the plain sequential scan.
     """
 
     def __init__(
@@ -94,6 +102,7 @@ class DeltaNetBlock(nn.Module):
         use_output_gate: bool = True,
         use_decay_gate: bool = True,
         use_swiglu: bool = False,
+        train_chunk: int = 32,
         # Accepted for interface compatibility with HVNBlock construction
         # (ignored — DeltaNet defines its own dynamics):
         bond_dimension: int | None = None,
@@ -101,6 +110,7 @@ class DeltaNetBlock(nn.Module):
         **_unused,
     ):
         super().__init__()
+        self.train_chunk = int(train_chunk) if train_chunk and train_chunk > 1 else 0
         assert d_model % n_heads == 0, (
             f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"
         )
@@ -218,6 +228,99 @@ class DeltaNetBlock(nn.Module):
         return o * rms * self.read_norm_weight  # weight broadcasts [H, d]
 
     # ------------------------------------------------------------------
+    # Delta-rule recurrence (two implementations, identical result)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _scan_sequential(qN, kN, vN, alphaN, betaN):
+        """Token-by-token gated delta-rule scan (reference / short sequences).
+
+        All tensors are [N, S, d] (betaN is [N, S, 1]).  Returns oN [N, S, d].
+        This is the exact recurrence that ``forward_step`` also implements.
+        """
+        N, S, d = qN.shape
+        S_state = torch.zeros(N, d, d, device=qN.device, dtype=qN.dtype)
+        outs = []
+        for t in range(S):
+            k_t = kN[:, t]
+            if alphaN is not None:
+                S_state = S_state * alphaN[:, t].unsqueeze(1)  # decay key columns
+            Sk = (S_state * k_t.unsqueeze(1)).sum(-1)
+            u = vN[:, t] - Sk
+            S_state = S_state + betaN[:, t].unsqueeze(-1) * (u.unsqueeze(2) * k_t.unsqueeze(1))
+            outs.append((S_state * qN[:, t].unsqueeze(1)).sum(-1))
+        return torch.stack(outs, dim=1)
+
+    @staticmethod
+    def _scan_chunked(qN, kN, vN, alphaN, betaN, chunk):
+        """Chunked-parallel gated delta rule (Yang et al. 2024) — same result.
+
+        Splits the sequence into length-``C`` chunks; only the cross-chunk state
+        carry is sequential (``S/C`` steps).  Within a chunk the intra-chunk
+        error correction is solved in closed form via a unit lower-triangular
+        solve, and the reads/state-update are batched matmuls.  Per-channel
+        decay ``α`` is folded in via an intra-chunk cumulative-decay
+        reparameterization (GLA/gated-DeltaNet style).
+
+        Derivation (per head, state ``S`` maps key→value, ``o = S q``):
+            uᵢ = βᵢ(vᵢ − S̃ᵢ₋₁ kᵢ),  S_t = S̃ + βᵢ uᵢ kᵢᵀ,  S̃ = decay(·)
+        With ``P_i`` = inclusive cumprod of α within the chunk, define
+        ``k̄=k⊙P``, ``k̃=k/P``, ``q̄=q⊙P``; then the recurrence closes as
+        ``(I+strictly_lower(A))U = R`` with ``A[i,j]=βᵢ(k̃ⱼ·k̄ᵢ)``,
+        ``R[i]=βᵢ(vᵢ − S_in k̄ᵢ)``, and
+        ``O = q̄ S_inᵀ + tril(q̄ k̃ᵀ)U``, ``S_out = S_in⊙P_last + Uᵀ(k⊙P_last/P)``.
+        All causal (j≤i) interactions carry the bounded ratio ``P_i/P_j ≤ 1``.
+        """
+        N, S, d = qN.shape
+        dev = qN.device
+        orig_dtype = qN.dtype
+        # Run the reassociation in fp32 for the 1/P reparameterization stability.
+        with torch.autocast(device_type=dev.type, enabled=False):
+            qN = qN.float(); kN = kN.float(); vN = vN.float(); betaN = betaN.float()
+            if alphaN is not None:
+                alphaN = alphaN.float()
+            S_in = torch.zeros(N, d, d, device=dev, dtype=torch.float32)  # [d_v, d_k]
+            eye = torch.eye(chunk, device=dev, dtype=torch.float32)
+            outs = []
+            for s in range(0, S, chunk):
+                e = min(s + chunk, S)
+                L = e - s
+                q = qN[:, s:e]; k = kN[:, s:e]; v = vN[:, s:e]  # [N, L, d]
+                beta = betaN[:, s:e]                             # [N, L, 1]
+
+                if alphaN is not None:
+                    a = alphaN[:, s:e].clamp_min(1e-6)           # [N, L, d]
+                    P = torch.cumprod(a, dim=1)                  # inclusive cumprod [N, L, d]
+                else:
+                    P = torch.ones(N, L, d, device=dev, dtype=torch.float32)
+                P_last = P[:, -1, :]                             # [N, d]
+                kbar = k * P                                     # read/target side
+                ktil = k / P                                     # write/source side
+                qbar = q * P
+
+                # R[i] = beta_i (v_i - S_in kbar_i)
+                Sk = torch.einsum('nvk,nlk->nlv', S_in, kbar)    # [N, L, d_v]
+                R = beta * (v - Sk)                              # [N, L, d_v]
+
+                # A[i,j] = beta_i (kbar_i · ktil_j), keep strictly lower (j<i)
+                KK = torch.einsum('nik,njk->nij', kbar, ktil)    # [N, L, L]
+                A = beta * KK                                    # beta_i scales row i
+                M = eye[:L, :L] + torch.tril(A, diagonal=-1)     # unit lower-tri
+                U = torch.linalg.solve_triangular(
+                    M, R, upper=False, unitriangular=True)       # [N, L, d_v]
+
+                # O = qbar S_inᵀ + tril(qbar · ktilᵀ) U
+                QK = torch.tril(torch.einsum('nik,njk->nij', qbar, ktil), diagonal=0)
+                O = torch.einsum('nvk,nlk->nlv', S_in, qbar) + torch.einsum('nij,njv->niv', QK, U)
+                outs.append(O)
+
+                # S_out = S_in ⊙ P_last(cols) + Σ_i u_i (k_i ⊙ P_last/P_i)ᵀ
+                k_scaled = k * (P_last.unsqueeze(1) / P)          # [N, L, d]
+                S_in = S_in * P_last.unsqueeze(1) + torch.einsum('niv,nik->nvk', U, k_scaled)
+
+            oN = torch.cat(outs, dim=1)                          # [N, S, d]
+        return oN.to(orig_dtype) if oN.dtype != orig_dtype else oN
+
+    # ------------------------------------------------------------------
     # Training forward (sequential delta-rule scan, O(1) memory in N)
     # ------------------------------------------------------------------
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor | None = None) -> torch.Tensor:
@@ -243,26 +346,14 @@ class DeltaNetBlock(nn.Module):
         betaN = to_N(beta)    # [N, S, 1]
         alphaN = to_N(alpha) if alpha is not None else None  # [N, S, d]
 
-        S_state = torch.zeros(N, d, d, device=x.device, dtype=x.dtype)  # [d_v, d_k]
-        outs = []
-        for t in range(S):
-            k_t = kN[:, t]           # [N, d]  (key space)
-            if alphaN is not None:
-                a_t = alphaN[:, t]   # [N, d]  per key-channel decay
-                S_state = S_state * a_t.unsqueeze(1)   # decay columns (key dim)
-            # prediction error: u = v - S k
-            Sk = (S_state * k_t.unsqueeze(1)).sum(-1)          # [N, d_v]
-            u = vN[:, t] - Sk                                  # [N, d_v]
-            # delta write: S += β · u kᵀ
-            S_state = S_state + betaN[:, t].unsqueeze(-1) * (
-                u.unsqueeze(2) * k_t.unsqueeze(1)
-            )
-            # read with the query: o = S q
-            o_t = (S_state * qN[:, t].unsqueeze(1)).sum(-1)    # [N, d_v]
-            outs.append(o_t)
+        # Reassociated (chunked-parallel) delta rule for training speed; falls
+        # back to the plain sequential scan for short sequences or when disabled.
+        if self.train_chunk and S > 1:
+            oN = self._scan_chunked(qN, kN, vN, alphaN, betaN, self.train_chunk)
+        else:
+            oN = self._scan_sequential(qN, kN, vN, alphaN, betaN)
 
-        o = torch.stack(outs, dim=1)  # [N, S, d]
-        o = o.view(B, H, S, d).permute(0, 2, 1, 3)  # [B, S, H, d]
+        o = oN.view(B, H, S, d).permute(0, 2, 1, 3)  # [B, S, H, d]
         o = self._read_normalize(o)                 # normalizer (lever 1)
         o = o.reshape(B, S, D)
 
