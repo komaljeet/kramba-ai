@@ -165,6 +165,122 @@ class MultiHeadVortexInjection(nn.Module):
 
         return deflected, velocity
 
+    # ------------------------------------------------------------------
+    # Concurrent-serving decode step: grouped GEMM over streams (Issue #43)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _grouped_proj(u: torch.Tensor, W: torch.Tensor, n_heads: int) -> torch.Tensor:
+        """Apply a per-head weight to a single-token batch as one grouped GEMM.
+
+        This is the concurrent-serving reformulation of ``bmm(u, W_rep^T)``.
+        The per-stream decode step feeds a length-1 sequence, so the naïve
+        batched path degenerates to ``B*n_heads`` independent matrix-*vector*
+        products (a GEMV — memory-bandwidth bound, tensor cores idle) and, worse,
+        replicates the shared per-head weight ``B`` times via
+        ``repeat_interleave``.  Here we instead stack the ``B`` concurrent streams
+        as the columns of a GEMM: for each head ``h`` the shared weight
+        ``W[h] ∈ ℝ^{Dout×Din}`` multiplies ``X_h ∈ ℝ^{Din×B}`` (all streams at
+        once) — a single compute-bound GEMM per head, weights read once.
+
+        ``u`` is laid out **batch-outer** (``bh = b*n_heads + h``), matching the
+        block's ``permute(0, 2, 1, 3)`` reshape, so head ``h`` is ``bh % n_heads``.
+
+        Parameters
+        ----------
+        u : torch.Tensor
+            Single-token input, shape [B*n_heads, 1, Din].
+        W : torch.Tensor
+            Per-head weight, shape [n_heads, Dout, Din].
+        n_heads : int
+            Number of heads.
+
+        Returns
+        -------
+        torch.Tensor, shape [B*n_heads, 1, Dout] — equals ``bmm(u, W_rep^T)``.
+        """
+        BH, one, Din = u.shape
+        Dout = W.shape[1]
+        B = BH // n_heads
+        # [BH,1,Din] -> [B, n_heads, Din] -> [n_heads, Din, B]
+        U = u.view(B, n_heads, Din).permute(1, 2, 0)          # [n_heads, Din, B]
+        Y = torch.bmm(W, U)                                    # [n_heads, Dout, B]  (grouped GEMM)
+        # [n_heads, Dout, B] -> [B, n_heads, Dout] -> [BH, 1, Dout]
+        return Y.permute(2, 0, 1).reshape(BH, one, Dout)
+
+    def forward_served(
+        self,
+        x: torch.Tensor,
+        hamiltonian: torch.Tensor,
+        position_ids: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Grouped-GEMM decode step for concurrent serving (Issue #43).
+
+        Numerically equivalent to :meth:`forward` for a single token (``S == 1``),
+        but reformulates the three **shared-weight** projections (vorticity, gate,
+        output) as grouped GEMMs across the concurrent-stream axis instead of
+        ``B*n_heads`` per-stream GEMVs with a ``repeat_interleave``-replicated
+        weight.  The per-stream Biot-Savart read ``H · ω`` stays a batched op
+        (each stream owns its Hamiltonian — inherently block-diagonal).
+
+        Uses **batch-outer** ordering (``bh = b*n_heads + h``) throughout, so the
+        output of a concurrent batch matches running each stream on its own.  (The
+        legacy :meth:`forward` expands per-head params with ``repeat_interleave``,
+        i.e. head-outer ordering, which silently mismatches heads for
+        ``n_heads>1, B>1`` — this path is the corrected reformulation.)
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Single-token input, shape [B*n_heads, 1, d_head].
+        hamiltonian : torch.Tensor
+            Per-stream Hamiltonians, shape [B*n_heads, d_head, d_head].
+        position_ids : torch.Tensor, optional
+            Position ids, shape [B*n_heads, 1] (batch-outer).
+
+        Returns
+        -------
+        deflected : torch.Tensor, shape [B*n_heads, 1, d_head]
+        velocity : torch.Tensor, shape [B*n_heads, 1, d_head]
+        """
+        BH, S, D = x.shape
+        assert S == 1, "forward_served handles a single decode token"
+        nh = self.n_heads
+        B = BH // nh
+
+        if position_ids is None:
+            position_ids = torch.zeros(BH, 1, device=x.device, dtype=torch.long)
+        elif position_ids.ndim == 1:
+            position_ids = position_ids.unsqueeze(0).expand(BH, -1)
+
+        # --- Step 1: Vorticity projection ω = W_ω · x (grouped GEMM over streams) ---
+        vorticity = self._grouped_proj(x, self.vorticity_weight, nh)  # [BH, 1, D]
+        freq_scale = self.vorticity_frequency.repeat(B)               # [BH] batch-outer tile
+        vorticity = _apply_rotary_embeddings(vorticity, position_ids, frequency_scale=freq_scale)
+
+        # --- Step 2: Biot-Savart velocity v = Γ · (H · ω) (per-stream, block-diagonal) ---
+        velocity = torch.bmm(vorticity, hamiltonian.transpose(-1, -2))  # [BH, 1, D]
+        gamma_e = self.gamma.repeat(B, 1)                              # [BH, 1] batch-outer tile
+        velocity = gamma_e.view(BH, 1, 1) * velocity
+
+        # --- Step 3: Gated deflection g = σ(W_g · [x; v]) (grouped GEMM) ---
+        gate_input = torch.cat([x, velocity], dim=-1)                 # [BH, 1, 2D]
+        gate = self._grouped_proj(gate_input, self.gate_weight, nh)  # [BH, 1, D]
+        b_gate = self.gate_bias.repeat(B, 1)                          # [BH, D] batch-outer tile
+        gate = torch.sigmoid(gate + b_gate.view(BH, 1, D))
+        deflected_raw = x + gate * velocity
+
+        # --- Output projection (grouped GEMM) + per-head LayerNorm ---
+        deflected = self._grouped_proj(deflected_raw, self.output_weight, nh)  # [BH, 1, D]
+        mean = deflected.mean(dim=-1, keepdim=True)
+        var = deflected.var(dim=-1, keepdim=True, unbiased=False)
+        deflected = (deflected - mean) / torch.sqrt(var + 1e-5)
+        ln_w = self.ln_weight.repeat(B, 1)                            # [BH, D] batch-outer tile
+        ln_b = self.ln_bias.repeat(B, 1)
+        deflected = deflected * ln_w.view(BH, 1, D) + ln_b.view(BH, 1, D)
+
+        return deflected, velocity
+
 
 class MultiThreadVortexInjection(nn.Module):
     """Multi-Thread Vortex Injection (Issue #22).

@@ -442,6 +442,7 @@ BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 
 | #32 | Extreme weight compression (Phase 1 + edge-devices branch) | `compress.py`, `sparse.py`, `edge/` |
 | #33 | Custom kernels & parallel processing (4/6 fixes) | `kernels/`, `model.py` |
 | #34 | Gated-DeltaNet readout/update dynamics — PPL 8.8→3.4 | `deltanet.py` |
+| #43 | Correct, fused concurrent-serving decode (~2.5× tok/s, fixes B>1 head-misroute) | `model.py`, `hvn_block.py`, `batched_vortex.py`, `batched_memory.py` |
 
 ---
 
@@ -654,6 +655,51 @@ read the −38% size / +12% PPL trade as the small-scale signal, not a scaled he
 `d` the `4d²`-per-layer projection share grows relative to the `vocab·d` embedding, so the size
 win grows (and the PPL cost should be re-measured at scale).
 
+### 8.9 Correct, Fused Concurrent-Serving Decode (Issue #43)
+
+Split from the #37 hardware review (point ②): serving N users runs N independent
+streams — each with its own Hamiltonian H_i — through the model together. The batched
+decode feeds a **length-1** sequence per stream, so per-step wall-time is dominated by
+**kernel-launch / Python overhead, not compute** (it is nearly flat in the stream count —
+that is why batching already scales tok/s ~linearly with B). The review's premise (reformulate
+the per-stream `H_i·v_i` reads into one big **GEMM**) turned out **not** to be the lever: those
+reads are inherently **block-diagonal** (each stream owns its H, so no shared-weight GEMM
+exists), and at HVN's head dims (`d_head=64`) cuBLAS's batched path is already efficient — a
+grouped-GEMM reformulation of the *shared* projections was measured **throughput-neutral-to-
+negative** (the layout permutes cost more than the matmul saves; decode is launch-bound). The
+real lever is **fewer launches**: routing the batched step through the Issue #33 `FusedHVNStep`
+Triton kernel (2 launches/block vs ~25 PyTorch ops), which was previously wired only for
+single-stream (`generate_incremental_fused`).
+
+Two things shipped in `model.generate_served` (`forward_step_served`):
+
+1. **Correctness fix.** The legacy `generate_batched` expanded per-head params with
+   `repeat_interleave(B)` (head-outer ordering `h·B+b`) while the stream batch is laid out
+   batch-outer (`b·n_heads+h`), so for **`n_heads>1, B>1` each concurrent stream silently used
+   the *wrong head's* projection weights** — `generate_batched` did **not** equal running each
+   stream alone (verified: diverges at `n_heads=4`, matches only at `n_heads=1`). The served path
+   uses batch-outer ordering in both backends, so a concurrent batch is **equivalent to
+   single-stream** generation (torch backend matches to ~1e-6; fused to the kernel's ~1e-2).
+2. **Throughput.** `backend="fused"` (default `auto` when CUDA+Triton+`d_head≥16`) collapses the
+   per-token launches, `backend="torch"` is a portable grouped-GEMM fallback (matches
+   single-stream to ~1e-6; used when Triton is unavailable or `d_head<16`). DeltaNet / multi-thread
+   memory fall back to `generate_batched`.
+
+Sustained throughput — **total tok/s across all streams**, 128 new tokens, d=512, 8 heads, 2L,
+fp32, RTX 4050 (`test_issue43.py`):
+
+| Concurrent streams | legacy `generate_batched` (buggy) | served-torch (correct) | **served-fused (correct)** | fused vs legacy |
+|---:|---:|---:|---:|:---:|
+| 1 | 263 | 254 | **675** | **2.56×** |
+| 8 | 2,096 | 1,987 | **5,416** | **2.58×** |
+| 32 | 8,484 | 7,744 | **20,815** | **2.45×** |
+| 64 | 15,924 | 15,062 | **42,716** | **2.68×** |
+
+**~2.5–2.7× sustained tok/s at every concurrency level** (and 2.66× over the *correct* torch
+baseline, so the win is real, not an artifact of the bug), with every stream's output identical to
+single-stream. O(1) per-token preserved (flat ms/token N=64→256), no KV cache, no HVN-math change.
+`test_issue43.py` 7/7; `demo.py` / `test_issue33.py` / `test_issue34.py` regressions pass.
+
 ### 8.5 Honest Assessment
 
 **Where HVN wins:** memory efficiency (O(1) vs O(N)), parameter efficiency (43% fewer),
@@ -821,6 +867,15 @@ regress >2% per fix; Triton kernel dtype-agnostic.
   string (no crash), results flow through `ToolExecutor.max_result_len` truncation, and a
   `certifi` CA bundle is used when available. `test_issue41.py` 7/7 (HTTP layer mocked). No
   architecture change — O(1) / no-KV preserved. Feeds #25.
+- **#43 — Fuse concurrent-stream serving** ✅ **Done** (2026-07-04): `model.generate_served`
+  (`forward_step_served`, backends `fused`/`torch`/`auto`). Found the batched `H_i·v_i` reads are
+  block-diagonal (no shared GEMM) and decode is **launch-bound**, so the win is the #33 fused
+  Triton kernel wired into the batched path (~**2.5–2.7× tok/s** at 1/8/32/64 streams), **not** a
+  GEMM reformulation (measured neutral-to-negative). Also fixes a pre-existing **head-misrouting
+  bug**: legacy `generate_batched` used head-outer `repeat_interleave` ordering, so `n_heads>1,
+  B>1` streams got the wrong head's weights — served is batch-outer and equals single-stream
+  (torch ~1e-6, fused ~1e-2). O(1)/no-KV preserved; `test_issue43.py` 7/7. Benefits #31 under
+  multi-user load (see §8.9).
 - **#25 — Agentic mode**: ReAct-style loop with planning, tool chaining, self-correction.
   Depends on #24 (done).
 - **#26 — Training dashboard**: single-page HTML/CSS/JS (Chart.js via CDN), no server.
