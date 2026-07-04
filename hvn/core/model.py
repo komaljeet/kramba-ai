@@ -15,6 +15,7 @@ The model accepts input token IDs [batch, seq_len] and produces logits
 import torch
 import torch.nn as nn
 from .hvn_block import HVNBlock
+from .deltanet import DeltaNetBlock
 from .decoder import HVNDecoder
 
 
@@ -140,6 +141,8 @@ class HamiltonianVortexNetwork(nn.Module):
         use_per_token_eta: bool = False,
         n_threads: int = 1,
         use_parallel_scan: bool = False,
+        use_deltanet: bool = False,
+        deltanet_conv_kernel: int = 4,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -148,29 +151,46 @@ class HamiltonianVortexNetwork(nn.Module):
         self.n_heads = n_heads
         self.n_threads = n_threads
         self.use_parallel_scan = use_parallel_scan
+        self.use_deltanet = use_deltanet
 
         # Token embedding
         self.token_embedding = nn.Embedding(vocab_size, d_model)
 
-        # Stacked HVN blocks (multi-head, multi-thread)
-        self.blocks = nn.ModuleList([
-            HVNBlock(
-                d_model=d_model,
-                n_heads=n_heads,
-                bond_dimension=bond_dimension,
-                chunk_size=chunk_size,
-                dropout=dropout,
-                rank_k=rank_k,
-                use_nonlinear_update=use_nonlinear_update,
-                use_causal_reinjection=use_causal_reinjection,
-                use_cross_head_mixing=use_cross_head_mixing,
-                use_swiglu=use_swiglu,
-                use_per_token_eta=use_per_token_eta,
-                n_threads=n_threads,
-                use_parallel_scan=use_parallel_scan,
-            )
-            for _ in range(num_layers)
-        ])
+        # Stacked blocks.  When ``use_deltanet`` is set, use the Gated-DeltaNet
+        # dynamics block (Issue #34) which fixes the readout/update dynamics;
+        # otherwise use the original HVNBlock (default — backward compatible).
+        if use_deltanet:
+            self.blocks = nn.ModuleList([
+                DeltaNetBlock(
+                    d_model=d_model,
+                    n_heads=n_heads,
+                    dropout=dropout,
+                    conv_kernel=deltanet_conv_kernel,
+                    use_swiglu=use_swiglu,
+                    bond_dimension=bond_dimension,
+                    chunk_size=chunk_size,
+                )
+                for _ in range(num_layers)
+            ])
+        else:
+            self.blocks = nn.ModuleList([
+                HVNBlock(
+                    d_model=d_model,
+                    n_heads=n_heads,
+                    bond_dimension=bond_dimension,
+                    chunk_size=chunk_size,
+                    dropout=dropout,
+                    rank_k=rank_k,
+                    use_nonlinear_update=use_nonlinear_update,
+                    use_causal_reinjection=use_causal_reinjection,
+                    use_cross_head_mixing=use_cross_head_mixing,
+                    use_swiglu=use_swiglu,
+                    use_per_token_eta=use_per_token_eta,
+                    n_threads=n_threads,
+                    use_parallel_scan=use_parallel_scan,
+                )
+                for _ in range(num_layers)
+            ])
 
         # Final layer norm
         self.final_norm = nn.LayerNorm(d_model)

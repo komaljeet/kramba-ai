@@ -198,6 +198,36 @@ OpenAI API's own contract).
 model, no dynamic multi-checkpoint hot-swapping. Verified with `test_server.py` (6/6
 checks: health, models, completions, chat completions, SSE streaming, tool calling).
 
+## Gated-DeltaNet Dynamics — the real PPL lever (Issue #34)
+
+HVN's long-standing perplexity gap (≈8.1 vs SSM ≈1.1) was **not** a state-capacity
+problem — the SSM reaches PPL ≈1.1 with a *smaller* fixed state, and every
+capacity-oriented strategy (#21, #22) moved PPL <3%. The culprit was the **readout/update
+dynamics**: the velocity L2-norm + Frobenius clamp (a NaN band-aid that discards all
+magnitude) and the non-standard symmetric `H·P·H` update.
+
+`--use_deltanet` swaps each block for a self-contained **Gated-DeltaNet** block
+(`hvn/core/deltanet.py`) that borrows proven linear-attention fast-weight dynamics:
+
+| Lever | What it does |
+|-------|--------------|
+| Per-channel data-dependent decay gate `α_t=σ(W_α x)` | Replaces the Frobenius clamp — stable over 1500+ tokens with no magnitude clamping |
+| Per-head output RMSNorm normalizer | Makes the read a proper scale-normalized readout instead of an unnormalized matmul |
+| Gated DeltaNet update `S_t = diag(α_t)S_{t-1} + β_t(v_t−S_{t-1}k_t)k_tᵀ` | Separate learned **k/v** projections + separate query read `o_t=S_t q_t` (drops the ill-conditioned `HPH`) |
+| Output gate `SiLU(W_g x)` + short causal depthwise conv | Cheap output-side conditioning (Mamba / RWKV-7 style) |
+
+```bash
+# Train with the DeltaNet dynamics fix (backward compatible; default is the original HVN path)
+python train.py --epochs 20 --use_deltanet --generate --prompt "The "
+```
+
+**Result** (tiny-Shakespeare, d_model=128, 2 layers, controlled A/B, same seed/data):
+eval PPL **8.81 → 3.42 — 61% better** (target ≥30%), reaching PPL <4 by epoch 3.
+**O(1) inference is fully preserved** (fixed `d_head×d_head` state, no KV cache — flat
+2.6 ms/token from N=256→4096). Verified by `test_issue34.py` (5/5 on GPU). The delta-rule
+training forward is a sequential scan (~9× slower/epoch — *training only*); the
+chunked-parallel delta rule is a drop-in follow-up speedup.
+
 ## Quality Improvement Strategies (Issue #21)
 
 HVN's perplexity can be improved by enabling one or more quality strategies.

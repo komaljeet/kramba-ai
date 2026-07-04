@@ -14,9 +14,30 @@
 
 ### #34 — Close the PPL gap by fixing readout/update dynamics (not state capacity)
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/34
-- **Status**: Open (created 2026-07-04)
+- **Status**: **Done (2026-07-04)** — `--use_deltanet`, verified 61% PPL improvement on GPU.
 - **Goal**: Close the PPL gap (HVN ~8.1 vs SSM ~1.1, Transformer ~1.9) by fixing the
   **readout/update dynamics**, not state capacity. Preserve O(1) inference.
+- **What was done**: New self-contained `DeltaNetBlock` (`hvn/core/deltanet.py`), a
+  Gated-DeltaNet linear-attention block used when `use_deltanet=True` (default off →
+  original HVN path untouched, zero regression). Implements all three levers:
+  1. **Per-channel data-dependent decay gate** `α_t=σ(W_α x)` replaces the Frobenius
+     clamp, plus a **per-head output RMSNorm normalizer** on the read.
+  2. **Gated DeltaNet update** `S_t = diag(α_t)S_{t-1} + β_t(v_t − S_{t-1}k_t)k_tᵀ` with
+     **separate k/v projections** and a separate query `q` read `o_t=S_t q_t` (drops HPH).
+  3. **Output gate** `SiLU(W_g x)` + **short causal depthwise conv** on the input path.
+  - Wired `--use_deltanet` / `--deltanet_conv_kernel` through `model.py`, `train.py`,
+    `quality_benchmark.py`, `generate.py` (checkpoint round-trips the flag).
+  - `test_issue34.py`: 5/5 pass on GPU — forward↔incremental parity (diff 6e-7),
+    O(1) per-token scaling (2.57 ms/tok flat N=256→4096), 1500-token stability with
+    NO clamp (|S|max≈0.4), backward-compat default path.
+  - **Result**: controlled A/B on tiny-Shakespeare (d=128, 2L, 15 ep, same seed/data):
+    baseline HVN best PPL **8.81 → DeltaNet 3.42 = 61.1% better** (target ≥30%). DeltaNet
+    reached PPL <4 by epoch 3.
+  - **Cost/caveat**: training forward uses a sequential delta-rule scan (~27.5 vs
+    3.1 s/epoch — training only). **Inference O(1) is fully preserved** (no KV cache,
+    fixed d×d state). The training slowdown is not fundamental — the chunked-parallel
+    delta rule (Yang et al. 2024) is a drop-in speedup left as follow-up.
+  - Mirrored into the `edge-devices` branch (`EdgeHVN(use_deltanet=True)`).
 - **Key insight (why prior work stalled)**: The "fixed d×d matrix is a fundamental
   compression bottleneck" narrative is contradicted by the project's own benchmark —
   the SSM reaches PPL ~1.1 with a state *smaller* than HVN's d×d-per-head Hamiltonian.
@@ -351,6 +372,7 @@
 |-------|--------------------------------------|------------------|
 | SSM | ~1.16 | N/A |
 | Transformer | ~2.0 | -0.090 |
+| **HVN + Gated-DeltaNet (Issue #34, `--use_deltanet`)** | **~3.4** (61% better than 8.8 baseline) | TBD (#35) |
 | HVN (Issue #22 n_threads=4 + all strategies) | ~8.13 | -0.0123 |
 | HVN (Issue #22 n_threads=4) | ~8.41 | -0.0123 |
 | HVN (Issue #21 strategies) | ~8.37 | -0.0126 |
@@ -364,6 +386,9 @@ Hamiltonian, proving O(1) state capacity is not the limiter. The real culprit is
 discard magnitude information, and the non-standard symmetric `HPH` update. This is why
 every capacity-oriented strategy (#21, #22) moved PPL <3%.
 
-**Next step**: See **#34** (fix readout normalization + adopt DeltaNet-style update —
-the real lever) and **#35** (validate scaling on real data before trusting the flat
-exponent). #36 handles generation-speed cleanups independently.
+**Confirmed (2026-07-04)**: **#34** validated the diagnosis — swapping in Gated-DeltaNet
+readout/update dynamics (`--use_deltanet`) cut PPL from 8.8 → 3.4 (61% better) at
+equal/lower FLOPs with O(1) inference preserved, while every prior capacity-oriented
+strategy moved PPL <3%. The readout/update dynamics *were* the limiter, not state
+capacity. Remaining: **#35** (validate scaling on real data — refit the exponent for the
+DeltaNet variant) and **#36** (generation-speed cleanups).

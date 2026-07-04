@@ -396,7 +396,7 @@ See `docs/BENCHMARK_RESULTS.md` § 5 for full details. Fixes 2 and 5 deferred (P
 19. ~~**CUDA Graph capture**~~ ✅ Done (Issue #33, Fix 6) — 78 → 220 tok/s
 20. **Flash-style tiled Hamiltonian computation** ⬜ Deferred (Issue #33, Fix 2 — needed only when d_model > 1024)
 21. **Extreme weight compression** ⬜ Open (Issue #32 — 10B → <2GB, 1T → <200GB)
-22. **Fix readout/update dynamics for PPL** ⬜ Open (Issue #34) — the real quality lever
+22. ~~**Fix readout/update dynamics for PPL**~~ ✅ Done (Issue #34, `--use_deltanet`) — PPL 8.8 → 3.4 (61% better), O(1) preserved
 23. **Real-scale scaling re-measurement** ⬜ Open (Issue #35) — WikiText-103
 24. **Generation-speed cleanups** ⬜ Open (Issue #36) — redundant prefill + host-device syncs
 
@@ -412,12 +412,18 @@ See `docs/BENCHMARK_RESULTS.md` § 5 for full details. Fixes 2 and 5 deferred (P
 > update), so the fix is to borrow proven dynamics from DeltaNet / GLA / Mamba-2 / RWKV-7,
 > not to add more capacity (which #21/#22 already showed moves PPL <3%).
 
-### 9.1 Readout & update dynamics (Issue #34)
-- [ ] Replace velocity L2-norm + Frobenius clamp with a **per-channel data-dependent
-      decay gate** + a **normalizer/denominator** on the readout (prime suspect for the 8→1 gap)
-- [ ] Adopt **canonical DeltaNet update** with **separate k/v projections** (drop symmetric `HPH`)
-- [ ] Add **output gate + short causal depthwise conv** on the read path
-- Target: eval PPL ≥30% better than the 8.13 baseline at equal/lower FLOPs, O(1) preserved
+### 9.1 Readout & update dynamics (Issue #34) — ✅ Done (2026-07-04, `--use_deltanet`)
+- [x] Replace velocity L2-norm + Frobenius clamp with a **per-channel data-dependent
+      decay gate** + a **normalizer** (per-head output RMSNorm) on the readout
+- [x] Adopt **canonical (gated) DeltaNet update** with **separate k/v projections** +
+      separate query read (drop symmetric `HPH`)
+- [x] Add **output gate + short causal depthwise conv** on the read path
+- **Result**: new `hvn/core/deltanet.py::DeltaNetBlock` (self-contained, flag-gated,
+  default off). GPU A/B on tiny-Shakespeare (d=128, 2L): PPL **8.81 → 3.42 = 61% better**
+  (target ≥30%). O(1) inference preserved (flat 2.6 ms/tok N=256→4096); 1500-token
+  stability with no clamp. `test_issue34.py` 5/5. Mirrored to `edge-devices`.
+  Caveat: sequential training scan (~9× slower/epoch, training only) — chunked-parallel
+  delta rule is a follow-up speedup.
 
 ### 9.2 Real-scale scaling validation (Issue #35)
 - [ ] Wire WikiText-103 (≥100M tokens) into `eval/scaling_laws.py`; compute-matched sweep

@@ -24,6 +24,7 @@ from .hamiltonian_memory import HamiltonianMemoryBlock
 from .batched_memory import MultiHeadHamiltonianMemory, MultiThreadHamiltonianMemory
 from .batched_vortex import MultiHeadVortexInjection, MultiThreadVortexInjection
 from .hvn_block import HVNBlock
+from .deltanet import DeltaNetBlock
 from .decoder import HVNDecoder
 from .model import HamiltonianVortexNetwork, CUDAGraphRunner
 
@@ -35,6 +36,7 @@ __all__ = [
     "MultiHeadVortexInjection",
     "MultiThreadVortexInjection",
     "HVNBlock",
+    "DeltaNetBlock",
     "HVNDecoder",
     "HamiltonianVortexNetwork",
     "CUDAGraphRunner",
