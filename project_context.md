@@ -106,6 +106,17 @@ evaluation MUST run on GPU — never on CPU.  The environment is pre-configured:
 - #25 — Agentic mode: multi-step reasoning, planning, and self-correction (depends on #24, which is done; #25 itself still open)
 - #26 — Training dashboard: interactive HTML GUI (initial `docs/dashboard.html` built, issue covers refinement)
 - #32 — Extreme weight compression (10B → <2GB, 1T → <200GB; see `EXECUTION_PLAN.md`; depends on #33's dtype-agnostic kernel, which is done)
+- #34 — Close the PPL gap by fixing readout/update dynamics, NOT state capacity (created 2026-07-04).
+  Key insight: SSM reaches PPL ~1.1 with a smaller fixed state than HVN, so the "d×d compression
+  bottleneck" story is wrong — the culprit is the velocity L2-norm + Frobenius clamp (discards
+  magnitude) and the non-standard symmetric `HPH` update. Fix = per-channel decay gate + readout
+  normalizer + DeltaNet update with separate k/v + output gate/conv. See `related.md` #34.
+- #35 — Re-measure scaling on WikiText-103 (created 2026-07-04). The flat exponent (params^-0.007)
+  came from only 34K chars of Shakespeare and is untrustworthy; gates whether #34's architectural
+  work is worth it. See `related.md` #35.
+- #36 — Speed up incremental generation (created 2026-07-04). `generate_incremental` runs a full
+  `forward()` over the prompt and discards it, then re-processes the prompt token-by-token; plus
+  per-token host-device syncs. Complements #33's kernel work. See `related.md` #36.
 
 ### Key Architecture Files (current state on main)
 - `hvn/core/hvn_block.py` — HVNBlock with batched multi-head processing, RMSNorm (in progress on branch)

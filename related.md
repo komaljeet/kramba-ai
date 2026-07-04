@@ -12,6 +12,56 @@
 
 ## Open Issues
 
+### #34 — Close the PPL gap by fixing readout/update dynamics (not state capacity)
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/34
+- **Status**: Open (created 2026-07-04)
+- **Goal**: Close the PPL gap (HVN ~8.1 vs SSM ~1.1, Transformer ~1.9) by fixing the
+  **readout/update dynamics**, not state capacity. Preserve O(1) inference.
+- **Key insight (why prior work stalled)**: The "fixed d×d matrix is a fundamental
+  compression bottleneck" narrative is contradicted by the project's own benchmark —
+  the SSM reaches PPL ~1.1 with a state *smaller* than HVN's d×d-per-head Hamiltonian.
+  Fixed-size O(1) state is NOT the limiter. Every capacity-oriented strategy (#21 rank-k,
+  #22 multi-thread, multi-head) moved PPL <3% — optimizing the wrong axis.
+- **What HVN really is**: a linear-attention fast-weight net. `v_t = Γ·(H·ω_t)` is a
+  linear-attention read; `H ← (1-η)H + η(P − HPH)` is a delta-rule update. Borrow proven
+  fixes from DeltaNet / GLA / Mamba-2 / RWKV-7.
+- **Three levers (highest impact first)**:
+  1. Replace the velocity L2-norm + Frobenius clamp (a NaN band-aid that discards all
+     magnitude info) with a **per-channel data-dependent decay gate** + a
+     **normalizer/denominator** on the readout. *(Prime suspect for the 8→1 gap.)*
+  2. Adopt the **canonical DeltaNet update** with **separate k/v projections** (decouple
+     read from write; drop the ill-conditioned symmetric `HPH`).
+  3. Add an **output gate + short causal depthwise conv** on the read path.
+- **Acceptance**: eval PPL improves ≥30% vs 8.13 baseline at equal/lower FLOPs; O(1) preserved.
+- **Depends on**: #35 (real-scale validation — gates whether scaling is real).
+
+### #35 — Re-measure HVN scaling on real-scale data (WikiText-103)
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/35
+- **Status**: Open (created 2026-07-04)
+- **Goal**: Re-measure the scaling exponent on a ≥100M-token corpus before trusting the
+  "flat scaling" conclusion.
+- **Key insight**: The exponent `PPL ∝ params^-0.007` was measured on **~34K characters**
+  of Tiny-Shakespeare — deep in the overfit/saturation regime, so it measures
+  regularization noise, not architectural scaling. A scaling law from toy data is not a
+  scaling law.
+- **Tasks**: wire WikiText-103 into `eval/scaling_laws.py`; compute-matched sweep
+  d_model={128,256,512,768} on GPU; refit exponents for HVN/Transformer/SSM; report
+  whether "flat scaling" survives.
+
+### #36 — Speed up incremental generation (redundant prefill + host-device syncs)
+- **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/36
+- **Status**: Open (created 2026-07-04)
+- **Goal**: Remove implementation-level generation overhead (complements #33's kernel work).
+- **Concrete bugs/inefficiencies found**:
+  1. `generate_incremental` (`hvn/core/model.py` ~L586) runs a **full `self.forward()` over
+     the prompt and throws the result away**, then re-processes the prompt token-by-token
+     to build states — the prompt is processed twice per call.
+  2. Prompt prefill is sequential; should use the batched/chunked forward.
+  3. Per-token `torch.tensor([[id]], device=...)` alloc + `.item()` sync stalls the pipeline.
+- **Acceptance**: dead forward removed (identical seeded output), prefill batched,
+  per-token syncs cut, tok/s improvement reported on GPU and shown stackable with
+  `--cuda_graph`/`--fused_kernel`.
+
 ### #31 — OpenAI-Compatible API Server: Serve HVN via REST API for ecosystem integration
 - **GitLab**: https://gitlab.com/komalbarun/kramba-ai/-/work_items/31
 - **Status**: Closed (2026-07-03)
@@ -306,9 +356,14 @@
 | HVN (Issue #21 strategies) | ~8.37 | -0.0126 |
 | HVN (original) | ~8.37 | -0.007 |
 
-**Root cause**: The Hamiltonian compresses all sequence history into a single
-d×d matrix per head.  Multi-thread memory (K matrices per head) increases
-capacity from O(d²) to O(K·d²), improving PPL by 4-8%.
+**Root cause (SUPERSEDED — see #34)**: Previously attributed to the d×d matrix being a
+"fundamental compression bottleneck." This is now believed to be **wrong**: the SSM
+baseline reaches PPL ~1.1 with a *smaller* fixed state than HVN's d×d-per-head
+Hamiltonian, proving O(1) state capacity is not the limiter. The real culprit is the
+**readout/update dynamics** — specifically the velocity L2-norm + Frobenius clamp that
+discard magnitude information, and the non-standard symmetric `HPH` update. This is why
+every capacity-oriented strategy (#21, #22) moved PPL <3%.
 
-**Next step**: Further quality improvements may require parallel scan (Phase 5.5
-Strategy B) or custom Triton kernels (Phase 5.1, 5.3) for speed.
+**Next step**: See **#34** (fix readout normalization + adopt DeltaNet-style update —
+the real lever) and **#35** (validate scaling on real data before trusting the flat
+exponent). #36 handles generation-speed cleanups independently.
