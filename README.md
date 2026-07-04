@@ -800,7 +800,10 @@ login wall + Cloudflare challenge). Examples: `glab issue view <id> --repo komal
 2. Implement the change; verify with a real test or runnable command on GPU.
 3. Commit referencing the issue (`git commit -m "Fix: … for issue #NN"`).
 4. Push the branch (`git push origin <branch>`).
-5. Merge to `main`; close the issue when resolved (or reopen if it regresses).
+5. **Always open a Merge Request** with `glab mr create` — target `main`, put `Closes #NN`
+   in the description so the issue auto-closes on merge, and add a `glab issue note NN`
+   summarizing the result + linking the MR. Never push to or merge `main` directly; the
+   maintainer reviews and merges the MR manually.
 
 GitLab project: https://gitlab.com/komalbarun/kramba-ai
 
