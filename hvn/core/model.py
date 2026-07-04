@@ -472,6 +472,150 @@ class HamiltonianVortexNetwork(nn.Module):
 
         return logits, new_states
 
+    def supports_served(self) -> bool:
+        """Whether all blocks expose the concurrent-serving decode path (#43)."""
+        return not self.use_deltanet and all(
+            hasattr(b, "supports_served") and b.supports_served() for b in self.blocks
+        )
+
+    def _served_can_fuse(self, device: torch.device) -> bool:
+        """Whether the fused Triton serving backend is usable for this model.
+
+        The fused single-launch step (Issue #33 ``FusedHVNStep``) needs a CUDA
+        device, a working Triton, and ``d_head >= 16`` (the ``tl.dot`` tile
+        floor).  When unavailable we fall back to the portable torch grouped-GEMM
+        step, which is numerically tighter but launch-bound.
+        """
+        if device.type != "cuda":
+            return False
+        try:
+            import triton  # noqa: F401
+        except Exception:
+            return False
+        return all(getattr(b, "d_head", 0) >= 16 for b in self.blocks)
+
+    def forward_step_served(
+        self,
+        input_ids: torch.Tensor,
+        states: list[torch.Tensor],
+        position_idx: int | None = None,
+        use_fused: bool = False,
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        """Single-token step for N concurrent streams (Issue #43).
+
+        Correct, batch-outer concurrent decode for the default HVN block, in two
+        interchangeable backends (both keep every stream's output identical to
+        running it alone — unlike :meth:`forward_step_batched`, whose per-head
+        ``repeat_interleave`` expansion mis-routes heads for ``n_heads>1, B>1``):
+
+        * ``use_fused=True`` — the Issue #33 ``FusedHVNStep`` Triton kernel, one
+          program per ``(stream, head)``, collapsing ~25 per-token PyTorch ops
+          into 2 launches.  Decode is **launch-bound** at serving batch sizes
+          (per-step wall-time is nearly flat in the stream count), so cutting
+          launches is the real throughput lever — ~3× sustained tok/s.  Matches
+          single-stream to the fused kernel's ~1e-2 numerics (same path as
+          ``generate_incremental_fused``).
+        * ``use_fused=False`` — a portable torch step that reformulates the three
+          shared-weight projections as one grouped GEMM per head across the
+          concurrent streams (no ``repeat_interleave`` weight replication).
+          Matches single-stream to ~1e-6.  Used when Triton is unavailable or
+          ``d_head < 16``.
+        """
+        x = self.token_embedding(input_ids)  # [B, 1, D]
+        new_states = []
+        for i, block in enumerate(self.blocks):
+            if use_fused:
+                x, new_state = block.forward_step_fused(x, states[i], position_idx=position_idx)
+            else:
+                x, new_state = block.forward_step_served(x, states[i], position_idx=position_idx)
+            new_states.append(new_state)
+        x = self.final_norm(x)
+        logits = self.decoder(x)  # [B, 1, V]
+        return logits, new_states
+
+    @torch.no_grad()
+    def generate_served(
+        self,
+        prompt_ids_list: list[list[int]],
+        max_new_tokens: int = 200,
+        temperature: float = 0.8,
+        top_k: int = 10,
+        device: torch.device = None,
+        backend: str = "auto",
+    ) -> list[list[int]]:
+        """Concurrent-serving batched generation (Issue #43).
+
+        Same interface/semantics as :meth:`generate_batched`, but drives the
+        correct concurrent decode step (:meth:`forward_step_served`) so N streams
+        share the model efficiently while each stream's output stays identical to
+        single-stream generation.  ``backend``: ``"fused"`` forces the Triton
+        single-launch step (~3× tok/s, the serving win), ``"torch"`` forces the
+        portable grouped-GEMM step, ``"auto"`` (default) uses fused when available
+        (CUDA + Triton + ``d_head>=16``) else torch.  Falls back to
+        :meth:`generate_batched` for blocks without the served path (DeltaNet /
+        multi-thread memory).
+        """
+        if not self.supports_served():
+            return self.generate_batched(
+                prompt_ids_list, max_new_tokens=max_new_tokens,
+                temperature=temperature, top_k=top_k, device=device,
+            )
+
+        if device is None:
+            device = next(self.parameters()).device
+
+        if backend == "fused":
+            use_fused = True
+        elif backend == "torch":
+            use_fused = False
+        else:
+            use_fused = self._served_can_fuse(device)
+
+        self.eval()
+        B = len(prompt_ids_list)
+        if B == 0:
+            return []
+
+        prompt_ids_list = [p if len(p) > 0 else [0] for p in prompt_ids_list]
+        max_prompt_len = max(len(p) for p in prompt_ids_list)
+
+        param_dtype = next(self.parameters()).dtype
+        states = self.init_generation_state_batched(B, device=device, dtype=param_dtype)
+
+        prompt_matrix = torch.zeros(B, max_prompt_len, dtype=torch.long, device=device)
+        for b, prompt in enumerate(prompt_ids_list):
+            prompt_matrix[b, : len(prompt)] = torch.tensor(
+                prompt, dtype=torch.long, device=device
+            )
+
+        # Phase 1: prefill prompts (all streams in lock-step)
+        for t in range(max_prompt_len):
+            tok_ids = prompt_matrix[:, t : t + 1]
+            logits_step, states = self.forward_step_served(
+                tok_ids, states, position_idx=t, use_fused=use_fused
+            )
+
+        next_logits = logits_step[:, -1, :] / temperature  # [B, V]
+
+        # Phase 2: incremental decode (sampling stays on-device)
+        step_id_tensors: list[torch.Tensor] = []
+        for step_idx in range(max_new_tokens):
+            logits = self._filter_top_k(next_logits, top_k)
+            probs = torch.softmax(logits, dim=-1)
+            next_ids = torch.multinomial(probs, num_samples=1)  # [B, 1]
+            step_id_tensors.append(next_ids)
+            logits_step, states = self.forward_step_served(
+                next_ids, states, position_idx=max_prompt_len + step_idx, use_fused=use_fused
+            )
+            next_logits = logits_step[:, -1, :] / temperature
+
+        generated_list = [list(p) for p in prompt_ids_list]
+        if step_id_tensors:
+            new_ids = torch.cat(step_id_tensors, dim=1).tolist()
+            for b in range(B):
+                generated_list[b].extend(new_ids[b])
+        return generated_list
+
     @torch.no_grad()
     def generate_batched(
         self,

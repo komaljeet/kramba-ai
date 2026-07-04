@@ -570,6 +570,77 @@ class MultiHeadHamiltonianMemory(nn.Module):
 
         return hamiltonian_new
 
+    def update_single_served(
+        self,
+        hamiltonian: torch.Tensor,
+        velocity: torch.Tensor,
+        input_vec: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Concurrent-serving single-token H update with batch-outer ordering (Issue #43).
+
+        Numerically equivalent to :meth:`update_single` for a single stream, but
+        expands the per-head ``eta``/``memory_gate`` **batch-outer**
+        (``bh = b*n_heads + h``) via ``repeat`` (tile) rather than
+        ``repeat_interleave`` (head-outer).  The head-outer expansion in
+        :meth:`update_single` silently applies the wrong head's gate to each
+        stream when ``n_heads>1, B>1``; this method keeps concurrent-batch output
+        identical to single-stream.  The input-dependent-eta branch already
+        indexes batch-outer (``arange(BH) % n_heads``) and is reused unchanged.
+
+        All the heavy ops (``H·v``, ``P``, ``H·P·H``) are per-stream and stay
+        batched — the Hamiltonian is block-diagonal across streams by construction.
+        """
+        BH, D, _ = hamiltonian.shape
+        B = BH // self.n_heads
+
+        if self.use_input_dependent_eta and input_vec is not None:
+            eta_raw = self.eta_proj(input_vec)  # [BH, n_heads]
+            head_indices = torch.arange(BH, device=hamiltonian.device) % self.n_heads
+            eta_t = torch.sigmoid(eta_raw.gather(1, head_indices.unsqueeze(1))).view(BH, 1, 1)
+        else:
+            eta = torch.clamp(self.eta, min=0.0, max=1.0)
+            eta_t = eta.repeat(B).view(BH, 1, 1)  # batch-outer tile
+
+        v_norm = velocity.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        v = velocity / v_norm  # [BH, D]
+
+        if self.use_nonlinear_update and input_vec is not None:
+            gate = torch.sigmoid(self.nonlinear_gate(input_vec))
+            v = v * gate
+
+        if self.rank_k > 1 and input_vec is not None:
+            w = self.rank_k_proj(input_vec).view(BH, self.rank_k, D)
+            w_norms = w.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+            w = w / w_norms
+            P = torch.bmm(w.transpose(-1, -2), w)
+            Hv = torch.bmm(hamiltonian, w.transpose(-1, -2))
+            Ht_v = torch.bmm(hamiltonian.transpose(-1, -2), w.transpose(-1, -2))
+            HPH = torch.bmm(Hv, Ht_v.transpose(-1, -2))
+        else:
+            v_col = v.unsqueeze(-1)
+            P = v_col * v_col.transpose(-1, -2)
+            Hv = torch.bmm(hamiltonian, v_col)
+            Ht_v = torch.bmm(hamiltonian.transpose(-1, -2), v_col)
+            HPH = Hv * Ht_v.transpose(-1, -2)
+
+        if self.use_residual:
+            hamiltonian_new = hamiltonian + eta_t * (P - HPH)
+        else:
+            hamiltonian_new = (1.0 - eta_t) * hamiltonian + eta_t * (P - HPH)
+
+        fro_norm = hamiltonian_new.norm(dim=(-1, -2), keepdim=True).clamp(min=1e-8)
+        max_norm = (D ** 0.5)
+        scale = torch.clamp(max_norm / fro_norm, max=1.0)
+        hamiltonian_new = hamiltonian_new * scale
+
+        if self.bond_dimension is not None and self.bond_dimension < D:
+            hamiltonian_new = self._svd_truncate_batched(hamiltonian_new)
+
+        gate_expanded = self.memory_gate.repeat(B)  # batch-outer tile
+        hamiltonian_new = hamiltonian_new * gate_expanded.view(BH, 1, 1)
+
+        return hamiltonian_new
+
 
 class MultiThreadHamiltonianMemory(nn.Module):
     """Multi-Thread Hamiltonian Memory (Issue #22).

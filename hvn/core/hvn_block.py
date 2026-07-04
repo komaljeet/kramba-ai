@@ -790,6 +790,66 @@ class HVNBlock(nn.Module):
 
         return x_t, H_new
 
+    def supports_served(self) -> bool:
+        """Whether this block has the concurrent-serving decode path (Issue #43).
+
+        The grouped-GEMM serving step is implemented for the default single-thread
+        multi-head HVN block.  Multi-thread memory (Issue #22) is not covered.
+        """
+        return (
+            self.n_threads == 1
+            and isinstance(self.vortex, MultiHeadVortexInjection)
+            and hasattr(self.memory, "update_single_served")
+        )
+
+    def forward_step_served(
+        self,
+        x_t: torch.Tensor,
+        H: torch.Tensor,
+        position_idx: int | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Concurrent-serving decode step: grouped GEMM over streams (Issue #43).
+
+        Same math as :meth:`forward_step_batched` but routes the shared-weight
+        vortex projections through :meth:`MultiHeadVortexInjection.forward_served`
+        (grouped GEMM across concurrent streams instead of per-stream GEMVs with a
+        replicated weight) and the Hamiltonian update through
+        :meth:`update_single_served` (batch-outer ordering).  For a single stream
+        (``B == 1``) it is bit-for-bit the same routing as ``forward_step_batched``;
+        for ``B > 1`` it keeps every stream's output identical to running it alone.
+        """
+        B, _, D = x_t.shape
+
+        if position_idx is None:
+            position_ids = torch.arange(1, device=x_t.device).unsqueeze(0).expand(B, -1)
+        else:
+            position_ids = torch.full((B, 1), int(position_idx), device=x_t.device, dtype=torch.long)
+
+        x_norm = self.norm(x_t)  # [B, 1, D]
+        x_proj = self.input_proj(x_norm)  # [B, 1, D]
+        x_heads = x_proj.view(B, 1, self.n_heads, self.d_head)
+        # Batch-outer layout: bh = b*n_heads + h
+        x_batched = x_heads.permute(0, 2, 1, 3).contiguous().view(B * self.n_heads, 1, self.d_head)
+
+        pos_batched = position_ids.unsqueeze(1).expand(B, self.n_heads, 1).contiguous()
+        pos_batched = pos_batched.view(B * self.n_heads, 1)
+
+        deflected_batched, velocity_batched = self.vortex.forward_served(
+            x_batched, H, position_ids=pos_batched
+        )
+
+        velocity_single = velocity_batched.squeeze(1)          # [B*n_heads, d_head]
+        input_single = x_batched.squeeze(1)                    # [B*n_heads, d_head]
+        H_new = self.memory.update_single_served(H, velocity_single, input_vec=input_single)
+
+        deflected = deflected_batched.view(B, self.n_heads, 1, self.d_head).permute(0, 2, 1, 3).contiguous()
+        deflected = deflected.view(B, 1, self.n_heads * self.d_head)
+        deflected = self.output_proj(deflected)
+
+        x_t = x_t + self.dropout(deflected) + self.ffn(x_norm)
+
+        return x_t, H_new
+
     def forward_step_batched(
         self,
         x_t: torch.Tensor,
