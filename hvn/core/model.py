@@ -516,40 +516,30 @@ class HamiltonianVortexNetwork(nn.Module):
         param_dtype = next(self.parameters()).dtype
         states = self.init_generation_state_batched(B, device=device, dtype=param_dtype)
 
+        # Build the padded prompt matrix once on-device (pad id 0), then feed one
+        # column per step — avoids rebuilding + host→device copying every token.
+        prompt_matrix = torch.zeros(B, max_prompt_len, dtype=torch.long, device=device)
+        for b, prompt in enumerate(prompt_ids_list):
+            prompt_matrix[b, : len(prompt)] = torch.tensor(
+                prompt, dtype=torch.long, device=device
+            )
+
         # Process prompts token-by-token (all sequences in parallel)
         for t in range(max_prompt_len):
-            # Build batch: use token t from each prompt, or pad token (0) if shorter
-            tok_ids = torch.zeros(B, 1, dtype=torch.long, device=device)
-            for b, prompt in enumerate(prompt_ids_list):
-                if t < len(prompt):
-                    tok_ids[b, 0] = prompt[t]
-                # else: pad token 0 (already initialized)
-
+            tok_ids = prompt_matrix[:, t : t + 1]  # [B, 1]
             logits_step, states = self.forward_step_batched(tok_ids, states, position_idx=t)
 
         # Last logits for sampling: [B, 1, V] → [B, V]
         next_logits = logits_step[:, -1, :] / temperature  # [B, V]
 
-        # Track generated tokens
-        generated_list = [list(p) for p in prompt_ids_list]
-
         # --- Phase 2: Generate new tokens incrementally (all sequences in parallel) ---
+        # Keep sampling on-device and collect ids as tensors; sync to host once.
+        step_id_tensors: list[torch.Tensor] = []  # each [B, 1]
         for step_idx in range(max_new_tokens):
-            # Top-k filtering (per sequence)
-            if top_k > 0:
-                top_k_val = min(top_k, next_logits.size(-1))
-                values, _ = torch.topk(next_logits, top_k_val, dim=-1)  # [B, k]
-                threshold = values[:, -1:]  # [B, 1] — k-th largest value
-                next_logits = next_logits.clone()
-                next_logits[next_logits < threshold] = float("-inf")
-
-            # Sample (batched)
-            probs = torch.softmax(next_logits, dim=-1)  # [B, V]
+            logits = self._filter_top_k(next_logits, top_k)  # [B, V]
+            probs = torch.softmax(logits, dim=-1)  # [B, V]
             next_ids = torch.multinomial(probs, num_samples=1)  # [B, 1]
-
-            # Append to each sequence
-            for b in range(B):
-                generated_list[b].append(next_ids[b, 0].item())
+            step_id_tensors.append(next_ids)
 
             # Forward step for all sequences at once: O(d²) per sequence, batched
             logits_step, states = self.forward_step_batched(
@@ -557,7 +547,97 @@ class HamiltonianVortexNetwork(nn.Module):
             )
             next_logits = logits_step[:, -1, :] / temperature  # [B, V]
 
+        # Single device→host sync: [B, max_new_tokens]
+        generated_list = [list(p) for p in prompt_ids_list]
+        if step_id_tensors:
+            new_ids = torch.cat(step_id_tensors, dim=1).tolist()  # [B][max_new_tokens]
+            for b in range(B):
+                generated_list[b].extend(new_ids[b])
+
         return generated_list
+
+    @torch.no_grad()
+    def _filter_top_k(self, logits: torch.Tensor, top_k: int) -> torch.Tensor:
+        """Apply top-k filtering on the last dim, staying on-device.
+
+        ``logits`` may be [V] (single sequence) or [B, V] (batched).  Returns a
+        new tensor with sub-threshold logits set to -inf (no in-place mutation
+        of the caller's tensor).
+        """
+        if not top_k or top_k <= 0:
+            return logits
+        k = min(top_k, logits.size(-1))
+        values, _ = torch.topk(logits, k, dim=-1)
+        threshold = values[..., -1:].contiguous()
+        return logits.masked_fill(logits < threshold, float("-inf"))
+
+    @torch.no_grad()
+    def prefill_states(
+        self,
+        prompt_tensor: torch.Tensor,
+        position_offset: int = 0,
+    ) -> tuple[torch.Tensor, list]:
+        """Prefill the recurrent state for a whole prompt, then seed sampling.
+
+        Replaces the old prompt handling in incremental generation (Issue #36),
+        which ran a full ``forward()`` whose result was thrown away and *then*
+        re-processed the prompt token-by-token — double work.  Here the prompt is
+        processed exactly once, and the returned state continues generation
+        identically to the per-token recurrence used by ``forward_step``.
+
+        Two exact paths, selected by block type:
+
+        * **DeltaNet** — the chunked-parallel delta rule is algebraically exact
+          (Issue #34, max|diff| ~5e-7 vs the sequential scan), so the whole
+          prompt is prefilled in a single chunked pass (``block.forward`` with
+          ``return_state=True``): O(chunks) kernel launches, and the captured
+          recurrent state matches the token-by-token result.
+        * **Default HVN** — the chunked forward is only a *within-chunk
+          approximation* of the sequential Hamiltonian recurrence that
+          ``forward_step`` uses at decode time, so prefilling through it would
+          change generated output.  The prompt is instead absorbed token-by-token
+          with the exact recurrence.  This is still a single pass — the redundant
+          full ``forward()`` the old code discarded is gone.
+
+        Parameters
+        ----------
+        prompt_tensor : torch.Tensor
+            Prompt token IDs, shape [B, S], dtype long.
+        position_offset : int
+            Position index of the prompt's first token (for RoPE / positions).
+
+        Returns
+        -------
+        last_logits : torch.Tensor
+            Logits for the final prompt token, shape [B, 1, V].
+        states : list
+            Per-block recurrent states, ready for ``forward_step_batched``.
+        """
+        B, S = prompt_tensor.shape
+        device = prompt_tensor.device
+        dtype = next(self.parameters()).dtype
+
+        if self.use_deltanet:
+            position_ids = torch.arange(
+                position_offset, position_offset + S, device=device
+            ).unsqueeze(0).expand(B, -1)
+            x = self.token_embedding(prompt_tensor)  # [B, S, D]
+            states = []
+            for block in self.blocks:
+                x, state = block(x, position_ids=position_ids, return_state=True)
+                states.append(state)
+            # Only the last position is needed to seed sampling.
+            last_logits = self.decoder(self.final_norm(x[:, -1:, :]))  # [B, 1, V]
+            return last_logits, states
+
+        # Default HVN path: exact sequential prefill (single pass).
+        states = self.init_generation_state_batched(B, device=device, dtype=dtype)
+        last_logits = None
+        for t in range(S):
+            last_logits, states = self.forward_step_batched(
+                prompt_tensor[:, t : t + 1], states, position_idx=position_offset + t
+            )
+        return last_logits, states
 
     @torch.no_grad()
     def generate_incremental(
@@ -570,8 +650,11 @@ class HamiltonianVortexNetwork(nn.Module):
     ) -> list[int]:
         """Fast autoregressive generation using O(1) incremental inference.
 
-        Processes the prompt in one forward pass, then generates each new
-        token with a single O(d²) forward_step — no context reprocessing.
+        Prefills the prompt in a single chunked/batched pass (``prefill_states``)
+        — the same code path as training ``forward`` — then generates each new
+        token with a single O(d²) ``forward_step_batched``.  No context
+        reprocessing, no redundant prompt forward, and no per-token host↔device
+        syncs in the decode loop (Issue #36).
 
         Parameters
         ----------
@@ -595,50 +678,37 @@ class HamiltonianVortexNetwork(nn.Module):
             device = next(self.parameters()).device
 
         self.eval()
-        B = 1
 
-        # --- Phase 1: Process the prompt in one forward pass ---
-        # This initializes the Hamiltonian state with the prompt context.
         if len(prompt_ids) == 0:
             prompt_ids = [0]
+        prompt_len = len(prompt_ids)
 
+        # --- Phase 1: Prefill the prompt in one batched/chunked pass ---
         prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long, device=device)
-        logits = self.forward(prompt_tensor)  # [1, S, V]
-
-        # Initialize states by re-processing the prompt through forward_step
-        # (more efficient: we can get states from the full forward, but for
-        # simplicity we reinitialize states and process prompt token-by-token)
-        states = self.init_generation_state(B, device=device, dtype=next(self.parameters()).dtype)
-
-        for t in range(len(prompt_ids)):
-            tok = torch.tensor([[prompt_ids[t]]], dtype=torch.long, device=device)
-            logits_step, states = self.forward_step(tok, states, position_idx=t)
-
-        # Last logits for sampling
-        next_logits = logits_step[0, -1, :] / temperature
-
-        generated = list(prompt_ids)
+        last_logits, states = self.prefill_states(prompt_tensor)  # [1, 1, V]
+        next_logits = last_logits[0, -1, :] / temperature  # [V]
 
         # --- Phase 2: Generate new tokens incrementally (O(1) each) ---
+        # Keep sampling on-device: reuse one input buffer, collect sampled ids
+        # as device tensors, and sync to host once at the end.
+        cur = torch.empty(1, 1, dtype=torch.long, device=device)
+        new_id_tensors: list[torch.Tensor] = []
         for step_idx in range(max_new_tokens):
-            # Top-k filtering
-            if top_k > 0:
-                top_k_val = min(top_k, next_logits.size(-1))
-                values, _ = torch.topk(next_logits, top_k_val)
-                next_logits = next_logits.clone()
-                next_logits[next_logits < values[-1]] = float("-inf")
+            logits = self._filter_top_k(next_logits, top_k)
+            probs = torch.softmax(logits, dim=-1)
+            next_id = torch.multinomial(probs, num_samples=1)  # [1], on device
+            new_id_tensors.append(next_id)
 
-            # Sample
-            probs = torch.softmax(next_logits, dim=-1)
-            next_id = torch.multinomial(probs, num_samples=1).item()
-            generated.append(next_id)
-
-            # Forward step: O(d²) — no context reprocessing!
-            tok = torch.tensor([[next_id]], dtype=torch.long, device=device)
-            logits_step, states = self.forward_step(tok, states, position_idx=len(prompt_ids) + step_idx)
+            # Feed the sampled id back in-place (no per-token host→device alloc).
+            cur.copy_(next_id.view(1, 1))
+            logits_step, states = self.forward_step_batched(
+                cur, states, position_idx=prompt_len + step_idx
+            )
             next_logits = logits_step[0, -1, :] / temperature
 
-        return generated
+        # Single device→host sync for the whole generation.
+        new_ids = torch.cat(new_id_tensors).tolist() if new_id_tensors else []
+        return list(prompt_ids) + new_ids
 
     # ------------------------------------------------------------------
     # CUDA Graph generation (Issue #33 Fix 6 — 2-3× speedup)
@@ -727,7 +797,6 @@ class HamiltonianVortexNetwork(nn.Module):
             logits_step, states = self.forward_step(tok, states, position_idx=t)
 
         next_logits = logits_step[0, -1, :] / temperature
-        generated = list(prompt_ids)
 
         # --- Phase 2: Capture graph and generate via replay ---
         # Build a runner with the current states
@@ -735,25 +804,22 @@ class HamiltonianVortexNetwork(nn.Module):
         runner.states = states  # use the states from prompt processing
         runner.capture(position_idx=len(prompt_ids))
 
+        # Keep sampling on-device; write the sampled id straight into the graph's
+        # static input tensor; sync the generated ids to host once at the end.
+        new_id_tensors: list[torch.Tensor] = []
         for step_idx in range(max_new_tokens):
-            # Top-k filtering
-            if top_k > 0:
-                top_k_val = min(top_k, next_logits.size(-1))
-                values, _ = torch.topk(next_logits, top_k_val)
-                next_logits = next_logits.clone()
-                next_logits[next_logits < values[-1]] = float("-inf")
-
-            # Sample
-            probs = torch.softmax(next_logits, dim=-1)
-            next_id = torch.multinomial(probs, num_samples=1).item()
-            generated.append(next_id)
+            logits = self._filter_top_k(next_logits, top_k)
+            probs = torch.softmax(logits, dim=-1)
+            next_id = torch.multinomial(probs, num_samples=1)  # [1], on device
+            new_id_tensors.append(next_id)
 
             # Copy next token into the static input tensor and replay
-            runner.input_ids.copy_(torch.tensor([[next_id]], dtype=torch.long, device=device))
+            runner.input_ids.copy_(next_id.view(1, 1))
             logits_step = runner.replay()
             next_logits = logits_step[0, -1, :] / temperature
 
-        return generated
+        new_ids = torch.cat(new_id_tensors).tolist() if new_id_tensors else []
+        return list(prompt_ids) + new_ids
 
     # ------------------------------------------------------------------
     # Fused Triton kernel generation (Issue #33 Fix 1)
@@ -797,49 +863,40 @@ class HamiltonianVortexNetwork(nn.Module):
 
         assert device.type == "cuda", "Fused Triton kernels require a CUDA device"
         self.eval()
-        B = 1
 
         if len(prompt_ids) == 0:
             prompt_ids = [0]
+        prompt_len = len(prompt_ids)
 
-        param_dtype = next(self.parameters()).dtype
-
-        # --- Phase 1: Process prompt using batched forward_step ---
-        # Use the batched path for the prompt (efficient for multi-token)
-        states = self.init_generation_state_batched(B, device=device, dtype=param_dtype)
-        for t in range(len(prompt_ids)):
-            tok = torch.tensor([[prompt_ids[t]]], dtype=torch.long, device=device)
-            logits_step, states = self.forward_step_batched(tok, states, position_idx=t)
-
-        next_logits = logits_step[0, -1, :] / temperature
-        generated = list(prompt_ids)
+        # --- Phase 1: Prefill the prompt in one batched/chunked pass (Issue #36) ---
+        prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long, device=device)
+        last_logits, states = self.prefill_states(prompt_tensor)
+        next_logits = last_logits[0, -1, :] / temperature
 
         # --- Phase 2: Generate using fused Triton kernels ---
+        # Keep sampling on-device; reuse one input buffer; sync ids once.
+        cur = torch.empty(1, 1, dtype=torch.long, device=device)
+        new_id_tensors: list[torch.Tensor] = []
         for step_idx in range(max_new_tokens):
-            # Top-k filtering
-            if top_k > 0:
-                top_k_val = min(top_k, next_logits.size(-1))
-                values, _ = torch.topk(next_logits, top_k_val)
-                next_logits = next_logits.clone()
-                next_logits[next_logits < values[-1]] = float("-inf")
-
-            # Sample
-            probs = torch.softmax(next_logits, dim=-1)
-            next_id = torch.multinomial(probs, num_samples=1).item()
-            generated.append(next_id)
+            logits = self._filter_top_k(next_logits, top_k)
+            probs = torch.softmax(logits, dim=-1)
+            next_id = torch.multinomial(probs, num_samples=1)  # [1], on device
+            new_id_tensors.append(next_id)
 
             # Fused forward step: 2 Triton kernel launches per block
-            x = self.token_embedding(torch.tensor([[next_id]], dtype=torch.long, device=device))
+            cur.copy_(next_id.view(1, 1))
+            x = self.token_embedding(cur)
             new_states = []
             for i, block in enumerate(self.blocks):
-                x, new_state = block.forward_step_fused(x, states[i], position_idx=len(prompt_ids) + step_idx)
+                x, new_state = block.forward_step_fused(x, states[i], position_idx=prompt_len + step_idx)
                 new_states.append(new_state)
             states = new_states
             x = self.final_norm(x)
             logits_step = self.decoder(x)
             next_logits = logits_step[0, -1, :] / temperature
 
-        return generated
+        new_ids = torch.cat(new_id_tensors).tolist() if new_id_tensors else []
+        return list(prompt_ids) + new_ids
 
     # ------------------------------------------------------------------
     # Conversation state management (Issue #25 — Agentic Mode)
@@ -933,35 +990,38 @@ class HamiltonianVortexNetwork(nn.Module):
         states = conv_state["hamiltonian_states"]
         pos = conv_state["position"]
 
-        # Feed input tokens through the model (updating Hamiltonian state)
-        for tok_id in input_ids:
-            tok = torch.tensor([[tok_id]], dtype=torch.long, device=device)
-            logits_step, states = self.forward_step(tok, states, position_idx=pos)
-            pos += 1
+        # Feed input tokens through the model (updating Hamiltonian state).
+        # Multi-turn chat continues from the carried-over state, so it uses the
+        # incremental forward_step path (prefill would reset the state).  Reuse
+        # one input buffer instead of allocating a tensor per token.
+        cur = torch.empty(1, 1, dtype=torch.long, device=device)
+        if len(input_ids) > 0:
+            input_row = torch.tensor([input_ids], dtype=torch.long, device=device)  # [1, T]
+            for t in range(input_row.size(1)):
+                logits_step, states = self.forward_step(
+                    input_row[:, t : t + 1], states, position_idx=pos
+                )
+                pos += 1
+        else:
+            logits_step = None
 
         # Sample first response token
         next_logits = logits_step[0, -1, :] / temperature
-        response_ids = []
 
-        # Generate response tokens
+        # Generate response tokens — keep sampling on-device, sync ids once.
+        resp_id_tensors: list[torch.Tensor] = []
         for step_idx in range(max_new_tokens):
-            # Top-k filtering
-            if top_k > 0:
-                top_k_val = min(top_k, next_logits.size(-1))
-                values, _ = torch.topk(next_logits, top_k_val)
-                next_logits = next_logits.clone()
-                next_logits[next_logits < values[-1]] = float("-inf")
+            logits = self._filter_top_k(next_logits, top_k)
+            probs = torch.softmax(logits, dim=-1)
+            next_id = torch.multinomial(probs, num_samples=1)  # [1], on device
+            resp_id_tensors.append(next_id)
 
-            # Sample
-            probs = torch.softmax(next_logits, dim=-1)
-            next_id = torch.multinomial(probs, num_samples=1).item()
-            response_ids.append(next_id)
-
-            # Forward step
-            tok = torch.tensor([[next_id]], dtype=torch.long, device=device)
-            logits_step, states = self.forward_step(tok, states, position_idx=pos)
+            cur.copy_(next_id.view(1, 1))
+            logits_step, states = self.forward_step(cur, states, position_idx=pos)
             pos += 1
             next_logits = logits_step[0, -1, :] / temperature
+
+        response_ids = torch.cat(resp_id_tensors).tolist() if resp_id_tensors else []
 
         # Update conversation state
         conv_state["hamiltonian_states"] = states
@@ -1075,19 +1135,15 @@ class HamiltonianVortexNetwork(nn.Module):
             device = next(self.parameters()).device
 
         self.eval()
-        B = 1
 
         if len(prompt_ids) == 0:
             prompt_ids = [0]
+        prompt_len = len(prompt_ids)
 
-        # Initialize states and process prompt
-        states = self.init_generation_state(B, device=device, dtype=next(self.parameters()).dtype)
-
-        for t in range(len(prompt_ids)):
-            tok = torch.tensor([[prompt_ids[t]]], dtype=torch.long, device=device)
-            logits_step, states = self.forward_step(tok, states, position_idx=t)
-
-        next_logits = logits_step[0, -1, :] / temperature
+        # Prefill the prompt in one batched/chunked pass (Issue #36).
+        prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long, device=device)
+        last_logits, states = self.prefill_states(prompt_tensor)
+        next_logits = last_logits[0, -1, :] / temperature
 
         generated = list(prompt_ids)
         stop_set = set(stop_token_ids) if stop_token_ids else set()
@@ -1100,22 +1156,20 @@ class HamiltonianVortexNetwork(nn.Module):
                 if 0 <= tid < self.vocab_size:
                     allowed_mask[tid] = True
 
+        # Reuse one input buffer.  The sampled id must be synced each step here
+        # because stop / constrained-decoding decisions depend on its value.
+        cur = torch.empty(1, 1, dtype=torch.long, device=device)
         for step_idx in range(max_new_tokens):
             # Apply allowed-token constraint (JSON-constrained decoding)
             if allowed_mask is not None:
-                next_logits = next_logits.clone()
-                next_logits[~allowed_mask] = float("-inf")
+                next_logits = next_logits.masked_fill(~allowed_mask, float("-inf"))
 
-            # Top-k filtering
-            if top_k > 0:
-                top_k_val = min(top_k, next_logits.size(-1))
-                values, _ = torch.topk(next_logits, top_k_val)
-                next_logits = next_logits.clone()
-                next_logits[next_logits < values[-1]] = float("-inf")
+            next_logits = self._filter_top_k(next_logits, top_k)
 
             # Sample
             probs = torch.softmax(next_logits, dim=-1)
-            next_id = torch.multinomial(probs, num_samples=1).item()
+            next_id_t = torch.multinomial(probs, num_samples=1)  # [1]
+            next_id = int(next_id_t.item())
             generated.append(next_id)
 
             # Check stop condition
@@ -1123,8 +1177,10 @@ class HamiltonianVortexNetwork(nn.Module):
                 break
 
             # Forward step: O(d²) — no context reprocessing!
-            tok = torch.tensor([[next_id]], dtype=torch.long, device=device)
-            logits_step, states = self.forward_step(tok, states, position_idx=len(prompt_ids) + step_idx)
+            cur.copy_(next_id_t.view(1, 1))
+            logits_step, states = self.forward_step_batched(
+                cur, states, position_idx=prompt_len + step_idx
+            )
             next_logits = logits_step[0, -1, :] / temperature
 
         return generated

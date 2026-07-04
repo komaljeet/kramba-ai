@@ -460,6 +460,13 @@ vocab=256 unless noted.
 | Transformer | 780.6 | 1.28 | 13.0 MB | 461,312 |
 | SSM | 40.0 | 25.0 | 12.8 MB | 362,496 |
 
+**Incremental generation loop cleanups (Issue #36, warmed best-of-5, d=128, 2L, prompt=64,
+200 new tokens):** removing the redundant prompt prefill + moving decode sampling on-device
+takes `generate_incremental` from **65.4 → 160.7 tok/s (2.46×)**, stacking on top of #33's
+kernels (`--cuda_graph` 350 tok/s, `--fused_kernel` 354 tok/s). Prompt prefill for the
+DeltaNet path is now a single chunked pass — **42.7×** fewer kernel launches than
+token-by-token on a 512-token prompt.
+
 **Forward pass scaling (ms/token, batch=1):** HVN flat 5.06→5.05 from N=256→4096 (**O(1) ✓**);
 SSM ~0.43 flat; Transformer sub-ms (Flash Attention). **Memory at N=4096:** HVN 38.4 MB vs
 Transformer 48.3 MB (20% less) vs SSM 36.3 MB.
@@ -564,9 +571,19 @@ LoRA, QLoRA, instruction tuning, LoRA save/load, demo (#29).
   regularization noise, not architectural scaling). Gates whether scaling is real. **Note:**
   #34 already validated the dynamics diagnosis by direct A/B, so this is confirmatory
   measurement, not a blocker.
-- **9.3 Generation-speed cleanups (#36)** — ⬜ Open. Remove the dead full-`forward()` prompt
-  prefill in `generate_incremental` (prompt is processed twice); batch/chunk the prefill; cut
-  per-token tensor alloc + `.item()` host-device syncs. Complements #33's kernel work.
+- **9.3 Generation-speed cleanups (#36)** — ✅ **Done**. Removed the dead full-`forward()`
+  prompt prefill in `generate_incremental` (the prompt was processed twice), and moved decode
+  sampling on-device: reuse one preallocated input buffer (no per-token host→device alloc),
+  keep top-k + `multinomial` on-device, and sync generated ids to host once at the end (no
+  per-step `.item()`). New `prefill_states` absorbs the prompt in a single pass with two exact
+  paths: DeltaNet uses the algebraically-exact chunked scan (O(chunks) launches — **42.7×**
+  fewer than token-by-token on a 512-token prompt); the default HVN path uses the exact
+  sequential recurrence (its chunked forward is a within-chunk *approximation*, so prefilling
+  through it would change output). Result: `generate_incremental` **65.4 → 160.7 tok/s
+  (2.46×)** (d=128, 2L, prompt=64, 200 new tokens, warmed best-of-5), verified token-for-token
+  identical to the previous implementation (`test_issue36.py` 5/5, `top_k=1` greedy parity),
+  and **stackable** with #33 kernels (`--cuda_graph` 350 tok/s, `--fused_kernel` 354 tok/s).
+  O(1) preserved; `demo.py`, `test_issue33.py`, `test_issue34.py` regressions pass.
 
 ---
 
@@ -626,8 +643,9 @@ regress >2% per fix; Triton kernel dtype-agnostic.
   Phases 2–5 on `hvn/core` not layered in by design).
 - **#35 — Re-measure scaling on WikiText-103** (created 2026-07-04): flat exponent came from
   34K chars; measurement-only, confirmatory (see §9.2).
-- **#36 — Speed up incremental generation** (created 2026-07-04): remove redundant prefill +
-  per-token host-device syncs (see §9.3).
+- **#36 — Speed up incremental generation** ✅ **Done** (2026-07-04): removed redundant prefill
+  + per-token host↔device syncs; `generate_incremental` 65.4 → 160.7 tok/s (2.46×), stacks
+  with #33 kernels (see §9.3).
 
 ### #34 — Close the PPL Gap via Readout/Update Dynamics — ✅ Done (2026-07-04)
 
