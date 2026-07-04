@@ -917,7 +917,14 @@ back to CPU.
 login wall + Cloudflare challenge). Examples: `glab issue view <id> --repo komalbarun/kramba-ai`,
 `glab issue list`, `glab work-items list`. Per-issue workflow:
 
-1. Create a branch `issue-NN-short-description` (never work on `main` directly).
+1. **Always branch from an up-to-date `main`.** First sync local `main` with the remote,
+   then cut the branch off it — never off whatever branch happens to be checked out (that
+   inherits unrelated in-flight work):
+   ```bash
+   git checkout main && git pull origin main
+   git checkout -b issue-NN-short-description
+   ```
+   Never work on `main` directly.
 2. Implement the change; verify with a real test or runnable command on GPU.
 3. Commit referencing the issue (`git commit -m "Fix: … for issue #NN"`).
 4. Push the branch (`git push origin <branch>`).
