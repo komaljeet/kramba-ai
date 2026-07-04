@@ -521,7 +521,43 @@ Transformer 48.3 MB (20% less) vs SSM 36.3 MB.
 Deferred: Fix 2 (flash-style tiling, needed when d_model>1024), Fix 5 (fully parallel
 positional injection, research-level).
 
-### 8.4 Honest Assessment
+### 8.4 Real-Scale Scaling Re-measurement (Issue #35)
+
+Rebuilt scaling harness (`eval/scaling_laws.py`): **compute-matched** (fixed per-model token
+budget, not epochs), **full held-out eval PPL** (whole valid split in `seq_len` chunks), BPE +
+SSM added, per-model saturation tracking, streaming WikiText-103 loader.
+
+**Headline run — WikiText-103, BPE (vocab 8,000), 5M-token compute-matched budget** (12.4M
+unique train tokens available, so no repeats — models are **not** data-starved), d={128,256,512,768},
+2 layers, seq_len=128, bf16, RTX 4050:
+
+| Model | d=128 | d=256 | d=512 | d=768 | Params (d=768) | **Exponent** (PPL ∝ N^b) |
+|-------|------:|------:|------:|------:|---------------:|:---:|
+| **HVN** (default) | 521.1 | 351.9 | 236.1 | 205.8 | 21.75M | **−0.4237** |
+| Transformer | 395.6 | 246.0 | 172.9 | 150.3 | 26.46M | −0.4066 |
+| SSM | 366.8 | 225.2 | 138.5 | 110.6 | 22.92M | −0.5311 |
+
+All three models are **still improving at 5M tokens** (unsaturated — the correct regime for a
+scaling law). Absolute PPL is high because 5M tokens is a small budget for BPE-8000; the
+**exponent**, not the absolute PPL, is the quantity of interest.
+
+**Result — the flat exponent was a small-data artifact.** On real-scale data HVN scales at
+**−0.42**, essentially matching Transformer (**−0.41**) and near SSM (−0.53) — a ~100× steeper
+exponent than the original **−0.007**. HVN's PPL drops 521 → 206 (2.5×) across a 9× param
+increase; it clearly benefits from scale. The "HVN doesn't scale" narrative is **refuted**.
+
+**Small-data control — full Tiny-Shakespeare, char-level, 2M-token budget** (1.0M train chars,
+32× the 34K the −0.007 was fit on): HVN −0.0042, Transformer −0.0252, SSM −0.1060; HVN saturates
+at ~1M tokens (all sizes). This *reproduces* the flat exponent — and shows why it is an artifact:
+at 1M chars every size saturates early (data-bound), so the exponent measures saturation noise,
+not architectural scaling. Move to a corpus where models aren't starved and the flatness vanishes.
+
+*Caveats:* default HVN only (`--use_deltanet` (#34) not swept — the obvious next experiment);
+5M-token reduced budget, not the full ~100M — absolute PPLs will drop substantially at a larger
+budget, but the exponent comparison is already in the trustworthy (unsaturated) regime. Reproduce
+/ scale up via the one-command job in §9.2.
+
+### 8.5 Honest Assessment
 
 **Where HVN wins:** memory efficiency (O(1) vs O(N)), parameter efficiency (43% fewer),
 theoretical O(1) per-token scaling (flat N=256→4096), incremental generation, kernels
@@ -555,8 +591,10 @@ fully parallel with learned positional injection (research moonshot, loses causa
 ### Phase 6: Evaluation & Scaling — ✅ Complete
 
 Real-dataset benchmarks (#2), long-context N=256→4096 + needle-in-haystack (#2), scaling
-laws (#18). **Original finding (now questioned — see Phase 9/#35):** no wall-clock crossover;
-HVN PPL ∝ params^-0.007 (nearly flat) vs Transformer params^-0.090 (steep).
+laws (#18). **Original finding (now overturned):** HVN PPL ∝ params^-0.007 (nearly flat). **#35
+re-measurement on real WikiText-103 (BPE, compute-matched, unsaturated):** HVN scales at **−0.42**
+≈ Transformer −0.41 — the flat −0.007 was a 34K-char artifact; HVN benefits from scale normally
+(see §8.4 / §9.2).
 
 ### Phase 7: Inference Optimization & Production — ✅ / ⬜ mixed
 
@@ -581,12 +619,32 @@ LoRA, QLoRA, instruction tuning, LoRA save/load, demo (#29).
   A/B tiny-Shakespeare (d=128, 2L): PPL **8.81 → 3.42 = 61% better** (target ≥30%). O(1)
   preserved. Training via chunked-parallel delta rule (Yang et al. 2024): 27.5 → 3.7 s/epoch
   (~7.4×), numerically identical to sequential scan (max|diff| 4.8e-7). `test_issue34.py` 5/5.
-- **9.2 Real-scale scaling validation (#35)** — ⬜ Open. Wire WikiText-103 (≥100M tokens)
-  into `eval/scaling_laws.py`; compute-matched sweep; refit exponents. The current -0.007 is
-  from 34K chars and untrustworthy (deep in overfit/saturation regime — measures
-  regularization noise, not architectural scaling). Gates whether scaling is real. **Note:**
-  #34 already validated the dynamics diagnosis by direct A/B, so this is confirmatory
-  measurement, not a blocker.
+- **9.2 Real-scale scaling validation (#35)** — ✅ **Done — the flat exponent was a small-data
+  artifact.** Rewired `eval/scaling_laws.py` for a *methodologically correct* scaling study:
+  **compute-matched** training (every size sees the same **token budget**, not the same epochs),
+  **full held-out eval PPL** (whole valid split in `seq_len` chunks, not a single mid-text batch),
+  **BPE** tokenizer support, **SSM** added to the sweep, and a per-model eval-PPL-vs-tokens
+  trajectory reporting each model's **saturation token budget**. Added a streaming WikiText-103
+  loader (`eval/datasets.py`, `--dataset wikitext103 --local-path <dir>`, char-capped reads to
+  bound memory on the 539 MB corpus).
+
+  **Headline run — real WikiText-103, BPE (vocab 8,000), 5M-token compute-matched budget** (12.4M
+  unique train tokens, so unsaturated), d={128,256,512,768}, 2L, bf16, RTX 4050 (see §8.4).
+  **Refit exponents: HVN −0.4237, Transformer −0.4066, SSM −0.5311.** HVN scales *as well as* a
+  Transformer (marginally steeper) and its PPL drops 521 → 206 across a 9× param increase — a
+  ~100× steeper exponent than the original −0.007. **The "HVN doesn't benefit from scale"
+  conclusion is refuted:** it was an artifact of fitting on 34K characters (deep in the
+  overfit/saturation regime). A **small-data control** on full Tiny-Shakespeare (char-level, 32×
+  the original data) *reproduces* the flat exponent (HVN −0.0042) precisely because every size
+  saturates at ~1M tokens there — confirming the artifact mechanism. **Caveat:** default HVN only
+  (the #34 `--use_deltanet` fix was not swept); 5M-token reduced budget (absolute PPLs drop at a
+  larger budget, but the exponent is already in the trustworthy unsaturated regime). Scale up via:
+  ```bash
+  python -m eval.scaling_laws --dataset wikitext103 --local-path wikitext-103-v1 \
+      --tokenizer bpe --bpe_vocab 8000 --token_budget 100_000_000 \
+      --d_models 128,256,512,768 --precision bf16 --compile \
+      --output-json results/scaling_wt103.json --output-plot results/scaling_wt103.png
+  ```
 - **9.3 Generation-speed cleanups (#36)** — ✅ **Done**. Removed the dead full-`forward()`
   prompt prefill in `generate_incremental` (the prompt was processed twice), and moved decode
   sampling on-device: reuse one preallocated input buffer (no per-token host→device alloc),
@@ -659,8 +717,12 @@ regress >2% per fix; Triton kernel dtype-agnostic.
   Initial `docs/dashboard.html` built; issue covers refinement.
 - **#32 — Extreme weight compression**: see §10 (Phase 1 + edge-devices branch done;
   Phases 2–5 on `hvn/core` not layered in by design).
-- **#35 — Re-measure scaling on WikiText-103** (created 2026-07-04): flat exponent came from
-  34K chars; measurement-only, confirmatory (see §9.2).
+- **#35 — Re-measure scaling on real-scale data** ✅ **Done** (2026-07-04): rebuilt harness
+  (compute-matched token budget, full eval PPL, BPE, SSM, saturation tracking, streaming
+  WikiText-103 loader). On real WikiText-103 (BPE, 5M-token compute-matched, unsaturated) HVN
+  scales at **−0.4237** ≈ Transformer −0.4066 (SSM −0.5311) — the flat **−0.007** was a **34K-char
+  artifact**, now refuted; a full-Shakespeare small-data control reproduces the flat exponent via
+  early saturation, confirming the mechanism (see §8.4 / §9.2).
 - **#36 — Speed up incremental generation** ✅ **Done** (2026-07-04): removed redundant prefill
   + per-token host↔device syncs; HVN decode 80.7 → 197.7 tok/s (2.45×), DeltaNet
   time-to-first-token 1,612 → 23 ms (70×), stacks with #33 kernels (see §9.3).
@@ -686,6 +748,12 @@ O(1) scaling (2.57 ms/tok flat N=256→4096), 1500-token stability with no clamp
 | HVN (#22 n_threads=4 + all strategies) | ~8.13 | -0.0123 |
 | HVN (#21 strategies) | ~8.37 | -0.0126 |
 | HVN (original) | ~8.37 | -0.007 |
+
+> **Exponent caveat (#35):** every "Scaling exponent" above was fit on **char-level
+> Tiny-Shakespeare**, which is small enough that all model sizes saturate — so these numbers
+> measure saturation noise, **not** architectural scaling. On real WikiText-103 (BPE,
+> compute-matched, unsaturated) HVN scales at **−0.42** ≈ Transformer −0.41 (see §8.4). Read the
+> flat char-Shakespeare exponents as a small-data artifact, not a property of HVN.
 
 **Root cause (superseded → confirmed):** previously attributed to a "fundamental compression
 bottleneck" of the d×d matrix. Now known **wrong** — the SSM reaches PPL ~1.1 with a *smaller*
@@ -732,7 +800,10 @@ login wall + Cloudflare challenge). Examples: `glab issue view <id> --repo komal
 2. Implement the change; verify with a real test or runnable command on GPU.
 3. Commit referencing the issue (`git commit -m "Fix: … for issue #NN"`).
 4. Push the branch (`git push origin <branch>`).
-5. Merge to `main`; close the issue when resolved (or reopen if it regresses).
+5. **Always open a Merge Request** with `glab mr create` — target `main`, put `Closes #NN`
+   in the description so the issue auto-closes on merge, and add a `glab issue note NN`
+   summarizing the result + linking the MR. Never push to or merge `main` directly; the
+   maintainer reviews and merges the MR manually.
 
 GitLab project: https://gitlab.com/komalbarun/kramba-ai
 

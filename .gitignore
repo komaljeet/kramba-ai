@@ -6,3 +6,4 @@ web/.env
 web/staticfiles/
 web/db.sqlite3
 web/celerybeat-schedule*
+wikitext-103-v1
