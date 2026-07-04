@@ -379,6 +379,7 @@ add `--grad_accum 4` to recover effective batch.
 | `--n_threads` | 1 | Independent H threads per head (Issue #22); 4 recommended |
 | `--use_parallel_scan` | flag | Associative parallel scan (Issue #33 Fix 3) |
 | `--use_deltanet` | flag | Gated-DeltaNet dynamics (Issue #34) |
+| `--weightless` | flag | Freeze DeltaNet q/k/v/out projections as seed-regenerated random features (Issue #40; needs `--use_deltanet`) |
 
 ### Precision Guide
 
@@ -622,6 +623,37 @@ O(1) preserved (`test_issue34.py` 5/5, `test_issue33.py` 5/5, `demo.py` pass). `
 now safe to run in bf16 at all widths, which **unblocks the #39 default-flip decision** (left to a
 follow-up so this change keeps defaults unchanged).
 
+### 8.8 Hybrid Weightless Projections for Gated-DeltaNet (Issue #40)
+
+*"Instead of using weights, use something else to keep file size / memory low — we already won
+the no-qkv battle."* The Hamiltonian H is **already** weightless (runtime state, never
+trained/stored). #40 targets the remaining trained tensors. A **fully** weightless net is not
+viable — the #34 DeltaNet win came *specifically* from the **learned, data-dependent dynamics**
+(`α_t=σ(W_α x)`, `β_t=σ(W_β x)`, output gate, causal conv), so freezing those hands most of it
+back. So the shipped variant (`--weightless`, requires `--use_deltanet`,
+`hvn/core/weightless.py`) is a **hybrid**: freeze the four big `d×d` "address/content"
+projections (`q/k/v/out`) as **PRNG-seed-regenerated random features** — each stored as *one
+integer*, not `d²` floats (`SeededLinear`, a non-persistent buffer regenerated from the seed on
+load) — while keeping the tiny high-leverage learned core (`α/β/g` gates, conv, read RMSNorm).
+
+A/B on the bundled tiny-Shakespeare sample (the #34 scale — d=128, 2L, 20 epochs, bf16, RTX 4050),
+dense vs weightless DeltaNet, identical config/seed:
+
+| Variant | Params | Eval PPL | Checkpoint |
+|---------|-------:|---------:|-----------:|
+| DeltaNet (dense) | 344,633 | 1.087 | 1,359 KB |
+| **DeltaNet (weightless)** | **213,561 (−38%)** | **1.220 (+12.3%)** | **845 KB (−37.8%)** |
+
+Freezing the four projections removes `4·d²·L` floats (here 131,072), cutting params/checkpoint
+~38% for a **+12.3% relative PPL** cost — the model stays reliable (both memorize the sample near
+perfectly). O(1) inference, no-KV, fixed d×d state and forward↔incremental parity are all
+preserved (freezing a projection is orthogonal to them); checkpoints round-trip **exactly** by
+regenerating the frozen matrices from the stored seed. `test_issue40.py` 6/6; `test_issue34.py`
+5/5, `demo.py` pass. *Scope:* flag-gated, defaults unchanged; PPL is the memorization regime, so
+read the −38% size / +12% PPL trade as the small-scale signal, not a scaled headline. At larger
+`d` the `4d²`-per-layer projection share grows relative to the `vocab·d` embedding, so the size
+win grows (and the PPL cost should be re-measured at scale).
+
 ### 8.5 Honest Assessment
 
 **Where HVN wins:** memory efficiency (O(1) vs O(N)), parameter efficiency (43% fewer),
@@ -776,6 +808,11 @@ regress >2% per fix; Triton kernel dtype-agnostic.
 
 ### Open Issues
 
+- **#40 — Non-weights NN** 🔄 **Hybrid shipped (flag-gated)** (2026-07-04): fully weightless is
+  not viable (it hands back the #34 learned-dynamics win), so `--weightless` freezes the DeltaNet
+  `q/k/v/out` projections as seed-regenerated random features (`hvn/core/weightless.py`) while
+  keeping the learned gates/conv. A/B: −38% params/checkpoint at +12.3% PPL, O(1) preserved,
+  exact seed round-trip (see §8.8). Defaults unchanged; scale-up PPL cost still to be measured.
 - **#25 — Agentic mode**: ReAct-style loop with planning, tool chaining, self-correction.
   Depends on #24 (done).
 - **#26 — Training dashboard**: single-page HTML/CSS/JS (Chart.js via CDN), no server.

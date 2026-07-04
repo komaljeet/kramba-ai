@@ -292,6 +292,8 @@ def train_model(
         "chunk_size": model.blocks[0].chunk_size if hasattr(model.blocks[0], 'chunk_size') else 64,
         "use_deltanet": getattr(model, "use_deltanet", False),
         "deltanet_conv_kernel": getattr(model.blocks[0], "conv_kernel", 4),
+        "weightless": getattr(model, "weightless", False),
+        "weightless_seed": getattr(model, "weightless_seed", 1234),
     }, save_path)
     print(f"\n✓ Model saved to {save_path}")
 
@@ -412,6 +414,9 @@ def main():
     # --- Issue #34: Gated-DeltaNet readout/update dynamics ---
     parser.add_argument("--use_deltanet", action="store_true", help="Use Gated-DeltaNet blocks (Issue #34): per-channel decay gate + readout normalizer + separate k/v DeltaNet update + output gate/conv. Fixes the PPL gap. Preserves O(1) inference. Overrides HVN-specific strategy flags.")
     parser.add_argument("--deltanet_conv_kernel", type=int, default=4, help="Kernel size of the short causal depthwise conv in DeltaNet blocks (Issue #34). 0/1 disables it.")
+    # --- Issue #40: hybrid weightless projections ---
+    parser.add_argument("--weightless", action="store_true", help="Issue #40 (requires --use_deltanet): freeze the q/k/v/out DeltaNet projections as seed-regenerated random features (stored as one integer, not d² floats each) while keeping the learned data-dependent gates/conv. Shrinks the checkpoint; A/B the PPL cost. Preserves O(1) inference.")
+    parser.add_argument("--weightless_seed", type=int, default=1234, help="Base PRNG seed for the frozen weightless projections (Issue #40).")
     # --- Issue #23: Vision / multimodal ---
     parser.add_argument("--vision", action="store_true", help="Enable vision/multimodal mode (Issue #23). Trains image+text with patch embeddings.")
     parser.add_argument("--image_size", type=int, default=64, help="Image size (square, default 64 for fast demo)")
@@ -532,6 +537,8 @@ def main():
         use_parallel_scan=args.use_parallel_scan,
         use_deltanet=args.use_deltanet,
         deltanet_conv_kernel=args.deltanet_conv_kernel,
+        weightless=args.weightless,
+        weightless_seed=args.weightless_seed,
     )
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {param_count:,}")
@@ -584,6 +591,8 @@ def main():
             "chunk_size": model.blocks[0].chunk_size if hasattr(model.blocks[0], 'chunk_size') else 64,
             "use_deltanet": getattr(model, "use_deltanet", False),
             "deltanet_conv_kernel": getattr(model.blocks[0], "conv_kernel", 4),
+            "weightless": getattr(model, "weightless", False),
+            "weightless_seed": getattr(model, "weightless_seed", 1234),
         }, args.save)
         print(f"✓ Merged model saved to {args.save}")
     elif args.lora or args.qlora:
