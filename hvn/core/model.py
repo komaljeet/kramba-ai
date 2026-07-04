@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 from .hvn_block import HVNBlock
 from .deltanet import DeltaNetBlock
+from .weightless import WeightlessDeltaNetBlock
 from .decoder import HVNDecoder
 
 
@@ -143,6 +144,8 @@ class HamiltonianVortexNetwork(nn.Module):
         use_parallel_scan: bool = False,
         use_deltanet: bool = False,
         deltanet_conv_kernel: int = 4,
+        weightless: bool = False,
+        weightless_seed: int = 1234,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -152,6 +155,10 @@ class HamiltonianVortexNetwork(nn.Module):
         self.n_threads = n_threads
         self.use_parallel_scan = use_parallel_scan
         self.use_deltanet = use_deltanet
+        # Issue #40: hybrid weightless variant — seed-regenerated (frozen) q/k/v/
+        # out projections in the DeltaNet block; only meaningful with DeltaNet.
+        self.weightless = weightless and use_deltanet
+        self.weightless_seed = weightless_seed
 
         # Token embedding
         self.token_embedding = nn.Embedding(vocab_size, d_model)
@@ -160,8 +167,13 @@ class HamiltonianVortexNetwork(nn.Module):
         # dynamics block (Issue #34) which fixes the readout/update dynamics;
         # otherwise use the original HVNBlock (default — backward compatible).
         if use_deltanet:
+            # Issue #40: when weightless, the q/k/v/out projections are frozen
+            # seed-regenerated random features (WeightlessDeltaNetBlock); the
+            # data-dependent gates/conv stay learned.  Otherwise the standard
+            # fully-trained DeltaNetBlock (#34).
+            block_cls = WeightlessDeltaNetBlock if self.weightless else DeltaNetBlock
             self.blocks = nn.ModuleList([
-                DeltaNetBlock(
+                block_cls(
                     d_model=d_model,
                     n_heads=n_heads,
                     dropout=dropout,
@@ -169,8 +181,9 @@ class HamiltonianVortexNetwork(nn.Module):
                     use_swiglu=use_swiglu,
                     bond_dimension=bond_dimension,
                     chunk_size=chunk_size,
+                    **({"seed": weightless_seed, "layer_idx": i} if self.weightless else {}),
                 )
-                for _ in range(num_layers)
+                for i in range(num_layers)
             ])
         else:
             self.blocks = nn.ModuleList([

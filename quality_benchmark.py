@@ -209,6 +209,9 @@ def main():
     # --- Issue #34: Gated-DeltaNet readout/update dynamics ---
     parser.add_argument("--use_deltanet", action="store_true", help="Use Gated-DeltaNet blocks (Issue #34): fixes readout/update dynamics to close the PPL gap. Preserves O(1) inference.")
     parser.add_argument("--deltanet_conv_kernel", type=int, default=4, help="Kernel size of the short causal depthwise conv in DeltaNet blocks (Issue #34).")
+    # --- Issue #40: hybrid weightless projections ---
+    parser.add_argument("--weightless", action="store_true", help="Issue #40 (requires --use_deltanet): freeze q/k/v/out DeltaNet projections as seed-regenerated random features. A/B the PPL cost of the checkpoint-size saving.")
+    parser.add_argument("--weightless_seed", type=int, default=1234, help="Base PRNG seed for the frozen weightless projections (Issue #40).")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -261,6 +264,8 @@ def main():
             use_parallel_scan=args.use_parallel_scan,
             use_deltanet=args.use_deltanet,
             deltanet_conv_kernel=args.deltanet_conv_kernel,
+            weightless=args.weightless,
+            weightless_seed=args.weightless_seed,
         ),
         "Transformer": TransformerLM(
             vocab_size=vocab_size, d_model=args.d_model,
