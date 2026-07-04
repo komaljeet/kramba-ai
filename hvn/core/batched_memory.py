@@ -152,7 +152,11 @@ class MultiHeadHamiltonianMemory(nn.Module):
             eta_b = eta_avg.gather(1, head_indices.unsqueeze(1)).view(BH, 1, 1)  # [BH, 1, 1]
         else:
             eta = torch.clamp(self.eta, min=0.0, max=1.0)  # [n_heads]
-            eta_expanded = eta.repeat_interleave(BH // self.n_heads)  # [BH]
+            # Batch is batch-outer (bh = b*n_heads + h), so tile per-head eta with
+            # repeat (not repeat_interleave) to match — Issue #46.  This mirrors the
+            # input-dependent branch above, which already indexes batch-outer via
+            # ``arange(BH) % n_heads``.
+            eta_expanded = eta.repeat(BH // self.n_heads)  # [BH]
             eta_b = eta_expanded.view(BH, 1, 1)  # [BH, 1, 1]
 
         # --- Normalise all velocity vectors ---
@@ -218,7 +222,7 @@ class MultiHeadHamiltonianMemory(nn.Module):
             hamiltonian_new = self._svd_truncate_batched(hamiltonian_new)
 
         # --- Per-head memory gate ---
-        gate_expanded = self.memory_gate.repeat_interleave(BH // self.n_heads)  # [BH]
+        gate_expanded = self.memory_gate.repeat(BH // self.n_heads)  # [BH]
         hamiltonian_new = hamiltonian_new * gate_expanded.view(BH, 1, 1)
 
         return hamiltonian_new
@@ -264,7 +268,7 @@ class MultiHeadHamiltonianMemory(nn.Module):
             eta_per_token = eta_all.gather(2, idx).squeeze(-1)  # [BH, S]
         else:
             eta = torch.clamp(self.eta, min=0.0, max=1.0)
-            eta_expanded = eta.repeat_interleave(BH // self.n_heads)
+            eta_expanded = eta.repeat(BH // self.n_heads)
             eta_per_token = eta_expanded.view(BH, 1).expand(BH, S)  # [BH, S]
 
         for t in range(S):
@@ -319,7 +323,7 @@ class MultiHeadHamiltonianMemory(nn.Module):
             H = self._svd_truncate_batched(H)
 
         # Per-head memory gate
-        gate_expanded = self.memory_gate.repeat_interleave(BH // self.n_heads)
+        gate_expanded = self.memory_gate.repeat(BH // self.n_heads)
         H = H * gate_expanded.view(BH, 1, 1)
 
         return H
@@ -375,7 +379,7 @@ class MultiHeadHamiltonianMemory(nn.Module):
             eta = eta_avg.gather(1, head_indices.unsqueeze(1)).view(BH)  # [BH]
         else:
             eta = torch.clamp(self.eta, min=0.0, max=1.0)
-            eta = eta.repeat_interleave(BH // self.n_heads)  # [BH]
+            eta = eta.repeat(BH // self.n_heads)  # [BH]
 
         # --- Normalize velocities ---
         v_norms = velocities.norm(dim=-1, keepdim=True).clamp(min=1e-8)
@@ -451,7 +455,7 @@ class MultiHeadHamiltonianMemory(nn.Module):
             H_scanned = self._svd_truncate_batched(H_scanned)
 
         # --- Per-head memory gate ---
-        gate_expanded = self.memory_gate.repeat_interleave(BH // self.n_heads)
+        gate_expanded = self.memory_gate.repeat(BH // self.n_heads)
         H_scanned = H_scanned * gate_expanded.view(BH, 1, 1)
 
         return H_scanned
@@ -522,7 +526,7 @@ class MultiHeadHamiltonianMemory(nn.Module):
             eta_t = torch.sigmoid(eta_raw.gather(1, head_indices.unsqueeze(1))).view(BH, 1, 1)
         else:
             eta = torch.clamp(self.eta, min=0.0, max=1.0)
-            eta_expanded = eta.repeat_interleave(BH // self.n_heads)
+            eta_expanded = eta.repeat(BH // self.n_heads)
             eta_t = eta_expanded.view(BH, 1, 1)
 
         v_norm = velocity.norm(dim=-1, keepdim=True).clamp(min=1e-8)
@@ -565,7 +569,7 @@ class MultiHeadHamiltonianMemory(nn.Module):
         if self.bond_dimension is not None and self.bond_dimension < D:
             hamiltonian_new = self._svd_truncate_batched(hamiltonian_new)
 
-        gate_expanded = self.memory_gate.repeat_interleave(BH // self.n_heads)
+        gate_expanded = self.memory_gate.repeat(BH // self.n_heads)
         hamiltonian_new = hamiltonian_new * gate_expanded.view(BH, 1, 1)
 
         return hamiltonian_new
@@ -881,7 +885,7 @@ class MultiThreadHamiltonianMemory(nn.Module):
             eta_b = eta_avg.gather(1, unit_indices.unsqueeze(1)).view(BU, 1, 1)
         else:
             eta = torch.clamp(self.eta, min=0.0, max=1.0)
-            eta_expanded = eta.repeat_interleave(BU // self.n_units)
+            eta_expanded = eta.repeat(BU // self.n_units)
             eta_b = eta_expanded.view(BU, 1, 1)
 
         # --- Normalise all velocity vectors ---
@@ -930,7 +934,7 @@ class MultiThreadHamiltonianMemory(nn.Module):
             hamiltonian_new = self._svd_truncate_batched(hamiltonian_new)
 
         # --- Per-unit memory gate ---
-        gate_expanded = self.memory_gate.repeat_interleave(BU // self.n_units)
+        gate_expanded = self.memory_gate.repeat(BU // self.n_units)
         hamiltonian_new = hamiltonian_new * gate_expanded.view(BU, 1, 1)
 
         return hamiltonian_new
@@ -963,7 +967,7 @@ class MultiThreadHamiltonianMemory(nn.Module):
             eta_per_token = eta_all.gather(2, idx).squeeze(-1)
         else:
             eta = torch.clamp(self.eta, min=0.0, max=1.0)
-            eta_expanded = eta.repeat_interleave(BU // self.n_units)
+            eta_expanded = eta.repeat(BU // self.n_units)
             eta_per_token = eta_expanded.view(BU, 1).expand(BU, S)
 
         for t in range(S):
@@ -1006,7 +1010,7 @@ class MultiThreadHamiltonianMemory(nn.Module):
         if self.bond_dimension is not None and self.bond_dimension < D:
             H = self._svd_truncate_batched(H)
 
-        gate_expanded = self.memory_gate.repeat_interleave(BU // self.n_units)
+        gate_expanded = self.memory_gate.repeat(BU // self.n_units)
         H = H * gate_expanded.view(BU, 1, 1)
 
         return H
@@ -1067,7 +1071,7 @@ class MultiThreadHamiltonianMemory(nn.Module):
             ).view(BU, 1, 1)
         else:
             eta = torch.clamp(self.eta, min=0.0, max=1.0)
-            eta_expanded = eta.repeat_interleave(BU // self.n_units)
+            eta_expanded = eta.repeat(BU // self.n_units)
             eta_t = eta_expanded.view(BU, 1, 1)
 
         v_norm = velocity.norm(dim=-1, keepdim=True).clamp(min=1e-8)
@@ -1106,7 +1110,7 @@ class MultiThreadHamiltonianMemory(nn.Module):
         if self.bond_dimension is not None and self.bond_dimension < D:
             hamiltonian_new = self._svd_truncate_batched(hamiltonian_new)
 
-        gate_expanded = self.memory_gate.repeat_interleave(BU // self.n_units)
+        gate_expanded = self.memory_gate.repeat(BU // self.n_units)
         hamiltonian_new = hamiltonian_new * gate_expanded.view(BU, 1, 1)
 
         return hamiltonian_new
