@@ -813,6 +813,14 @@ regress >2% per fix; Triton kernel dtype-agnostic.
   `q/k/v/out` projections as seed-regenerated random features (`hvn/core/weightless.py`) while
   keeping the learned gates/conv. A/B: −38% params/checkpoint at +12.3% PPL, O(1) preserved,
   exact seed round-trip (see §8.8). Defaults unchanged; scale-up PPL cost still to be measured.
+- **#41 — Real web search tool** ✅ **Done** (2026-07-04): replaced the canned-dict mock
+  `web_search` (`hvn/tools.py`) with a live backend — keyless **DuckDuckGo Instant Answer API**
+  by default (stdlib `urllib`, no new required dep), auto-switching to **Tavily** when
+  `TAVILY_API_KEY` is set (or forced via `HVN_SEARCH_PROVIDER`). Same tool signature/schema
+  (registry + `ToolCallingSession` unchanged); network/parse errors degrade to a clear error
+  string (no crash), results flow through `ToolExecutor.max_result_len` truncation, and a
+  `certifi` CA bundle is used when available. `test_issue41.py` 7/7 (HTTP layer mocked). No
+  architecture change — O(1) / no-KV preserved. Feeds #25.
 - **#25 — Agentic mode**: ReAct-style loop with planning, tool chaining, self-correction.
   Depends on #24 (done).
 - **#26 — Training dashboard**: single-page HTML/CSS/JS (Chart.js via CDN), no server.

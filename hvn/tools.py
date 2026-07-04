@@ -705,29 +705,231 @@ def calculator(expression: str) -> str:
         return f"Error: {type(e).__name__}: {e}"
 
 
-def web_search(query: str) -> str:
-    """A mock web search tool (for demo purposes).
+# ---------------------------------------------------------------------------
+# Web search (Issue #41) — real, live backend replacing the old mock
+# ---------------------------------------------------------------------------
+#
+# Providers:
+#   * "duckduckgo" (default, keyless) — the DuckDuckGo Instant Answer JSON API
+#     (``https://api.duckduckgo.com``).  No API key, no signup.
+#   * "tavily" — the Tavily search API (needs ``TAVILY_API_KEY``); selected
+#     automatically when that key is present, or forced via HVN_SEARCH_PROVIDER.
+#
+# Selection: ``HVN_SEARCH_PROVIDER`` env var overrides; otherwise Tavily is used
+# when ``TAVILY_API_KEY`` is set, else DuckDuckGo.  All network failures degrade
+# to a clear error string so the O(1) agentic loop keeps running.
 
-    In a real deployment, this would call an actual search API.
-    For the demo, it returns a canned response based on the query.
+DEFAULT_SEARCH_RESULTS = 5
+DEFAULT_SEARCH_TIMEOUT = 10.0
+_SEARCH_USER_AGENT = "hvn-agent/1.0 (+https://gitlab.com/komalbarun/kramba-ai)"
+
+
+def _ssl_context():
+    """Prefer the ``certifi`` CA bundle when available.
+
+    Some Python installs (notably on Windows/macOS) ship an incomplete system
+    trust store; certifi provides Mozilla's up-to-date roots.  Falls back to the
+    default context when certifi is not installed.
+    """
+    import ssl
+
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
+def _http_get(url: str, timeout: float, headers: Optional[Dict[str, str]] = None) -> str:
+    """Fetch ``url`` and return the decoded body (isolated for easy mocking)."""
+    import urllib.request
+
+    req = urllib.request.Request(
+        url, headers=headers or {"User-Agent": _SEARCH_USER_AGENT}
+    )
+    with urllib.request.urlopen(  # noqa: S310 (trusted host)
+        req, timeout=timeout, context=_ssl_context()
+    ) as resp:
+        charset = resp.headers.get_content_charset() or "utf-8"
+        return resp.read().decode(charset, errors="replace")
+
+
+def _http_post_json(
+    url: str, payload: Dict[str, Any], timeout: float,
+    headers: Optional[Dict[str, str]] = None,
+) -> str:
+    """POST ``payload`` as JSON and return the decoded response body."""
+    import urllib.request
+
+    data = json.dumps(payload).encode("utf-8")
+    hdrs = {"Content-Type": "application/json", "User-Agent": _SEARCH_USER_AGENT}
+    hdrs.update(headers or {})
+    req = urllib.request.Request(url, data=data, headers=hdrs)
+    with urllib.request.urlopen(  # noqa: S310
+        req, timeout=timeout, context=_ssl_context()
+    ) as resp:
+        charset = resp.headers.get_content_charset() or "utf-8"
+        return resp.read().decode(charset, errors="replace")
+
+
+def _search_duckduckgo(
+    query: str, max_results: int, timeout: float,
+) -> List[Tuple[Optional[str], str, str]]:
+    """Query the keyless DuckDuckGo Instant Answer API.
+
+    Returns a list of ``(title, snippet, url)`` tuples (title may be ``None``).
+    """
+    import urllib.parse
+
+    qs = urllib.parse.urlencode({
+        "q": query,
+        "format": "json",
+        "no_html": 1,
+        "no_redirect": 1,
+        "skip_disambig": 1,
+    })
+    raw = _http_get(f"https://api.duckduckgo.com/?{qs}", timeout)
+    data = json.loads(raw)
+
+    results: List[Tuple[Optional[str], str, str]] = []
+
+    # Direct instant answers first (most authoritative).
+    abstract = data.get("AbstractText") or data.get("Abstract")
+    if abstract:
+        results.append((
+            data.get("Heading") or query,
+            abstract,
+            data.get("AbstractURL", ""),
+        ))
+    if data.get("Answer"):
+        results.append(("Answer", str(data["Answer"]), ""))
+    if data.get("Definition"):
+        results.append(("Definition", data["Definition"], data.get("DefinitionURL", "")))
+
+    # Then related topics (may be flat entries or nested groups).
+    def _add_topic(topic: Dict[str, Any]) -> None:
+        text = topic.get("Text")
+        if text:
+            results.append((None, text, topic.get("FirstURL", "")))
+
+    for topic in data.get("RelatedTopics", []):
+        if len(results) >= max_results:
+            break
+        if isinstance(topic, dict) and "Topics" in topic:
+            for sub in topic["Topics"]:
+                if len(results) >= max_results:
+                    break
+                if isinstance(sub, dict):
+                    _add_topic(sub)
+        elif isinstance(topic, dict):
+            _add_topic(topic)
+
+    return results[:max_results]
+
+
+def _search_tavily(
+    query: str, max_results: int, timeout: float,
+) -> List[Tuple[Optional[str], str, str]]:
+    """Query the Tavily API (requires ``TAVILY_API_KEY``)."""
+    import os
+
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if not api_key:
+        raise RuntimeError("TAVILY_API_KEY is not set")
+
+    raw = _http_post_json(
+        "https://api.tavily.com/search",
+        {
+            "api_key": api_key,
+            "query": query,
+            "max_results": max_results,
+            "include_answer": True,
+        },
+        timeout,
+    )
+    data = json.loads(raw)
+
+    results: List[Tuple[Optional[str], str, str]] = []
+    if data.get("answer"):
+        results.append(("Answer", str(data["answer"]), ""))
+    for item in data.get("results", []):
+        if len(results) >= max_results:
+            break
+        results.append((
+            item.get("title"),
+            item.get("content", ""),
+            item.get("url", ""),
+        ))
+    return results[:max_results]
+
+
+def _format_search_results(
+    query: str, results: List[Tuple[Optional[str], str, str]],
+) -> str:
+    """Render ``(title, snippet, url)`` tuples as a compact text block."""
+    lines = [f"Search results for '{query}':"]
+    for i, (title, snippet, url) in enumerate(results, 1):
+        snippet = " ".join(str(snippet).split())  # collapse whitespace
+        if title:
+            line = f"{i}. {title}: {snippet}"
+        else:
+            line = f"{i}. {snippet}"
+        if url:
+            line += f" ({url})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _select_search_provider() -> str:
+    """Resolve the active provider from env (explicit override, else auto)."""
+    import os
+
+    provider = os.environ.get("HVN_SEARCH_PROVIDER", "").strip().lower()
+    if provider:
+        return provider
+    if os.environ.get("TAVILY_API_KEY"):
+        return "tavily"
+    return "duckduckgo"
+
+
+def web_search(
+    query: str,
+    max_results: int = DEFAULT_SEARCH_RESULTS,
+    timeout: float = DEFAULT_SEARCH_TIMEOUT,
+) -> str:
+    """Search the web and return a text summary of the top results.
+
+    Uses a real search backend (keyless DuckDuckGo Instant Answer API by
+    default; Tavily when ``TAVILY_API_KEY`` is set or ``HVN_SEARCH_PROVIDER``
+    forces it).  On any network/parse error it returns a clear error string
+    rather than raising, so the agentic tool loop keeps running.
 
     Parameters
     ----------
     query : str
         The search query.
+    max_results : int, optional
+        Maximum number of result entries to include (default 5).
+    timeout : float, optional
+        Per-request network timeout in seconds (default 10).
     """
-    # Mock results — in production, replace with actual API call
-    mock_results = {
-        "python": "Python is a high-level programming language. Created by Guido van Rossum in 1991.",
-        "hvn": "The Hamiltonian Vortex Network is a novel architecture combining fluid dynamics and quantum mechanics.",
-        "weather": "Weather: 22°C, partly cloudy, humidity 45%.",
-        "default": f"Search results for '{query}': No relevant results found.",
-    }
-    query_lower = query.lower()
-    for key, result in mock_results.items():
-        if key in query_lower:
-            return result
-    return mock_results["default"]
+    if not query or not query.strip():
+        return "Error: empty search query"
+
+    provider = _select_search_provider()
+    try:
+        if provider in ("tavily",):
+            results = _search_tavily(query, max_results, timeout)
+        elif provider in ("duckduckgo", "ddg"):
+            results = _search_duckduckgo(query, max_results, timeout)
+        else:
+            return f"Error: unknown search provider '{provider}'"
+    except Exception as e:  # network error, JSON parse, missing key, etc.
+        return f"Error: web search failed ({type(e).__name__}: {e})"
+
+    if not results:
+        return f"No results found for '{query}'."
+    return _format_search_results(query, results)
 
 
 def string_reverse(text: str) -> str:
@@ -989,6 +1191,8 @@ __all__ = [
     "ToolCallingSession",
     "calculator",
     "web_search",
+    "DEFAULT_SEARCH_RESULTS",
+    "DEFAULT_SEARCH_TIMEOUT",
     "string_reverse",
     "word_count",
     "create_demo_registry",
