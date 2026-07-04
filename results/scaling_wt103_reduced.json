@@ -1,0 +1,575 @@
+{
+  "dataset": "shakespeare",
+  "dataset_stats": {
+    "tokenizer": "char",
+    "vocab_size": 65,
+    "train_chars": 1003854,
+    "eval_chars": 111540,
+    "train_tokens": 1003854,
+    "eval_tokens": 111540
+  },
+  "hyperparameters": {
+    "d_models": [
+      128,
+      256,
+      512,
+      768
+    ],
+    "n_layers": 2,
+    "token_budget": 2000000,
+    "eval_interval_tokens": 400000,
+    "batch_size": 16,
+    "seq_len": 128,
+    "lr": 0.0003,
+    "precision": "bf16",
+    "tokenizer": "char",
+    "bpe_vocab": 8000,
+    "compile": false,
+    "use_deltanet": false
+  },
+  "models": [
+    {
+      "name": "HVN",
+      "params": 281985,
+      "final_eval_ppl": 12.177058261638573,
+      "total_time_s": 18.481443405151367,
+      "tokens_seen": 1998848,
+      "trajectory": [
+        {
+          "tokens_seen": 401408,
+          "eval_ppl": 13.036682573455195,
+          "train_loss": 2.55776309967041,
+          "time_s": 3.8508496284484863
+        },
+        {
+          "tokens_seen": 800768,
+          "eval_ppl": 12.361362846470078,
+          "train_loss": 2.5255484580993652,
+          "time_s": 7.453577518463135
+        },
+        {
+          "tokens_seen": 1200128,
+          "eval_ppl": 12.238310143179936,
+          "train_loss": 2.4917473793029785,
+          "time_s": 11.189677238464355
+        },
+        {
+          "tokens_seen": 1601536,
+          "eval_ppl": 12.184857085741532,
+          "train_loss": 2.5108516216278076,
+          "time_s": 15.032040119171143
+        },
+        {
+          "tokens_seen": 1998848,
+          "eval_ppl": 12.177058261638573,
+          "train_loss": 2.5114145278930664,
+          "time_s": 18.481382846832275
+        }
+      ],
+      "saturation_tokens": 1200128,
+      "d_model": 128,
+      "n_layers": 2
+    },
+    {
+      "name": "Transformer",
+      "params": 412416,
+      "final_eval_ppl": 11.354722233401827,
+      "total_time_s": 5.553175449371338,
+      "tokens_seen": 1998848,
+      "trajectory": [
+        {
+          "tokens_seen": 401408,
+          "eval_ppl": 12.363910608184176,
+          "train_loss": 2.548076629638672,
+          "time_s": 1.1461782455444336
+        },
+        {
+          "tokens_seen": 800768,
+          "eval_ppl": 11.718444993907173,
+          "train_loss": 2.5063717365264893,
+          "time_s": 2.2885007858276367
+        },
+        {
+          "tokens_seen": 1200128,
+          "eval_ppl": 11.514302223415271,
+          "train_loss": 2.413090229034424,
+          "time_s": 3.4323861598968506
+        },
+        {
+          "tokens_seen": 1601536,
+          "eval_ppl": 11.38701708091145,
+          "train_loss": 2.406674861907959,
+          "time_s": 4.510497570037842
+        },
+        {
+          "tokens_seen": 1998848,
+          "eval_ppl": 11.354722233401827,
+          "train_loss": 2.387650966644287,
+          "time_s": 5.553110599517822
+        }
+      ],
+      "saturation_tokens": 1601536,
+      "d_model": 128,
+      "n_layers": 2
+    },
+    {
+      "name": "SSM",
+      "params": 313600,
+      "final_eval_ppl": 7.178921054272012,
+      "total_time_s": 287.5244731903076,
+      "tokens_seen": 1998848,
+      "trajectory": [
+        {
+          "tokens_seen": 401408,
+          "eval_ppl": 9.404586875077358,
+          "train_loss": 2.2639524936676025,
+          "time_s": 56.927361249923706
+        },
+        {
+          "tokens_seen": 800768,
+          "eval_ppl": 7.8896612757446,
+          "train_loss": 2.0010664463043213,
+          "time_s": 115.24921083450317
+        },
+        {
+          "tokens_seen": 1200128,
+          "eval_ppl": 7.40344656212133,
+          "train_loss": 1.9224740266799927,
+          "time_s": 173.34441208839417
+        },
+        {
+          "tokens_seen": 1601536,
+          "eval_ppl": 7.209255099635684,
+          "train_loss": 1.9691200256347656,
+          "time_s": 230.77075672149658
+        },
+        {
+          "tokens_seen": 1998848,
+          "eval_ppl": 7.178921054272012,
+          "train_loss": 1.9176568984985352,
+          "time_s": 287.5243854522705
+        }
+      ],
+      "saturation_tokens": 1601536,
+      "d_model": 128,
+      "n_layers": 2
+    },
+    {
+      "name": "HVN",
+      "params": 1088129,
+      "final_eval_ppl": 12.028467947826678,
+      "total_time_s": 17.507213830947876,
+      "tokens_seen": 1998848,
+      "trajectory": [
+        {
+          "tokens_seen": 401408,
+          "eval_ppl": 12.364765827368862,
+          "train_loss": 2.523989677429199,
+          "time_s": 3.438209056854248
+        },
+        {
+          "tokens_seen": 800768,
+          "eval_ppl": 12.12051725799254,
+          "train_loss": 2.5222034454345703,
+          "time_s": 6.79587197303772
+        },
+        {
+          "tokens_seen": 1200128,
+          "eval_ppl": 12.092711589705166,
+          "train_loss": 2.516174077987671,
+          "time_s": 10.617290258407593
+        },
+        {
+          "tokens_seen": 1601536,
+          "eval_ppl": 12.055152954265088,
+          "train_loss": 2.4657278060913086,
+          "time_s": 14.118553876876831
+        },
+        {
+          "tokens_seen": 1998848,
+          "eval_ppl": 12.028467947826678,
+          "train_loss": 2.4968037605285645,
+          "time_s": 17.507137537002563
+        }
+      ],
+      "saturation_tokens": 800768,
+      "d_model": 256,
+      "n_layers": 2
+    },
+    {
+      "name": "Transformer",
+      "params": 1611264,
+      "final_eval_ppl": 10.865791934651192,
+      "total_time_s": 5.843961238861084,
+      "tokens_seen": 1998848,
+      "trajectory": [
+        {
+          "tokens_seen": 401408,
+          "eval_ppl": 11.782910091470438,
+          "train_loss": 2.4096274375915527,
+          "time_s": 1.1562628746032715
+        },
+        {
+          "tokens_seen": 800768,
+          "eval_ppl": 11.368636303231773,
+          "train_loss": 2.371692180633545,
+          "time_s": 2.3804931640625
+        },
+        {
+          "tokens_seen": 1200128,
+          "eval_ppl": 11.107430849050559,
+          "train_loss": 2.358044147491455,
+          "time_s": 3.5897486209869385
+        },
+        {
+          "tokens_seen": 1601536,
+          "eval_ppl": 10.87741339033218,
+          "train_loss": 2.294773578643799,
+          "time_s": 4.711331605911255
+        },
+        {
+          "tokens_seen": 1998848,
+          "eval_ppl": 10.865791934651192,
+          "train_loss": 2.3748393058776855,
+          "time_s": 5.843920469284058
+        }
+      ],
+      "saturation_tokens": 1601536,
+      "d_model": 256,
+      "n_layers": 2
+    },
+    {
+      "name": "SSM",
+      "params": 1217024,
+      "final_eval_ppl": 6.141330092015065,
+      "total_time_s": 283.6565463542938,
+      "tokens_seen": 1998848,
+      "trajectory": [
+        {
+          "tokens_seen": 401408,
+          "eval_ppl": 7.850548324379933,
+          "train_loss": 2.0301122665405273,
+          "time_s": 57.47478747367859
+        },
+        {
+          "tokens_seen": 800768,
+          "eval_ppl": 6.728190142023248,
+          "train_loss": 1.864308476448059,
+          "time_s": 113.98586368560791
+        },
+        {
+          "tokens_seen": 1200128,
+          "eval_ppl": 6.348291843845115,
+          "train_loss": 1.731512188911438,
+          "time_s": 170.72336983680725
+        },
+        {
+          "tokens_seen": 1601536,
+          "eval_ppl": 6.184256486095896,
+          "train_loss": 1.6188973188400269,
+          "time_s": 227.57643389701843
+        },
+        {
+          "tokens_seen": 1998848,
+          "eval_ppl": 6.141330092015065,
+          "train_loss": 1.685270071029663,
+          "time_s": 283.65650057792664
+        }
+      ],
+      "saturation_tokens": 1601536,
+      "d_model": 256,
+      "n_layers": 2
+    },
+    {
+      "name": "HVN",
+      "params": 4273281,
+      "final_eval_ppl": 11.985899120062756,
+      "total_time_s": 18.19257664680481,
+      "tokens_seen": 1998848,
+      "trajectory": [
+        {
+          "tokens_seen": 401408,
+          "eval_ppl": 12.26672268053042,
+          "train_loss": 2.4668588638305664,
+          "time_s": 3.7766950130462646
+        },
+        {
+          "tokens_seen": 800768,
+          "eval_ppl": 12.192544039504446,
+          "train_loss": 2.468759059906006,
+          "time_s": 7.362841844558716
+        },
+        {
+          "tokens_seen": 1200128,
+          "eval_ppl": 12.047744235896586,
+          "train_loss": 2.4716739654541016,
+          "time_s": 10.969883680343628
+        },
+        {
+          "tokens_seen": 1601536,
+          "eval_ppl": 12.01236247583253,
+          "train_loss": 2.4576470851898193,
+          "time_s": 14.607088804244995
+        },
+        {
+          "tokens_seen": 1998848,
+          "eval_ppl": 11.985899120062756,
+          "train_loss": 2.411780834197998,
+          "time_s": 18.19247531890869
+        }
+      ],
+      "saturation_tokens": 1200128,
+      "d_model": 512,
+      "n_layers": 2
+    },
+    {
+      "name": "Transformer",
+      "params": 6368256,
+      "final_eval_ppl": 10.566924329080043,
+      "total_time_s": 10.417242288589478,
+      "tokens_seen": 1998848,
+      "trajectory": [
+        {
+          "tokens_seen": 401408,
+          "eval_ppl": 11.67924477337263,
+          "train_loss": 2.3961284160614014,
+          "time_s": 2.097637414932251
+        },
+        {
+          "tokens_seen": 800768,
+          "eval_ppl": 11.355460747880825,
+          "train_loss": 2.3671724796295166,
+          "time_s": 4.178938865661621
+        },
+        {
+          "tokens_seen": 1200128,
+          "eval_ppl": 11.030181532358434,
+          "train_loss": 2.364818572998047,
+          "time_s": 6.259828567504883
+        },
+        {
+          "tokens_seen": 1601536,
+          "eval_ppl": 10.66848670648976,
+          "train_loss": 2.291168689727783,
+          "time_s": 8.341817140579224
+        },
+        {
+          "tokens_seen": 1998848,
+          "eval_ppl": 10.566924329080043,
+          "train_loss": 2.316646099090576,
+          "time_s": 10.417191505432129
+        }
+      ],
+      "saturation_tokens": 1601536,
+      "d_model": 512,
+      "n_layers": 2
+    },
+    {
+      "name": "SSM",
+      "params": 4793344,
+      "final_eval_ppl": 5.328608364172668,
+      "total_time_s": 283.7752113342285,
+      "tokens_seen": 1998848,
+      "trajectory": [
+        {
+          "tokens_seen": 401408,
+          "eval_ppl": 7.044316808633855,
+          "train_loss": 1.8232572078704834,
+          "time_s": 57.04978275299072
+        },
+        {
+          "tokens_seen": 800768,
+          "eval_ppl": 6.141802704504871,
+          "train_loss": 1.701956033706665,
+          "time_s": 113.73329377174377
+        },
+        {
+          "tokens_seen": 1200128,
+          "eval_ppl": 5.62076707201084,
+          "train_loss": 1.558475136756897,
+          "time_s": 170.56719541549683
+        },
+        {
+          "tokens_seen": 1601536,
+          "eval_ppl": 5.372115172333371,
+          "train_loss": 1.4850246906280518,
+          "time_s": 227.47684788703918
+        },
+        {
+          "tokens_seen": 1998848,
+          "eval_ppl": 5.328608364172668,
+          "train_loss": 1.581099033355713,
+          "time_s": 283.7751281261444
+        }
+      ],
+      "saturation_tokens": 1601536,
+      "d_model": 512,
+      "n_layers": 2
+    },
+    {
+      "name": "HVN",
+      "params": 9555585,
+      "final_eval_ppl": 11.999267772504822,
+      "total_time_s": 26.252841472625732,
+      "tokens_seen": 1998848,
+      "trajectory": [
+        {
+          "tokens_seen": 401408,
+          "eval_ppl": 12.498451876359045,
+          "train_loss": 2.483614444732666,
+          "time_s": 5.449378252029419
+        },
+        {
+          "tokens_seen": 800768,
+          "eval_ppl": 12.14638326293327,
+          "train_loss": 2.480607748031616,
+          "time_s": 10.656311750411987
+        },
+        {
+          "tokens_seen": 1200128,
+          "eval_ppl": 12.057546245593166,
+          "train_loss": 2.445364236831665,
+          "time_s": 15.847684621810913
+        },
+        {
+          "tokens_seen": 1601536,
+          "eval_ppl": 12.038198624711587,
+          "train_loss": 2.455253839492798,
+          "time_s": 21.07856845855713
+        },
+        {
+          "tokens_seen": 1998848,
+          "eval_ppl": 11.999267772504822,
+          "train_loss": 2.475663661956787,
+          "time_s": 26.252764463424683
+        }
+      ],
+      "saturation_tokens": 1200128,
+      "d_model": 768,
+      "n_layers": 2
+    },
+    {
+      "name": "Transformer",
+      "params": 14270976,
+      "final_eval_ppl": 10.368351547300767,
+      "total_time_s": 21.49110984802246,
+      "tokens_seen": 1998848,
+      "trajectory": [
+        {
+          "tokens_seen": 401408,
+          "eval_ppl": 11.742244064715765,
+          "train_loss": 2.4757652282714844,
+          "time_s": 4.30593729019165
+        },
+        {
+          "tokens_seen": 800768,
+          "eval_ppl": 11.280416488253739,
+          "train_loss": 2.40293550491333,
+          "time_s": 8.606163501739502
+        },
+        {
+          "tokens_seen": 1200128,
+          "eval_ppl": 10.802697359165844,
+          "train_loss": 2.3049168586730957,
+          "time_s": 12.898917436599731
+        },
+        {
+          "tokens_seen": 1601536,
+          "eval_ppl": 10.552310775957366,
+          "train_loss": 2.252842664718628,
+          "time_s": 17.21284008026123
+        },
+        {
+          "tokens_seen": 1998848,
+          "eval_ppl": 10.368351547300767,
+          "train_loss": 2.159230947494507,
+          "time_s": 21.491048097610474
+        }
+      ],
+      "saturation_tokens": null,
+      "d_model": 768,
+      "n_layers": 2
+    },
+    {
+      "name": "SSM",
+      "params": 10728960,
+      "final_eval_ppl": 4.939073504402112,
+      "total_time_s": 284.2874104976654,
+      "tokens_seen": 1998848,
+      "trajectory": [
+        {
+          "tokens_seen": 401408,
+          "eval_ppl": 6.628211607220026,
+          "train_loss": 1.7667144536972046,
+          "time_s": 55.44687795639038
+        },
+        {
+          "tokens_seen": 800768,
+          "eval_ppl": 5.660580661420605,
+          "train_loss": 1.6340879201889038,
+          "time_s": 109.9746253490448
+        },
+        {
+          "tokens_seen": 1200128,
+          "eval_ppl": 5.243521939605625,
+          "train_loss": 1.590667724609375,
+          "time_s": 168.66408252716064
+        },
+        {
+          "tokens_seen": 1601536,
+          "eval_ppl": 4.992374621950172,
+          "train_loss": 1.4432141780853271,
+          "time_s": 229.54570508003235
+        },
+        {
+          "tokens_seen": 1998848,
+          "eval_ppl": 4.939073504402112,
+          "train_loss": 1.4298888444900513,
+          "time_s": 284.2873523235321
+        }
+      ],
+      "saturation_tokens": null,
+      "d_model": 768,
+      "n_layers": 2
+    }
+  ],
+  "analysis": {
+    "summary_lines": [
+      "HVN          scaling:  PPL \u2248 12.7973 \u00d7 params^-0.0042",
+      "SSM          scaling:  PPL \u2248 27.3074 \u00d7 params^-0.1060",
+      "Transformer  scaling:  PPL \u2248 15.6625 \u00d7 params^-0.0252",
+      "HVN exponent -0.0042 vs Transformer -0.0252 \u2014 HVN is flatter (worse).",
+      "HVN exponent -0.0042 vs SSM -0.1060 \u2014 HVN is flatter (worse).",
+      "",
+      "Saturation (token budget where eval PPL stops improving):",
+      "  HVN          d=128 : 1,200,128 tok",
+      "  HVN          d=256 : 800,768 tok",
+      "  HVN          d=512 : 1,200,128 tok",
+      "  HVN          d=768 : 1,200,128 tok",
+      "  SSM          d=128 : 1,601,536 tok",
+      "  SSM          d=256 : 1,601,536 tok",
+      "  SSM          d=512 : 1,601,536 tok",
+      "  SSM          d=768 : still improving at 1,998,848 tok",
+      "  Transformer  d=128 : 1,601,536 tok",
+      "  Transformer  d=256 : 1,601,536 tok",
+      "  Transformer  d=512 : 1,601,536 tok",
+      "  Transformer  d=768 : still improving at 1,998,848 tok",
+      "No wall-clock crossover within tested sizes."
+    ],
+    "power_laws": {
+      "HVN": [
+        12.797343227062242,
+        -0.004179676565218322
+      ],
+      "SSM": [
+        27.30739358111458,
+        -0.10598006231516197
+      ],
+      "Transformer": [
+        15.662510778235822,
+        -0.025156119412556754
+      ]
+    },
+    "crossover_d_model": null
+  }
+}
