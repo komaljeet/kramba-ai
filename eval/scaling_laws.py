@@ -209,6 +209,10 @@ def train_compute_matched(
     tokens_seen = 0
     next_eval_at = eval_interval_tokens
     t0 = time.time()
+    # Loss-spike guard threshold (Issue #44): grad clipping is to 1.0, so a
+    # healthy pre-clip norm is O(1–10); a spike is orders of magnitude larger.
+    spike_grad_norm = 1e3
+    skipped_steps = 0
 
     batch_iter = cycle(train_loader)
     for step in range(total_steps):
@@ -229,8 +233,19 @@ def train_compute_matched(
             scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            # Loss-spike guard (Issue #44): under bf16 at large width the
+            # Gated-DeltaNet block can throw an occasional loss/grad spike; a
+            # single non-finite step otherwise poisons the weights *and* the
+            # AdamW moments, turning a transient spike into permanent NaN.  Skip
+            # the step when the loss is non-finite or the grad norm explodes
+            # (clip_grad_norm_ returns the pre-clip total norm), leaving the
+            # optimizer state untouched so training recovers.
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if torch.isfinite(loss) and torch.isfinite(grad_norm) and grad_norm < spike_grad_norm:
+                optimizer.step()
+            else:
+                skipped_steps += 1
+                optimizer.zero_grad(set_to_none=True)
         scheduler.step()
 
         tokens_seen += tokens_per_batch
@@ -244,8 +259,9 @@ def train_compute_matched(
                 "train_loss": loss.item(),
                 "time_s": elapsed,
             })
+            skip_note = f"  |  skipped={skipped_steps}" if skipped_steps else ""
             print(f"    {tokens_seen:>12,} tok  |  train_loss={loss.item():.4f}  |  "
-                  f"eval_ppl={ppl:.3f}  |  {elapsed:.1f}s")
+                  f"eval_ppl={ppl:.3f}  |  {elapsed:.1f}s{skip_note}")
             next_eval_at += eval_interval_tokens
 
     total_time = time.time() - t0
@@ -264,6 +280,7 @@ def train_compute_matched(
         "tokens_seen": tokens_seen,
         "trajectory": trajectory,
         "saturation_tokens": saturation,
+        "skipped_steps": skipped_steps,
     }
 
 
