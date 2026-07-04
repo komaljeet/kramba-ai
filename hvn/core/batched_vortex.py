@@ -122,28 +122,33 @@ class MultiHeadVortexInjection(nn.Module):
 
         # --- Step 1: Batched vorticity projection ---
         # ω_t = W_ω · x_t  for all heads at once
-        # vorticity_weight: [n_heads, D, D] → repeat for each batch element: [BH, D, D]
-        # Batch ordering: [B0H0, B0H1, ..., B0H(n-1), B1H0, ...]
+        # vorticity_weight: [n_heads, D, D] → tile for each batch element: [BH, D, D]
+        # The block lays the batch out **batch-outer** (bh = b*n_heads + h, so
+        # slot bh holds head bh % n_heads); per-head params must therefore be
+        # **tiled** (repeat), which yields [h0..h(n-1)] repeated B times, matching
+        # that ordering.  (Using repeat_interleave here is the Issue #46 bug — it
+        # produces head-outer ordering h*B+b and mis-routes weights for
+        # n_heads>1, B>1, so a batched forward != running each sequence alone.)
         B = BH // self.n_heads
-        w_vort = self.vorticity_weight.repeat_interleave(B, dim=0)  # [BH, D, D]
+        w_vort = self.vorticity_weight.repeat(B, 1, 1)  # [BH, D, D]
         vorticity = torch.bmm(x, w_vort.transpose(-1, -2))  # [BH, S, D]
         # Apply rotary embeddings with per-head frequency scaling
         # Each head uses a different frequency → different heads capture
         # different frequency patterns (local vs global, like Fourier features)
-        freq_scale = self.vorticity_frequency.repeat_interleave(B, dim=0)  # [BH]
+        freq_scale = self.vorticity_frequency.repeat(B)  # [BH]
         vorticity = _apply_rotary_embeddings(vorticity, position_ids, frequency_scale=freq_scale)
 
         # --- Step 2: Batched Biot-Savart velocity ---
         # v_t = Γ · (H · ω_t)
         velocity = torch.bmm(vorticity, hamiltonian.transpose(-1, -2))  # [BH, S, D]
-        gamma_expanded = self.gamma.repeat_interleave(B, dim=0)  # [BH, 1]
+        gamma_expanded = self.gamma.repeat(B, 1)  # [BH, 1]
         velocity = gamma_expanded.view(BH, 1, 1) * velocity  # [BH, S, D]
 
         # --- Step 3: Batched gated deflection ---
         # g_t = σ(W_g · [x_t ; v_t])
         gate_input = torch.cat([x, velocity], dim=-1)  # [BH, S, 2D]
-        w_gate = self.gate_weight.repeat_interleave(B, dim=0)  # [BH, D, 2D]
-        b_gate = self.gate_bias.repeat_interleave(B, dim=0)  # [BH, D]
+        w_gate = self.gate_weight.repeat(B, 1, 1)  # [BH, D, 2D]
+        b_gate = self.gate_bias.repeat(B, 1)  # [BH, D]
         gate = torch.bmm(gate_input, w_gate.transpose(-1, -2))  # [BH, S, D]
         gate = gate + b_gate.view(BH, 1, D)
         gate = torch.sigmoid(gate)  # [BH, S, D]
@@ -152,15 +157,15 @@ class MultiHeadVortexInjection(nn.Module):
         deflected_raw = x + gate * velocity  # [BH, S, D]
 
         # Batched output projection
-        w_out = self.output_weight.repeat_interleave(B, dim=0)  # [BH, D, D]
+        w_out = self.output_weight.repeat(B, 1, 1)  # [BH, D, D]
         deflected = torch.bmm(deflected_raw, w_out.transpose(-1, -2))  # [BH, S, D]
 
         # Batched LayerNorm: normalize over last dim
         mean = deflected.mean(dim=-1, keepdim=True)
         var = deflected.var(dim=-1, keepdim=True, unbiased=False)
         deflected = (deflected - mean) / torch.sqrt(var + 1e-5)
-        ln_w = self.ln_weight.repeat_interleave(B, dim=0)  # [BH, D]
-        ln_b = self.ln_bias.repeat_interleave(B, dim=0)  # [BH, D]
+        ln_w = self.ln_weight.repeat(B, 1)  # [BH, D]
+        ln_b = self.ln_bias.repeat(B, 1)  # [BH, D]
         deflected = deflected * ln_w.view(BH, 1, D) + ln_b.view(BH, 1, D)
 
         return deflected, velocity
@@ -447,37 +452,40 @@ class MultiThreadVortexInjection(nn.Module):
             pos_threaded = position_ids
 
         # --- Step 1: Batched vorticity projection ---
-        w_vort = self.vorticity_weight.repeat_interleave(B, dim=0)  # [BU, D, D]
+        # Per-unit params are laid out [n_units, ...] (unit = h*n_threads + k) and
+        # the batch is **batch-outer** (bu = b*n_units + u), so tile (repeat), not
+        # repeat_interleave — see the Issue #46 note in MultiHeadVortexInjection.
+        w_vort = self.vorticity_weight.repeat(B, 1, 1)  # [BU, D, D]
         vorticity = torch.bmm(x_vort, w_vort.transpose(-1, -2))  # [BU, S, D]
-        freq_scale = self.vorticity_frequency.repeat_interleave(B, dim=0)  # [BU]
+        freq_scale = self.vorticity_frequency.repeat(B)  # [BU]
         vorticity = _apply_rotary_embeddings(
             vorticity, pos_threaded, frequency_scale=freq_scale
         )
 
         # --- Step 2: Batched Biot-Savart velocity ---
         velocity = torch.bmm(vorticity, hamiltonian.transpose(-1, -2))  # [BU, S, D]
-        gamma_expanded = self.gamma.repeat_interleave(B, dim=0)  # [BU, 1]
+        gamma_expanded = self.gamma.repeat(B, 1)  # [BU, 1]
         velocity = gamma_expanded.view(BU, 1, 1) * velocity  # [BU, S, D]
 
         # --- Step 3: Batched gated deflection ---
         gate_input = torch.cat([x_vort, velocity], dim=-1)  # [BU, S, 2D]
-        w_gate = self.gate_weight.repeat_interleave(B, dim=0)  # [BU, D, 2D]
-        b_gate = self.gate_bias.repeat_interleave(B, dim=0)  # [BU, D]
+        w_gate = self.gate_weight.repeat(B, 1, 1)  # [BU, D, 2D]
+        b_gate = self.gate_bias.repeat(B, 1)  # [BU, D]
         gate = torch.bmm(gate_input, w_gate.transpose(-1, -2))  # [BU, S, D]
         gate = gate + b_gate.view(BU, 1, D)
         gate = torch.sigmoid(gate)
 
         deflected_raw = x_vort + gate * velocity  # [BU, S, D]
 
-        w_out = self.output_weight.repeat_interleave(B, dim=0)  # [BU, D, D]
+        w_out = self.output_weight.repeat(B, 1, 1)  # [BU, D, D]
         deflected = torch.bmm(deflected_raw, w_out.transpose(-1, -2))  # [BU, S, D]
 
         # Batched LayerNorm
         mean = deflected.mean(dim=-1, keepdim=True)
         var = deflected.var(dim=-1, keepdim=True, unbiased=False)
         deflected = (deflected - mean) / torch.sqrt(var + 1e-5)
-        ln_w = self.ln_weight.repeat_interleave(B, dim=0)
-        ln_b = self.ln_bias.repeat_interleave(B, dim=0)
+        ln_w = self.ln_weight.repeat(B, 1)
+        ln_b = self.ln_bias.repeat(B, 1)
         deflected = deflected * ln_w.view(BU, 1, D) + ln_b.view(BU, 1, D)
 
         # --- Step 4: Mix thread outputs back to per-head ---

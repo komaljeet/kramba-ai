@@ -9,13 +9,15 @@ The lever for concurrent throughput is therefore **fewer launches**, not a bigge
 matmul: routing the batched step through the Issue #33 ``FusedHVNStep`` Triton
 kernel (2 launches/block instead of ~25 PyTorch ops) gives ~3× sustained tok/s.
 
-This also fixes a **pre-existing correctness bug**: the legacy ``generate_batched``
-expands per-head params with ``repeat_interleave`` (head-outer ordering ``h*B+b``)
-while the stream batch is laid out batch-outer (``b*n_heads+h``), so for
-``n_heads>1, B>1`` each concurrent stream silently used the *wrong head's*
-projection weights — ``generate_batched`` did NOT equal running each stream alone.
-``generate_served`` uses batch-outer ordering in both backends, so a concurrent
-batch is equivalent to single-stream generation.
+This originally worked around a correctness bug in the legacy ``generate_batched``
+(per-head params expanded with ``repeat_interleave`` — head-outer ordering
+``h*B+b`` — while the stream batch is laid out batch-outer ``b*n_heads+h``, so for
+``n_heads>1, B>1`` each stream silently used the *wrong head's* weights).  That bug
+has since been **fixed at the source in Issue #46** (batch-outer tiling in the
+shared vortex/memory modules), so ``generate_batched`` now equals single-stream too
+(see ``test_batched_matches_single_stream_after_issue46``).  ``generate_served``
+remains the throughput-optimized path (grouped GEMM / fused kernel), also
+batch-outer and equal to single-stream.
 
 Two backends (``generate_served(backend=...)``):
   * ``torch`` — portable grouped-GEMM step; matches single-stream to ~1e-6.
@@ -113,21 +115,24 @@ def test_served_fused_concurrent_matches_single_stream():
     print(f"[4/7] served(fused) concurrent == single-stream (diff={max_diff:.1e}, kernel numerics) ... OK")
 
 
-def test_legacy_batched_bug_is_documented():
-    """Sanity: the legacy batched path DOES diverge from single-stream for n_heads>1.
+def test_batched_matches_single_stream_after_issue46():
+    """generate_batched now equals single-stream for n_heads>1 (Issue #46 fix).
 
-    This pins the pre-existing head-misrouting bug that the served path fixes.
+    The head-misrouting bug that the served path originally worked around was
+    fixed at the source in Issue #46 (batch-outer tiling of per-head params in
+    the shared vortex/memory modules), so the legacy ``generate_batched`` path is
+    now correct too — a concurrent batch matches running each stream alone.
     """
     dev = _device()
-    m = _build(dev, n_heads=4)
-    prompts = [[3, 5, 7, 9, 11], [2, 4, 6, 8, 10]]
-    ref = [m.generate_incremental(p, max_new_tokens=10, temperature=1e-6,
-                                  top_k=1, device=dev) for p in prompts]
-    legacy = m.generate_batched(prompts, max_new_tokens=10, temperature=1e-6,
-                                top_k=1, device=dev)
-    diverges = any(ref[i] != legacy[i] for i in range(len(prompts)))
-    assert diverges, "legacy generate_batched unexpectedly matched single-stream"
-    print("[5/7] legacy generate_batched confirmed to mis-route heads for B>1 (bug) ... OK")
+    for n_heads in (1, 4, 8):
+        m = _build(dev, n_heads=n_heads)
+        prompts = [[3, 5, 7, 9, 11], [2, 4, 6, 8, 10], [1, 15, 17, 19, 21]]
+        ref = [m.generate_incremental(p, max_new_tokens=10, temperature=1e-6,
+                                      top_k=1, device=dev) for p in prompts]
+        legacy = m.generate_batched(prompts, max_new_tokens=10, temperature=1e-6,
+                                    top_k=1, device=dev)
+        assert ref == legacy, f"generate_batched != single-stream (n_heads={n_heads})"
+    print("[5/7] generate_batched == single-stream after Issue #46 (n_heads in {1,4,8}) ... OK")
 
 
 def test_o1_scaling_preserved():
@@ -177,13 +182,13 @@ def test_concurrent_throughput_benchmark():
         return m.generate_served(p, max_new_tokens=n, temperature=1e-6, top_k=1, device=dev, backend="fused")
 
     print("[7/7] concurrent throughput (total tok/s across streams, 128 new tokens):")
-    print(f"       {'streams':>8} | {'legacy(buggy)':>13} | {'served-torch':>12} | {'served-fused':>12} | {'fused vs legacy':>15}")
+    print(f"       {'streams':>8} | {'batched(#46)':>13} | {'served-torch':>12} | {'served-fused':>12} | {'fused vs batched':>16}")
     for B in (1, 8, 32, 64):
         lg = _bench_tok_s(m, dev, B, 128, legacy)
         st = _bench_tok_s(m, dev, B, 128, s_torch)
         sf = _bench_tok_s(m, dev, B, 128, s_fused)
         print(f"       {B:>8} | {lg:>13.1f} | {st:>12.1f} | {sf:>12.1f} | {sf / lg:>14.2f}x")
-    print("       (served backends keep every stream's output equal to single-stream; legacy does not)")
+    print("       (all three keep every stream's output equal to single-stream after Issue #46)")
 
 
 if __name__ == "__main__":
@@ -194,7 +199,7 @@ if __name__ == "__main__":
     test_served_torch_concurrent_matches_single_stream_greedy()
     test_served_torch_concurrent_matches_single_stream_logits()
     test_served_fused_concurrent_matches_single_stream()
-    test_legacy_batched_bug_is_documented()
+    test_batched_matches_single_stream_after_issue46()
     test_o1_scaling_preserved()
     test_concurrent_throughput_benchmark()
     print("=" * 72)

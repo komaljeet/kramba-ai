@@ -503,10 +503,13 @@ class HamiltonianVortexNetwork(nn.Module):
     ) -> tuple[torch.Tensor, list[torch.Tensor]]:
         """Single-token step for N concurrent streams (Issue #43).
 
-        Correct, batch-outer concurrent decode for the default HVN block, in two
-        interchangeable backends (both keep every stream's output identical to
-        running it alone — unlike :meth:`forward_step_batched`, whose per-head
-        ``repeat_interleave`` expansion mis-routes heads for ``n_heads>1, B>1``):
+        Throughput-optimized batch-outer concurrent decode for the default HVN
+        block, in two interchangeable backends (both keep every stream's output
+        identical to running it alone).  Since Issue #46 fixed the per-head
+        routing in the shared modules, :meth:`forward_step_batched` is *also*
+        correct now (batch-outer tiling instead of head-outer
+        ``repeat_interleave``); this path additionally avoids the per-stream weight
+        replication for speed:
 
         * ``use_fused=True`` — the Issue #33 ``FusedHVNStep`` Triton kernel, one
           program per ``(stream, head)``, collapsing ~25 per-token PyTorch ops
@@ -517,8 +520,8 @@ class HamiltonianVortexNetwork(nn.Module):
           ``generate_incremental_fused``).
         * ``use_fused=False`` — a portable torch step that reformulates the three
           shared-weight projections as one grouped GEMM per head across the
-          concurrent streams (no ``repeat_interleave`` weight replication).
-          Matches single-stream to ~1e-6.  Used when Triton is unavailable or
+          concurrent streams (no per-stream weight replication).  Matches
+          single-stream to ~1e-6.  Used when Triton is unavailable or
           ``d_head < 16``.
         """
         x = self.token_embedding(input_ids)  # [B, 1, D]

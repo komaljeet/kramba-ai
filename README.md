@@ -443,6 +443,7 @@ BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 
 | #33 | Custom kernels & parallel processing (4/6 fixes) | `kernels/`, `model.py` |
 | #34 | Gated-DeltaNet readout/update dynamics — PPL 8.8→3.4 | `deltanet.py` |
 | #43 | Correct, fused concurrent-serving decode (~2.5× tok/s, fixes B>1 head-misroute) | `model.py`, `hvn_block.py`, `batched_vortex.py`, `batched_memory.py` |
+| #46 | Systemic batch-ordering fix — batched `forward`/eval/`generate_batched` now == single-stream (batch-outer tiling of per-head params) | `batched_vortex.py`, `batched_memory.py` |
 
 ---
 
@@ -699,6 +700,42 @@ fp32, RTX 4050 (`test_issue43.py`):
 baseline, so the win is real, not an artifact of the bug), with every stream's output identical to
 single-stream. O(1) per-token preserved (flat ms/token N=64→256), no KV cache, no HVN-math change.
 `test_issue43.py` 7/7; `demo.py` / `test_issue33.py` / `test_issue34.py` regressions pass.
+
+### 8.10 Systemic Batch-Ordering Fix — Batched `forward` == Single-Stream (Issue #46)
+
+The head-misrouting bug that #43's served path worked around was **not** confined to
+`generate_batched` — the same shared batched modules (`batched_vortex.py`,
+`batched_memory.py`) back **training `forward`, batched eval PPL, and
+`parallel_forward`**, so every batched path with `n_heads>1, B>1` was affected. The
+block lays the batch out **batch-outer** (`bh = b·n_heads + h`, so slot `bh` holds head
+`bh % n_heads`), but the per-head params were expanded with `repeat_interleave(B)` —
+**head-outer** ordering (`h·B + b`) — pairing each slot's data-head with the *wrong*
+weight-head. The bug was self-consistent within a fixed batch size (so training still
+converged), but it entangled learned per-head routing with the training batch size and
+diluted multi-head specialization.
+
+The fix **tiles** per-head params batch-outer (`repeat` instead of `repeat_interleave`)
+in `MultiHead`/`MultiThread` vortex + memory, matching the input-dependent-eta branch
+that *already* indexed batch-outer via `arange(BH) % n_heads`. One source change corrects
+`forward`, eval, `generate_batched`, and `parallel_forward` together.
+
+**Result — the issue's own evidence snippet, `max|batched − per-sequence|`:**
+
+| n_heads | Before (buggy) | After (#46) |
+|--------:|---------------:|------------:|
+| 1 | 6.0e-07 | 6.0e-07 |
+| 4 | **2.42** | **6.0e-07** |
+| 8 | (diverges) | 6.0e-07 |
+
+Batched `forward` now equals single-stream at every width, across all flag-gated variants
+(`n_threads>1`, `--use_parallel_scan`, `--per_token_eta`, `--rank_k`, `--causal_reinjection`,
+`--nonlinear_update`) and for `parallel_forward` and `generate_batched`. `B=1` is bit-unchanged
+(tiling ≡ interleaving at batch size 1). `test_issue46.py` 5/5; `test_issue43.py` 7/7 (the
+"legacy bug" pin flipped to a "now-fixed" assertion), `test_issue33.py` / `test_issue34.py` /
+`demo.py` regressions pass. **Caveat:** this is a semantics-breaking change — checkpoints trained
+under the old routing and the §8.x benchmark numbers were produced under the buggy routing; the
+re-measurement is tracked in **#47** (folded into the final real-scale pass #45), which should also
+A/B whether correct head routing improves PPL by restoring multi-head specialization.
 
 ### 8.5 Honest Assessment
 
