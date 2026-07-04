@@ -396,3 +396,33 @@ See `docs/BENCHMARK_RESULTS.md` § 5 for full details. Fixes 2 and 5 deferred (P
 19. ~~**CUDA Graph capture**~~ ✅ Done (Issue #33, Fix 6) — 78 → 220 tok/s
 20. **Flash-style tiled Hamiltonian computation** ⬜ Deferred (Issue #33, Fix 2 — needed only when d_model > 1024)
 21. **Extreme weight compression** ⬜ Open (Issue #32 — 10B → <2GB, 1T → <200GB)
+22. **Fix readout/update dynamics for PPL** ⬜ Open (Issue #34) — the real quality lever
+23. **Real-scale scaling re-measurement** ⬜ Open (Issue #35) — WikiText-103
+24. **Generation-speed cleanups** ⬜ Open (Issue #36) — redundant prefill + host-device syncs
+
+---
+
+## Phase 9: PPL Root-Cause Correction (⬜ Planned — Issues #34/#35/#36, 2026-07-04)
+
+> **Diagnosis update**: The long-standing "d×d matrix is a fundamental compression
+> bottleneck" explanation for HVN's PPL gap is contradicted by our own benchmark —
+> the SSM baseline reaches PPL ~1.1 with a state *smaller* than HVN's d×d-per-head
+> Hamiltonian. Fixed-size O(1) state is **not** the limiter. HVN is really a
+> linear-attention fast-weight network (`v=Γ·Hω` read, `H←(1-η)H+η(P−HPH)` delta-rule
+> update), so the fix is to borrow proven dynamics from DeltaNet / GLA / Mamba-2 / RWKV-7,
+> not to add more capacity (which #21/#22 already showed moves PPL <3%).
+
+### 9.1 Readout & update dynamics (Issue #34)
+- [ ] Replace velocity L2-norm + Frobenius clamp with a **per-channel data-dependent
+      decay gate** + a **normalizer/denominator** on the readout (prime suspect for the 8→1 gap)
+- [ ] Adopt **canonical DeltaNet update** with **separate k/v projections** (drop symmetric `HPH`)
+- [ ] Add **output gate + short causal depthwise conv** on the read path
+- Target: eval PPL ≥30% better than the 8.13 baseline at equal/lower FLOPs, O(1) preserved
+
+### 9.2 Real-scale scaling validation (Issue #35)
+- [ ] Wire WikiText-103 (≥100M tokens) into `eval/scaling_laws.py`; compute-matched sweep
+- [ ] Refit HVN/Transformer/SSM exponents; the current -0.007 is from 34K chars and untrustworthy
+
+### 9.3 Generation-speed cleanups (Issue #36)
+- [ ] Remove the dead full-`forward()` prompt prefill in `generate_incremental`
+- [ ] Batch/chunk the prompt prefill; cut per-token tensor alloc + `.item()` syncs
