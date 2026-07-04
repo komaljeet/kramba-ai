@@ -579,12 +579,48 @@ i.e. while *winning*). A fp32 rerun of d=512 trains stably to 218.9, confirming 
 **large-width bf16 numerical-stability / loss-spike issue, not a quality deficit** — existing grad
 clipping is insufficient at that width.
 
-**Decision — keep flag-gated, do not flip the default.** Acceptance criterion #35 ("DeltaNet ≥ HVN
-block at real scale") holds on *quality* but fails on *robustness*: a default must train cleanly in
-the recommended precision, and DeltaNet currently does not at d≥512/bf16. `--use_deltanet` is the
-**recommended** setting (use fp32, or bf16 only at d≤256, until the instability is fixed); flipping
-the default is blocked on a follow-up that fixes large-width bf16 stability (loss-spike guarding /
-fp32-casting the decay gate & normalization / init & LR tuning).
+**Decision (at the time) — keep flag-gated, do not flip the default.** Acceptance criterion #35
+("DeltaNet ≥ HVN block at real scale") held on *quality* but failed on *robustness*: a default must
+train cleanly in the recommended precision, and DeltaNet did not at d≥512/bf16. Flipping the default
+was blocked on a follow-up (Issue #44) fixing large-width bf16 stability. **That fix is now done —
+see §8.7.**
+
+### 8.7 Large-Width bf16 Stability Fix for Gated-DeltaNet (Issue #44)
+
+The §8.6 divergence was diagnosed to two numerical hot-spots in the bf16 path, both fixed in
+`hvn/core/deltanet.py` (matmuls stay bf16; only the sensitive reductions move to fp32):
+
+1. **fp32 islands** for the numerically sensitive ops — the L2-normalization of q/k (`_l2norm`), the
+   per-head output RMSNorm on the read (`_read_normalize`, which squares a large read `S·q` — bf16
+   overflows above ≈1.8e19 after `pow(2)`), and the data-dependent decay/write gates `α`/`β`.
+2. **Flooring the intra-chunk cumulative decay `P = cumprod(α)`** in the chunked-parallel scan. The
+   algebra only uses the bounded causal ratios `P_i/P_j ≤ 1` (j≤i), but the intermediate
+   `ktil = k/P` overflows fp32 to Inf once `P` underflows — at d≥512 enough decay channels shrink
+   within a 32-token chunk that `(1e-6)^32` underflows. `P` is floored at `1e-16` (keys/queries are
+   unit-norm, so `1/P ≤ 1e16`, well inside fp32), only perturbing channels already decayed to ≈0.
+3. **Loss-spike guard** in the training loop (`eval/scaling_laws.py`) as a belt-and-suspenders net:
+   skip the optimizer step on a non-finite loss or a grad-norm spike (>1e3) so a transient spike
+   can't poison the weights and AdamW moments.
+
+**Result — DeltaNet now trains cleanly in bf16 at every width, with no NaN, and its quality win
+*grows* with scale** (the instability had been silently degrading the large-width runs even before
+the NaN). Full sweep, same config as §8.6 (WikiText-103, BPE-8000, 5M-token compute-matched, 2L,
+seq_len=128, **bf16**, RTX 4050):
+
+| d_model | HVN (default) | HVN-DeltaNet | Transformer | DeltaNet vs HVN |
+|--------:|--------------:|-------------:|------------:|:---:|
+| 128 | 522.5 | **410.6** | 392.6 | **−21.4%** |
+| 256 | 348.4 | **251.9** | 245.1 | **−27.7%** |
+| 512 | 236.0 | **159.4** | 173.9 | **−32.4%** |
+| 768 | 205.9 | **128.0** | 149.7 | **−37.8%** |
+
+Refit exponents (bf16): HVN −0.423, **HVN-DeltaNet −0.507** (steepest of the three), Transformer
+−0.404. DeltaNet no longer just matches the Transformer at d≤256 — it now **beats both HVN and the
+Transformer at d=512 and d=768** and has the steepest scaling exponent. All acceptance criteria met:
+no NaN at any width; bf16 d=512/768 PPL ≤ default HVN (and well below the fp32 DeltaNet numbers);
+O(1) preserved (`test_issue34.py` 5/5, `test_issue33.py` 5/5, `demo.py` pass). `--use_deltanet` is
+now safe to run in bf16 at all widths, which **unblocks the #39 default-flip decision** (left to a
+follow-up so this change keeps defaults unchanged).
 
 ### 8.5 Honest Assessment
 
@@ -755,14 +791,17 @@ regress >2% per fix; Triton kernel dtype-agnostic.
 - **#36 — Speed up incremental generation** ✅ **Done** (2026-07-04): removed redundant prefill
   + per-token host↔device syncs; HVN decode 80.7 → 197.7 tok/s (2.45×), DeltaNet
   time-to-first-token 1,612 → 23 ms (70×), stacks with #33 kernels (see §9.3).
-- **#39 — Make Gated-DeltaNet the default block?** 🔄 **Decided: keep flag-gated** (2026-07-04,
-  blocked-on-#35 sweep now run). Added a distinct `HVN-DeltaNet` variant to
-  `eval/scaling_laws.py` and swept it on real WikiText-103 (BPE-8000, 5M-token compute-matched):
-  DeltaNet cuts PPL **21–28%** at d≤256 (matches Transformer) and beats HVN at d=512 in fp32
-  (218.9 vs 237), **but diverges to NaN at d≥512 under bf16** (the recommended precision). Since a
-  default must train cleanly in bf16, the default stays HVN and `--use_deltanet` is documented as
-  recommended (fp32, or bf16 ≤ d=256). Flipping is now blocked on a **large-width bf16-stability
-  fix**, not on scaling evidence (see §8.6).
+- **#39 — Make Gated-DeltaNet the default block?** 🔄 **Was: keep flag-gated** (2026-07-04) because
+  DeltaNet **diverged to NaN at d≥512 under bf16**; the flip was blocked solely on a large-width
+  bf16-stability fix. **That blocker is now cleared by #44** — DeltaNet trains cleanly in bf16 at all
+  widths and beats HVN/Transformer at d≥512 (see §8.7). The default-flip decision is now unblocked
+  and left as the remaining follow-up.
+- **#44 — Fix large-width bf16 instability in the Gated-DeltaNet block** ✅ **Done** (2026-07-04):
+  fp32 islands for `_l2norm` / read RMSNorm / decay-write gates, flooring the intra-chunk cumulative
+  decay `P` (bounds the `k/P` overflow), and a training-loop loss-spike guard. Full bf16 sweep now
+  NaN-free at every width; DeltaNet PPL 522.5→410.6 (d128), 348→251.9 (d256), 236→159.4 (d512),
+  205.9→128.0 (d768) — beating both HVN and Transformer at d≥512, steepest exponent (−0.507).
+  `test_issue34.py`/`test_issue33.py`/`demo.py` all pass (see §8.7).
 
 ### #34 — Close the PPL Gap via Readout/Update Dynamics — ✅ Done (2026-07-04)
 
@@ -781,7 +820,7 @@ O(1) scaling (2.57 ms/tok flat N=256→4096), 1500-token stability with no clamp
 |-------|-------------------------------|------------------|
 | SSM | ~1.16 | N/A |
 | Transformer | ~2.0 | -0.090 |
-| **HVN + Gated-DeltaNet (#34)** | **~3.4** (61% better than 8.8) | ~−0.42, real-scale, −21–28% PPL vs HVN (#39; bf16-unstable at d≥512) |
+| **HVN + Gated-DeltaNet (#34)** | **~3.4** (61% better than 8.8) | **−0.507** real-scale, −21–38% PPL vs HVN, beats Transformer at d≥512 (#39/#44; bf16-stable at all widths) |
 | HVN (#22 n_threads=4 + all strategies) | ~8.13 | -0.0123 |
 | HVN (#21 strategies) | ~8.37 | -0.0126 |
 | HVN (original) | ~8.37 | -0.007 |

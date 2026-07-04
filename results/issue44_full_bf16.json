@@ -1,0 +1,952 @@
+{
+  "dataset": "wikitext103",
+  "dataset_stats": {
+    "tokenizer": "bpe",
+    "vocab_size": 8000,
+    "train_chars": 50000000,
+    "eval_chars": 1000000,
+    "train_tokens": 12443702,
+    "eval_tokens": 243977
+  },
+  "hyperparameters": {
+    "d_models": [
+      128,
+      256,
+      512,
+      768
+    ],
+    "n_layers": 2,
+    "token_budget": 5000000,
+    "eval_interval_tokens": 500000,
+    "batch_size": 16,
+    "seq_len": 128,
+    "lr": 0.0003,
+    "precision": "bf16",
+    "tokenizer": "bpe",
+    "bpe_vocab": 8000,
+    "compile": false,
+    "use_deltanet": false
+  },
+  "models": [
+    {
+      "name": "HVN",
+      "params": 2321280,
+      "final_eval_ppl": 522.5409541436553,
+      "total_time_s": 50.97642135620117,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 997.1005039099505,
+          "train_loss": 6.928733825683594,
+          "time_s": 5.485555410385132
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 819.2359799268588,
+          "train_loss": 6.793510437011719,
+          "time_s": 10.547929763793945
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 716.2482941163026,
+          "train_loss": 6.506275177001953,
+          "time_s": 15.561709642410278
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 636.3685137885394,
+          "train_loss": 6.410714149475098,
+          "time_s": 20.57077980041504
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 585.3825859808097,
+          "train_loss": 6.355551719665527,
+          "time_s": 25.558602809906006
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 551.9106474321736,
+          "train_loss": 6.368539333343506,
+          "time_s": 30.543110370635986
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 535.2373388367017,
+          "train_loss": 6.372657775878906,
+          "time_s": 35.8649320602417
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 526.4055567102733,
+          "train_loss": 6.288054943084717,
+          "time_s": 40.994767904281616
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 522.8983895776222,
+          "train_loss": 6.300993919372559,
+          "time_s": 46.02272868156433
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 522.5409541436553,
+          "train_loss": 6.393867015838623,
+          "time_s": 50.97634148597717
+        }
+      ],
+      "saturation_tokens": 4001792,
+      "skipped_steps": 0,
+      "d_model": 128,
+      "n_layers": 2
+    },
+    {
+      "name": "HVN-DeltaNet",
+      "params": 2388040,
+      "final_eval_ppl": 410.5547066140387,
+      "total_time_s": 100.2926390171051,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 965.6933311123884,
+          "train_loss": 6.9272966384887695,
+          "time_s": 10.116628646850586
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 738.904575363642,
+          "train_loss": 6.655513763427734,
+          "time_s": 20.17641258239746
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 603.9767844393862,
+          "train_loss": 6.574612617492676,
+          "time_s": 30.23014783859253
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 518.1379807088779,
+          "train_loss": 6.364555358886719,
+          "time_s": 40.341551065444946
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 469.4456800900926,
+          "train_loss": 6.327966690063477,
+          "time_s": 50.31735825538635
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 439.1670480501819,
+          "train_loss": 6.105796813964844,
+          "time_s": 60.26582860946655
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 422.68723506206055,
+          "train_loss": 6.1571574211120605,
+          "time_s": 70.24881672859192
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 414.11948742389325,
+          "train_loss": 6.183727264404297,
+          "time_s": 80.29813194274902
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 411.06422077479476,
+          "train_loss": 6.138804912567139,
+          "time_s": 90.32136249542236
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 410.5547066140387,
+          "train_loss": 6.1489152908325195,
+          "time_s": 100.29252934455872
+        }
+      ],
+      "saturation_tokens": 4001792,
+      "skipped_steps": 0,
+      "d_model": 128,
+      "n_layers": 2
+    },
+    {
+      "name": "Transformer",
+      "params": 2443776,
+      "final_eval_ppl": 392.61082614627645,
+      "total_time_s": 20.48399519920349,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 926.7461293195073,
+          "train_loss": 7.017818450927734,
+          "time_s": 2.1123876571655273
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 703.4382927050287,
+          "train_loss": 6.540122032165527,
+          "time_s": 4.1448304653167725
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 564.1451188845148,
+          "train_loss": 6.388588905334473,
+          "time_s": 6.202293634414673
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 489.3795747087368,
+          "train_loss": 6.280373573303223,
+          "time_s": 8.249051332473755
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 446.8082756069105,
+          "train_loss": 6.20140266418457,
+          "time_s": 10.277523517608643
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 419.93419153598535,
+          "train_loss": 6.051897048950195,
+          "time_s": 12.32484769821167
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 404.44047590028435,
+          "train_loss": 6.118685722351074,
+          "time_s": 14.363481521606445
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 396.21927942934116,
+          "train_loss": 6.094911098480225,
+          "time_s": 16.417725324630737
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 393.15222558848194,
+          "train_loss": 5.987410545349121,
+          "time_s": 18.45082187652588
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 392.61082614627645,
+          "train_loss": 5.923316955566406,
+          "time_s": 20.483927011489868
+        }
+      ],
+      "saturation_tokens": 4001792,
+      "skipped_steps": 0,
+      "d_model": 128,
+      "n_layers": 2
+    },
+    {
+      "name": "HVN",
+      "params": 5158784,
+      "final_eval_ppl": 348.4233474755858,
+      "total_time_s": 55.252164125442505,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 825.2944236779772,
+          "train_loss": 6.753830909729004,
+          "time_s": 5.543957948684692
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 625.391927492282,
+          "train_loss": 6.502824783325195,
+          "time_s": 11.067145347595215
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 502.8115763480957,
+          "train_loss": 6.259242057800293,
+          "time_s": 16.535680294036865
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 438.86519016349644,
+          "train_loss": 6.188920974731445,
+          "time_s": 22.027347326278687
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 399.6752692675919,
+          "train_loss": 5.960008144378662,
+          "time_s": 27.499155282974243
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 373.39647600315965,
+          "train_loss": 6.076468467712402,
+          "time_s": 32.9625518321991
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 359.278781544277,
+          "train_loss": 5.86435604095459,
+          "time_s": 38.44392156600952
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 351.67447726711805,
+          "train_loss": 6.003349304199219,
+          "time_s": 44.047553300857544
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 348.8136968878628,
+          "train_loss": 5.9373321533203125,
+          "time_s": 49.70673441886902
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 348.4233474755858,
+          "train_loss": 5.87456750869751,
+          "time_s": 55.2520751953125
+        }
+      ],
+      "saturation_tokens": 4001792,
+      "skipped_steps": 0,
+      "d_model": 256,
+      "n_layers": 2
+    },
+    {
+      "name": "HVN-DeltaNet",
+      "params": 5423432,
+      "final_eval_ppl": 251.94430727294372,
+      "total_time_s": 104.68136692047119,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 726.9224102834261,
+          "train_loss": 6.516753196716309,
+          "time_s": 10.653248310089111
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 483.4434351127714,
+          "train_loss": 6.237711429595947,
+          "time_s": 21.244167804718018
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 379.1374506602638,
+          "train_loss": 5.904139518737793,
+          "time_s": 31.943490028381348
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 325.8328991249901,
+          "train_loss": 5.897103309631348,
+          "time_s": 42.265931367874146
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 293.7405538597244,
+          "train_loss": 5.765116214752197,
+          "time_s": 52.67590141296387
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 272.4737404420615,
+          "train_loss": 5.779367923736572,
+          "time_s": 63.06334900856018
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 260.8031476218352,
+          "train_loss": 5.596954345703125,
+          "time_s": 73.50813961029053
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 254.79763935637936,
+          "train_loss": 5.46677303314209,
+          "time_s": 83.93295168876648
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 252.22547785623462,
+          "train_loss": 5.4651923179626465,
+          "time_s": 94.28954887390137
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 251.94430727294372,
+          "train_loss": 5.54443359375,
+          "time_s": 104.68124532699585
+        }
+      ],
+      "saturation_tokens": 4501504,
+      "skipped_steps": 0,
+      "d_model": 256,
+      "n_layers": 2
+    },
+    {
+      "name": "Transformer",
+      "params": 5673984,
+      "final_eval_ppl": 245.08773458838706,
+      "total_time_s": 27.68986940383911,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 691.8995924808252,
+          "train_loss": 6.475369453430176,
+          "time_s": 2.8816869258880615
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 462.14035003682056,
+          "train_loss": 6.220486640930176,
+          "time_s": 5.631806373596191
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 366.90498164160414,
+          "train_loss": 5.941038131713867,
+          "time_s": 8.389766931533813
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 314.9939289335855,
+          "train_loss": 5.926096439361572,
+          "time_s": 11.146180868148804
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 285.1858182538262,
+          "train_loss": 5.639187812805176,
+          "time_s": 13.921936273574829
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 265.8227992915536,
+          "train_loss": 5.6171722412109375,
+          "time_s": 16.696068048477173
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 254.72393589953913,
+          "train_loss": 5.5543622970581055,
+          "time_s": 19.434959888458252
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 247.97424591590465,
+          "train_loss": 5.540496826171875,
+          "time_s": 22.210846662521362
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 245.61676894582575,
+          "train_loss": 5.594639778137207,
+          "time_s": 24.93483257293701
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 245.08773458838706,
+          "train_loss": 5.3435139656066895,
+          "time_s": 27.689796686172485
+        }
+      ],
+      "saturation_tokens": 4501504,
+      "skipped_steps": 0,
+      "d_model": 256,
+      "n_layers": 2
+    },
+    {
+      "name": "HVN",
+      "params": 12406656,
+      "final_eval_ppl": 235.9498589178933,
+      "total_time_s": 83.73422241210938,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 627.5167371757568,
+          "train_loss": 6.581643104553223,
+          "time_s": 7.157323598861694
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 425.0045566403663,
+          "train_loss": 6.054293632507324,
+          "time_s": 14.29740309715271
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 343.5609462528384,
+          "train_loss": 6.035678386688232,
+          "time_s": 21.437273263931274
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 294.7555907429538,
+          "train_loss": 5.684261322021484,
+          "time_s": 28.907497882843018
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 269.59097405362456,
+          "train_loss": 5.662437438964844,
+          "time_s": 37.085922956466675
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 253.53448085614835,
+          "train_loss": 5.5903639793396,
+          "time_s": 46.82412886619568
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 243.87699545468382,
+          "train_loss": 5.422150135040283,
+          "time_s": 56.13795447349548
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 238.60279361097997,
+          "train_loss": 5.587587356567383,
+          "time_s": 65.40909719467163
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 236.37385091297466,
+          "train_loss": 5.44145393371582,
+          "time_s": 74.59741759300232
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 235.9498589178933,
+          "train_loss": 5.477222442626953,
+          "time_s": 83.73412203788757
+        }
+      ],
+      "saturation_tokens": 4501504,
+      "skipped_steps": 0,
+      "d_model": 512,
+      "n_layers": 2
+    },
+    {
+      "name": "HVN-DeltaNet",
+      "params": 13460296,
+      "final_eval_ppl": 159.38979700175855,
+      "total_time_s": 177.18658924102783,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 497.36979217288666,
+          "train_loss": 6.093654632568359,
+          "time_s": 17.978023529052734
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 308.88894991850225,
+          "train_loss": 5.857754707336426,
+          "time_s": 35.91598296165466
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 243.2171494683286,
+          "train_loss": 5.495823860168457,
+          "time_s": 52.857343673706055
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 206.55124586760166,
+          "train_loss": 5.3793206214904785,
+          "time_s": 70.5390682220459
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 186.66363492302193,
+          "train_loss": 5.3215765953063965,
+          "time_s": 88.78924322128296
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 174.02737645514222,
+          "train_loss": 5.216856002807617,
+          "time_s": 107.05632519721985
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 166.49874712923744,
+          "train_loss": 5.325577735900879,
+          "time_s": 125.36794090270996
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 161.25513342176558,
+          "train_loss": 5.154313087463379,
+          "time_s": 142.42505717277527
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 159.54381623769308,
+          "train_loss": 4.919960975646973,
+          "time_s": 160.11010360717773
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 159.38979700175855,
+          "train_loss": 5.168270587921143,
+          "time_s": 177.1864514350891
+        }
+      ],
+      "saturation_tokens": 4501504,
+      "skipped_steps": 0,
+      "d_model": 512,
+      "n_layers": 2
+    },
+    {
+      "name": "Transformer",
+      "params": 14493696,
+      "final_eval_ppl": 173.92080321237307,
+      "total_time_s": 55.25279664993286,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 479.41197486956753,
+          "train_loss": 6.347221851348877,
+          "time_s": 5.538821458816528
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 310.6453177627456,
+          "train_loss": 5.822339057922363,
+          "time_s": 11.061834335327148
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 250.20654739824104,
+          "train_loss": 5.438946723937988,
+          "time_s": 16.64498281478882
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 219.4333196343194,
+          "train_loss": 5.399392604827881,
+          "time_s": 22.28416395187378
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 201.0885289769506,
+          "train_loss": 5.286189556121826,
+          "time_s": 27.78761339187622
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 189.57284564449614,
+          "train_loss": 5.163729667663574,
+          "time_s": 33.28415012359619
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 181.39227048368085,
+          "train_loss": 5.264077186584473,
+          "time_s": 38.77033281326294
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 176.296584320504,
+          "train_loss": 5.204111099243164,
+          "time_s": 44.29048728942871
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 174.39778769624968,
+          "train_loss": 5.111611366271973,
+          "time_s": 49.80012655258179
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 173.92080321237307,
+          "train_loss": 5.084962844848633,
+          "time_s": 55.25260663032532
+        }
+      ],
+      "saturation_tokens": 4501504,
+      "skipped_steps": 0,
+      "d_model": 512,
+      "n_layers": 2
+    },
+    {
+      "name": "HVN",
+      "params": 21751680,
+      "final_eval_ppl": 205.91856775895192,
+      "total_time_s": 113.371009349823,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 513.3398022878241,
+          "train_loss": 6.203606605529785,
+          "time_s": 11.34224247932434
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 343.8056499322208,
+          "train_loss": 5.9564714431762695,
+          "time_s": 22.71712327003479
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 279.1955430770842,
+          "train_loss": 5.582305908203125,
+          "time_s": 33.97247290611267
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 249.28134118748451,
+          "train_loss": 5.61772346496582,
+          "time_s": 45.26310682296753
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 233.55332457653637,
+          "train_loss": 5.45784854888916,
+          "time_s": 56.721795320510864
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 220.94382903742195,
+          "train_loss": 5.439148902893066,
+          "time_s": 68.04681301116943
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 212.57070810999028,
+          "train_loss": 5.574121475219727,
+          "time_s": 79.48608565330505
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 208.559048128098,
+          "train_loss": 5.261417865753174,
+          "time_s": 90.78663182258606
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 206.2694624906675,
+          "train_loss": 5.294266700744629,
+          "time_s": 102.09164118766785
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 205.91856775895192,
+          "train_loss": 5.281090259552002,
+          "time_s": 113.37090396881104
+        }
+      ],
+      "saturation_tokens": 4501504,
+      "skipped_steps": 0,
+      "d_model": 768,
+      "n_layers": 2
+    },
+    {
+      "name": "HVN-DeltaNet",
+      "params": 24118600,
+      "final_eval_ppl": 128.0055575635228,
+      "total_time_s": 192.27986431121826,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 377.70843874198505,
+          "train_loss": 6.047946929931641,
+          "time_s": 19.622052431106567
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 245.5877015079324,
+          "train_loss": 5.3777570724487305,
+          "time_s": 38.58035969734192
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 194.63322561208528,
+          "train_loss": 5.194761753082275,
+          "time_s": 57.9833562374115
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 168.84968995062894,
+          "train_loss": 5.105058670043945,
+          "time_s": 77.06473445892334
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 152.17033115525084,
+          "train_loss": 5.041006088256836,
+          "time_s": 96.38963961601257
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 141.58779825840344,
+          "train_loss": 4.741701602935791,
+          "time_s": 115.39952516555786
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 135.02069497909784,
+          "train_loss": 4.806352615356445,
+          "time_s": 134.439306974411
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 130.02260660072423,
+          "train_loss": 5.013114929199219,
+          "time_s": 154.20701122283936
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 128.37757280662308,
+          "train_loss": 4.7806196212768555,
+          "time_s": 173.17282843589783
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 128.0055575635228,
+          "train_loss": 4.886628150939941,
+          "time_s": 192.27975916862488
+        }
+      ],
+      "saturation_tokens": 4501504,
+      "skipped_steps": 0,
+      "d_model": 768,
+      "n_layers": 2
+    },
+    {
+      "name": "Transformer",
+      "params": 26459136,
+      "final_eval_ppl": 149.74336924340344,
+      "total_time_s": 90.97700548171997,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 377.1255545367423,
+          "train_loss": 5.894165515899658,
+          "time_s": 9.240824222564697
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 252.83575434477524,
+          "train_loss": 5.398927211761475,
+          "time_s": 18.37071394920349
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 212.47813842745248,
+          "train_loss": 5.288037300109863,
+          "time_s": 27.514151573181152
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 190.10047146935167,
+          "train_loss": 5.399916172027588,
+          "time_s": 36.673190116882324
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 173.8450890351446,
+          "train_loss": 5.051829814910889,
+          "time_s": 45.91256785392761
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 163.59579090787463,
+          "train_loss": 4.99545955657959,
+          "time_s": 54.97246050834656
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 156.9370959746901,
+          "train_loss": 4.932494163513184,
+          "time_s": 63.97964525222778
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 152.46286453140215,
+          "train_loss": 5.04494571685791,
+          "time_s": 73.00792098045349
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 150.16805771013227,
+          "train_loss": 4.930837631225586,
+          "time_s": 82.01527571678162
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 149.74336924340344,
+          "train_loss": 5.008552551269531,
+          "time_s": 90.97692346572876
+        }
+      ],
+      "saturation_tokens": 4501504,
+      "skipped_steps": 0,
+      "d_model": 768,
+      "n_layers": 2
+    }
+  ],
+  "analysis": {
+    "summary_lines": [
+      "HVN          scaling:  PPL \u2248 250255.1003 \u00d7 params^-0.4234",
+      "HVN-DeltaNet scaling:  PPL \u2248 677555.6056 \u00d7 params^-0.5068",
+      "Transformer  scaling:  PPL \u2248 140251.3540 \u00d7 params^-0.4035",
+      "HVN exponent -0.4234 vs Transformer -0.4035 \u2014 HVN is steeper (better).",
+      "HVN-DeltaNet exponent -0.5068 vs Transformer -0.4035 \u2014 HVN-DeltaNet is steeper (better).",
+      "HVN-DeltaNet exponent -0.5068 vs default HVN -0.4234 \u2014 DeltaNet is steeper (better).",
+      "  d=128 : HVN 522.54 -> DeltaNet 410.55 (+21.4% PPL)",
+      "  d=256 : HVN 348.42 -> DeltaNet 251.94 (+27.7% PPL)",
+      "  d=512 : HVN 235.95 -> DeltaNet 159.39 (+32.4% PPL)",
+      "  d=768 : HVN 205.92 -> DeltaNet 128.01 (+37.8% PPL)",
+      "",
+      "Saturation (token budget where eval PPL stops improving):",
+      "  HVN          d=128 : 4,001,792 tok",
+      "  HVN          d=256 : 4,001,792 tok",
+      "  HVN          d=512 : 4,501,504 tok",
+      "  HVN          d=768 : 4,501,504 tok",
+      "  HVN-DeltaNet d=128 : 4,001,792 tok",
+      "  HVN-DeltaNet d=256 : 4,501,504 tok",
+      "  HVN-DeltaNet d=512 : 4,501,504 tok",
+      "  HVN-DeltaNet d=768 : 4,501,504 tok",
+      "  Transformer  d=128 : 4,001,792 tok",
+      "  Transformer  d=256 : 4,501,504 tok",
+      "  Transformer  d=512 : 4,501,504 tok",
+      "  Transformer  d=768 : 4,501,504 tok",
+      "No wall-clock crossover within tested sizes."
+    ],
+    "power_laws": {
+      "HVN": [
+        250255.10031276947,
+        -0.4233745353825425
+      ],
+      "HVN-DeltaNet": [
+        677555.6056209479,
+        -0.5067895842662087
+      ],
+      "Transformer": [
+        140251.3539940642,
+        -0.403547738391653
+      ]
+    },
+    "crossover_d_model": null
+  }
+}

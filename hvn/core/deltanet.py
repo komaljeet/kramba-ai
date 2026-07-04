@@ -57,9 +57,26 @@ import torch.nn.functional as F
 from .hvn_block import RMSNorm, SwiGLU
 
 
+# Floor for the intra-chunk cumulative decay ``P`` in the chunked scan (Issue
+# #44).  Keys/queries are L2-normalized (|·| ≤ 1), so ``1/P`` reaches at most
+# ``1/_P_FLOOR = 1e16`` — well inside fp32's ~3.4e38 range even after summing
+# over d_head — while a floor this small only touches channels that have already
+# decayed to ≈0 (negligible contribution).
+_P_FLOOR = 1e-16
+
+
 def _l2norm(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """L2-normalize over the last dimension."""
-    return x / x.norm(dim=-1, keepdim=True).clamp_min(eps)
+    """L2-normalize over the last dimension.
+
+    The sum-of-squares reduction is done in fp32 regardless of the input dtype:
+    in bf16 the accumulation over a wide ``d_head`` loses enough precision that
+    the normalized vectors drift, which — compounded through the delta-rule
+    recurrence at large width — is one of the seeds of the bf16 loss spike
+    (Issue #44).  The result is cast back to the input dtype.
+    """
+    xf = x.float()
+    out = xf / xf.norm(dim=-1, keepdim=True).clamp_min(eps)
+    return out.to(x.dtype)
 
 
 class DeltaNetBlock(nn.Module):
@@ -209,10 +226,15 @@ class DeltaNetBlock(nn.Module):
         k = _l2norm(self.k_proj(xc).view(B, S, H, d))
         v = self.v_proj(xc).view(B, S, H, d)
 
-        beta = torch.sigmoid(self.beta_proj(xc)).view(B, S, H, 1)
+        # Gates in fp32 (Issue #44): β is the write strength and α is the decay
+        # that drives the ``P = cumprod(α)`` / ``1/P`` reparameterization in the
+        # chunked scan — a bf16-quantized α near 1.0 (init ≈0.95) compounds error
+        # over the chunk and helps seed the large-width divergence.  Sigmoid in
+        # fp32 keeps them accurate; kept fp32 to match the fp32 scan.
+        beta = torch.sigmoid(self.beta_proj(xc).float()).view(B, S, H, 1)
 
         if self.use_decay_gate:
-            alpha = torch.sigmoid(self.alpha_proj(xc)).view(B, S, H, d)
+            alpha = torch.sigmoid(self.alpha_proj(xc).float()).view(B, S, H, d)
         else:
             alpha = None
 
@@ -223,9 +245,18 @@ class DeltaNetBlock(nn.Module):
         return q, k, v, alpha, beta, gate
 
     def _read_normalize(self, o: torch.Tensor) -> torch.Tensor:
-        """Per-head RMSNorm on the read output.  o: [B, S, H, d] → [B, S, H, d]."""
-        rms = o.pow(2).mean(dim=-1, keepdim=True).add(self.read_norm_eps).rsqrt()
-        return o * rms * self.read_norm_weight  # weight broadcasts [H, d]
+        """Per-head RMSNorm on the read output.  o: [B, S, H, d] → [B, S, H, d].
+
+        Done in fp32 (Issue #44): the read ``o = S·q`` can grow large at wide
+        ``d_head``, and squaring it in bf16 both loses precision and risks
+        overflow (bf16 overflows above ≈1.8e19 after ``pow(2)``), which produces
+        Inf → NaN.  Normalizing in fp32 keeps the readout finite and scale-stable
+        at d≥512; the output is cast back to the block dtype.
+        """
+        of = o.float()
+        rms = of.pow(2).mean(dim=-1, keepdim=True).add(self.read_norm_eps).rsqrt()
+        out = of * rms * self.read_norm_weight.float()  # weight broadcasts [H, d]
+        return out.to(o.dtype)
 
     # ------------------------------------------------------------------
     # Delta-rule recurrence (two implementations, identical result)
@@ -294,7 +325,17 @@ class DeltaNetBlock(nn.Module):
 
                 if alphaN is not None:
                     a = alphaN[:, s:e].clamp_min(1e-6)           # [N, L, d]
-                    P = torch.cumprod(a, dim=1)                  # inclusive cumprod [N, L, d]
+                    # Inclusive cumprod, floored (Issue #44): the causal ratios
+                    # that the algebra actually uses are ``P_i/P_j ≤ 1`` (j≤i),
+                    # but the intermediate ``ktil = k/P`` overflows fp32 to Inf
+                    # once ``P`` underflows — at large ``d_head`` (d≥512) enough
+                    # decay channels shrink within a 32-token chunk that the raw
+                    # ``(1e-6)^32`` cumprod underflows, giving Inf → NaN and
+                    # (post loss-spike guard) a fully stalled model.  Flooring
+                    # ``P`` at ``P_FLOOR`` bounds ``1/P`` while only perturbing
+                    # channels that have already decayed to ≈0 (their
+                    # contribution is negligible), so the read/state stay finite.
+                    P = torch.cumprod(a, dim=1).clamp_min(_P_FLOOR)  # [N, L, d]
                 else:
                     P = torch.ones(N, L, d, device=dev, dtype=torch.float32)
                 P_last = P[:, -1, :]                             # [N, d]
