@@ -68,8 +68,14 @@ from hvn.core import HamiltonianVortexNetwork  # noqa: E402
 from train import CharTokenizer, TextDataset  # noqa: E402
 from .datasets import DATASET_REGISTRY  # noqa: E402
 
-_MODEL_COLORS = {"HVN": "tab:blue", "Transformer": "tab:orange", "SSM": "tab:green"}
-_MODEL_MARKERS = {"HVN": "o", "Transformer": "s", "SSM": "^"}
+_MODEL_COLORS = {
+    "HVN": "tab:blue", "HVN-DeltaNet": "tab:red",
+    "Transformer": "tab:orange", "SSM": "tab:green",
+}
+_MODEL_MARKERS = {"HVN": "o", "HVN-DeltaNet": "D", "Transformer": "s", "SSM": "^"}
+
+# Models that are HVN variants (used by the analysis to compare against the baselines).
+_HVN_VARIANTS = ("HVN", "HVN-DeltaNet")
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +371,14 @@ def run_scaling_laws(
                 bond_dimension=bond_dim, chunk_size=64, dropout=0.1,
                 use_deltanet=use_deltanet,
             )
+        if "HVN-DeltaNet" in models:
+            # Issue #39: sweep the Gated-DeltaNet block (Issue #34) alongside the
+            # default HVN block so the two curves are directly comparable.
+            model_specs["HVN-DeltaNet"] = HamiltonianVortexNetwork(
+                vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
+                bond_dimension=bond_dim, chunk_size=64, dropout=0.1,
+                use_deltanet=True,
+            )
         if "Transformer" in models:
             model_specs["Transformer"] = TransformerLM(
                 vocab_size=vocab_size, d_model=d_model, n_layers=n_layers, n_heads=4,
@@ -478,16 +492,40 @@ def _compute_analysis(results: list[dict]) -> dict:
             a, b = fit
             summary_lines.append(f"{name:<12} scaling:  PPL ≈ {a:.4f} × params^{b:.4f}")
 
-    # Compare HVN exponent to Transformer/SSM if all present.
-    hvn_fit = power_laws.get("HVN")
-    if hvn_fit:
+    # Compare each HVN variant's exponent to Transformer/SSM if present.
+    for hvn_name in _HVN_VARIANTS:
+        hvn_fit = power_laws.get(hvn_name)
+        if not hvn_fit:
+            continue
         b_hvn = hvn_fit[1]
         for other in ("Transformer", "SSM"):
             of = power_laws.get(other)
             if of:
                 verdict = "steeper (better)" if b_hvn < of[1] else "flatter (worse)"
                 summary_lines.append(
-                    f"HVN exponent {b_hvn:.4f} vs {other} {of[1]:.4f} — HVN is {verdict}."
+                    f"{hvn_name} exponent {b_hvn:.4f} vs {other} {of[1]:.4f} — "
+                    f"{hvn_name} is {verdict}."
+                )
+
+    # Head-to-head: HVN-DeltaNet vs default HVN block (Issue #39 decision input).
+    hvn_fit, dn_fit = power_laws.get("HVN"), power_laws.get("HVN-DeltaNet")
+    if hvn_fit and dn_fit:
+        verdict = "steeper (better)" if dn_fit[1] < hvn_fit[1] else "flatter (worse)"
+        summary_lines.append(
+            f"HVN-DeltaNet exponent {dn_fit[1]:.4f} vs default HVN {hvn_fit[1]:.4f} — "
+            f"DeltaNet is {verdict}."
+        )
+        by_d = {}
+        for r in results:
+            if r["name"] in ("HVN", "HVN-DeltaNet"):
+                by_d.setdefault(r["d_model"], {})[r["name"]] = r["final_eval_ppl"]
+        for d in sorted(by_d):
+            pair = by_d[d]
+            if "HVN" in pair and "HVN-DeltaNet" in pair:
+                base, dn = pair["HVN"], pair["HVN-DeltaNet"]
+                pct = 100.0 * (base - dn) / base
+                summary_lines.append(
+                    f"  d={d:<4}: HVN {base:.2f} -> DeltaNet {dn:.2f} ({pct:+.1f}% PPL)"
                 )
 
     # Saturation summary.
@@ -612,8 +650,9 @@ def main() -> None:
     parser.add_argument("--output-plot", type=str, default=None)
     parser.add_argument("--compile", action="store_true", help="Use torch.compile.")
     parser.add_argument("--models", type=str, nargs="+", default=None,
-                        choices=["HVN", "Transformer", "SSM"],
-                        help="Which models to compare (default: all three).")
+                        choices=["HVN", "HVN-DeltaNet", "Transformer", "SSM"],
+                        help="Which models to compare (default: HVN, Transformer, SSM). "
+                             "Add 'HVN-DeltaNet' to sweep the Issue #34 block (Issue #39).")
     parser.add_argument("--precision", type=str, default="fp32",
                         choices=["fp32", "fp16", "bf16"])
     parser.add_argument("--tokenizer", type=str, default="char", choices=["char", "bpe"],

@@ -552,10 +552,39 @@ at ~1M tokens (all sizes). This *reproduces* the flat exponent — and shows why
 at 1M chars every size saturates early (data-bound), so the exponent measures saturation noise,
 not architectural scaling. Move to a corpus where models aren't starved and the flatness vanishes.
 
-*Caveats:* default HVN only (`--use_deltanet` (#34) not swept — the obvious next experiment);
+*Caveats:* default HVN only (the `--use_deltanet` (#34) sweep is now done — see §8.6, Issue #39);
 5M-token reduced budget, not the full ~100M — absolute PPLs will drop substantially at a larger
 budget, but the exponent comparison is already in the trustworthy (unsaturated) regime. Reproduce
 / scale up via the one-command job in §9.2.
+
+### 8.6 DeltaNet vs Default Block at Real Scale (Issue #39)
+
+The #34 DeltaNet win was previously only measured on 34K chars. Issue #39 swept it on the same
+real-scale config as §8.4 (WikiText-103, BPE-8000, 5M-token compute-matched budget, 2 layers,
+seq_len=128, RTX 4050) via a distinct `HVN-DeltaNet` model in `eval/scaling_laws.py`
+(`--models HVN HVN-DeltaNet Transformer`):
+
+| d_model | HVN (default) | HVN-DeltaNet | Transformer | DeltaNet vs HVN |
+|--------:|--------------:|-------------:|------------:|:---:|
+| 128 | 522.1 | **410.4** | 394.5 | **−21.4%** |
+| 256 | 350.4 | **251.9** | 248.4 | **−28.1%** |
+| 512 | 237.0 | **218.9** (fp32) / NaN (bf16) | 173.1 | −7.6% (fp32) |
+| 768 | 206.1 | NaN (bf16) | 150.1 | — |
+
+**DeltaNet is better on quality at every width** — it cuts PPL 21–28% at d≤256 (essentially
+matching the Transformer) and, in fp32, reaches 218.9 at d=512 (beating HVN's 237 and still
+improving). **But under bf16** — the project's recommended training precision on RTX 40-series —
+**it diverges to NaN at d≥512** (d=512 spiked after 2M tokens at PPL 207; d=768 after 1M at 244,
+i.e. while *winning*). A fp32 rerun of d=512 trains stably to 218.9, confirming the failure is a
+**large-width bf16 numerical-stability / loss-spike issue, not a quality deficit** — existing grad
+clipping is insufficient at that width.
+
+**Decision — keep flag-gated, do not flip the default.** Acceptance criterion #35 ("DeltaNet ≥ HVN
+block at real scale") holds on *quality* but fails on *robustness*: a default must train cleanly in
+the recommended precision, and DeltaNet currently does not at d≥512/bf16. `--use_deltanet` is the
+**recommended** setting (use fp32, or bf16 only at d≤256, until the instability is fixed); flipping
+the default is blocked on a follow-up that fixes large-width bf16 stability (loss-spike guarding /
+fp32-casting the decay gate & normalization / init & LR tuning).
 
 ### 8.5 Honest Assessment
 
@@ -726,6 +755,14 @@ regress >2% per fix; Triton kernel dtype-agnostic.
 - **#36 — Speed up incremental generation** ✅ **Done** (2026-07-04): removed redundant prefill
   + per-token host↔device syncs; HVN decode 80.7 → 197.7 tok/s (2.45×), DeltaNet
   time-to-first-token 1,612 → 23 ms (70×), stacks with #33 kernels (see §9.3).
+- **#39 — Make Gated-DeltaNet the default block?** 🔄 **Decided: keep flag-gated** (2026-07-04,
+  blocked-on-#35 sweep now run). Added a distinct `HVN-DeltaNet` variant to
+  `eval/scaling_laws.py` and swept it on real WikiText-103 (BPE-8000, 5M-token compute-matched):
+  DeltaNet cuts PPL **21–28%** at d≤256 (matches Transformer) and beats HVN at d=512 in fp32
+  (218.9 vs 237), **but diverges to NaN at d≥512 under bf16** (the recommended precision). Since a
+  default must train cleanly in bf16, the default stays HVN and `--use_deltanet` is documented as
+  recommended (fp32, or bf16 ≤ d=256). Flipping is now blocked on a **large-width bf16-stability
+  fix**, not on scaling evidence (see §8.6).
 
 ### #34 — Close the PPL Gap via Readout/Update Dynamics — ✅ Done (2026-07-04)
 
@@ -744,7 +781,7 @@ O(1) scaling (2.57 ms/tok flat N=256→4096), 1500-token stability with no clamp
 |-------|-------------------------------|------------------|
 | SSM | ~1.16 | N/A |
 | Transformer | ~2.0 | -0.090 |
-| **HVN + Gated-DeltaNet (#34)** | **~3.4** (61% better than 8.8) | TBD (#35) |
+| **HVN + Gated-DeltaNet (#34)** | **~3.4** (61% better than 8.8) | ~−0.42, real-scale, −21–28% PPL vs HVN (#39; bf16-unstable at d≥512) |
 | HVN (#22 n_threads=4 + all strategies) | ~8.13 | -0.0123 |
 | HVN (#21 strategies) | ~8.37 | -0.0126 |
 | HVN (original) | ~8.37 | -0.007 |
