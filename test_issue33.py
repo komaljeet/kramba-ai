@@ -40,17 +40,25 @@ def main():
 
         prompt = list(range(32))
 
+        # Warmup both paths (graph capture + any lazy init) so the timed runs
+        # measure steady-state throughput, not one-off setup cost.
+        model.generate_incremental(prompt, max_new_tokens=5, device=device)
+        model.generate_incremental_graph(prompt, max_new_tokens=5, device=device)
+        torch.cuda.synchronize()
+
         # Regular generation
         t0 = time.perf_counter()
-        out_reg = model.generate_incremental(prompt, max_new_tokens=50, device=device)
+        out_reg = model.generate_incremental(prompt, max_new_tokens=200, device=device)
+        torch.cuda.synchronize()
         t1 = time.perf_counter()
-        reg_tps = 50 / (t1 - t0)
+        reg_tps = 200 / (t1 - t0)
 
         # CUDA Graph generation
         t0 = time.perf_counter()
-        out_graph = model.generate_incremental_graph(prompt, max_new_tokens=50, device=device)
+        out_graph = model.generate_incremental_graph(prompt, max_new_tokens=200, device=device)
+        torch.cuda.synchronize()
         t1 = time.perf_counter()
-        graph_tps = 50 / (t1 - t0)
+        graph_tps = 200 / (t1 - t0)
 
         assert len(out_reg) == len(out_graph), f"Length mismatch: {len(out_reg)} vs {len(out_graph)}"
         speedup = graph_tps / reg_tps
@@ -72,17 +80,26 @@ def main():
 
         prompt = list(range(32))
 
+        # Warmup both paths so the timed runs exclude Triton JIT-compile cost
+        # (the fused kernel compiles on first launch).  The README's 2-7x figure
+        # is warmed throughput; timing a cold call measures compilation, not speed.
+        model.generate_incremental(prompt, max_new_tokens=5, device=device)
+        model.generate_incremental_fused(prompt, max_new_tokens=5, device=device)
+        torch.cuda.synchronize()
+
         # Regular generation
         t0 = time.perf_counter()
-        out_reg = model.generate_incremental(prompt, max_new_tokens=50, device=device)
+        out_reg = model.generate_incremental(prompt, max_new_tokens=200, device=device)
+        torch.cuda.synchronize()
         t1 = time.perf_counter()
-        reg_tps = 50 / (t1 - t0)
+        reg_tps = 200 / (t1 - t0)
 
         # Fused Triton generation
         t0 = time.perf_counter()
-        out_fused = model.generate_incremental_fused(prompt, max_new_tokens=50, device=device)
+        out_fused = model.generate_incremental_fused(prompt, max_new_tokens=200, device=device)
+        torch.cuda.synchronize()
         t1 = time.perf_counter()
-        fused_tps = 50 / (t1 - t0)
+        fused_tps = 200 / (t1 - t0)
 
         assert len(out_reg) == len(out_fused), f"Length mismatch: {len(out_reg)} vs {len(out_fused)}"
         speedup = fused_tps / reg_tps

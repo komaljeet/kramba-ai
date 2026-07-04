@@ -231,11 +231,13 @@ class DeltaNetBlock(nn.Module):
     # Delta-rule recurrence (two implementations, identical result)
     # ------------------------------------------------------------------
     @staticmethod
-    def _scan_sequential(qN, kN, vN, alphaN, betaN):
+    def _scan_sequential(qN, kN, vN, alphaN, betaN, return_state: bool = False):
         """Token-by-token gated delta-rule scan (reference / short sequences).
 
         All tensors are [N, S, d] (betaN is [N, S, 1]).  Returns oN [N, S, d].
         This is the exact recurrence that ``forward_step`` also implements.
+        When ``return_state`` is True, also returns the final ``S_state`` [N, d, d]
+        so a prompt can be prefilled and generation continued (Issue #36).
         """
         N, S, d = qN.shape
         S_state = torch.zeros(N, d, d, device=qN.device, dtype=qN.dtype)
@@ -248,10 +250,13 @@ class DeltaNetBlock(nn.Module):
             u = vN[:, t] - Sk
             S_state = S_state + betaN[:, t].unsqueeze(-1) * (u.unsqueeze(2) * k_t.unsqueeze(1))
             outs.append((S_state * qN[:, t].unsqueeze(1)).sum(-1))
-        return torch.stack(outs, dim=1)
+        oN = torch.stack(outs, dim=1)
+        if return_state:
+            return oN, S_state
+        return oN
 
     @staticmethod
-    def _scan_chunked(qN, kN, vN, alphaN, betaN, chunk):
+    def _scan_chunked(qN, kN, vN, alphaN, betaN, chunk, return_state: bool = False):
         """Chunked-parallel gated delta rule (Yang et al. 2024) — same result.
 
         Splits the sequence into length-``C`` chunks; only the cross-chunk state
@@ -318,15 +323,28 @@ class DeltaNetBlock(nn.Module):
                 S_in = S_in * P_last.unsqueeze(1) + torch.einsum('niv,nik->nvk', U, k_scaled)
 
             oN = torch.cat(outs, dim=1)                          # [N, S, d]
-        return oN.to(orig_dtype) if oN.dtype != orig_dtype else oN
+        oN = oN.to(orig_dtype) if oN.dtype != orig_dtype else oN
+        if return_state:
+            return oN, S_in.to(orig_dtype)                       # final [N, d_v, d_k]
+        return oN
 
     # ------------------------------------------------------------------
     # Training forward (sequential delta-rule scan, O(1) memory in N)
     # ------------------------------------------------------------------
-    def forward(self, x: torch.Tensor, position_ids: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        position_ids: torch.Tensor | None = None,
+        return_state: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict]:
         """Process a sequence.  x: [B, S, D] → [B, S, D].
 
         Parallel-residual: ``x = x + deltanet(norm(x)) + ffn(norm(x))``.
+
+        When ``return_state`` is True, also returns the recurrent state
+        (``{"S": [B*n_heads, d, d], "conv": [B, D, K-1]}``) after absorbing the
+        whole sequence, so generation can continue via ``forward_step``
+        (prompt prefill for Issue #36).  The state matches ``init_state``.
         """
         B, S, D = x.shape
         H, d = self.n_heads, self.d_head
@@ -349,9 +367,13 @@ class DeltaNetBlock(nn.Module):
         # Reassociated (chunked-parallel) delta rule for training speed; falls
         # back to the plain sequential scan for short sequences or when disabled.
         if self.train_chunk and S > 1:
-            oN = self._scan_chunked(qN, kN, vN, alphaN, betaN, self.train_chunk)
+            oN = self._scan_chunked(qN, kN, vN, alphaN, betaN, self.train_chunk,
+                                    return_state=return_state)
         else:
-            oN = self._scan_sequential(qN, kN, vN, alphaN, betaN)
+            oN = self._scan_sequential(qN, kN, vN, alphaN, betaN,
+                                       return_state=return_state)
+        if return_state:
+            oN, S_final = oN  # unpack (oN, final recurrent state)
 
         o = oN.view(B, H, S, d).permute(0, 2, 1, 3)  # [B, S, H, d]
         o = self._read_normalize(o)                 # normalizer (lever 1)
@@ -362,7 +384,24 @@ class DeltaNetBlock(nn.Module):
 
         deflected = self.out_proj(o)
         ffn_out = self.ffn(x_norm)
-        return x + self.dropout(deflected) + ffn_out
+        out = x + self.dropout(deflected) + ffn_out
+
+        if return_state:
+            state = {"S": S_final}
+            if self.conv_kernel:
+                # Conv buffer = last (K-1) *pre-conv* tokens (x_norm), matching
+                # the window that _conv_step concatenates each step.  Left-pad
+                # with zeros when the prompt is shorter than K-1.
+                k1 = self.conv_kernel - 1
+                buf = x_norm.transpose(1, 2)  # [B, D, S]
+                if S < k1:
+                    pad = torch.zeros(B, D, k1 - S, device=x.device, dtype=x_norm.dtype)
+                    buf = torch.cat([pad, buf], dim=2)
+                else:
+                    buf = buf[:, :, -k1:]
+                state["conv"] = buf.contiguous()
+            return out, state
+        return out
 
     # ------------------------------------------------------------------
     # Incremental generation — O(1) per token, no KV cache
