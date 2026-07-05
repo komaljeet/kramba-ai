@@ -30,6 +30,12 @@ RUN pip install --no-cache-dir -r /srv/web-requirements.txt
 # hvn_worker/worker.py reuses it rather than duplicating a tokenizer class.
 COPY hvn/ /srv/hvn/
 COPY train.py /srv/train.py
+# In-app training (Issue #57): the training worker reuses auto_train.py's
+# curriculum orchestrator and the eval/ dataset+scoring package; the web role
+# also imports eval.curriculum (torch-free) for the CURRICULUM_STAGES the launch
+# form validates against. Same image, so vendor both here.
+COPY auto_train.py /srv/auto_train.py
+COPY eval/ /srv/eval/
 
 # Django project
 COPY web/ /srv/web/

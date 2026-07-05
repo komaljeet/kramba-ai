@@ -6,8 +6,20 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 
-from .models import Conversation, Message, ModelVersion
+from .models import Conversation, Message, ModelVersion, TrainingJob
 from .security import contains_injection_markers
+
+# The coding-curriculum stage names (Issue #53/#54). eval.curriculum is the
+# source of truth and torch-free, so importing it doesn't pull the GPU stack
+# into the web process - but `eval` only sits on the path when the repo root is
+# importable (the Docker image sets PYTHONPATH=/srv; a bare `cd web && manage.py
+# test` does not). Fall back to the literal list so app/test startup never hinges
+# on repo-root layout; the two are kept in sync (the ChoiceField below rejects
+# anything else anyway).
+try:
+    from eval.curriculum import CURRICULUM_STAGES
+except Exception:  # pragma: no cover - repo root not on sys.path (local test run)
+    CURRICULUM_STAGES = ["html", "css", "js", "php", "python", "devops"]
 
 User = get_user_model()
 
@@ -68,6 +80,86 @@ class ModelVersionSerializer(serializers.ModelSerializer):
         if not os.path.isfile(resolved):
             raise serializers.ValidationError(f"No file found at {value}")
         return value
+
+
+class TrainingJobSerializer(serializers.ModelSerializer):
+    """Read view of a training run (Issue #57): status, config, live progress,
+    and the ModelVersion it produced on success."""
+
+    result_model_version_tag = serializers.CharField(
+        source="result_model_version.tag", read_only=True, default=None
+    )
+
+    class Meta:
+        model = TrainingJob
+        fields = (
+            "id", "status", "config", "current_stage", "stages_done", "stages_total",
+            "last_metrics", "detail", "error", "result_model_version",
+            "result_model_version_tag", "created_at", "started_at", "finished_at",
+        )
+        read_only_fields = fields
+
+
+class TrainingJobCreateSerializer(serializers.Serializer):
+    """Validates the launch config for an in-app training run.
+
+    The model architecture (d_model, deltanet, etc.) is fixed by the base
+    checkpoint the run continues from (auto_train.run_curriculum carries the
+    weights forward) - this only chooses which registered ModelVersion to
+    continue from, which curriculum stages to train, and the training budget.
+    """
+
+    from_model_version = serializers.PrimaryKeyRelatedField(queryset=ModelVersion.objects.all())
+    stages = serializers.ListField(
+        child=serializers.ChoiceField(choices=CURRICULUM_STAGES),
+        allow_empty=False,
+        default=list(CURRICULUM_STAGES),
+    )
+    epochs_per_stage = serializers.IntegerField(min_value=1, max_value=100, default=2)
+    seq_len = serializers.IntegerField(min_value=16, max_value=2048, default=128)
+    batch_size = serializers.IntegerField(min_value=1, max_value=256, default=16)
+    lr = serializers.FloatField(min_value=1e-6, max_value=1.0, default=1e-4)
+    precision = serializers.ChoiceField(choices=["fp32", "fp16", "bf16"], default="bf16")
+    download = serializers.BooleanField(default=False)
+    # Fast offline loop-validation (tiny budget/epochs) - the app's equivalent
+    # of `auto_train.py --smoke`, for verifying the wiring on the 6 GB box.
+    smoke = serializers.BooleanField(default=False)
+
+    def validate_stages(self, value):
+        # Preserve the canonical curriculum order regardless of the order the
+        # client sent them in, and drop duplicates (stages train sequentially).
+        seen = set()
+        ordered = [s for s in CURRICULUM_STAGES if s in value and not (s in seen or seen.add(s))]
+        return ordered
+
+    def to_config(self) -> dict:
+        """Flattens the validated data into the JSON config stored on the
+        TrainingJob and consumed by api.tasks.run_training."""
+        data = self.validated_data
+        model_version = data["from_model_version"]
+        cfg = {
+            "from_model_version_id": str(model_version.id),
+            "from_model_version_tag": model_version.tag,
+            "base_checkpoint_path": model_version.checkpoint_path,
+            "stages": data["stages"],
+            "epochs_per_stage": data["epochs_per_stage"],
+            "seq_len": data["seq_len"],
+            "batch_size": data["batch_size"],
+            "lr": data["lr"],
+            "precision": data["precision"],
+            "download": data["download"],
+            "smoke": data["smoke"],
+        }
+        if data["smoke"]:
+            # Mirror auto_train.main()'s --smoke preset: tiny everything, offline.
+            cfg.update(
+                epochs_per_stage=1,
+                seq_len=min(data["seq_len"], 64),
+                max_train_chars=60_000,
+                max_eval_chars=6_000,
+                download=False,
+            )
+        return cfg
 
 
 class MessageCreateSerializer(serializers.Serializer):

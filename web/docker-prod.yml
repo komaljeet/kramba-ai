@@ -105,6 +105,36 @@ services:
               count: 1
               capabilities: [gpu]
 
+  # Dedicated GPU training worker (Issue #57) - consumes ONLY the `training`
+  # queue (one job at a time), so an in-app curriculum run never starves chat
+  # inference (app-worker) or fights it for GPU memory. Same self-contained
+  # image; auto_train.py + eval/ are vendored into it (see web/Dockerfile).
+  # Reads/writes the same `checkpoints` volume: continues from a registered
+  # ModelVersion and writes the produced checkpoint back for registration.
+  app-train-worker:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    command: ["train-worker"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: web.settings.prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - checkpoints:/data/checkpoints
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   app-beat:
     build:
       context: ..

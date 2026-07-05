@@ -123,6 +123,16 @@ CELERY_TASK_TRACK_STARTED = True
 CELERY_WORKER_CONCURRENCY = int(os.environ.get("CELERY_WORKER_CONCURRENCY", "1"))
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
+# Route the in-app training task (Issue #57) onto its own `training` queue so it
+# runs on a SEPARATE worker (docker role `train-worker`, `celery -A web worker
+# -Q training`) from chat inference. An hours-long GPU-saturating curriculum run
+# must never sit in the same queue as chat turns and starve their latency. Chat
+# inference stays on the default `celery` queue; the inference worker consumes
+# `-Q celery` only, so it never picks up a training job.
+CELERY_TASK_ROUTES = {
+    "api.tasks.run_training": {"queue": "training"},
+}
+
 # One fixed daily job - a static schedule is enough, no need for
 # django-celery-beat's DB-backed dynamic scheduling for a single task.
 CELERY_BEAT_SCHEDULE = {
