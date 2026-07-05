@@ -243,12 +243,53 @@ class ConversationFormatter:
 # State Checkpoint
 # ---------------------------------------------------------------------------
 
+# Tag used to mark a serialized torch tensor inside the (otherwise
+# JSON-native) conversation-state tree. Chosen not to collide with any state
+# dict key the blocks use ("S"/"conv"/…).
+_TENSOR_TAG = "__hvn_tensor__"
+
+
+def _encode_state_tree(obj: Any) -> Any:
+    """Recursively encode a conversation-state tree to JSON-native values.
+
+    The per-block state shape differs by block type — the default HVN block
+    stores ``list[head] -> list[Tensor]`` while the Gated-DeltaNet block
+    stores ``{"S": Tensor, "conv": Tensor}`` — so serialization must be
+    structure-agnostic rather than assuming a fixed nesting.  Tensors become
+    ``{_TENSOR_TAG: <nested list>}``; dicts/lists recurse; scalars pass through.
+    """
+    if torch.is_tensor(obj):
+        return {_TENSOR_TAG: obj.detach().cpu().tolist()}
+    if isinstance(obj, dict):
+        return {k: _encode_state_tree(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_encode_state_tree(v) for v in obj]
+    return obj
+
+
+def _decode_state_tree(obj: Any, device: torch.device, dtype: torch.dtype) -> Any:
+    """Inverse of :func:`_encode_state_tree` — rebuild tensors on ``device``."""
+    if isinstance(obj, dict):
+        if _TENSOR_TAG in obj:
+            return torch.tensor(obj[_TENSOR_TAG], dtype=dtype, device=device)
+        return {k: _decode_state_tree(v, device, dtype) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_decode_state_tree(v, device, dtype) for v in obj]
+    return obj
+
+
 class StateCheckpoint:
     """Save / load / fork conversation state (Hamiltonian matrices) to disk.
 
     The Hamiltonian state is the core memory of the HVN model — a set of
     fixed-size d×d matrices (one per block, per head).  This class serializes
     them to a JSON file along with conversation metadata.
+
+    Both block families are supported: the default HVN block (nested
+    per-head tensor lists) and the Gated-DeltaNet block (per-block ``{"S",
+    "conv"}`` dicts).  The on-disk format is versioned — v2 uses a generic,
+    structure-agnostic tensor-tagged tree; v1 (legacy, default-block only) is
+    still readable.
 
     Parameters
     ----------
@@ -280,21 +321,14 @@ class StateCheckpoint:
         metadata : dict, optional
             Additional metadata to save (e.g. model config, timestamp).
         """
-        # Serialize Hamiltonian states to CPU tensors → lists
-        # Structure: list of blocks, each block is list of heads, each head is list[Tensor]
-        hamiltonian_data = []
-        for block_states in conv_state["hamiltonian_states"]:
-            # block_states is a list of per-head states, each head state is a list[Tensor]
-            block_data = []
-            for head_states in block_states:
-                head_data = []
-                for h_tensor in head_states:
-                    head_data.append(h_tensor.detach().cpu().tolist())
-                block_data.append(head_data)
-            hamiltonian_data.append(block_data)
+        # Serialize the Hamiltonian state tree structure-agnostically so both
+        # the default block (nested per-head tensor lists) and the DeltaNet
+        # block (per-block {"S","conv"} dicts) round-trip — see
+        # _encode_state_tree.
+        hamiltonian_data = _encode_state_tree(conv_state["hamiltonian_states"])
 
         checkpoint = {
-            "version": 1,
+            "version": 2,
             "timestamp": time.time(),
             "system_prompt": system_prompt,
             "turns": turns,
@@ -338,18 +372,23 @@ class StateCheckpoint:
         with open(self.path, "r", encoding="utf-8") as f:
             checkpoint = json.load(f)
 
-        # Deserialize Hamiltonian states
-        # Structure: list of blocks, each block is list of heads, each head is list[Tensor]
-        hamiltonian_states = []
-        for block_data in checkpoint["conv_state"]["hamiltonian_states"]:
-            block_states = []
-            for head_data in block_data:
-                head_states = []
-                for h_list in head_data:
-                    h_tensor = torch.tensor(h_list, dtype=dtype, device=device)
-                    head_states.append(h_tensor)
-                block_states.append(head_states)
-            hamiltonian_states.append(block_states)
+        raw_states = checkpoint["conv_state"]["hamiltonian_states"]
+        if checkpoint.get("version", 1) >= 2:
+            # v2: generic tensor-tagged tree (any block type).
+            hamiltonian_states = _decode_state_tree(raw_states, device, dtype)
+        else:
+            # v1 legacy: list of blocks -> list of heads -> list[Tensor]
+            # (default HVN block only, no tensor tags).
+            hamiltonian_states = []
+            for block_data in raw_states:
+                block_states = []
+                for head_data in block_data:
+                    head_states = [
+                        torch.tensor(h_list, dtype=dtype, device=device)
+                        for h_list in head_data
+                    ]
+                    block_states.append(head_states)
+                hamiltonian_states.append(block_states)
 
         conv_state = {
             "hamiltonian_states": hamiltonian_states,
