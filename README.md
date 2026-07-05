@@ -282,7 +282,7 @@ kramba-ai/
 │   ├── hf_model.py                # HVNConfig, HVNForCausalLM (HuggingFace wrapper)
 │   └── edge/                      # edge-devices branch: full Issue #32 compression suite
 ├── docs/                          # ISSUE_30_PLAN.md, dashboard.html (compendium consolidated into this README)
-├── eval/                          # run_eval, scaling_laws, long_context, datasets, instruction, multimodal
+├── eval/                          # run_eval, scaling_laws, long_context, datasets, curriculum, instruction, multimodal
 ├── tests/                         # test_*.py standalone test scripts (run from root: python tests/test_issueNN.py)
 ├── demos/                         # demo*.py showcase scripts (run from root: python demos/demo.py)
 ├── results/                       # benchmark JSON/PNG outputs
@@ -378,6 +378,22 @@ adds two numbers` → `def add(a, b):\n    return a + b`. Held-out **bits-per-ch
 invariant) is reported against the bundled char baseline. This is the first of a 5-issue milestone
 tree (#51 → #52 app wiring → #53/#54/#55 coding curriculum); it is a loop-validation, not a
 frontier-quality model.
+
+**Coding-curriculum dataset loaders (Issue #53).** `eval/curriculum.py` adds per-language code
+corpora for the curriculum order **HTML → CSS → JS → PHP → Python → DevOps**, re-exported from
+`eval/datasets.py`:
+
+```python
+from eval.datasets import load_curriculum_stage, CURRICULUM_STAGES
+train, valid = load_curriculum_stage("python")            # cached, license-filtered, deduped
+train, valid = load_curriculum_stage("html", local_dir="./code_corpus")  # use pre-fetched files
+```
+
+Each stage is **permissive-license-filtered** (copyleft/share-alike files rejected),
+**near-deduped** (exact + MinHash-Jaccard), budget-capped (compute-matched), and split 90/10 by
+document. Resolution mirrors the WikiText-103 loader — local dir → best-effort curated permissive
+download → **offline synthetic fallback**, so `python -m eval.curriculum` smoke-loads all six
+stages with no network. This feeds the #54 orchestrator and #55 coding eval.
 
 ---
 
@@ -526,6 +542,7 @@ BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 
 | #45/#47 | Final real-scale benchmark pass under corrected #46 routing — 4-model WikiText-103 sweep; corrected routing **improves default HVN 6–12%**, DeltaNet confirmed quality leader (recommended default), weightless real-scale cost measured (§8.12) | `eval/scaling_laws.py`, `results/scaling_final_pass.*` |
 | #51 | Chat/base checkpoint pipeline — one command wires BPE tokenizer → WikiText-103 pretrain (DeltaNet + bf16 + #50 speed levers) → instruction/chat fine-tune → checkpoint+tokenizer, with a non-degenerate smoke-gate. Produces the first real servable checkpoint (Milestone 1, feeds #52/#53/#54/#55) | `build_chat_checkpoint.py`, `tests/test_issue51.py` |
 | #52 | Wire the #51 checkpoint into the Django app + end-to-end chat smoke test (Milestone 1, Issue B). Worker rebuilds the model with the checkpoint's `use_deltanet`/`weightless` flags (the #51 checkpoint is a DeltaNet model — default-block load raised); `StateCheckpoint` now serializes conversation state structure-agnostically (v2 tensor-tagged tree) so the DeltaNet `{"S","conv"}` per-block state round-trips (old nested-list serializer crashed on every turn); compose/env point at `hvn_chat_checkpoint.pt`; smoke test drives the real serving path (`hvn_worker` → `ChatSession.user_turn`/streaming) for a non-degenerate reply + save→load round-trip | `web/hvn_worker/worker.py`, `hvn/chat.py`, `web/docker-compose.yml`, `web/README.md`, `web/tests/test_chat_smoke.py` |
+| #53 | Curriculum dataset loaders (Milestone 2, Issue C) — `load_curriculum_stage('html'\|'css'\|'js'\|'php'\|'python'\|'devops')` returns `(train, eval)` streams for the coding-curriculum order, mirroring the WikiText-103 loader. **Permissive-only license filtering** (rejects GPL/LGPL/AGPL/MPL/EPL/CC-BY-SA), **near-dedup** (exact + MinHash-Jaccard over word-shingles), per-stage compute-matched char budgets + 90/10 doc split, and streaming/local-cache resolution (local dir → best-effort curated permissive download → offline synthetic fallback so every stage smoke-loads on the 6 GB box with no network). Feeds #54 (orchestrator) and #55 (eval) | `eval/curriculum.py`, `eval/datasets.py`, `tests/test_issue53.py` |
 
 ---
 
