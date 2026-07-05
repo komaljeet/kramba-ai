@@ -14,6 +14,7 @@ The model accepts input token IDs [batch, seq_len] and produces logits
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 from .hvn_block import HVNBlock
 from .deltanet import DeltaNetBlock
 from .weightless import WeightlessDeltaNetBlock
@@ -146,6 +147,7 @@ class HamiltonianVortexNetwork(nn.Module):
         deltanet_conv_kernel: int = 4,
         weightless: bool = False,
         weightless_seed: int = 1234,
+        grad_checkpoint: bool = False,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -155,6 +157,11 @@ class HamiltonianVortexNetwork(nn.Module):
         self.n_threads = n_threads
         self.use_parallel_scan = use_parallel_scan
         self.use_deltanet = use_deltanet
+        # Issue #49: gradient (activation) checkpointing — recompute each block's
+        # activations in the backward pass instead of storing them.  Training-only,
+        # mathematically exact (bit-identical gradients), trades ~20-30% compute for
+        # a large activation-memory saving so a larger d_model / batch fits in 6 GB.
+        self.grad_checkpoint = grad_checkpoint
         # Issue #40: hybrid weightless variant — seed-regenerated (frozen) q/k/v/
         # out projections in the DeltaNet block; only meaningful with DeltaNet.
         self.weightless = weightless and use_deltanet
@@ -236,9 +243,16 @@ class HamiltonianVortexNetwork(nn.Module):
         # Embed tokens
         x = self.token_embedding(input_ids)  # [B, S, D]
 
-        # Pass through HVN blocks
+        # Pass through HVN blocks.  With gradient checkpointing (Issue #49) each
+        # block's activations are recomputed in the backward pass instead of
+        # being stored — exact same result, far less activation memory.  Only
+        # active while building a graph (training); inference is untouched.
+        use_ckpt = self.grad_checkpoint and self.training and torch.is_grad_enabled()
         for block in self.blocks:
-            x = block(x, position_ids=position_ids)  # [B, S, D]
+            if use_ckpt:
+                x = checkpoint(block, x, position_ids, use_reentrant=False)  # [B, S, D]
+            else:
+                x = block(x, position_ids=position_ids)  # [B, S, D]
 
         # Final normalisation
         x = self.final_norm(x)  # [B, S, D]

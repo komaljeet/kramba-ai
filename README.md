@@ -53,6 +53,41 @@ The result: **O(d²) per-token inference cost, constant in sequence length N.**
 | Inference memory | 2.46 GB | 6.29 MB | **0.26%** |
 | Scaling in N | O(Nd) | O(d²r) = O(1) | — |
 
+### 1.1 North Star: Frontier-Scale Training
+
+> **This project is being built toward training a frontier-scale model on the HVN
+> architecture.** That goal is the tie-breaker for every design decision — features, fixes,
+> defaults, and evaluation methodology must all be chosen so they *still hold at scale*, even
+> though present-day validation runs on a single RTX 4050 (6 GB). When two options are otherwise
+> equal, pick the one that scales.
+
+**Honest framing.** A frontier model (100B–1T+ params) requires a multi-node GPU cluster
+(hundreds–thousands of 80 GB accelerators), not this laptop. The RTX 4050 work exists to
+**de-risk and validate scaling behavior** — measuring exponents, stability, and O(1) inference
+on research-scale models — *before* committing cluster budget. The 6 GB GPU is the wind tunnel,
+not the aircraft.
+
+**Frontier-readiness checklist (apply to every change):**
+
+1. **Preserve O(1) inference.** No KV cache, no N-dependent memory. This is the architecture's
+   entire value proposition and the reason frontier-scale *inference* is affordable — never
+   trade it away for a training-time convenience.
+2. **Batched paths must equal single-stream, provably.** The #46 head-misrouting bug proved that
+   a self-consistent-but-wrong batched path silently degrades quality and entangles learning with
+   batch size — fatal at scale (large data-parallel batches). Every batched/parallel path needs a
+   `batched == single-stream` test (see `test_issue46.py`).
+3. **Numerical stability at width and in bf16.** Large `d_model` is where bf16 hot-spots bite
+   (#44). New ops must be checked for overflow/underflow at frontier widths, not just d≤256, with
+   fp32 islands where reductions are sensitive.
+4. **Scale-honest evaluation.** Never fit conclusions on saturated small data (the −0.007
+   artifact, §8.4). Use compute-matched, unsaturated, held-out PPL and report the **exponent**.
+   Prefer levers whose advantage *grows* with scale (DeltaNet's steeper −0.504 exponent).
+5. **Distributed-training readiness.** No single-GPU assumptions baked into the model or training
+   loop. Multi-GPU/multi-node data + tensor parallelism (DDP/FSDP) is the critical open
+   dependency for this north star — see the elevated priority in §9 Phase 7.
+6. **Defaults that scale.** The documented default should be the variant that wins *at scale*, not
+   on the 34K sample — hence the #39 recommendation to make `--use_deltanet` the default block.
+
 ---
 
 ## 2. Theoretical Framework & Mathematical Formalism
@@ -384,6 +419,7 @@ add `--grad_accum 4` to recover effective batch.
 | `--use_parallel_scan` | flag | Associative parallel scan (Issue #33 Fix 3) |
 | `--use_deltanet` | flag | Gated-DeltaNet dynamics (Issue #34) |
 | `--weightless` | flag | Freeze DeltaNet q/k/v/out projections as seed-regenerated random features (Issue #40; needs `--use_deltanet`) |
+| `--grad_checkpoint` | flag | Exact gradient (activation) checkpointing (Issue #49): recompute block activations in the backward pass — bit-identical gradients, ~20-30% slower/step, ~64% lower peak activation memory (fits a bigger `d_model`/batch in 6 GB) |
 
 ### Precision Guide
 
@@ -449,6 +485,7 @@ BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 
 | #43 | Correct, fused concurrent-serving decode (~2.5× tok/s, fixes B>1 head-misroute) | `model.py`, `hvn_block.py`, `batched_vortex.py`, `batched_memory.py` |
 | #46 | Systemic batch-ordering fix — batched `forward`/eval/`generate_batched` now == single-stream (batch-outer tiling of per-head params) | `batched_vortex.py`, `batched_memory.py` |
 | #42 | Real reasoning/thinking — trainable `[THINK]` chain-of-thought (multi-step arithmetic), with-think vs no-think A/B **+52pp**; also fixed a latent tokenizer bug that dropped OOV chars (digits) from aux training data | `reasoning.py`, `train.py`, `eval/reasoning.py` |
+| #49 | Exact gradient (activation) checkpointing (`--grad_checkpoint`) — bit-identical gradients, −64% peak activation memory, unlocks a larger model on the 6 GB card | `model.py`, `train.py`, `eval/scaling_laws.py`, `tests/test_issue49.py` |
 | #45/#47 | Final real-scale benchmark pass under corrected #46 routing — 4-model WikiText-103 sweep; corrected routing **improves default HVN 6–12%**, DeltaNet confirmed quality leader (recommended default), weightless real-scale cost measured (§8.12) | `eval/scaling_laws.py`, `results/scaling_final_pass.*` |
 
 ---
@@ -868,6 +905,35 @@ O(1) per-token inference, no-KV, and forward↔incremental parity are unchanged 
 training/measurement only; `test_issue46.py` guards the routing fix). **Deliverables:**
 `results/scaling_final_pass.json` + `results/scaling_final_pass.png`.
 
+### 8.13 Exact Gradient (Activation) Checkpointing — `--grad_checkpoint` (Issue #49)
+
+The one **mathematically exact** training-memory lever: `torch.utils.checkpoint.checkpoint`
+(`use_reentrant=False`) wraps each HVN/DeltaNet block in `model.forward`, recomputing that
+block's activations in the backward pass instead of storing them. Gradients, weights, and the
+final trained model are **bit-for-bit identical** to training without it — the only cost is
+per-step wall-clock. Flag-gated (`train.py --grad_checkpoint`, `eval/scaling_laws.py
+--grad_checkpoint`), default **off**, so defaults are unchanged. Training-only: it is guarded by
+`self.training and torch.is_grad_enabled()`, so the O(1)/no-KV inference and eval paths are
+untouched (bit-identical regardless of the flag).
+
+**Exactness — proven, not assumed** (`test_issue49.py`, RTX 4050): with checkpointing on vs off,
+both the **logits** and **every parameter's gradient** match to `max|diff| < 1e-4` (fp32 recompute
+reassociation floor), for the default HVN block *and* the DeltaNet block.
+
+**Memory win** — peak train-step CUDA memory (forward+backward), d=256, 4 layers, seq_len=512,
+batch=16, fp32, RTX 4050:
+
+| Config | `--grad_checkpoint` off | on | Peak reduction |
+|--------|------------------------:|---:|:---:|
+| d=256, 4L, seq=512, B=16 | 766 MiB | 274 MiB | **−64%** |
+
+**Unlocks a larger model on the same card:** a `seq_len=1024, batch=48, 8 layers, d=384` training
+step **OOMs** on the 6 GB RTX 4050 without the flag but **trains successfully with it**
+(`test_issue49.py` [5/5]) — directly serving the §1.1 frontier north star (validate a bigger model
+on the wind-tunnel GPU, architecture untouched). `test_issue49.py` 5/5; `test_issue46.py` 5/5
+regression. **Out of scope** (not 100% exact — separate issues): 8-bit optimizer (quantized moments,
+needs a PPL A/B) and CPU/NVMe optimizer offload.
+
 ### 8.5 Honest Assessment
 
 **Where HVN wins:** memory efficiency (O(1) vs O(N)), parameter efficiency (43% fewer),
@@ -910,7 +976,11 @@ re-measurement on real WikiText-103 (BPE, compute-matched, unsaturated):** HVN s
 ### Phase 7: Inference Optimization & Production — ✅ / ⬜ mixed
 
 Quantization INT8/NF4 (#20 ✅), BPE tokenizer (#11 ✅), HuggingFace integration (#3/#6 ✅),
-mixed precision (#19 ✅). ⬜ Distributed training (DDP) still open.
+mixed precision (#19 ✅). ⬜ **Distributed training (DDP/FSDP) — the critical open dependency
+for the §1.1 frontier north star.** Single-GPU validation is complete; scaling beyond
+research-size requires multi-GPU data/tensor parallelism, and every batched path is already
+#46-correct (`batched == single-stream`), which is the prerequisite for correct data-parallel
+training. This should be the next priority when moving off the RTX 4050.
 
 ### Phase 8: Fine-Tuning & Instruction Tuning — ✅ Complete
 

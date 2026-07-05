@@ -399,6 +399,7 @@ def main():
     parser.add_argument("--compile", action="store_true", help="Use torch.compile for faster training (GPU recommended)")
     parser.add_argument("--precision", type=str, default="fp32", choices=["fp32", "fp16", "bf16"], help="Mixed-precision training mode (fp16/bf16 require CUDA)")
     parser.add_argument("--grad_accum", type=int, default=1, help="Gradient accumulation steps (effective batch size = batch_size × grad_accum)")
+    parser.add_argument("--grad_checkpoint", action="store_true", help="Gradient (activation) checkpointing (Issue #49): recompute block activations in the backward pass instead of storing them. Mathematically exact (bit-identical gradients/model), ~20-30% slower per step, but frees activation memory so a larger --d_model / --batch_size fits in the same VRAM. Training-only; inference unchanged.")
     parser.add_argument("--tokenizer", type=str, default="char", choices=["char", "bpe"], help="Tokenizer type: char or bpe")
     parser.add_argument("--bpe_vocab", type=int, default=1000, help="BPE vocabulary size (only used with --tokenizer bpe)")
     # --- Issue #21 quality strategies ---
@@ -551,7 +552,11 @@ def main():
         deltanet_conv_kernel=args.deltanet_conv_kernel,
         weightless=args.weightless,
         weightless_seed=args.weightless_seed,
+        grad_checkpoint=args.grad_checkpoint,
     )
+    if args.grad_checkpoint:
+        print("Gradient (activation) checkpointing enabled (Issue #49): "
+              "exact gradients, ~20-30% slower/step, lower activation memory.")
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {param_count:,}")
 
