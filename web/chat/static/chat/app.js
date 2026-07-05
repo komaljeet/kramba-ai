@@ -27,6 +27,7 @@
 
   let activeId = null;       // selected conversation id
   let ws = null;             // current WebSocket
+  let generating = false;    // a turn is currently streaming (Send→Stop state)
   let streamingBubble = null; // assistant bubble being filled by the stream
   let modelList = [];        // last-loaded ModelVersions (reused by the training form)
   const STAGES = ["html", "css", "js", "php", "python", "devops"];
@@ -176,6 +177,7 @@
     if (id === activeId) {
       activeId = null; closeSocket();
       $("messages").innerHTML = '<div class="empty">Select or create a conversation to start chatting.</div>';
+      setGenerating(false);
       $("send").disabled = true;
     }
     await loadConversations();
@@ -200,6 +202,7 @@
     }
     if (!messages.length) box.innerHTML = '<div class="empty">Say hello to start the conversation.</div>';
     openSocket(id);
+    setGenerating(false);
     $("send").disabled = false;
   }
 
@@ -215,15 +218,38 @@
         renderAssistant(streamingBubble);
         scrollDown();
       } else if (data.type === "done") {
+        // A stopped turn (Issue #61) is discarded server-side, so the partial
+        // bubble we streamed is orphaned - drop it to match the saved history.
+        if (data.stopped && streamingBubble) streamingBubble.remove();
         streamingBubble = null;
-        setStatus("");
-        $("send").disabled = false;
+        setStatus(data.stopped ? "Stopped." : "");
+        setGenerating(false);
+      } else if (data.type === "error") {
+        // Terminal failure frame (Issue #60) - un-stick the composer instead of
+        // hanging on "Generating…" forever.
+        streamingBubble = null;
+        setStatus(data.detail || "Generation failed. Please try again.");
+        setGenerating(false);
       }
     };
     ws.onclose = (evt) => {
       if (evt.code === 4401) { setStatus("Session expired — please log in again."); logout(); }
       else if (evt.code === 4403) setStatus("You do not have access to this conversation.");
+      else if (generating) {
+        // Socket dropped mid-generation - don't leave the UI stuck. send() will
+        // transparently reopen it on the next attempt.
+        setStatus("Connection lost. Send again to reconnect.");
+        setGenerating(false);
+      }
     };
+  }
+
+  // Toggle the composer between idle (Send) and generating (Stop) states.
+  function setGenerating(on) {
+    generating = on;
+    $("send").hidden = on;
+    $("send").disabled = on;
+    $("stop").hidden = !on;
   }
 
   function closeSocket() {
@@ -242,16 +268,22 @@
   async function send() {
     const promptEl = $("prompt");
     const content = promptEl.value.trim();
-    if (!content || !activeId) return;
+    if (!content || !activeId || generating) return;
 
-    if (!(await waitForSocket())) { setStatus("Connecting… try again in a moment."); return; }
+    // Transparently (re)open a dropped socket instead of dead-ending on
+    // "Connecting…" (Issue #63): a chat whose socket closed (server restart,
+    // idle drop) would otherwise never recover without reselecting it.
+    if (!(await waitForSocket())) {
+      openSocket(activeId);
+      if (!(await waitForSocket())) { setStatus("Connecting… try again in a moment."); return; }
+    }
 
     const emptyMsg = $("messages").querySelector(".empty");
     if (emptyMsg) emptyMsg.remove();
 
     addBubble("user", content);
     promptEl.value = "";
-    $("send").disabled = true;
+    setGenerating(true);
     streamingBubble = null;
     setStatus("Generating…");
     scrollDown();
@@ -267,12 +299,23 @@
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       setStatus(data.detail || "Message rejected.");
-      $("send").disabled = false;
+      setGenerating(false);
     }
-    // Success: tokens arrive over the WebSocket; the "done" frame re-enables send.
+    // Success: tokens arrive over the WebSocket; a done/error frame ends the turn.
+  }
+
+  async function stop() {
+    if (!generating || !activeId) return;
+    setStatus("Stopping…");
+    // Best-effort: the server stops at the next token and sends a done frame
+    // (which flips the UI back). Don't flip locally yet so a failed request
+    // doesn't leave the composer enabled while the worker is still streaming.
+    const res = await api(`/conversations/${activeId}/stop/`, { method: "POST" });
+    if (!res.ok) setStatus("Could not stop — it should finish shortly.");
   }
 
   $("send").addEventListener("click", send);
+  $("stop").addEventListener("click", stop);
   $("prompt").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });

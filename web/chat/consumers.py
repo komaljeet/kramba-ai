@@ -49,7 +49,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({"type": "token", "delta": event["delta"]}))
 
     async def chat_done(self, event):
-        await self.send(text_data=json.dumps({"type": "done", "message_id": event["message_id"]}))
+        await self.send(text_data=json.dumps({
+            "type": "done",
+            "message_id": event.get("message_id", ""),
+            "stopped": event.get("stopped", False),
+        }))
+
+    async def chat_error(self, event):
+        # Terminal frame for a failed generation (Issue #60) so the client
+        # stops waiting on "Generating…" and can send again.
+        await self.send(text_data=json.dumps({
+            "type": "error",
+            "detail": event.get("detail", "Generation failed."),
+        }))
 
     @database_sync_to_async
     def _user_owns_conversation(self, user_id, conversation_id) -> bool:

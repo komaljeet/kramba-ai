@@ -112,6 +112,18 @@ CHANNEL_LAYERS = {
     }
 }
 
+# Shared cache on the same Redis. Used for the cross-process "stop generation"
+# flag (Issue #61): the web role sets it (ConversationViewSet.stop), the GPU
+# worker polls it (api.tasks.generate_response). Must be Redis, not LocMem -
+# web and worker are separate processes. (settings/test.py overrides this with
+# LocMem, which is fine for the single-process test runner.)
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": REDIS_URL,
+    }
+}
+
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_ACCEPT_CONTENT = ["json"]

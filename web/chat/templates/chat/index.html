@@ -76,6 +76,7 @@
               background: var(--panel-2); color: var(--text); min-height: 46px; max-height: 160px; }
     #send { padding: 0 20px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 600; }
     #send:disabled { opacity: .5; cursor: not-allowed; }
+    #stop { padding: 0 20px; border: 0; border-radius: 10px; background: var(--danger); color: #fff; font-weight: 600; }
     .status { font-size: 12px; color: var(--muted); padding: 0 16px 8px; min-height: 14px; }
 
     /* Training panel (Issue #57, staff-only) */
@@ -195,6 +196,7 @@
       <div id="row">
         <textarea id="prompt" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
         <button id="send" disabled>Send</button>
+        <button id="stop" hidden>Stop</button>
       </div>
     </div>
   </main>

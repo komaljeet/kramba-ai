@@ -13,9 +13,11 @@ from unittest import mock
 from rest_framework.test import APITestCase
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 
 from api.models import Conversation, ModelVersion
 from api.serializers import MessageCreateSerializer
+from api.tasks import cancel_key
 
 User = get_user_model()
 STRONG_PASSWORD = "correct-horse-battery-staple-9"
@@ -74,3 +76,30 @@ class MessageToggleViewTests(APITestCase):
         _, kwargs = mock_task.delay.call_args
         self.assertEqual(kwargs["thinking"], True)
         self.assertEqual(kwargs["web_search"], False)
+
+
+class StopGenerationTests(APITestCase):
+    """Issue #61: POST /conversations/<id>/stop/ sets the shared cancel flag the
+    generate_response task polls between tokens."""
+
+    def setUp(self):
+        self.model_version = ModelVersion.objects.create(tag="stop-test-v1", checkpoint_path="/dev/null")
+        self.user = User.objects.create_user(username="stop_user", password=STRONG_PASSWORD)
+        self.other = User.objects.create_user(username="stop_other", password=STRONG_PASSWORD)
+        self.conversation = Conversation.objects.create(
+            owner=self.user, title="stop", model_version=self.model_version
+        )
+        cache.delete(cancel_key(str(self.conversation.id)))
+
+    def test_stop_sets_cancel_flag(self):
+        self.client.force_authenticate(user=self.user)
+        res = self.client.post(f"/api/conversations/{self.conversation.id}/stop/")
+        self.assertEqual(res.status_code, 202)
+        self.assertTrue(cache.get(cancel_key(str(self.conversation.id))))
+
+    def test_non_owner_cannot_stop(self):
+        self.client.force_authenticate(user=self.other)
+        res = self.client.post(f"/api/conversations/{self.conversation.id}/stop/")
+        # Owner-scoped queryset -> a non-owner can't even see the conversation.
+        self.assertEqual(res.status_code, 404)
+        self.assertIsNone(cache.get(cancel_key(str(self.conversation.id))))
