@@ -78,14 +78,18 @@ the image can vendor `../hvn`).
 
 ## Tests
 
-The `web/tests/` suite runs under Django's test runner (Postgres + Redis, as in
-`docker-compose.yml`). The end-to-end chat smoke test
-(`tests/test_chat_smoke.py`) trains a tiny BPE + Gated-DeltaNet checkpoint and
-drives the **real** serving path (`hvn_worker` → `ChatSession.user_turn` /
-streaming), asserting a non-degenerate reply and a working save→load state
-round-trip; it skips cleanly where torch isn't installed.
+`web/settings/test.py` runs the whole suite locally with **no external
+services** — sqlite in-memory DB, in-memory Channels layer, in-memory Celery
+broker — while inheriting the real DRF/JWT/security config from `base.py`:
 
 ```bash
-# inside the app image / a torch-enabled env with Postgres+Redis available:
-python web/manage.py test
+cd web
+python manage.py test --settings=web.settings.test
 ```
+
+The end-to-end chat smoke test (`tests/test_chat_smoke.py`) trains a tiny BPE +
+Gated-DeltaNet checkpoint and drives the **real** serving path (`hvn_worker` →
+`ChatSession.user_turn` / streaming), asserting a non-degenerate reply and a
+working save→load state round-trip; it skips cleanly where torch isn't
+installed. (Running against the compose Postgres/Redis instead is also fine —
+just point `DJANGO_SETTINGS_MODULE` at `web.settings.dev` with a `.env`.)
