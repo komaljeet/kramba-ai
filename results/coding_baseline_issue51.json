@@ -1,0 +1,176 @@
+[
+  {
+    "lang": "html",
+    "metric_kind": "structural",
+    "runtime": "none",
+    "score": 0.0,
+    "completion_valid_rate": 0.0,
+    "exec_pass_at_k": null,
+    "exec_k": null,
+    "n_prompts": 4,
+    "ppl": 10572.8825,
+    "bits_per_char": 7.1992,
+    "samples": [
+      {
+        "prefix": "<!-- SPDX-License-Identifier: MIT -->\n<!DOCTYPE html>\n<html ",
+        "completion": "is entanglement renormalization?\nIt updates the Hamiltonian by absorbing new vor",
+        "valid": false
+      },
+      {
+        "prefix": "<!-- SPDX-License-Identifier: MIT -->\n<!DOCTYPE html>\n<html ",
+        "completion": "are a fixed-size matrix.\n\n### Response:\nThe method enables efficient computation",
+        "valid": false
+      },
+      {
+        "prefix": "<!-- SPDX-License-Identifier: MIT -->\n<!DOCTYPE html>\n<html ",
+        "completion": ".\nFollowing up: What is the bond dimension?\nThe bond dimension is the SVD trunca",
+        "valid": false
+      }
+    ]
+  },
+  {
+    "lang": "css",
+    "metric_kind": "structural",
+    "runtime": "none",
+    "score": 0.0,
+    "completion_valid_rate": 0.0,
+    "exec_pass_at_k": null,
+    "exec_k": null,
+    "n_prompts": 4,
+    "ppl": 8211.8613,
+    "bits_per_char": 6.5648,
+    "samples": [
+      {
+        "prefix": "/* SPDX-License-Identifier: MIT\n * Synthetic curriculum samp",
+        "completion": "ay etay or NF4 4-bit with minimal quality loss.\nFollowing up: What is the scalin",
+        "valid": false
+      },
+      {
+        "prefix": ".archived-cluster {\n  position: #f5f5f5;\n  col",
+        "completion": "### Response:\ndef is_even(n):\n    return n % 2 == 0\n\nBelow is an instruction tha",
+        "valid": false
+      },
+      {
+        "prefix": ".verbose-report {\n  position: 2px solid #c",
+        "completion": ".\n\n\nBelow is an instruction that describes a task. Write a response.\n\n### Instru",
+        "valid": false
+      }
+    ]
+  },
+  {
+    "lang": "js",
+    "metric_kind": "structural",
+    "runtime": "none",
+    "score": 0.25,
+    "completion_valid_rate": 0.25,
+    "exec_pass_at_k": null,
+    "exec_k": null,
+    "n_prompts": 4,
+    "ppl": 5748.9222,
+    "bits_per_char": 5.773,
+    "samples": [
+      {
+        "prefix": "/* SPDX-License-Identifier: MIT\n * Synthetic curriculum samp",
+        "completion": "UANTIZED FINE TUNING\n\nBelow is an instruction that describes a task. Write a res",
+        "valid": false
+      },
+      {
+        "prefix": "export function deleteOrder(report, options = {}) {\n  if (!r",
+        "completion": "### Response:\ndef reverse(s):\n    return s[::-1]\n\nYou are a concise technical ad",
+        "valid": false
+      },
+      {
+        "prefix": "export class OrderStore {\n  constructor() { this.items = new",
+        "completion": ".\n\n### Input:\nWhat is the inference complexity of HVN?\n\n### Response:\nO(1) per t",
+        "valid": false
+      }
+    ]
+  },
+  {
+    "lang": "php",
+    "metric_kind": "structural",
+    "runtime": "none",
+    "score": 0.25,
+    "completion_valid_rate": 0.25,
+    "exec_pass_at_k": null,
+    "exec_k": null,
+    "n_prompts": 4,
+    "ppl": 6643.2341,
+    "bits_per_char": 5.7334,
+    "samples": [
+      {
+        "prefix": "<?php\n// SPDX-Lice",
+        "completion": "O(1) inference work?\nThe Hamiltonian state is a fixed d\u00d7d matrix that summarizes",
+        "valid": true
+      },
+      {
+        "prefix": "declare(stri",
+        "completion": ".\nFollowing up: What is the Hamiltonian Vortex Network?\nThe HVN is a novel archi",
+        "valid": false
+      },
+      {
+        "prefix": "final class ProfileService\n{\n  ",
+        "completion": "inference work?\nThe Hamiltonian state is a fixed d\u00d7d matrix that summarizes all ",
+        "valid": false
+      }
+    ]
+  },
+  {
+    "lang": "python",
+    "metric_kind": "exec",
+    "runtime": "python",
+    "score": 0.0,
+    "completion_valid_rate": 0.0,
+    "exec_pass_at_k": 0.0,
+    "exec_k": 1,
+    "n_prompts": 4,
+    "ppl": 4793.7042,
+    "bits_per_char": 5.0768,
+    "samples": [
+      {
+        "prefix": "# SPDX-License-Identifier: MIT\n# Synthetic curriculum sample",
+        "completion": ".\n\n### Input:\nCreate a function that checks if a number is even.\n\n### Response:\n",
+        "valid": false
+      },
+      {
+        "prefix": "@dataclass\nclass Session:\n    name: str\n    session_id: ",
+        "completion": "(positive\n\n### Response:\npositive\n\nBelow is an instruction that describes a task",
+        "valid": false
+      },
+      {
+        "prefix": "    def render(self, value):\n        \"\"\"Render the session a",
+        "completion": ".\n\n### Instruction:\nTranslate the following text to pig latin.\n\n### Input:\nhello",
+        "valid": false
+      }
+    ]
+  },
+  {
+    "lang": "devops",
+    "metric_kind": "structural",
+    "runtime": "none",
+    "score": 1.0,
+    "completion_valid_rate": 1.0,
+    "exec_pass_at_k": null,
+    "exec_k": null,
+    "n_prompts": 4,
+    "ppl": 5425.2026,
+    "bits_per_char": 6.9162,
+    "samples": [
+      {
+        "prefix": "# SPDX-License-Identifier: MIT\nFROM python:3.12-slim AS acco",
+        "completion": "is the Hamiltonian Vortex Network?\nThe HVN is a novel architecture that replaces",
+        "valid": true
+      },
+      {
+        "prefix": "# SPDX-License-Identifier: MIT\nFROM python:3.12-slim AS prof",
+        "completion": "is the Hamiltonian Vortex Network?\nThe HVN is a novel architecture that replaces",
+        "valid": true
+      },
+      {
+        "prefix": "# SPDX-License-Identifier: MIT\napiVersion: apps/v1\nkind: Dep",
+        "completion": ".\n\n\nYou are a knowledgeable tutor.\nWhat is the Hamiltonian Vortex Network?\nThe H",
+        "valid": true
+      }
+    ]
+  }
+]

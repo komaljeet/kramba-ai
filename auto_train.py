@@ -71,9 +71,8 @@ from torch.utils.data import DataLoader
 from hvn.core import HamiltonianVortexNetwork
 from train import CharTokenizer, TextDataset, train_model
 from eval.curriculum import CURRICULUM_STAGES, load_curriculum_stage
-# Reuse the #51 pipeline's held-out metric + completion smoke rather than
-# duplicating them; the #55 harness will extend evaluate_stage below.
-from build_chat_checkpoint import heldout_bpc, complete, is_non_degenerate
+# Per-stage scoring lives in the #55 coding-eval harness (eval.coding), imported
+# lazily inside evaluate_stage to avoid a circular import.
 
 STATE_VERSION = 1
 
@@ -144,32 +143,28 @@ def evaluate_stage(
     eval_text: str,
     seq_len: int,
     device: torch.device,
+    allow_exec: bool = False,
 ) -> dict:
-    """Score one trained stage on its held-out split.
+    """Score one trained stage on its held-out split (the #55 coding-eval seam).
 
-    Returns a JSON-serialisable metrics dict. Today it reports tokenization-
-    invariant **bits-per-char** + PPL and whether a short code continuation is
-    **non-degenerate** (the cheap #51 gate). This function is the plug-in point
-    for the #55 coding-eval harness — replace/extend the returned dict and the
+    Delegates to :func:`eval.coding.score_stage`, which returns tokenization-
+    invariant **bits-per-char** + PPL, the **structural completion-validity rate**
+    (the per-language #55 ``coding_score``), and — for a language with a runtime
+    when ``allow_exec`` is set — a HumanEval-style exec ``pass@k``. ``allow_exec``
+    defaults to **False** so unattended curriculum runs stay fast and side-effect-
+    free; the exec pass@k is an explicit ``python -m eval.coding`` pass.
+
+    The returned dict is a superset of the original contract (``ppl`` /
+    ``bits_per_char`` / ``non_degenerate`` / ``completion_sample``), so the
     per-stage metrics log grows richer without touching the scheduler.
     """
-    ppl, bpc = heldout_bpc(model, tokenizer, eval_text, seq_len, device)
+    # Imported here (not at module load) to avoid a circular import: eval.coding
+    # is a leaf that reuses build_chat_checkpoint; auto_train depends on it.
+    from eval.coding import score_stage
 
-    # Continuation smoke: feed a short prefix of the held-out code and check the
-    # completion isn't empty / a single repeated char (a degenerate model).
-    prefix = eval_text[:200].strip() or eval_text[:200]
-    completion = complete(
-        model, tokenizer, prefix, max_new_tokens=48,
-        temperature=0.3, top_k=5, device=device, stop_tokens=(),
+    return score_stage(
+        model, tokenizer, stage, eval_text, seq_len, device, allow_exec=allow_exec,
     )
-    non_degenerate = is_non_degenerate(completion, prefix)
-
-    return {
-        "ppl": round(ppl, 4),
-        "bits_per_char": round(bpc, 4),
-        "non_degenerate": bool(non_degenerate),
-        "completion_sample": completion[:120],
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +327,8 @@ def run_curriculum(
         _append_metrics(metrics_path, row)
         print(f"  ✓ stage '{stage}' done in {elapsed:.1f}s | "
               f"PPL {metrics['ppl']} | {metrics['bits_per_char']} bits/char | "
+              f"coding_score={metrics.get('coding_score')} "
+              f"({metrics.get('metric_kind')}) | "
               f"non_degenerate={metrics['non_degenerate']}")
         print(f"  ✓ checkpoint: {stage_ckpt}")
 
