@@ -445,6 +445,7 @@ BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 
 | #43 | Correct, fused concurrent-serving decode (~2.5× tok/s, fixes B>1 head-misroute) | `model.py`, `hvn_block.py`, `batched_vortex.py`, `batched_memory.py` |
 | #46 | Systemic batch-ordering fix — batched `forward`/eval/`generate_batched` now == single-stream (batch-outer tiling of per-head params) | `batched_vortex.py`, `batched_memory.py` |
 | #42 | Real reasoning/thinking — trainable `[THINK]` chain-of-thought (multi-step arithmetic), with-think vs no-think A/B **+52pp**; also fixed a latent tokenizer bug that dropped OOV chars (digits) from aux training data | `reasoning.py`, `train.py`, `eval/reasoning.py` |
+| #45/#47 | Final real-scale benchmark pass under corrected #46 routing — 4-model WikiText-103 sweep; corrected routing **improves default HVN 6–12%**, DeltaNet confirmed quality leader (recommended default), weightless real-scale cost measured (§8.12) | `eval/scaling_laws.py`, `results/scaling_final_pass.*` |
 
 ---
 
@@ -535,6 +536,9 @@ SSM added, per-model saturation tracking, streaming WikiText-103 loader.
 unique train tokens available, so no repeats — models are **not** data-starved), d={128,256,512,768},
 2 layers, seq_len=128, bf16, RTX 4050:
 
+> **HVN column superseded by §8.12** (corrected #46 routing lowers it 6–12%: −0.397 exponent);
+> Transformer/SSM are unaffected by #46 and stand. This §8.4 table is retained as the #35 record.
+
 | Model | d=128 | d=256 | d=512 | d=768 | Params (d=768) | **Exponent** (PPL ∝ N^b) |
 |-------|------:|------:|------:|------:|---------------:|:---:|
 | **HVN** (default) | 521.1 | 351.9 | 236.1 | 205.8 | 21.75M | **−0.4237** |
@@ -611,6 +615,11 @@ The §8.6 divergence was diagnosed to two numerical hot-spots in the bf16 path, 
 the NaN). Full sweep, same config as §8.6 (WikiText-103, BPE-8000, 5M-token compute-matched, 2L,
 seq_len=128, **bf16**, RTX 4050):
 
+> **Superseded for the HVN-default column — see §8.12.** This table was produced under the
+> pre-#46 buggy head routing. The corrected-routing final pass (§8.12) lowers the default-HVN
+> numbers 6–12% (e.g. d=128 522.5 → 469.1); the DeltaNet column is unaffected (it doesn't use the
+> buggy modules) and reproduces here within run variance.
+
 | d_model | HVN (default) | HVN-DeltaNet | Transformer | DeltaNet vs HVN |
 |--------:|--------------:|-------------:|------------:|:---:|
 | 128 | 522.5 | **410.6** | 392.6 | **−21.4%** |
@@ -655,7 +664,9 @@ regenerating the frozen matrices from the stored seed. `test_issue40.py` 6/6; `t
 5/5, `demo.py` pass. *Scope:* flag-gated, defaults unchanged; PPL is the memorization regime, so
 read the −38% size / +12% PPL trade as the small-scale signal, not a scaled headline. At larger
 `d` the `4d²`-per-layer projection share grows relative to the `vocab·d` embedding, so the size
-win grows (and the PPL cost should be re-measured at scale).
+win grows (and the PPL cost should be re-measured at scale). **Now measured at real scale — see
+§8.12:** at BPE-8000 the −38% saving shrinks to −5.5% at d=128 (large embedding) and *grows* with
+width to −19.6% at d=768, for a +10–21% PPL cost — confirming this caveat quantitatively.
 
 ### 8.9 Correct, Fused Concurrent-Serving Decode (Issue #43)
 
@@ -783,6 +794,75 @@ which also repairs the tool-calling (#24) and instruction-tuning (#29) data path
 generalization gap on harder word problems is visible — think accuracy is 53%, not 100%).
 Consistent with the project's methodology (§8.4/§8.8), read the **+52pp delta** as the headline,
 not the absolute number; a real-scale re-measure belongs in the #45 final pass.
+
+### 8.12 Final Real-Scale Benchmark Pass — Corrected Head Routing (Issues #45 / #47)
+
+The single end-state benchmark run, executed once now that all feature work is settled. It
+**supersedes** the default-HVN columns of §8.4/§8.6/§8.7 and the tiny-Shakespeare weightless A/B
+of §8.8: every number here is produced under the **corrected #46 batch-outer head routing** (the
+§8.x tables above were produced under the pre-#46 buggy `repeat_interleave` routing). SSM is
+omitted from this pass (a reference competitor, not part of HVN, and unaffected by #46 — its §8.4
+numbers stand); the comparison of interest is the three HVN variants vs the Transformer baseline.
+
+**Config** (identical harness to §8.4/§8.7): WikiText-103, BPE-8000, 5M-token compute-matched
+budget (12.4M unique train tokens — unsaturated), d ∈ {128,256,512,768}, 2L, seq_len=128, **bf16**,
+RTX 4050 (`eval/scaling_laws.py --models HVN HVN-DeltaNet HVN-DeltaNet-Weightless Transformer`,
+`results/scaling_final_pass.{json,png}`).
+
+| d_model | HVN (default) | HVN-DeltaNet | HVN-DeltaNet-Weightless | Transformer |
+|--------:|--------------:|-------------:|------------------------:|------------:|
+| 128 | 469.1 | **412.3** | 455.2 | 395.6 |
+| 256 | 307.2 | **251.1** | 275.2 | 245.6 |
+| 512 | 218.8 | **159.4** | 183.3 | 172.0 |
+| 768 | 194.3 | **129.4** | 157.0 | 150.8 |
+
+**Refit exponents (PPL ∝ params^b):** HVN **−0.397**, HVN-DeltaNet **−0.504** (steepest),
+HVN-DeltaNet-Weightless **−0.499**, Transformer **−0.406**.
+
+**Finding 1 — correct head routing measurably *improves* the default HVN block (#47's A/B).** The
+#46 fix (each batched slot now reads its own head's weights, restoring multi-head specialization
+the bug had diluted) lifts the default block at every width vs the buggy-routing §8.7 numbers:
+
+| d_model | HVN pre-#46 (§8.7, buggy) | HVN post-#46 (this pass) | Δ |
+|--------:|--------------------------:|-------------------------:|:---:|
+| 128 | 522.5 | 469.1 | **−10.2%** |
+| 256 | 348.4 | 307.2 | **−11.8%** |
+| 512 | 236.0 | 218.8 | −7.3% |
+| 768 | 205.9 | 194.3 | −5.7% |
+
+So the #46 correctness fix was **also a quality fix** — the head-misrouting had been silently
+degrading the default block by 6–12% PPL. **DeltaNet is unaffected** (412.3/251.1/159.4/129.4 ≈
+§8.7's 410.6/251.9/159.4/128.0, within run variance) because the `DeltaNetBlock` replaces the
+block entirely and never touches the buggy `batched_vortex`/`batched_memory` modules — a clean
+confirmation that #46 was localized to the default HVN path.
+
+**Finding 2 — DeltaNet remains the quality leader and is the recommended default (feeds #39).** It
+beats the default HVN block at every width (−12.1% → −33.4% PPL as d grows), has the steepest
+exponent (−0.504 vs Transformer −0.406), and **beats the Transformer at d ≥ 512** (159.4 vs 172.0;
+129.4 vs 150.8). Combined with #44 (bf16-stable at all widths) the last blocker on the #39
+default-flip is cleared: **`--use_deltanet` should become the documented default block.**
+
+**Finding 3 — weightless (#40) real-scale cost, measured for the first time beyond d=128/tiny.**
+The hybrid weightless DeltaNet (frozen seed-regenerated q/k/v/out projections) vs dense DeltaNet:
+
+| d_model | Dense PPL | Weightless PPL | PPL cost | Param saving |
+|--------:|----------:|---------------:|:--------:|:------------:|
+| 128 | 412.3 | 455.2 | +10.4% | −5.5% |
+| 256 | 251.1 | 275.2 | +9.6% | −9.7% |
+| 512 | 159.4 | 183.3 | +15.0% | −15.6% |
+| 768 | 129.4 | 157.0 | +21.3% | −19.6% |
+
+This **confirms the §8.8 caveat quantitatively**: the −38% param saving seen at d=128 on
+tiny-Shakespeare was a small-vocab artifact (char vocab ≈ 65, so the `vocab·d` embedding was
+negligible and the frozen `4·d²·L` projections dominated). At BPE-8000 the embedding is large, so
+at small `d` the saving is modest (−5.5%) and **grows with width** (−19.6% at d=768) as the `4d²L`
+projection share overtakes the `vocab·d` embedding — exactly as predicted. Weightless still beats
+the default HVN block at every width and keeps a near-DeltaNet exponent (−0.499), so it remains the
+right pick when checkpoint size dominates; the PPL cost is a modest, width-growing 10–21%.
+
+O(1) per-token inference, no-KV, and forward↔incremental parity are unchanged by this pass (it is
+training/measurement only; `test_issue46.py` guards the routing fix). **Deliverables:**
+`results/scaling_final_pass.json` + `results/scaling_final_pass.png`.
 
 ### 8.5 Honest Assessment
 
@@ -975,11 +1055,21 @@ regress >2% per fix; Triton kernel dtype-agnostic.
 - **#36 — Speed up incremental generation** ✅ **Done** (2026-07-04): removed redundant prefill
   + per-token host↔device syncs; HVN decode 80.7 → 197.7 tok/s (2.45×), DeltaNet
   time-to-first-token 1,612 → 23 ms (70×), stacks with #33 kernels (see §9.3).
-- **#39 — Make Gated-DeltaNet the default block?** 🔄 **Was: keep flag-gated** (2026-07-04) because
-  DeltaNet **diverged to NaN at d≥512 under bf16**; the flip was blocked solely on a large-width
-  bf16-stability fix. **That blocker is now cleared by #44** — DeltaNet trains cleanly in bf16 at all
-  widths and beats HVN/Transformer at d≥512 (see §8.7). The default-flip decision is now unblocked
-  and left as the remaining follow-up.
+- **#39 — Make Gated-DeltaNet the default block?** ✅ **Recommendation reached** (2026-07-05): the
+  final corrected-routing pass (§8.12) confirms DeltaNet is the quality leader at real scale —
+  steepest exponent (−0.504), beats the default HVN block at every width (−12→−33% PPL), beats the
+  Transformer at d≥512, and (via #44) is bf16-stable at all widths. **Recommendation: `--use_deltanet`
+  becomes the documented default block.** The actual default-value flip in code is left as a small
+  follow-up so this measurement pass keeps defaults unchanged.
+- **#45 — Final real-scale benchmark pass** ✅ **Done** (2026-07-05): the end-state 4-model
+  (HVN / HVN-DeltaNet / HVN-DeltaNet-Weightless / Transformer) WikiText-103 sweep under corrected
+  #46 routing (`results/scaling_final_pass.{json,png}`, §8.12). Added the `HVN-DeltaNet-Weightless`
+  entry to `eval/scaling_laws.py`. SSM dropped (reference competitor, unaffected by #46, §8.4 stands).
+  Feeds the #39 recommendation.
+- **#47 — Re-measure under corrected head routing** ✅ **Done** (2026-07-05, folded into #45): the
+  A/B shows the #46 fix was **also a quality fix** — correct head routing lifts the default HVN
+  block 6–12% PPL by restoring multi-head specialization the bug had diluted; DeltaNet is unaffected
+  (doesn't use the buggy modules). §8.4/§8.6/§8.7 default-HVN columns superseded by §8.12.
 - **#44 — Fix large-width bf16 instability in the Gated-DeltaNet block** ✅ **Done** (2026-07-04):
   fp32 islands for `_l2norm` / read RMSNorm / decay-write gates, flooring the intra-chunk cumulative
   decay `P` (bounds the `k/P` overflow), and a training-loop loss-spike guard. Full bf16 sweep now
