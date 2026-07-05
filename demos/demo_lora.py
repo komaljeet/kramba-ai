@@ -28,6 +28,10 @@ import math
 import os
 import tempfile
 
+# --- repo-root path bootstrap (added during reorg, issue #48) ---
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+# --- end path bootstrap ---
 from hvn.core import HamiltonianVortexNetwork
 from hvn.lora import (
     LoRAAdapter,

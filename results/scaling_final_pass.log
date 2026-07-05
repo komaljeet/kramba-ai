@@ -1,0 +1,298 @@
+Using GPU: NVIDIA GeForce RTX 4050 Laptop GPU
+
+======================================================================
+Loading dataset: wikitext103
+======================================================================
+  WikiText-103: reading from wikitext-103-v1
+  Training BPE tokenizer (vocab=8000) on the train split ...
+  Tokenizer:        bpe (vocab 8,000)
+  Train chars:      50,000,000  ->  12,443,702 tokens
+  Eval chars:       1,000,000  ->  243,977 tokens
+  d_models:         [128, 256, 512, 768]
+  Models:           ['HVN', 'HVN-DeltaNet', 'HVN-DeltaNet-Weightless', 'Transformer']
+  Token budget:     5,000,000 / model  (compute-matched)
+  Eval interval:    500,000 tokens
+
+======================================================================
+d_model = 128
+======================================================================
+
+  Training HVN (2,321,280 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.9406  |  eval_ppl=919.751  |  5.6s
+       1,001,472 tok  |  train_loss=6.6260  |  eval_ppl=749.553  |  10.9s
+       1,501,184 tok  |  train_loss=6.5568  |  eval_ppl=649.378  |  16.5s
+       2,000,896 tok  |  train_loss=6.4840  |  eval_ppl=575.114  |  21.8s
+       2,500,608 tok  |  train_loss=6.3719  |  eval_ppl=525.745  |  27.0s
+       3,000,320 tok  |  train_loss=6.2681  |  eval_ppl=498.263  |  32.2s
+       3,500,032 tok  |  train_loss=6.2374  |  eval_ppl=481.649  |  37.5s
+       4,001,792 tok  |  train_loss=6.0917  |  eval_ppl=472.757  |  42.8s
+       4,501,504 tok  |  train_loss=6.2934  |  eval_ppl=469.522  |  48.1s
+       4,999,168 tok  |  train_loss=6.2374  |  eval_ppl=469.097  |  53.3s
+    -> HVN: PPL 469.097  |  53.3s  |  saturates: 4,001,792 tok
+
+  Training HVN-DeltaNet (2,388,040 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.9049  |  eval_ppl=950.793  |  10.4s
+       1,001,472 tok  |  train_loss=6.7316  |  eval_ppl=734.149  |  20.7s
+       1,501,184 tok  |  train_loss=6.4115  |  eval_ppl=601.636  |  31.0s
+       2,000,896 tok  |  train_loss=6.3765  |  eval_ppl=518.080  |  41.2s
+       2,500,608 tok  |  train_loss=6.2330  |  eval_ppl=469.449  |  51.6s
+       3,000,320 tok  |  train_loss=6.1963  |  eval_ppl=440.822  |  61.8s
+       3,500,032 tok  |  train_loss=6.1383  |  eval_ppl=425.194  |  72.1s
+       4,001,792 tok  |  train_loss=6.1149  |  eval_ppl=416.027  |  82.5s
+       4,501,504 tok  |  train_loss=6.0103  |  eval_ppl=412.801  |  92.9s
+       4,999,168 tok  |  train_loss=6.1215  |  eval_ppl=412.304  |  103.1s
+    -> HVN-DeltaNet: PPL 412.304  |  103.1s  |  saturates: 4,001,792 tok
+
+  Training HVN-DeltaNet-Weightless (2,256,968 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.9080  |  eval_ppl=956.582  |  10.1s
+       1,001,472 tok  |  train_loss=6.6749  |  eval_ppl=775.353  |  20.2s
+       1,501,184 tok  |  train_loss=6.5065  |  eval_ppl=652.193  |  30.3s
+       2,000,896 tok  |  train_loss=6.4049  |  eval_ppl=566.894  |  40.7s
+       2,500,608 tok  |  train_loss=6.2573  |  eval_ppl=516.107  |  51.0s
+       3,000,320 tok  |  train_loss=6.3910  |  eval_ppl=485.123  |  61.1s
+       3,500,032 tok  |  train_loss=6.2219  |  eval_ppl=468.456  |  71.2s
+       4,001,792 tok  |  train_loss=6.2522  |  eval_ppl=459.103  |  81.4s
+       4,501,504 tok  |  train_loss=6.1990  |  eval_ppl=455.793  |  91.5s
+       4,999,168 tok  |  train_loss=6.1993  |  eval_ppl=455.216  |  101.9s
+    -> HVN-DeltaNet-Weightless: PPL 455.216  |  101.9s  |  saturates: 4,001,792 tok
+
+  Training Transformer (2,443,776 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.8991  |  eval_ppl=908.561  |  2.2s
+       1,001,472 tok  |  train_loss=6.5755  |  eval_ppl=694.920  |  4.3s
+       1,501,184 tok  |  train_loss=6.4005  |  eval_ppl=564.201  |  6.4s
+       2,000,896 tok  |  train_loss=6.2353  |  eval_ppl=492.475  |  8.5s
+       2,500,608 tok  |  train_loss=6.1586  |  eval_ppl=450.482  |  10.6s
+       3,000,320 tok  |  train_loss=6.0129  |  eval_ppl=424.846  |  12.7s
+       3,500,032 tok  |  train_loss=6.0767  |  eval_ppl=408.295  |  14.7s
+       4,001,792 tok  |  train_loss=6.0461  |  eval_ppl=399.599  |  16.8s
+       4,501,504 tok  |  train_loss=6.0871  |  eval_ppl=396.154  |  18.9s
+       4,999,168 tok  |  train_loss=6.1569  |  eval_ppl=395.620  |  21.0s
+    -> Transformer: PPL 395.620  |  21.0s  |  saturates: 4,501,504 tok
+
+======================================================================
+d_model = 256
+======================================================================
+
+  Training HVN (5,158,784 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.4565  |  eval_ppl=736.890  |  5.9s
+       1,001,472 tok  |  train_loss=6.3936  |  eval_ppl=555.185  |  11.7s
+       1,501,184 tok  |  train_loss=6.2624  |  eval_ppl=442.583  |  17.5s
+       2,000,896 tok  |  train_loss=6.1360  |  eval_ppl=386.369  |  23.3s
+       2,500,608 tok  |  train_loss=5.9625  |  eval_ppl=350.507  |  29.1s
+       3,000,320 tok  |  train_loss=5.8390  |  eval_ppl=329.895  |  35.2s
+       3,500,032 tok  |  train_loss=5.7861  |  eval_ppl=316.789  |  41.1s
+       4,001,792 tok  |  train_loss=5.7886  |  eval_ppl=310.410  |  46.9s
+       4,501,504 tok  |  train_loss=5.8923  |  eval_ppl=307.443  |  52.6s
+       4,999,168 tok  |  train_loss=5.6808  |  eval_ppl=307.156  |  58.3s
+    -> HVN: PPL 307.156  |  58.3s  |  saturates: 4,501,504 tok
+
+  Training HVN-DeltaNet (5,423,432 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.6824  |  eval_ppl=731.500  |  10.9s
+       1,001,472 tok  |  train_loss=6.3027  |  eval_ppl=489.396  |  21.7s
+       1,501,184 tok  |  train_loss=5.8549  |  eval_ppl=381.306  |  32.5s
+       2,000,896 tok  |  train_loss=5.9387  |  eval_ppl=325.633  |  43.3s
+       2,500,608 tok  |  train_loss=5.8397  |  eval_ppl=292.379  |  54.1s
+       3,000,320 tok  |  train_loss=5.5800  |  eval_ppl=272.521  |  64.8s
+       3,500,032 tok  |  train_loss=5.5474  |  eval_ppl=259.384  |  75.5s
+       4,001,792 tok  |  train_loss=5.5271  |  eval_ppl=254.046  |  86.2s
+       4,501,504 tok  |  train_loss=5.5524  |  eval_ppl=251.554  |  96.9s
+       4,999,168 tok  |  train_loss=5.5600  |  eval_ppl=251.130  |  107.5s
+    -> HVN-DeltaNet: PPL 251.130  |  107.5s  |  saturates: 4,501,504 tok
+
+  Training HVN-DeltaNet-Weightless (4,899,144 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.6680  |  eval_ppl=758.838  |  10.7s
+       1,001,472 tok  |  train_loss=6.2779  |  eval_ppl=529.561  |  21.0s
+       1,501,184 tok  |  train_loss=6.0500  |  eval_ppl=415.923  |  31.3s
+       2,000,896 tok  |  train_loss=6.0084  |  eval_ppl=354.701  |  41.6s
+       2,500,608 tok  |  train_loss=5.7527  |  eval_ppl=316.436  |  51.9s
+       3,000,320 tok  |  train_loss=5.7298  |  eval_ppl=296.711  |  62.2s
+       3,500,032 tok  |  train_loss=5.7234  |  eval_ppl=284.808  |  72.5s
+       4,001,792 tok  |  train_loss=5.6266  |  eval_ppl=278.256  |  82.9s
+       4,501,504 tok  |  train_loss=5.8181  |  eval_ppl=275.463  |  93.3s
+       4,999,168 tok  |  train_loss=5.7418  |  eval_ppl=275.153  |  103.6s
+    -> HVN-DeltaNet-Weightless: PPL 275.153  |  103.6s  |  saturates: 4,501,504 tok
+
+  Training Transformer (5,673,984 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.5531  |  eval_ppl=694.097  |  2.8s
+       1,001,472 tok  |  train_loss=6.2410  |  eval_ppl=460.402  |  5.6s
+       1,501,184 tok  |  train_loss=5.9445  |  eval_ppl=367.401  |  8.4s
+       2,000,896 tok  |  train_loss=5.7685  |  eval_ppl=316.473  |  11.3s
+       2,500,608 tok  |  train_loss=5.6952  |  eval_ppl=284.784  |  14.1s
+       3,000,320 tok  |  train_loss=5.6864  |  eval_ppl=265.697  |  16.9s
+       3,500,032 tok  |  train_loss=5.6045  |  eval_ppl=254.897  |  19.7s
+       4,001,792 tok  |  train_loss=5.5999  |  eval_ppl=248.993  |  22.4s
+       4,501,504 tok  |  train_loss=5.5261  |  eval_ppl=246.016  |  25.2s
+       4,999,168 tok  |  train_loss=5.6427  |  eval_ppl=245.634  |  28.0s
+    -> Transformer: PPL 245.634  |  28.0s  |  saturates: 4,501,504 tok
+
+======================================================================
+d_model = 512
+======================================================================
+
+  Training HVN (12,406,656 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.3248  |  eval_ppl=550.589  |  7.4s
+       1,001,472 tok  |  train_loss=5.9007  |  eval_ppl=366.990  |  14.9s
+       1,501,184 tok  |  train_loss=5.7898  |  eval_ppl=301.125  |  22.2s
+       2,000,896 tok  |  train_loss=5.6866  |  eval_ppl=265.867  |  29.6s
+       2,500,608 tok  |  train_loss=5.5631  |  eval_ppl=246.527  |  37.2s
+       3,000,320 tok  |  train_loss=5.5786  |  eval_ppl=233.117  |  44.7s
+       3,500,032 tok  |  train_loss=5.4948  |  eval_ppl=226.480  |  52.1s
+       4,001,792 tok  |  train_loss=5.4962  |  eval_ppl=221.282  |  59.5s
+       4,501,504 tok  |  train_loss=5.4535  |  eval_ppl=219.165  |  66.9s
+       4,999,168 tok  |  train_loss=5.3148  |  eval_ppl=218.819  |  74.3s
+    -> HVN: PPL 218.819  |  74.3s  |  saturates: 4,501,504 tok
+
+  Training HVN-DeltaNet (13,460,296 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.2185  |  eval_ppl=496.547  |  12.3s
+       1,001,472 tok  |  train_loss=5.8647  |  eval_ppl=312.002  |  24.5s
+       1,501,184 tok  |  train_loss=5.6767  |  eval_ppl=241.385  |  36.6s
+       2,000,896 tok  |  train_loss=5.4238  |  eval_ppl=206.564  |  48.8s
+       2,500,608 tok  |  train_loss=5.2914  |  eval_ppl=186.336  |  61.0s
+       3,000,320 tok  |  train_loss=5.1824  |  eval_ppl=173.878  |  73.3s
+       3,500,032 tok  |  train_loss=5.0914  |  eval_ppl=165.890  |  85.6s
+       4,001,792 tok  |  train_loss=5.1504  |  eval_ppl=161.615  |  97.9s
+       4,501,504 tok  |  train_loss=5.0970  |  eval_ppl=159.770  |  110.2s
+       4,999,168 tok  |  train_loss=5.1283  |  eval_ppl=159.419  |  122.4s
+    -> HVN-DeltaNet: PPL 159.419  |  122.4s  |  saturates: 4,501,504 tok
+
+  Training HVN-DeltaNet-Weightless (11,363,144 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.3595  |  eval_ppl=540.868  |  11.8s
+       1,001,472 tok  |  train_loss=5.9459  |  eval_ppl=337.455  |  23.6s
+       1,501,184 tok  |  train_loss=5.5710  |  eval_ppl=264.393  |  35.7s
+       2,000,896 tok  |  train_loss=5.5632  |  eval_ppl=230.560  |  47.4s
+       2,500,608 tok  |  train_loss=5.4081  |  eval_ppl=210.003  |  59.2s
+       3,000,320 tok  |  train_loss=5.3865  |  eval_ppl=196.861  |  71.2s
+       3,500,032 tok  |  train_loss=5.2549  |  eval_ppl=189.773  |  83.2s
+       4,001,792 tok  |  train_loss=5.2581  |  eval_ppl=185.566  |  95.2s
+       4,501,504 tok  |  train_loss=5.3184  |  eval_ppl=183.603  |  107.0s
+       4,999,168 tok  |  train_loss=5.3203  |  eval_ppl=183.324  |  118.8s
+    -> HVN-DeltaNet-Weightless: PPL 183.324  |  118.8s  |  saturates: 4,501,504 tok
+
+  Training Transformer (14,493,696 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.1735  |  eval_ppl=464.861  |  5.3s
+       1,001,472 tok  |  train_loss=5.7937  |  eval_ppl=306.748  |  10.6s
+       1,501,184 tok  |  train_loss=5.4399  |  eval_ppl=247.652  |  15.9s
+       2,000,896 tok  |  train_loss=5.1904  |  eval_ppl=216.383  |  21.2s
+       2,500,608 tok  |  train_loss=5.3056  |  eval_ppl=198.232  |  26.5s
+       3,000,320 tok  |  train_loss=5.2763  |  eval_ppl=186.110  |  31.8s
+       3,500,032 tok  |  train_loss=5.3286  |  eval_ppl=179.025  |  37.1s
+       4,001,792 tok  |  train_loss=4.9846  |  eval_ppl=174.362  |  42.4s
+       4,501,504 tok  |  train_loss=5.0533  |  eval_ppl=172.446  |  47.7s
+       4,999,168 tok  |  train_loss=5.1224  |  eval_ppl=171.963  |  52.9s
+    -> Transformer: PPL 171.963  |  52.9s  |  saturates: 4,501,504 tok
+
+======================================================================
+d_model = 768
+======================================================================
+
+  Training HVN (21,751,680 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.1293  |  eval_ppl=433.556  |  10.5s
+       1,001,472 tok  |  train_loss=5.7158  |  eval_ppl=299.122  |  21.2s
+       1,501,184 tok  |  train_loss=5.7374  |  eval_ppl=255.111  |  33.2s
+       2,000,896 tok  |  train_loss=5.4875  |  eval_ppl=231.615  |  44.2s
+       2,500,608 tok  |  train_loss=5.4135  |  eval_ppl=218.702  |  54.6s
+       3,000,320 tok  |  train_loss=5.4769  |  eval_ppl=207.583  |  65.0s
+       3,500,032 tok  |  train_loss=5.3064  |  eval_ppl=200.567  |  75.3s
+       4,001,792 tok  |  train_loss=5.1848  |  eval_ppl=196.297  |  85.8s
+       4,501,504 tok  |  train_loss=5.3589  |  eval_ppl=194.605  |  96.1s
+       4,999,168 tok  |  train_loss=5.2708  |  eval_ppl=194.261  |  106.4s
+    -> HVN: PPL 194.261  |  106.4s  |  saturates: 4,501,504 tok
+
+  Training HVN-DeltaNet (24,118,600 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.1030  |  eval_ppl=381.900  |  17.4s
+       1,001,472 tok  |  train_loss=5.5272  |  eval_ppl=243.352  |  34.7s
+       1,501,184 tok  |  train_loss=5.2346  |  eval_ppl=194.698  |  52.1s
+       2,000,896 tok  |  train_loss=5.1104  |  eval_ppl=170.639  |  69.4s
+       2,500,608 tok  |  train_loss=5.1099  |  eval_ppl=152.637  |  86.7s
+       3,000,320 tok  |  train_loss=4.8289  |  eval_ppl=142.833  |  104.1s
+       3,500,032 tok  |  train_loss=4.8064  |  eval_ppl=135.374  |  121.4s
+       4,001,792 tok  |  train_loss=4.9735  |  eval_ppl=131.859  |  138.8s
+       4,501,504 tok  |  train_loss=4.7764  |  eval_ppl=129.708  |  156.2s
+       4,999,168 tok  |  train_loss=4.8532  |  eval_ppl=129.373  |  173.5s
+    -> HVN-DeltaNet: PPL 129.373  |  173.5s  |  saturates: 4,501,504 tok
+
+  Training HVN-DeltaNet-Weightless (19,400,008 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=6.0698  |  eval_ppl=416.883  |  16.4s
+       1,001,472 tok  |  train_loss=5.6494  |  eval_ppl=266.356  |  32.7s
+       1,501,184 tok  |  train_loss=5.4644  |  eval_ppl=219.003  |  49.0s
+       2,000,896 tok  |  train_loss=5.3283  |  eval_ppl=196.960  |  65.3s
+       2,500,608 tok  |  train_loss=5.2510  |  eval_ppl=181.089  |  81.7s
+       3,000,320 tok  |  train_loss=5.0967  |  eval_ppl=169.095  |  98.0s
+       3,500,032 tok  |  train_loss=5.1686  |  eval_ppl=163.372  |  114.3s
+       4,001,792 tok  |  train_loss=5.1505  |  eval_ppl=159.238  |  130.6s
+       4,501,504 tok  |  train_loss=5.0142  |  eval_ppl=157.191  |  146.9s
+       4,999,168 tok  |  train_loss=5.0001  |  eval_ppl=156.961  |  163.1s
+    -> HVN-DeltaNet-Weightless: PPL 156.961  |  163.1s  |  saturates: 4,501,504 tok
+
+  Training Transformer (26,459,136 params) — budget 5,000,000 tok = 2,441 steps of 2,048 tok
+         501,760 tok  |  train_loss=5.8013  |  eval_ppl=378.080  |  9.0s
+       1,001,472 tok  |  train_loss=5.5351  |  eval_ppl=257.570  |  18.0s
+       1,501,184 tok  |  train_loss=5.4764  |  eval_ppl=216.282  |  26.9s
+       2,000,896 tok  |  train_loss=5.3107  |  eval_ppl=192.287  |  35.9s
+       2,500,608 tok  |  train_loss=5.1909  |  eval_ppl=175.837  |  44.9s
+       3,000,320 tok  |  train_loss=5.2116  |  eval_ppl=165.445  |  53.8s
+       3,500,032 tok  |  train_loss=5.0105  |  eval_ppl=158.169  |  62.8s
+       4,001,792 tok  |  train_loss=5.1368  |  eval_ppl=153.324  |  71.8s
+       4,501,504 tok  |  train_loss=4.9185  |  eval_ppl=151.167  |  80.8s
+       4,999,168 tok  |  train_loss=5.0877  |  eval_ppl=150.787  |  89.7s
+    -> Transformer: PPL 150.787  |  89.7s  |  saturates: 4,501,504 tok
+
+======================================================================
+Scaling Laws Summary
+======================================================================
+Model          d_model      Params   Eval PPL      Time       Saturates
+-----------------------------------------------------------------------
+HVN                128   2,321,280    469.097     53.3s       4,001,792
+HVN-DeltaNet       128   2,388,040    412.304    103.1s       4,001,792
+HVN-DeltaNet-Weightless     128   2,256,968    455.216    101.9s       4,001,792
+Transformer        128   2,443,776    395.620     21.0s       4,501,504
+HVN                256   5,158,784    307.156     58.3s       4,501,504
+HVN-DeltaNet       256   5,423,432    251.130    107.5s       4,501,504
+HVN-DeltaNet-Weightless     256   4,899,144    275.153    103.6s       4,501,504
+Transformer        256   5,673,984    245.634     28.0s       4,501,504
+HVN                512  12,406,656    218.819     74.3s       4,501,504
+HVN-DeltaNet       512  13,460,296    159.419    122.4s       4,501,504
+HVN-DeltaNet-Weightless     512  11,363,144    183.324    118.8s       4,501,504
+Transformer        512  14,493,696    171.963     52.9s       4,501,504
+HVN                768  21,751,680    194.261    106.4s       4,501,504
+HVN-DeltaNet       768  24,118,600    129.373    173.5s       4,501,504
+HVN-DeltaNet-Weightless     768  19,400,008    156.961    163.1s       4,501,504
+Transformer        768  26,459,136    150.787     89.7s       4,501,504
+
+======================================================================
+Scaling Analysis
+======================================================================
+  HVN          scaling:  PPL ≈ 151079.0105 × params^-0.3973
+  HVN-DeltaNet scaling:  PPL ≈ 652702.8281 × params^-0.5043
+  HVN-DeltaNet-Weightless scaling:  PPL ≈ 633973.7029 × params^-0.4985
+  Transformer  scaling:  PPL ≈ 146423.3340 × params^-0.4062
+  HVN exponent -0.3973 vs Transformer -0.4062 — HVN is flatter (worse).
+  HVN-DeltaNet exponent -0.5043 vs Transformer -0.4062 — HVN-DeltaNet is steeper (better).
+  HVN-DeltaNet-Weightless exponent -0.4985 vs Transformer -0.4062 — HVN-DeltaNet-Weightless is steeper (better).
+  HVN-DeltaNet exponent -0.5043 vs default HVN -0.3973 — DeltaNet is steeper (better).
+    d=128 : HVN 469.10 -> DeltaNet 412.30 (+12.1% PPL)
+    d=256 : HVN 307.16 -> DeltaNet 251.13 (+18.2% PPL)
+    d=512 : HVN 218.82 -> DeltaNet 159.42 (+27.1% PPL)
+    d=768 : HVN 194.26 -> DeltaNet 129.37 (+33.4% PPL)
+  
+  Saturation (token budget where eval PPL stops improving):
+    HVN          d=128 : 4,001,792 tok
+    HVN          d=256 : 4,501,504 tok
+    HVN          d=512 : 4,501,504 tok
+    HVN          d=768 : 4,501,504 tok
+    HVN-DeltaNet d=128 : 4,001,792 tok
+    HVN-DeltaNet d=256 : 4,501,504 tok
+    HVN-DeltaNet d=512 : 4,501,504 tok
+    HVN-DeltaNet d=768 : 4,501,504 tok
+    HVN-DeltaNet-Weightless d=128 : 4,001,792 tok
+    HVN-DeltaNet-Weightless d=256 : 4,501,504 tok
+    HVN-DeltaNet-Weightless d=512 : 4,501,504 tok
+    HVN-DeltaNet-Weightless d=768 : 4,501,504 tok
+    Transformer  d=128 : 4,501,504 tok
+    Transformer  d=256 : 4,501,504 tok
+    Transformer  d=512 : 4,501,504 tok
+    Transformer  d=768 : 4,501,504 tok
+  No wall-clock crossover within tested sizes.
+
+Results saved to results/scaling_final_pass.json
+Plots saved to results/scaling_final_pass.png

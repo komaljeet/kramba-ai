@@ -25,6 +25,10 @@ def main():
     device = torch.device("cuda")
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
+# --- repo-root path bootstrap (added during reorg, issue #48) ---
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+# --- end path bootstrap ---
     from hvn.core import HamiltonianVortexNetwork, CUDAGraphRunner
     from hvn.kernels import fused_vortex_step, fused_hamiltonian_update, FusedHVNStep
 

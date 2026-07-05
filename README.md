@@ -246,9 +246,13 @@ kramba-ai/
 │   ├── vision.py / tools.py / chat.py / server.py  # Multimodal, tool calling, chat, OpenAI API
 │   ├── hf_model.py                # HVNConfig, HVNForCausalLM (HuggingFace wrapper)
 │   └── edge/                      # edge-devices branch: full Issue #32 compression suite
-├── docs/                          # (source docs — now consolidated into this compendium)
+├── docs/                          # ISSUE_30_PLAN.md, dashboard.html (compendium consolidated into this README)
 ├── eval/                          # run_eval, scaling_laws, long_context, datasets, instruction, multimodal
-├── demo.py / train.py / generate.py / benchmark.py / quality_benchmark.py
+├── tests/                         # test_*.py standalone test scripts (run from root: python tests/test_issueNN.py)
+├── demos/                         # demo*.py showcase scripts (run from root: python demos/demo.py)
+├── results/                       # benchmark JSON/PNG outputs
+├── train.py / generate.py / benchmark.py / quality_benchmark.py   # CLI entry points (kept at root)
+├── hvn_checkpoint*.pt / hvn_checkpoint_tokenizer.json             # trained checkpoints (default --checkpoint paths)
 └── requirements.txt
 ```
 
@@ -271,7 +275,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cu126
 pip install numpy
 
 # Run the architecture demo (verifies shapes & forward pass)
-python demo.py
+python demos/demo.py
 
 # Train the model on the bundled sample text
 python train.py --epochs 50 --generate --prompt "The "
