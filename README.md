@@ -1268,10 +1268,13 @@ back to CPU.
 login wall + Cloudflare challenge). Examples: `glab issue view <id> --repo komalbarun/kramba-ai`,
 `glab issue list`, `glab work-items list`. Per-issue workflow:
 
-1. **Always branch from an up-to-date `main`.** First sync local `main` with the remote,
-   then cut the branch off it — never off whatever branch happens to be checked out (that
-   inherits unrelated in-flight work):
+1. **ALWAYS pull `main` and branch off `main` — no exceptions.** Even if a dependency issue
+   isn't merged yet, still `git fetch` and branch from the updated remote `main`; **never**
+   cut the branch off whatever branch happens to be checked out (that inherits unrelated
+   in-flight work and produces a polluted MR diff). If a prerequisite has since merged, the
+   dependency is already in `main` — that's exactly why you pull first:
    ```bash
+   git fetch origin
    git checkout main && git pull origin main
    git checkout -b issue-NN-short-description
    ```
@@ -1280,9 +1283,12 @@ login wall + Cloudflare challenge). Examples: `glab issue view <id> --repo komal
 3. Commit referencing the issue (`git commit -m "Fix: … for issue #NN"`).
 4. Push the branch (`git push origin <branch>`).
 5. **Always open a Merge Request** with `glab mr create` — target `main`, put `Closes #NN`
-   in the description so the issue auto-closes on merge, and add a `glab issue note NN`
-   summarizing the result + linking the MR. Never push to or merge `main` directly; the
-   maintainer reviews and merges the MR manually.
+   in the description so the issue auto-closes on merge. Never push to or merge `main`
+   directly; the maintainer reviews and merges the MR manually.
+6. **On merge to `main`, always post a closing comment on the issue** with
+   `glab issue note NN` — summarize what shipped and link the merged MR, then confirm the
+   issue is closed (`Closes #NN` auto-closes it on merge; add the note regardless). Do this
+   for every handled issue so each one has a durable record of the delivered change.
 
 GitLab project: https://gitlab.com/komalbarun/kramba-ai
 
