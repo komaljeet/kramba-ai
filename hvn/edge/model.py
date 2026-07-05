@@ -30,6 +30,7 @@ import torch.nn as nn
 
 from ..core.decoder import HVNDecoder
 from ..core.hvn_block import HVNBlock
+from ..core.deltanet import DeltaNetBlock
 from .shared import SharedWeightHVN
 from .ternary import TernaryLinear, apply_ternary_to_model
 
@@ -45,6 +46,12 @@ class EdgeHVN(nn.Module):
     shared_weights : bool
         If True, all ``num_layers`` blocks share one set of weights
         (Phase 2.4, ALBERT-style) via :class:`~hvn.edge.shared.SharedWeightHVN`.
+    use_deltanet : bool
+        If True, use Gated-DeltaNet blocks (Issue #34) instead of ``HVNBlock``
+        — fixes the readout/update dynamics that caused HVN's PPL gap while
+        preserving O(1) inference.  Default False (original HVN path).
+    deltanet_conv_kernel : int
+        Kernel size of the DeltaNet short causal depthwise conv (Issue #34).
     """
 
     def __init__(
@@ -57,30 +64,34 @@ class EdgeHVN(nn.Module):
         chunk_size: Optional[int] = 64,
         dropout: float = 0.1,
         shared_weights: bool = False,
+        use_deltanet: bool = False,
+        deltanet_conv_kernel: int = 4,
     ):
         super().__init__()
         self.vocab_size = vocab_size
         self.d_model = d_model
         self.num_layers = num_layers
         self.shared_weights = shared_weights
+        self.use_deltanet = use_deltanet
 
         self.token_embedding = nn.Embedding(vocab_size, d_model)
 
-        if shared_weights:
-            block = HVNBlock(
+        def _make_block():
+            if use_deltanet:
+                return DeltaNetBlock(
+                    d_model=d_model, n_heads=n_heads, dropout=dropout,
+                    conv_kernel=deltanet_conv_kernel,
+                )
+            return HVNBlock(
                 d_model=d_model, n_heads=n_heads, bond_dimension=bond_dimension,
                 chunk_size=chunk_size, dropout=dropout,
             )
-            self.shared_block = SharedWeightHVN(block, num_layers)
+
+        if shared_weights:
+            self.shared_block = SharedWeightHVN(_make_block(), num_layers)
             self.blocks = None
         else:
-            self.blocks = nn.ModuleList([
-                HVNBlock(
-                    d_model=d_model, n_heads=n_heads, bond_dimension=bond_dimension,
-                    chunk_size=chunk_size, dropout=dropout,
-                )
-                for _ in range(num_layers)
-            ])
+            self.blocks = nn.ModuleList([_make_block() for _ in range(num_layers)])
             self.shared_block = None
 
         self.final_norm = nn.LayerNorm(d_model)
