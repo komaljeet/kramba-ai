@@ -1343,6 +1343,26 @@ back to CPU.
 
 ### Issue & Delivery Workflow
 
+> **⚠️ If the maintainer says a feature exists but you can't find it in the code, check the
+> GitLab issues first (`glab issue list --all`, `glab issue view <id>`).** Much of this project
+> was scoped issue-by-issue, and an issue may describe intended behavior that was only *partially*
+> delivered (e.g. Issue #30 designed a React/Vue chat client, but only the REST + WebSocket
+> backend was committed — no frontend UI page exists). The issue is the source of truth for what
+> was *meant* to be built; reconcile the gap before assuming the maintainer is mistaken.
+>
+> **Also consult the persistent assistant memory index (`MEMORY.md`) at the start of each
+> session** (in the Claude project memory dir, e.g.
+> `~/.claude/projects/<project>/memory/MEMORY.md`). It records durable workflow conventions and
+> past feedback (branching discipline, push-to-feature-branch-only, merge/close etiquette) that
+> aren't obvious from the code — check it alongside the GitLab issues before acting.
+
+> **📝 Always create a GitLab issue BEFORE starting any non-trivial work** (`glab issue create
+> --title "..." --description "..."`), even for work the maintainer just asked for verbally.
+> The issue is the unit of follow-up here: it captures scope/acceptance up front, gives the
+> branch and MR something to reference (`Closes #NN`), and leaves a durable trail so a later
+> session can pick the thread back up. Don't start editing code for a feature until its issue
+> exists.
+
 **Always use the GitLab CLI (`glab`)** for all GitLab interactions (the web UI is behind a
 login wall + Cloudflare challenge). Examples: `glab issue view <id> --repo komalbarun/kramba-ai`,
 `glab issue list`, `glab work-items list`. Per-issue workflow:
