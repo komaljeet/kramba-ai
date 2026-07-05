@@ -420,6 +420,24 @@ add `--grad_accum 4` to recover effective batch.
 | `--use_deltanet` | flag | Gated-DeltaNet dynamics (Issue #34) |
 | `--weightless` | flag | Freeze DeltaNet q/k/v/out projections as seed-regenerated random features (Issue #40; needs `--use_deltanet`) |
 | `--grad_checkpoint` | flag | Exact gradient (activation) checkpointing (Issue #49): recompute block activations in the backward pass — bit-identical gradients, ~20-30% slower/step, ~64% lower peak activation memory (fits a bigger `d_model`/batch in 6 GB) |
+| `--full` | flag | Issue #50 meta-flag: enable the **complete recommended fast-training stack** in one switch. Any flag passed explicitly overrides the preset (e.g. `--full --precision fp32`). See the Category A/B breakdown below. |
+
+**The `--full` meta-flag (Issue #50).** One switch that turns on the whole recommended
+stack so you don't have to remember and combine half a dozen flags — `python train.py --full ...`.
+It expands into two **honestly-labelled** categories:
+
+| Category | What it enables | Honesty |
+|----------|-----------------|---------|
+| **A — exact speed levers** (model bit-identical) | fused AdamW CUDA kernel · per-epoch (not per-step) loss sync (the training-loop analogue of the #36 generation fix) · pinned-memory + `non_blocking` H2D transfers · `--compile` (#10) · `--grad_checkpoint` (#49) | Speed **only** — the trained model is unchanged. |
+| **B — recommended defaults** (change model/precision) | `--precision bf16` (bf16-stable at every width since #44) · `--use_deltanet` (the #39-recommended higher-quality block) | **Not** quality-neutral — `--full` trains the best/fastest *recommended* model, not "the same model, faster." |
+
+It deliberately does **not** enable `--use_parallel_scan` (a no-op under `--use_deltanet`).
+On the first run `--full` prints a one-line banner listing exactly what it turned on (with
+`[A]`/`[B]` tags) so runs stay reproducible/auditable. **Measured:** steady-state **1.58×
+faster** (5.53 → 3.51 s/epoch, d=256/3L/seq128/B32, RTX 4050) once the one-time `torch.compile`
+warmup amortizes; the Category-A primitives are proven exact (`fused-off==on`,
+`sync-removed==original` train bit-identical weights — `tests/test_issue50.py`). Explicit flags
+always win, so `--full --precision fp32` trains in fp32.
 
 ### Precision Guide
 
@@ -486,6 +504,7 @@ BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 
 | #46 | Systemic batch-ordering fix — batched `forward`/eval/`generate_batched` now == single-stream (batch-outer tiling of per-head params) | `batched_vortex.py`, `batched_memory.py` |
 | #42 | Real reasoning/thinking — trainable `[THINK]` chain-of-thought (multi-step arithmetic), with-think vs no-think A/B **+52pp**; also fixed a latent tokenizer bug that dropped OOV chars (digits) from aux training data | `reasoning.py`, `train.py`, `eval/reasoning.py` |
 | #49 | Exact gradient (activation) checkpointing (`--grad_checkpoint`) — bit-identical gradients, −64% peak activation memory, unlocks a larger model on the 6 GB card | `model.py`, `train.py`, `eval/scaling_laws.py`, `tests/test_issue49.py` |
+| #50 | `--full` meta-flag — one-switch recommended fast-training stack (Category A exact speed levers: fused AdamW, per-epoch loss sync, pinned/async loading, `--compile`, `--grad_checkpoint`; Category B recommended model/precision: bf16 + DeltaNet). Explicit flags override; steady-state **1.58×** faster; Category-A primitives proven bit-exact | `train.py`, `tests/test_issue50.py` |
 | #45/#47 | Final real-scale benchmark pass under corrected #46 routing — 4-model WikiText-103 sweep; corrected routing **improves default HVN 6–12%**, DeltaNet confirmed quality leader (recommended default), weightless real-scale cost measured (§8.12) | `eval/scaling_laws.py`, `results/scaling_final_pass.*` |
 
 ---
