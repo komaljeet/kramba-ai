@@ -282,7 +282,7 @@ kramba-ai/
 │   ├── hf_model.py                # HVNConfig, HVNForCausalLM (HuggingFace wrapper)
 │   └── edge/                      # edge-devices branch: full Issue #32 compression suite
 ├── docs/                          # ISSUE_30_PLAN.md, dashboard.html (compendium consolidated into this README)
-├── eval/                          # run_eval, scaling_laws, long_context, datasets, curriculum, instruction, multimodal
+├── eval/                          # run_eval, scaling_laws, long_context, datasets, curriculum, coding, instruction, multimodal
 ├── tests/                         # test_*.py standalone test scripts (run from root: python tests/test_issueNN.py)
 ├── demos/                         # demo*.py showcase scripts (run from root: python demos/demo.py)
 ├── results/                       # benchmark JSON/PNG outputs
@@ -418,6 +418,42 @@ completion) to `auto_train_metrics.jsonl`. Progress is committed to `auto_train_
 **atomically after every stage**, so a re-run picks up at the next unfinished stage instead of
 restarting. `evaluate_stage()` is the seam the #55 coding-eval harness plugs into. O(1) inference is
 preserved (orchestration only; the served model is exactly what `train_model` produces).
+
+**Coding eval harness — per-language held-out completion scoring (Issue #55).** `eval/coding.py`
+gives each curriculum stage a **measurable** score instead of vibes — a per-language,
+HumanEval-style held-out code-completion eval, in the same style as the other `eval/` harnesses:
+
+```bash
+# Score one language (held-out text comes from the #53 loader, offline-safe):
+python -m eval.coding --checkpoint hvn_chat_checkpoint.pt --lang python
+# Score every stage and write a baseline JSON:
+python -m eval.coding --checkpoint hvn_chat_checkpoint.pt --lang all --json results/coding_baseline.json
+```
+
+It picks the strongest signal each language's tooling allows, always reporting the
+tokenization-invariant fallback:
+
+* **Exec-based pass@k** where a runtime exists — Python always (`sys.executable`), JavaScript when
+  `node` is installed, PHP when `php` is installed. A small bundled set of HumanEval-style problems
+  (a stub + hidden asserts) is completed by the model, executed in a throwaway temp dir via
+  `subprocess` with a timeout, and graded pass/fail (model output is untrusted → sandbox + timeout).
+* **Structural / compile validity** where no runtime is available (HTML, CSS, DevOps, and as the
+  off-box fallback for JS/PHP): the model completes a held-out prefix and the concatenation is
+  checked for structural validity — balanced tags/braces, `compile()` for Python, `yaml.safe_load`
+  for manifests.
+* **Held-out bits-per-char / PPL** is *always* computed (reusing the #51 metric) — tokenization-
+  invariant, so it compares fairly across tokenizers and gives a smooth gradient even when a tiny
+  loop-validation model can't yet emit runnable code.
+
+The callable API (`score_stage` / `evaluate_coding`) is what the #54 orchestrator logs after each
+stage: `auto_train.evaluate_stage` now delegates to it (keeping its backward-compatible
+`ppl`/`bits_per_char`/`non_degenerate` keys and adding a per-language `coding_score`). The
+orchestrator path defaults to **structural-only** (`allow_exec=False`) so unattended runs stay fast
+and side-effect-free; the exec pass@k is an explicit `python -m eval.coding` pass. **#51 base-model
+baselines** (`results/coding_baseline_issue51.json`, RTX 4050) — all ~0 exec/structural on the
+languages the base never saw, so curriculum gains are quantifiable: `python` pass@1 0% (5.08
+bits/char), `html`/`css` 0% structural (7.20 / 6.57 bits/char), `js`/`php` 25% (5.77 / 5.73). O(1)
+inference is untouched — the harness only reads a trained checkpoint.
 
 ---
 
@@ -568,6 +604,7 @@ BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 
 | #52 | Wire the #51 checkpoint into the Django app + end-to-end chat smoke test (Milestone 1, Issue B). Worker rebuilds the model with the checkpoint's `use_deltanet`/`weightless` flags (the #51 checkpoint is a DeltaNet model — default-block load raised); `StateCheckpoint` now serializes conversation state structure-agnostically (v2 tensor-tagged tree) so the DeltaNet `{"S","conv"}` per-block state round-trips (old nested-list serializer crashed on every turn); compose/env point at `hvn_chat_checkpoint.pt`; smoke test drives the real serving path (`hvn_worker` → `ChatSession.user_turn`/streaming) for a non-degenerate reply + save→load round-trip | `web/hvn_worker/worker.py`, `hvn/chat.py`, `web/docker-compose.yml`, `web/README.md`, `web/tests/test_chat_smoke.py` |
 | #54 | Auto-train orchestrator (Milestone 2, Issue D) — `auto_train.py` trains the #53 curriculum stages **in order** from the #51 base checkpoint, carrying the model weights forward, evaluating + checkpointing each stage (`checkpoint_stage_{name}.pt` + tokenizer + `auto_train_metrics.jsonl`), and **resuming** from the last completed stage after a kill (atomic `auto_train_state.json`; `--restart` to ignore it). Reuses `train.train_model` (#50 speed levers) + the #53 loaders; `evaluate_stage()` is the #55 eval seam. O(1) inference preserved | `auto_train.py`, `tests/test_issue54.py` |
 | #53 | Curriculum dataset loaders (Milestone 2, Issue C) — `load_curriculum_stage('html'\|'css'\|'js'\|'php'\|'python'\|'devops')` returns `(train, eval)` streams for the coding-curriculum order, mirroring the WikiText-103 loader. **Permissive-only license filtering** (rejects GPL/LGPL/AGPL/MPL/EPL/CC-BY-SA), **near-dedup** (exact + MinHash-Jaccard over word-shingles), per-stage compute-matched char budgets + 90/10 doc split, and streaming/local-cache resolution (local dir → best-effort curated permissive download → offline synthetic fallback so every stage smoke-loads on the 6 GB box with no network). Feeds #54 (orchestrator) and #55 (eval) | `eval/curriculum.py`, `eval/datasets.py`, `tests/test_issue53.py` |
+| #55 | Coding eval harness (Milestone 2, Issue E) — `python -m eval.coding --checkpoint X --lang python\|all` scores a checkpoint per language: **exec-based HumanEval-style pass@k** where a runtime exists (Python always; JS/PHP when `node`/`php` installed — sandboxed subprocess + timeout), **structural/compile validity** otherwise (balanced tags/braces, `compile()`, `yaml.safe_load`), and **always** tokenization-invariant held-out **bits-per-char**/PPL. Callable API (`score_stage`/`evaluate_coding`) is the #54 seam — `auto_train.evaluate_stage` delegates to it (keeps its `ppl`/`bits_per_char` keys, adds `coding_score`). #51 base baselines committed (`results/coding_baseline_issue51.json`) so curriculum gains are quantifiable. O(1) inference untouched | `eval/coding.py`, `auto_train.py`, `tests/test_issue55.py` |
 
 ---
 
