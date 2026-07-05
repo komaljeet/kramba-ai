@@ -20,6 +20,7 @@ Usage:
 import argparse
 import math
 import os
+import sys
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -173,6 +174,9 @@ def train_model(
     precision: str = "fp32",
     grad_accum_steps: int = 1,
     use_lora: bool = False,
+    fused_optimizer: bool = False,
+    defer_loss_sync: bool = False,
+    non_blocking: bool = False,
 ):
     """Train the HVN model with next-token prediction (cross-entropy loss).
 
@@ -188,25 +192,44 @@ def train_model(
     use_lora : bool
         If True, only train LoRA parameters (the base model is frozen).
         The optimizer will only receive LoRA parameters.
+    fused_optimizer : bool
+        Use the fused CUDA AdamW kernel (Issue #50, Category-A exact speed lever).
+        Model-bit-identical to the unfused kernel; only valid on CUDA.
+    defer_loss_sync : bool
+        Accumulate the epoch loss on-device and copy to host once per epoch
+        instead of a per-micro-batch ``loss.item()`` host↔device sync (Issue #50,
+        the training-loop analogue of the #36 generation fix).  Purely a logging
+        optimisation — gradients and the trained model are unaffected.
+    non_blocking : bool
+        Issue async (``non_blocking=True``) host→device transfers of the input
+        batches.  Only effective with a pinned-memory DataLoader (Issue #50).
     """
 
     if compile:
         print("Compiling model with torch.compile (first epoch will be slower)...")
         model = torch.compile(model, mode="reduce-overhead")
 
+    # Move params to the device BEFORE building the optimizer — the fused AdamW
+    # kernel requires its params to already live on CUDA at construction time.
+    model.to(device)
+    model.train()
+
     # --- Optimizer: use only trainable (LoRA) params if use_lora ---
+    # The fused kernel is CUDA-only; silently fall back on CPU.
+    use_fused = fused_optimizer and device.type == "cuda"
     if use_lora:
         trainable_params = [p for p in model.parameters() if p.requires_grad]
-        optimizer = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=0.01)
+        optimizer = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=0.01,
+                                      fused=use_fused)
         print(f"Optimizer: training only {len(trainable_params)} LoRA parameter tensors")
     else:
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01,
+                                      fused=use_fused)
+    if use_fused:
+        print("Optimizer: fused AdamW CUDA kernel enabled (Issue #50)")
     # Cosine LR schedule for smooth convergence
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = nn.CrossEntropyLoss()
-
-    model.to(device)
-    model.train()
 
     # --- Mixed-precision setup ---
     use_amp = precision in ("fp16", "bf16") and device.type == "cuda"
@@ -223,13 +246,15 @@ def train_model(
     print("-" * 60)
 
     for epoch in range(1, epochs + 1):
-        total_loss = 0.0
+        # Accumulate the running loss on-device when defer_loss_sync is set so we
+        # avoid a per-micro-batch host↔device sync; copy to host once at epoch end.
+        total_loss = torch.zeros((), device=device) if defer_loss_sync else 0.0
         n_batches = 0
         optimizer.zero_grad()
 
         for step, (batch_x, batch_y) in enumerate(dataloader):
-            batch_x = batch_x.to(device)  # [B, S]
-            batch_y = batch_y.to(device)  # [B, S]
+            batch_x = batch_x.to(device, non_blocking=non_blocking)  # [B, S]
+            batch_y = batch_y.to(device, non_blocking=non_blocking)  # [B, S]
 
             # Forward pass (with autocast for mixed precision)
             with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
@@ -247,7 +272,11 @@ def train_model(
             else:
                 loss.backward()
 
-            total_loss += loss.item() * grad_accum_steps  # restore unscaled loss for logging
+            # restore unscaled loss for logging
+            if defer_loss_sync:
+                total_loss += loss.detach() * grad_accum_steps  # on-device, no sync
+            else:
+                total_loss += loss.item() * grad_accum_steps
             n_batches += 1
 
             # Optimizer step every grad_accum_steps micro-batches
@@ -275,6 +304,8 @@ def train_model(
             optimizer.zero_grad()
 
         scheduler.step()
+        if defer_loss_sync:
+            total_loss = total_loss.item()  # single host sync per epoch
         avg_loss = total_loss / max(n_batches, 1)
         perplexity = math.exp(min(avg_loss, 20))  # clamp to avoid overflow
 
@@ -381,6 +412,61 @@ concepts. The result is a model that is both fast and expressive.
 """
 
 
+# ---------------------------------------------------------------------------
+# Issue #50: `--full` meta-flag — one-switch recommended fast-training stack
+# ---------------------------------------------------------------------------
+
+def apply_full_preset(args, explicit_flags):
+    """Expand the ``--full`` meta-flag into the recommended fast-training stack.
+
+    ``--full`` is a single switch that turns on the complete recommended
+    training stack so you don't have to remember and combine half a dozen flags.
+    It is split into two honestly-labelled categories:
+
+      * **Category A — exact speed levers (model bit-identical):** fused AdamW
+        kernel, per-epoch (not per-step) loss sync, and pinned/async data
+        loading.  These change *speed only*, never the trained model.
+      * **Category B — recommended defaults that change the model/precision:**
+        ``--precision bf16`` (bf16-stable at every width since #44) and
+        ``--use_deltanet`` (the #39-recommended higher-quality block).  These
+        are *not* quality-neutral — ``--full`` trains the best/fastest
+        *recommended* model, not the same model faster.
+
+    Any individual flag the user passed explicitly overrides the preset
+    (``explicit_flags`` is the set of ``--flag`` strings seen on the command
+    line).  Returns a list of human-readable strings describing exactly what was
+    enabled, for the reproducibility banner.
+
+    Note ``--use_parallel_scan`` is deliberately *not* enabled: it targets the
+    default HVN block and is a no-op under ``--use_deltanet`` (which ``--full``
+    turns on), so enabling it would be misleading.
+    """
+    enabled = []
+
+    # --- Category B: model/precision-changing recommended defaults ---
+    if "--precision" in explicit_flags:
+        enabled.append(f"precision={args.precision} (kept — user override)")
+    else:
+        args.precision = "bf16"
+        enabled.append("precision=bf16  [B]")
+    args.use_deltanet = True
+    enabled.append("use_deltanet  [B]")
+
+    # --- Category A: exact speed levers (model bit-identical) ---
+    args.compile = True
+    enabled.append("compile  [A]")
+    args.grad_checkpoint = True
+    enabled.append("grad_checkpoint (#49)  [A]")
+    args.fused_adamw = True
+    enabled.append("fused AdamW kernel  [A]")
+    args.defer_loss_sync = True
+    enabled.append("per-epoch loss sync (no per-step host sync)  [A]")
+    args.pin_memory = True
+    enabled.append("pinned-memory + async H2D transfers  [A]")
+
+    return enabled
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train the Hamiltonian Vortex Network")
     parser.add_argument("--text", type=str, default=None, help="Path to training text file")
@@ -400,6 +486,7 @@ def main():
     parser.add_argument("--precision", type=str, default="fp32", choices=["fp32", "fp16", "bf16"], help="Mixed-precision training mode (fp16/bf16 require CUDA)")
     parser.add_argument("--grad_accum", type=int, default=1, help="Gradient accumulation steps (effective batch size = batch_size × grad_accum)")
     parser.add_argument("--grad_checkpoint", action="store_true", help="Gradient (activation) checkpointing (Issue #49): recompute block activations in the backward pass instead of storing them. Mathematically exact (bit-identical gradients/model), ~20-30% slower per step, but frees activation memory so a larger --d_model / --batch_size fits in the same VRAM. Training-only; inference unchanged.")
+    parser.add_argument("--full", action="store_true", help="Issue #50 meta-flag: enable the complete recommended fast-training stack in one switch. Category A (exact, model-bit-identical speed levers): fused AdamW, per-epoch loss sync, pinned/async data loading, --compile, --grad_checkpoint. Category B (recommended defaults that CHANGE the model/precision): --precision bf16 + --use_deltanet. So --full trains the best/fastest RECOMMENDED model, not the same model faster. Any flag passed explicitly overrides the preset (e.g. --full --precision fp32).")
     parser.add_argument("--tokenizer", type=str, default="char", choices=["char", "bpe"], help="Tokenizer type: char or bpe")
     parser.add_argument("--bpe_vocab", type=int, default=1000, help="BPE vocabulary size (only used with --tokenizer bpe)")
     # --- Issue #21 quality strategies ---
@@ -463,6 +550,22 @@ def main():
     parser.add_argument("--merge_lora", action="store_true",
                         help="Merge LoRA weights back into base model after training (for zero-overhead inference).")
     args = parser.parse_args()
+
+    # Internal (non-CLI) Category-A loop primitives, off unless --full turns them on.
+    args.fused_adamw = False
+    args.defer_loss_sync = False
+    args.pin_memory = False
+
+    # --- Issue #50: expand the --full meta-flag (explicit flags win) ---
+    if args.full:
+        explicit_flags = {tok.split("=")[0] for tok in sys.argv[1:] if tok.startswith("--")}
+        enabled = apply_full_preset(args, explicit_flags)
+        print("=" * 60)
+        print("--full (Issue #50): recommended fast-training stack enabled")
+        print("  [A]=exact speed lever (model bit-identical)  [B]=changes model/precision")
+        for item in enabled:
+            print(f"    • {item}")
+        print("=" * 60)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
@@ -528,7 +631,10 @@ def main():
         print(f"  Total training tokens: {len(token_ids)}")
 
     dataset = TextDataset(token_ids, seq_len=args.seq_len)
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=False)
+    # Pinned-memory loading (Issue #50 --full) only helps CUDA async transfers.
+    pin_memory = args.pin_memory and torch.cuda.is_available()
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
+                            drop_last=False, pin_memory=pin_memory)
     print(f"Dataset: {len(dataset)} samples | DataLoader: {len(dataloader)} batches")
 
     # --- Build model ---
@@ -586,6 +692,9 @@ def main():
         model, dataloader, args.epochs, args.lr, device, args.save,
         compile=args.compile, precision=args.precision, grad_accum_steps=args.grad_accum,
         use_lora=(args.lora or args.qlora),
+        fused_optimizer=args.fused_adamw,
+        defer_loss_sync=args.defer_loss_sync,
+        non_blocking=pin_memory,
     )
 
     # --- Save tokenizer ---
