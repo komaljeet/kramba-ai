@@ -1,0 +1,119 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HVN Chat</title>
+  <!-- Inline styles are permitted by the CSP (style-src 'unsafe-inline');
+       the script is an external same-origin file because script-src is 'self'
+       only (see web/middleware/security_headers.py). -->
+  <style>
+    :root {
+      --bg: #0f1117; --panel: #161923; --panel-2: #1e2230; --line: #2a2f3d;
+      --text: #e6e8ee; --muted: #9aa2b1; --accent: #6d8bff; --danger: #e5484d;
+      --user: #24304d; --assistant: #1c2130;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; height: 100vh; display: flex; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+           background: var(--bg); color: var(--text); }
+    button { font: inherit; cursor: pointer; }
+    input, select { font: inherit; }
+
+    /* Login overlay */
+    #login { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+             background: var(--bg); z-index: 10; }
+    #login .card { background: var(--panel); padding: 28px; border-radius: 12px; width: 320px;
+                   border: 1px solid var(--line); }
+    #login h1 { margin: 0 0 4px; font-size: 20px; }
+    #login p { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+    #login input { width: 100%; margin-bottom: 10px; padding: 10px; border-radius: 8px;
+                   border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
+    .btn-primary { width: 100%; padding: 10px; border: 0; border-radius: 8px; background: var(--accent);
+                   color: #fff; font-weight: 600; }
+    .err { color: var(--danger); font-size: 13px; min-height: 16px; margin-top: 6px; }
+
+    /* Sidebar */
+    #sidebar { width: 280px; background: var(--panel); border-right: 1px solid var(--line);
+               display: flex; flex-direction: column; }
+    #sidebar header { padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex;
+                      align-items: center; justify-content: space-between; }
+    #sidebar header b { font-size: 15px; }
+    #new-chat { padding: 10px 16px; }
+    #new-chat select, #new-chat button { width: 100%; margin-top: 8px; padding: 9px; border-radius: 8px;
+                   border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
+    #new-chat button { background: var(--accent); color: #fff; border: 0; font-weight: 600; }
+    #convos { flex: 1; overflow-y: auto; padding: 8px; }
+    .convo { display: flex; align-items: center; gap: 6px; padding: 9px 10px; border-radius: 8px;
+             cursor: pointer; color: var(--muted); }
+    .convo:hover { background: var(--panel-2); }
+    .convo.active { background: var(--panel-2); color: var(--text); }
+    .convo .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .convo .del { border: 0; background: transparent; color: var(--muted); font-size: 15px; padding: 2px 6px;
+                  border-radius: 6px; }
+    .convo .del:hover { background: var(--danger); color: #fff; }
+    .link { background: transparent; border: 0; color: var(--muted); text-decoration: underline; font-size: 12px; }
+
+    /* Main */
+    #main { flex: 1; display: flex; flex-direction: column; }
+    #messages { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 14px; }
+    .empty { margin: auto; color: var(--muted); text-align: center; }
+    .msg { max-width: 720px; padding: 12px 14px; border-radius: 12px; white-space: pre-wrap; line-height: 1.5;
+           word-wrap: break-word; }
+    .msg.user { align-self: flex-end; background: var(--user); }
+    .msg.assistant { align-self: flex-start; background: var(--assistant); }
+    .msg .think { display: block; color: var(--muted); font-size: 12px; border-left: 2px solid var(--line);
+                  padding-left: 8px; margin-bottom: 8px; font-style: italic; }
+    #composer { border-top: 1px solid var(--line); padding: 12px 16px; background: var(--panel); }
+    #toggles { display: flex; gap: 18px; margin-bottom: 8px; font-size: 13px; color: var(--muted); }
+    #toggles label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    #row { display: flex; gap: 10px; }
+    #prompt { flex: 1; resize: none; padding: 11px; border-radius: 10px; border: 1px solid var(--line);
+              background: var(--panel-2); color: var(--text); min-height: 46px; max-height: 160px; }
+    #send { padding: 0 20px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 600; }
+    #send:disabled { opacity: .5; cursor: not-allowed; }
+    .status { font-size: 12px; color: var(--muted); padding: 0 16px 8px; min-height: 14px; }
+  </style>
+</head>
+<body>
+  <!-- Login -->
+  <div id="login">
+    <form class="card" id="login-form">
+      <h1>HVN Chat</h1>
+      <p>Sign in to your account.</p>
+      <input id="username" placeholder="Username" autocomplete="username" required>
+      <input id="password" type="password" placeholder="Password" autocomplete="current-password" required>
+      <input id="otp" placeholder="2FA code (if enabled)" autocomplete="one-time-code" inputmode="numeric">
+      <button class="btn-primary" type="submit">Sign in</button>
+      <div class="err" id="login-err"></div>
+    </form>
+  </div>
+
+  <!-- App -->
+  <aside id="sidebar" hidden>
+    <header><b>Conversations</b><button class="link" id="logout">Log out</button></header>
+    <div id="new-chat">
+      <select id="model-select" title="Model version for new conversations"></select>
+      <button id="create-convo">+ New chat</button>
+    </div>
+    <div id="convos"></div>
+  </aside>
+
+  <main id="main" hidden>
+    <div id="messages"><div class="empty">Select or create a conversation to start chatting.</div></div>
+    <div class="status" id="status"></div>
+    <div id="composer">
+      <div id="toggles">
+        <label><input type="checkbox" id="tg-thinking" checked> Thinking</label>
+        <label><input type="checkbox" id="tg-websearch"> Web search</label>
+        <label><input type="checkbox" id="tg-showthink"> Show think blocks</label>
+      </div>
+      <div id="row">
+        <textarea id="prompt" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
+        <button id="send" disabled>Send</button>
+      </div>
+    </div>
+  </main>
+
+  <script src="{% static 'chat/app.js' %}"></script>
+</body>
+</html>
