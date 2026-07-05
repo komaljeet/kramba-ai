@@ -55,8 +55,15 @@ the image can vendor `../hvn`).
    Checkpoint bytes are never uploaded through the API — only a path inside
    `HVN_CHECKPOINT_DIR` that already exists on the volume is accepted.
 
-5. **Chat.** Create a conversation pinned to that model version, open the
-   WebSocket, and post a prompt:
+5. **Chat in the browser.** Open `http://127.0.0.1:8000/` — the built-in
+   single-page chat UI (Issue #56, no separate build step). Log in, pick the
+   registered model, create a conversation, and send a prompt; tokens stream in
+   token-by-token over the WebSocket. Per-message **Thinking** and **Web search**
+   toggles are sent with each prompt, and **deleting** a chat frees both its DB
+   rows and its on-disk Hamiltonian state file.
+
+   To drive the same endpoints by hand instead, create a conversation pinned to
+   that model version, open the WebSocket, and post a prompt:
 
    ```bash
    # Create a conversation (returns its UUID):
@@ -73,8 +80,9 @@ the image can vendor `../hvn`).
 
    Generated tokens stream over the WebSocket as `{"type":"token","delta":...}`
    messages, ending with `{"type":"done","message_id":...}`; the finished reply
-   is also stored as a `Message`. A frontend at `http://localhost:3000` (the
-   default `CORS_ALLOWED_ORIGINS`) can drive the same endpoints.
+   is also stored as a `Message`. The bundled UI at `/` (step 5) drives exactly
+   these endpoints; a separate SPA origin (e.g. the `CORS_ALLOWED_ORIGINS`
+   default) could drive them too.
 
 ## Tests
 

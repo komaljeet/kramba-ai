@@ -12,6 +12,11 @@ CSP_POLICY = "; ".join(
         "default-src 'self'",
         "script-src 'self'",
         "style-src 'self' 'unsafe-inline'",  # DRF's browsable API inlines some CSS
+        # The minimal chat UI (chat/index.html, Issue #56) fetches the JSON API
+        # and opens a same-origin WebSocket (ws(s)://<host>/ws/chat/...); 'self'
+        # covers both. Set explicitly rather than relying on the default-src
+        # fallback so WebSocket connections are unambiguously allowed.
+        "connect-src 'self'",
         "img-src 'self' data:",
         "frame-ancestors 'none'",
         "base-uri 'self'",

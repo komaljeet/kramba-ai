@@ -72,6 +72,12 @@ class ModelVersionSerializer(serializers.ModelSerializer):
 
 class MessageCreateSerializer(serializers.Serializer):
     content = serializers.CharField(max_length=MAX_MESSAGE_LENGTH, allow_blank=False, trim_whitespace=False)
+    # Per-message toggles (Issue #56), plumbed through to the worker
+    # (api/tasks.py -> hvn_worker.inference.stream_turn):
+    #   thinking   - keep the model's [THINK] chain-of-thought (#42) in the reply
+    #   web_search - offer the web_search tool (#41) for this turn
+    thinking = serializers.BooleanField(required=False, default=True)
+    web_search = serializers.BooleanField(required=False, default=False)
 
     def validate_content(self, value):
         if contains_injection_markers(value):

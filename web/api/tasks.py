@@ -20,7 +20,12 @@ def conversation_group_name(conversation_id) -> str:
 
 
 @shared_task
-def generate_response(conversation_id: str, user_message_id: str) -> str:
+def generate_response(
+    conversation_id: str,
+    user_message_id: str,
+    thinking: bool = True,
+    web_search: bool = False,
+) -> str:
     """Runs one HVN chat turn for `conversation_id`, streaming each text
     delta to that conversation's Channels group as it's generated (consumed
     by chat.consumers.ChatConsumer over WebSocket - see ISSUE_30_PLAN.md
@@ -48,6 +53,8 @@ def generate_response(conversation_id: str, user_message_id: str) -> str:
         model_tag=conversation.model_version.tag,
         checkpoint_path=conversation.model_version.checkpoint_path,
         result=result,
+        thinking=thinking,
+        web_search=web_search,
     ):
         async_to_sync(channel_layer.group_send)(group, {"type": "chat.token", "delta": delta})
 
@@ -88,7 +95,10 @@ def purge_expired_conversations() -> int:
     auto-purge, run daily via Celery beat (see CELERY_BEAT_SCHEDULE in
     web/settings/base.py). Returns the number of conversations purged.
     """
-    from hvn_worker.inference import _state_path
+    # torch-free helper (same file location as inference._state_path) so the
+    # beat/worker process running the purge doesn't load the GPU stack just to
+    # delete files.
+    from hvn_worker.state import state_path as _state_path
 
     cutoff = timezone.now() - timezone.timedelta(days=settings.CONVERSATION_RETENTION_DAYS)
     expired = Conversation.objects.filter(updated_at__lt=cutoff)

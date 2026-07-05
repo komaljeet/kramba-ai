@@ -11,4 +11,6 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/health/", health),
     path("api/", include("api.urls")),
+    # Minimal single-page chat UI (Issue #56), served at the site root.
+    path("", include("chat.urls")),
 ]

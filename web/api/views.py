@@ -1,3 +1,6 @@
+import logging
+import os
+
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -8,6 +11,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+
+logger = logging.getLogger(__name__)
 
 from .models import Conversation, Message, ModelVersion
 from .permissions import IsAdminOrReadOnly, IsConversationOwner
@@ -87,6 +92,25 @@ class ConversationViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
 
+    def perform_destroy(self, instance):
+        # Deleting the Conversation row cascades to its Messages (Postgres FK),
+        # but the per-conversation Hamiltonian state file on the checkpoints
+        # volume is NOT a DB row, so it would otherwise be orphaned until the
+        # 90-day purge (which can no longer find it once the row is gone -
+        # Issue #56). Remove it here so a user-deleted chat reclaims both DB
+        # rows and disk/memory. Imported from the torch-free helper so the web
+        # role never pulls the GPU stack in just to locate a file.
+        from hvn_worker.state import state_path
+
+        path = state_path(instance.id)
+        super().perform_destroy(instance)
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass  # no state file yet (conversation had no completed turn)
+        except OSError:
+            logger.warning("Failed to remove state file %s on conversation delete", path)
+
     def get_throttles(self):
         if self.action == "messages" and self.request.method == "POST":
             return [GenerationRateThrottle()]
@@ -113,7 +137,13 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 role=Message.Role.USER,
                 content=serializer.validated_data["content"],
             )
-            task = generate_response.delay(str(conversation.id), str(user_message.id))
+            # Forward the per-message toggles (Issue #56) to the GPU worker.
+            task = generate_response.delay(
+                str(conversation.id),
+                str(user_message.id),
+                thinking=serializer.validated_data["thinking"],
+                web_search=serializer.validated_data["web_search"],
+            )
             return Response(
                 {"message": MessageSerializer(user_message).data, "task_id": task.id},
                 status=status.HTTP_202_ACCEPTED,
