@@ -81,6 +81,9 @@ def main():
     parser.add_argument("--tokens", type=int, default=200, help="Max new tokens to generate")
     parser.add_argument("--temp", type=float, default=0.8, help="Sampling temperature")
     parser.add_argument("--top_k", type=int, default=10, help="Top-k sampling (0 = disabled)")
+    parser.add_argument("--hide_thinking", action="store_true",
+                        help="Hide [THINK] reasoning blocks from the printed answer (Issue #42). "
+                             "The raw with-think output is still logged to stderr.")
     parser.add_argument("--cuda_graph", action="store_true",
                         help="Use CUDA Graph capture for generation (Issue #33 Fix 6). 2-3x speedup.")
     parser.add_argument("--fused_kernel", action="store_true",
@@ -363,6 +366,15 @@ def main():
             method = "incremental O(1) per-token (Hamiltonian state cache)"
         elapsed = time.time() - t0
         output = tokenizer.decode(generated_ids)
+
+        if args.hide_thinking:
+            # Issue #42: keep the reasoning trace but don't show it to the user.
+            import sys
+            raw = output
+            output = ToolCallParser.strip_tool_blocks(output)
+            print("[reasoning hidden — raw with-think output logged to stderr]",
+                  file=sys.stderr)
+            print(raw, file=sys.stderr)
 
         print(output)
         print("-" * 60)

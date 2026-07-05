@@ -444,6 +444,7 @@ BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 
 | #34 | Gated-DeltaNet readout/update dynamics — PPL 8.8→3.4 | `deltanet.py` |
 | #43 | Correct, fused concurrent-serving decode (~2.5× tok/s, fixes B>1 head-misroute) | `model.py`, `hvn_block.py`, `batched_vortex.py`, `batched_memory.py` |
 | #46 | Systemic batch-ordering fix — batched `forward`/eval/`generate_batched` now == single-stream (batch-outer tiling of per-head params) | `batched_vortex.py`, `batched_memory.py` |
+| #42 | Real reasoning/thinking — trainable `[THINK]` chain-of-thought (multi-step arithmetic), with-think vs no-think A/B **+52pp**; also fixed a latent tokenizer bug that dropped OOV chars (digits) from aux training data | `reasoning.py`, `train.py`, `eval/reasoning.py` |
 
 ---
 
@@ -736,6 +737,52 @@ Batched `forward` now equals single-stream at every width, across all flag-gated
 under the old routing and the §8.x benchmark numbers were produced under the buggy routing; the
 re-measurement is tracked in **#47** (folded into the final real-scale pass #45), which should also
 A/B whether correct head routing improves PPL by restoring multi-head specialization.
+
+### 8.11 Real Reasoning / Thinking — Trainable `[THINK]` Chain-of-Thought (Issue #42)
+
+Before #42 the `[THINK]`/`[/THINK]` special tokens (`hvn/tools.py`) were **only delimiter
+parsing** — the model was never trained to put meaningful content inside them, so "thinking"
+was a format convention, not a capability. #42 makes the blocks carry **real chain-of-thought
+that measurably helps**, as a pure **data + training + decoding-convention** feature — no
+architectural change, O(1) / no-KV inference untouched.
+
+- **Data (`hvn/reasoning.py`).** A synthetic generator for **multi-step arithmetic** (chained
+  add/sub, mul-then-add, order-of-operations, two-step word problems) — deterministic ground
+  truth, so answers auto-grade. Each example pairs a question with an explicit step-by-step
+  trace: `Answer: [THINK]\n6 * 2 = 12\n12 + 4 = 16\n[/THINK] The answer is 16.`
+- **Training (`train.py --reasoning_training`).** Mirrors the tool-calling (#24) data path.
+- **Decoding (`generate.py --hide_thinking`).** Strips `[THINK]` from the user-facing answer
+  (via the existing `ToolCallParser.strip_tool_blocks`) while logging the raw trace to stderr.
+- **Eval (`eval/reasoning.py`).** Auto-graded **with-think vs. no-think** A/B on a held-out set:
+  *think* lets the model reason before answering; *nothink* primes the answer prefix so it must
+  commit immediately (same model, same problems).
+
+**Result — reasoning measurably helps.** Char-level, `--use_deltanet`, d=256, 4L, 6,000
+reasoning examples, 80 epochs, RTX 4050; 200 held-out problems, greedy decode:
+
+| Mode | Exact-match accuracy |
+|------|:---:|
+| **think** (may emit `[THINK]`) | **53.5%** |
+| nothink (must answer immediately) | 1.5% |
+| **delta** | **+52.0pp** |
+
+Externalising intermediate results as tokens turns the final answer into a *copy* of a number
+the model just computed one step at a time, whereas the no-think path must compute the whole
+expression in a single forward step and essentially cannot. Example (greedy): `Question: 6 * 2 + 4`
+→ `[THINK] 6 * 2 = 12  12 + 4 = 16 [/THINK] The answer is 16.` ✓ `test_issue42.py` 5/5;
+`test_issue34.py` 5/5, `demo.py` pass.
+
+**Also fixed — a latent tokenizer bug.** The char tokenizer was built over the *base* corpus
+**before** the tool/reasoning/instruction data was appended, so any character absent from the
+base text (notably **every digit**, and `*`/`=`) was OOV and **silently dropped at encode time** —
+the reasoning examples trained with all numbers stripped. `train.py` now generates the auxiliary
+data first and builds the vocab over the **full** corpus (base + tool + reasoning + instruction),
+which also repairs the tool-calling (#24) and instruction-tuning (#29) data paths.
+
+*Scope / caveats:* small-scale, memorization-regime signal (single-digit operands; the
+generalization gap on harder word problems is visible — think accuracy is 53%, not 100%).
+Consistent with the project's methodology (§8.4/§8.8), read the **+52pp delta** as the headline,
+not the absolute number; a real-scale re-measure belongs in the #45 final pass.
 
 ### 8.5 Honest Assessment
 
