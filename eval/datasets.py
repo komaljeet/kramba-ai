@@ -41,6 +41,23 @@ CODE_CORPUS_URL = (
 )
 
 # ---------------------------------------------------------------------------
+# Coding-curriculum loaders (Issue #53) — HTML → CSS → JS → PHP → Python → DevOps.
+# Implemented in eval/curriculum.py and re-exported here so callers (the #54
+# orchestrator, the #55 eval) can use the same ``from eval.datasets import ...``
+# entry point as the WikiText / Shakespeare loaders below.
+# ---------------------------------------------------------------------------
+from eval.curriculum import (  # noqa: E402
+    CURRICULUM_STAGES,
+    CURRICULUM_BUDGETS,
+    CURRICULUM_EXTENSIONS,
+    load_curriculum_stage,
+    curriculum_stage_info,
+    smoke_load_all as smoke_load_curriculum,
+    is_permissive_source,
+    dedup_documents,
+)
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -250,3 +267,10 @@ DATASET_REGISTRY: dict[str, Callable[..., tuple[str, str]]] = {
     "shakespeare": load_shakespeare,
     "code": load_code_corpus,
 }
+
+# Register each curriculum stage under ``curriculum:<stage>`` so the CLI-driven
+# harnesses can dispatch to them like any other dataset.
+for _stage in CURRICULUM_STAGES:
+    DATASET_REGISTRY[f"curriculum:{_stage}"] = (
+        lambda local_dir=None, _s=_stage: load_curriculum_stage(_s, local_dir=local_dir)
+    )
