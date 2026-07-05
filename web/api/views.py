@@ -14,7 +14,9 @@ from django.contrib.auth import get_user_model
 
 logger = logging.getLogger(__name__)
 
-from .models import Conversation, Message, ModelVersion
+from django.utils import timezone
+
+from .models import Conversation, Message, ModelVersion, TrainingJob
 from .permissions import IsAdminOrReadOnly, IsConversationOwner
 from .serializers import (
     ConversationSerializer,
@@ -22,8 +24,10 @@ from .serializers import (
     MessageSerializer,
     ModelVersionSerializer,
     RegisterSerializer,
+    TrainingJobCreateSerializer,
+    TrainingJobSerializer,
 )
-from .tasks import generate_response
+from .tasks import generate_response, run_training
 
 User = get_user_model()
 
@@ -73,6 +77,82 @@ class ModelVersionViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+
+class TrainingJobViewSet(viewsets.ModelViewSet):
+    """Staff-only in-app training (Issue #57).
+
+    POST /api/training/ validates a launch config and enqueues a Celery
+    training task onto the dedicated GPU training queue (never the chat
+    inference queue - see CELERY_TASK_ROUTES). Only one job may be active at a
+    time so concurrent runs can't OOM the single GPU. GET list/retrieve exposes
+    live status/progress (also streamed over WebSocket by TrainingConsumer);
+    POST /api/training/{id}/cancel/ stops a queued or running job.
+    """
+
+    queryset = TrainingJob.objects.all()
+    serializer_class = TrainingJobSerializer
+    # Training saturates the GPU for hours and registers new model versions -
+    # strictly staff, read included (unlike ModelVersion's IsAdminOrReadOnly,
+    # which lets any user list models to pick one for a conversation).
+    permission_classes = [permissions.IsAdminUser]
+    http_method_names = ["get", "post", "head", "options"]  # no PUT/PATCH/DELETE
+
+    def create(self, request, *args, **kwargs):
+        # One job at a time: an hours-long GPU-saturating run must not stack
+        # with another (OOM / GPU contention). Reject rather than queue a second.
+        active = TrainingJob.objects.filter(status__in=TrainingJob.ACTIVE_STATUSES).first()
+        if active is not None:
+            return Response(
+                {"detail": f"A training job is already {active.status} (id {active.id}). "
+                           "Cancel or wait for it to finish before starting another."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        create_serializer = TrainingJobCreateSerializer(data=request.data)
+        create_serializer.is_valid(raise_exception=True)
+
+        job = TrainingJob.objects.create(
+            created_by=request.user,
+            config=create_serializer.to_config(),
+            stages_total=len(create_serializer.validated_data["stages"]),
+        )
+        # Store the task id up front so cancel can revoke a still-queued job
+        # (the task only overwrites it with the same id once it starts).
+        task = run_training.delay(str(job.id))
+        job.celery_task_id = task.id
+        job.save(update_fields=["celery_task_id"])
+
+        return Response(TrainingJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        job = self.get_object()
+        if job.status not in TrainingJob.ACTIVE_STATUSES:
+            return Response(
+                {"detail": f"Job is {job.status}; nothing to cancel."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Revoke the queued/running task. terminate=False: never SIGKILL a
+        # running stage mid-write - the task cooperates via its progress
+        # callback (checks the CANCELLING status at each stage boundary and
+        # stops after the current stage checkpoint is safely committed).
+        run_training.AsyncResult(job.celery_task_id).revoke(terminate=False)
+
+        if job.started_at is None:
+            # Never started (still queued) - revoke prevents it from running, so
+            # finalize immediately rather than leaving it stuck in CANCELLING.
+            job.status = TrainingJob.Status.CANCELLED
+            job.finished_at = timezone.now()
+            job.detail = "Cancelled before start."
+            job.save(update_fields=["status", "finished_at", "detail"])
+        else:
+            job.status = TrainingJob.Status.CANCELLING
+            job.detail = "Cancelling after current stage…"
+            job.save(update_fields=["status", "detail"])
+
+        return Response(TrainingJobSerializer(job).data, status=status.HTTP_200_OK)
 
 
 class ConversationViewSet(viewsets.ModelViewSet):

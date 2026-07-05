@@ -69,6 +69,68 @@ class Message(models.Model):
         return f"{self.role}: {self.content[:40]}"
 
 
+class TrainingJob(models.Model):
+    """An in-app training run (Issue #57): a staff user kicks off a
+    curriculum/validation run on the dedicated GPU training worker, progress
+    streams to the UI over Channels, and on success the resulting checkpoint is
+    registered as a new ModelVersion.
+
+    The job body reuses auto_train.run_curriculum (Issue #54) - this row only
+    tracks lifecycle, the requested config, live progress, and the produced
+    ModelVersion. It runs on a SEPARATE Celery queue/worker from chat inference
+    (CELERY_TASK_ROUTES in settings) so an hours-long GPU-saturating run never
+    starves chat latency, and only one job is allowed active at a time (guarded
+    in the view) so concurrent runs can't OOM the single GPU.
+    """
+
+    class Status(models.TextChoices):
+        QUEUED = "queued"
+        RUNNING = "running"
+        SUCCEEDED = "succeeded"
+        FAILED = "failed"
+        CANCELLING = "cancelling"
+        CANCELLED = "cancelled"
+
+    # Statuses in which the job still occupies the GPU worker / queue - used by
+    # the view's one-job-at-a-time guard and to decide whether cancel applies.
+    ACTIVE_STATUSES = (Status.QUEUED, Status.RUNNING, Status.CANCELLING)
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="+"
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
+    # The validated config the run was launched with (stages, epochs, precision,
+    # d_model, smoke, from-checkpoint) - stored verbatim so a completed run is
+    # self-describing and reproducible.
+    config = models.JSONField(default=dict)
+    celery_task_id = models.CharField(max_length=255, blank=True)
+
+    # Live progress, updated by the task as it streams to the UI.
+    current_stage = models.CharField(max_length=32, blank=True)
+    stages_done = models.PositiveSmallIntegerField(default=0)
+    stages_total = models.PositiveSmallIntegerField(default=0)
+    # Last per-stage metrics row (ppl / bits_per_char / coding_score) from
+    # auto_train, plus a short human-readable status line.
+    last_metrics = models.JSONField(null=True, blank=True)
+    detail = models.TextField(blank=True)
+    error = models.TextField(blank=True)
+
+    result_model_version = models.ForeignKey(
+        ModelVersion, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"TrainingJob {self.id} ({self.status})"
+
+
 class AuditLog(models.Model):
     """One row per generation-relevant request. Populated by
     web.middleware.audit_log.AuditLogMiddleware (Phase 5) and/or directly by

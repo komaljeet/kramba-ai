@@ -10,11 +10,18 @@ from .account import (
     TwoFactorSetupView,
     TwoFactorTokenObtainPairView,
 )
-from .views import ConversationViewSet, LogoutView, ModelVersionViewSet, RegisterView
+from .views import (
+    ConversationViewSet,
+    LogoutView,
+    ModelVersionViewSet,
+    RegisterView,
+    TrainingJobViewSet,
+)
 
 router = DefaultRouter()
 router.register("conversations", ConversationViewSet, basename="conversation")
 router.register("models", ModelVersionViewSet, basename="modelversion")
+router.register("training", TrainingJobViewSet, basename="training")
 
 urlpatterns = [
     path("auth/register/", RegisterView.as_view(), name="register"),

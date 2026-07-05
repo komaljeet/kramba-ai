@@ -217,13 +217,25 @@ def run_curriculum(
     resume: bool = True,
     device: torch.device | None = None,
     seed: int = 42,
+    progress_cb=None,
 ) -> dict:
     """Train ``stages`` in order from ``base_checkpoint``, one checkpoint each.
 
     Returns the final state dict. Resumable: on a re-run with ``resume=True`` any
     stage already recorded ``completed`` in the state file is skipped and the last
     stage checkpoint is carried forward instead of the base.
+
+    ``progress_cb``, if given, is called with a small event dict at the run/stage
+    boundaries (``{"event": "run_start"|"stage_start"|"stage_complete"|
+    "run_complete", ...}``). It is the seam the Issue #57 in-app training task
+    uses to stream progress to the UI and to abort cooperatively: a callback that
+    raises (e.g. on a user cancel) propagates out and stops the run cleanly after
+    the current stage's checkpoint/state have been committed. The CLI passes no
+    callback, so this is a no-op for ``python auto_train.py``.
     """
+    def _emit(event: dict) -> None:
+        if progress_cb is not None:
+            progress_cb(event)
     os.makedirs(out_dir, exist_ok=True)
     if state_path is None:
         state_path = os.path.join(out_dir, "auto_train_state.json")
@@ -270,10 +282,21 @@ def run_curriculum(
     }
     _atomic_write_json(state_path, state)
 
+    todo = [s for s in stages if s not in done_stages]
+    _emit({"event": "run_start", "stages": stages, "done": sorted(done_stages),
+           "todo": todo, "base": base_checkpoint})
+
     for stage in stages:
         if stage in done_stages:
             print(f"\n=== stage '{stage}' already complete — skipping ===")
             continue
+
+        # Cancel/stream seam: emitted BEFORE the expensive stage starts so a
+        # cooperative cancel (callback raises) aborts without burning GPU on a
+        # stage nobody's waiting for.
+        _emit({"event": "stage_start", "stage": stage,
+               "index": len(completed), "total": len(stages),
+               "from": carry_checkpoint})
 
         print(f"\n{'=' * 64}\n=== stage '{stage}'  (from {carry_checkpoint}) ===\n{'=' * 64}")
         t0 = time.time()
@@ -338,6 +361,14 @@ def run_curriculum(
         state["completed"] = completed
         state["current_checkpoint"] = carry_checkpoint
         _atomic_write_json(state_path, state)
+
+        _emit({"event": "stage_complete", "stage": stage,
+               "index": len(completed) - 1, "total": len(stages),
+               "checkpoint": stage_ckpt, "metrics": metrics,
+               "seconds": round(elapsed, 1)})
+
+    _emit({"event": "run_complete", "completed": len(completed),
+           "total": len(stages), "final_checkpoint": state["current_checkpoint"]})
 
     print(f"\n{'=' * 64}")
     print(f"Curriculum complete: {len(completed)}/{len(stages)} stage(s).")

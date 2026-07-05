@@ -103,6 +103,47 @@ services:
               count: 1
               capabilities: [gpu]
 
+  # Dedicated GPU training worker (Issue #57). Consumes ONLY the `training`
+  # queue (docker-entrypoint.sh `train-worker` role), one job at a time, so an
+  # hours-long in-app curriculum run never starves chat inference (app-worker,
+  # the `celery` queue) and can't fight it for GPU memory. On a single-GPU box
+  # both workers share the card; the one-job-at-a-time guard + separate queues
+  # keep them from running heavy work simultaneously. Reuses auto_train.py + the
+  # eval/ loaders, which the training task imports.
+  app-train-worker:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    command: ["train-worker"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: web.settings.dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - checkpoints:/data/checkpoints
+      - .:/srv/web
+      - ../hvn:/srv/hvn
+      - ../train.py:/srv/train.py:ro
+      # In-app training reuses the curriculum orchestrator + dataset/eval pkg.
+      - ../auto_train.py:/srv/auto_train.py:ro
+      - ../eval:/srv/eval:ro
+      # Same base checkpoints the inference worker mounts - a training run
+      # continues from a registered ModelVersion (a checkpoint on this volume).
+      - ../hvn_chat_checkpoint.pt:/data/checkpoints/hvn_chat_checkpoint.pt:ro
+      - ../hvn_chat_checkpoint_tokenizer.json:/data/checkpoints/hvn_chat_checkpoint_tokenizer.json:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   app-beat:
     build:
       context: ..

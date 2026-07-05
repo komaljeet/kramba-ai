@@ -72,6 +72,35 @@
     #send { padding: 0 20px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 600; }
     #send:disabled { opacity: .5; cursor: not-allowed; }
     .status { font-size: 12px; color: var(--muted); padding: 0 16px 8px; min-height: 14px; }
+
+    /* Training panel (Issue #57, staff-only) */
+    #open-training { margin-top: 8px; width: 100%; padding: 9px; border-radius: 8px;
+                     border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
+    #training { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+                background: rgba(0,0,0,.55); z-index: 20; }
+    #training .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+                      width: 460px; max-width: 92vw; max-height: 90vh; overflow-y: auto; padding: 22px; }
+    #training h2 { margin: 0 0 14px; font-size: 17px; }
+    #training label.field { display: block; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
+    #training label.field span { display: block; margin-bottom: 4px; }
+    #training input, #training select { width: 100%; padding: 8px; border-radius: 8px;
+                      border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
+    #tr-stages { display: flex; flex-wrap: wrap; gap: 10px; }
+    #tr-stages label { display: flex; align-items: center; gap: 5px; color: var(--text); font-size: 13px; }
+    .row2 { display: flex; gap: 10px; }
+    .row2 > * { flex: 1; }
+    #training .actions { display: flex; gap: 10px; margin-top: 8px; }
+    #training .actions button { flex: 1; padding: 10px; border-radius: 8px; border: 0; font-weight: 600; }
+    #tr-start { background: var(--accent); color: #fff; }
+    #tr-close { background: var(--panel-2); color: var(--text); border: 1px solid var(--line) !important; }
+    #tr-cancel { background: var(--danger); color: #fff; }
+    #tr-progress { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+    #tr-status { font-size: 13px; margin-bottom: 8px; }
+    #tr-bar { height: 8px; border-radius: 4px; background: var(--panel-2); overflow: hidden; margin-bottom: 8px; }
+    #tr-bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+    #tr-log { font-size: 12px; color: var(--muted); white-space: pre-wrap; max-height: 180px; overflow-y: auto;
+              font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    #tr-err { color: var(--danger); font-size: 13px; margin-top: 6px; min-height: 16px; }
   </style>
 </head>
 <body>
@@ -94,9 +123,60 @@
     <div id="new-chat">
       <select id="model-select" title="Model version for new conversations"></select>
       <button id="create-convo">+ New chat</button>
+      <!-- Staff-only (Issue #57): shown after the /api/training/ probe succeeds. -->
+      <button id="open-training" hidden>⚙ Start Training</button>
     </div>
     <div id="convos"></div>
   </aside>
+
+  <!-- Training launcher + live progress (Issue #57, staff-only) -->
+  <div id="training" hidden>
+    <div class="card">
+      <h2>Start Training</h2>
+      <p style="margin:0 0 14px;color:var(--muted);font-size:12px;">
+        Continues a curriculum/validation run from a registered checkpoint on the
+        dedicated GPU worker. This box validates scaling — it is not frontier training.
+      </p>
+      <label class="field"><span>Continue from model version</span>
+        <select id="tr-model"></select></label>
+      <label class="field"><span>Curriculum stages</span>
+        <div id="tr-stages"></div></label>
+      <div class="row2">
+        <label class="field"><span>Epochs / stage</span>
+          <input id="tr-epochs" type="number" min="1" max="100" value="2"></label>
+        <label class="field"><span>Precision</span>
+          <select id="tr-precision">
+            <option value="bf16" selected>bf16</option>
+            <option value="fp16">fp16</option>
+            <option value="fp32">fp32</option>
+          </select></label>
+      </div>
+      <div class="row2">
+        <label class="field"><span>Seq len</span>
+          <input id="tr-seqlen" type="number" min="16" max="2048" value="128"></label>
+        <label class="field"><span>Batch size</span>
+          <input id="tr-batch" type="number" min="1" max="256" value="16"></label>
+        <label class="field"><span>LR</span>
+          <input id="tr-lr" type="number" step="0.0001" min="0.000001" max="1" value="0.0001"></label>
+      </div>
+      <label class="field" style="display:flex;align-items:center;gap:8px;">
+        <input type="checkbox" id="tr-smoke" style="width:auto;">
+        <span style="margin:0;">Smoke run (tiny/offline — validate wiring)</span></label>
+
+      <div id="tr-err"></div>
+      <div class="actions">
+        <button id="tr-start">Start</button>
+        <button id="tr-cancel" hidden>Cancel</button>
+        <button id="tr-close">Close</button>
+      </div>
+
+      <div id="tr-progress" hidden>
+        <div id="tr-status"></div>
+        <div id="tr-bar"><i></i></div>
+        <div id="tr-log"></div>
+      </div>
+    </div>
+  </div>
 
   <main id="main" hidden>
     <div id="messages"><div class="empty">Select or create a conversation to start chatting.</div></div>

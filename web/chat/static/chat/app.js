@@ -28,6 +28,8 @@
   let activeId = null;       // selected conversation id
   let ws = null;             // current WebSocket
   let streamingBubble = null; // assistant bubble being filled by the stream
+  let modelList = [];        // last-loaded ModelVersions (reused by the training form)
+  const STAGES = ["html", "css", "js", "php", "python", "devops"];
 
   // ---- HTTP helpers --------------------------------------------------------
 
@@ -89,6 +91,9 @@
     }
     store.access = null; store.refresh = null;
     closeSocket();
+    closeTrainingSocket();
+    trainJobId = null;
+    $("training").hidden = true;
     $("sidebar").hidden = true; $("main").hidden = true; $("login").hidden = false;
   }
 
@@ -98,6 +103,7 @@
     $("login").hidden = true; $("sidebar").hidden = false; $("main").hidden = false;
     await loadModels();
     await loadConversations();
+    await initTraining();
   }
 
   async function loadModels() {
@@ -115,6 +121,7 @@
       return;
     }
     $("create-convo").disabled = false;
+    modelList = list;
     for (const m of list) {
       const opt = document.createElement("option");
       opt.value = m.id; opt.textContent = m.tag + (m.is_active ? " (active)" : "");
@@ -317,6 +324,157 @@
   }
 
   function setStatus(text) { $("status").textContent = text; }
+
+  // ---- Training (Issue #57, staff-only) -----------------------------------
+
+  let trainWs = null;    // WebSocket for the active/attached training job
+  let trainJobId = null; // id of the job being tracked
+
+  async function initTraining() {
+    // The training endpoints are staff-only (403 for everyone else) - probe
+    // once and only reveal the launcher for staff, matching the backend guard.
+    const res = await api("/training/");
+    if (!res.ok) { $("open-training").hidden = true; return; }
+    $("open-training").hidden = false;
+
+    // Re-attach to a job still running from a previous page load.
+    const data = await res.json();
+    const list = data.results || data;
+    const active = list.find((j) => ["queued", "running", "cancelling"].includes(j.status));
+    if (active) { openTraining(); attachJob(active); }
+  }
+
+  function openTraining() {
+    // Populate the model-version picker from the already-loaded list.
+    const sel = $("tr-model");
+    sel.innerHTML = "";
+    for (const m of modelList) {
+      const opt = document.createElement("option");
+      opt.value = m.id; opt.textContent = m.tag + (m.is_active ? " (active)" : "");
+      sel.appendChild(opt);
+    }
+    // Stage checkboxes (all checked by default).
+    const box = $("tr-stages");
+    if (!box.childElementCount) {
+      for (const s of STAGES) {
+        const lab = document.createElement("label");
+        const cb = document.createElement("input");
+        cb.type = "checkbox"; cb.value = s; cb.checked = true; cb.className = "tr-stage";
+        lab.appendChild(cb); lab.appendChild(document.createTextNode(s));
+        box.appendChild(lab);
+      }
+    }
+    $("tr-err").textContent = "";
+    $("training").hidden = false;
+  }
+
+  $("open-training").addEventListener("click", openTraining);
+  $("tr-close").addEventListener("click", () => { $("training").hidden = true; });
+
+  $("tr-start").addEventListener("click", async () => {
+    $("tr-err").textContent = "";
+    const stages = [...document.querySelectorAll(".tr-stage")].filter((c) => c.checked).map((c) => c.value);
+    if (!$("tr-model").value) { $("tr-err").textContent = "Register a model version to continue from first."; return; }
+    if (!stages.length) { $("tr-err").textContent = "Select at least one stage."; return; }
+
+    const body = {
+      from_model_version: $("tr-model").value,
+      stages,
+      epochs_per_stage: Number($("tr-epochs").value),
+      seq_len: Number($("tr-seqlen").value),
+      batch_size: Number($("tr-batch").value),
+      lr: Number($("tr-lr").value),
+      precision: $("tr-precision").value,
+      smoke: $("tr-smoke").checked,
+    };
+    $("tr-start").disabled = true;
+    const res = await api("/training/", { method: "POST", body });
+    $("tr-start").disabled = false;
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      $("tr-err").textContent = data.detail || JSON.stringify(data);
+      return;
+    }
+    attachJob(await res.json());
+  });
+
+  $("tr-cancel").addEventListener("click", async () => {
+    if (!trainJobId) return;
+    await api(`/training/${trainJobId}/cancel/`, { method: "POST" });
+    trStatus("Cancelling after the current stage…");
+  });
+
+  function attachJob(job) {
+    trainJobId = job.id;
+    $("tr-progress").hidden = false;
+    $("tr-start").disabled = true;
+    $("tr-cancel").hidden = false;
+    $("tr-log").textContent = "";
+    renderJob(job);
+    openTrainingSocket(job.id);
+  }
+
+  function renderJob(job) {
+    trStatus(`${job.status}${job.current_stage ? " — " + job.current_stage : ""}${job.detail ? " · " + job.detail : ""}`);
+    trBar(job.stages_done, job.stages_total);
+    if (job.error) trLog("ERROR: " + job.error);
+  }
+
+  function openTrainingSocket(id) {
+    closeTrainingSocket();
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    trainWs = new WebSocket(`${scheme}://${location.host}/ws/training/${id}/?token=${encodeURIComponent(store.access)}`);
+    trainWs.onmessage = (evt) => {
+      const data = JSON.parse(evt.data);
+      if (data.type === "status") {
+        trStatus(`${data.status}${data.detail ? " · " + data.detail : ""}`);
+      } else if (data.type === "progress") {
+        onTrainingEvent(data.event);
+      } else if (data.type === "done") {
+        finishJob(data);
+      }
+    };
+    trainWs.onclose = (evt) => {
+      if (evt.code === 4401) { logout(); }
+      else if (evt.code === 4403) trStatus("You do not have access to training.");
+    };
+  }
+
+  function onTrainingEvent(ev) {
+    if (!ev) return;
+    if (ev.event === "run_start") {
+      trLog(`▶ run: ${ev.todo.join(", ") || "(nothing to do)"}`);
+      trBar(ev.done.length, ev.stages.length);
+    } else if (ev.event === "stage_start") {
+      trStatus(`running — training '${ev.stage}' (${ev.index + 1}/${ev.total})`);
+      trLog(`→ stage '${ev.stage}' started`);
+    } else if (ev.event === "stage_complete") {
+      const m = ev.metrics || {};
+      trLog(`✓ stage '${ev.stage}' done in ${ev.seconds}s | PPL ${m.ppl} | ${m.bits_per_char} bits/char`);
+      trBar(ev.index + 1, ev.total);
+    } else if (ev.event === "run_complete") {
+      trBar(ev.total, ev.total);
+    }
+  }
+
+  async function finishJob(data) {
+    trStatus(`${data.status}${data.detail ? " · " + data.detail : ""}`);
+    if (data.error) trLog("ERROR: " + data.error);
+    if (data.model_version_tag) trLog(`✓ registered model version: ${data.model_version_tag}`);
+    $("tr-cancel").hidden = true;
+    $("tr-start").disabled = false;
+    trainJobId = null;
+    closeTrainingSocket();
+    if (data.status === "succeeded") await loadModels();  // the new checkpoint is now pickable
+  }
+
+  function closeTrainingSocket() {
+    if (trainWs) { trainWs.onclose = null; trainWs.close(); trainWs = null; }
+  }
+
+  function trStatus(t) { $("tr-status").textContent = t; }
+  function trLog(line) { $("tr-log").textContent += (line + "\n"); $("tr-log").scrollTop = $("tr-log").scrollHeight; }
+  function trBar(done, total) { $("tr-bar").firstElementChild.style.width = total ? `${Math.round(100 * done / total)}%` : "0"; }
 
   // ---- Start ---------------------------------------------------------------
 

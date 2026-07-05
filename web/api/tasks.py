@@ -9,7 +9,7 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 from django.utils import timezone
 
-from .models import AuditLog, Conversation, Message
+from .models import AuditLog, Conversation, Message, ModelVersion, TrainingJob
 from .security import filter_profanity, sanitize_output
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 def conversation_group_name(conversation_id) -> str:
     return f"conversation_{conversation_id}"
+
+
+def training_group_name(job_id) -> str:
+    return f"training_{job_id}"
 
 
 @shared_task
@@ -85,6 +89,153 @@ def generate_response(
     )
 
     return str(assistant_message.id)
+
+
+class _TrainingCancelled(Exception):
+    """Raised out of the progress callback when a staff user cancels a running
+    job, so run_curriculum unwinds cleanly after the current stage is committed
+    (its checkpoint/resume-state are already on disk) rather than being killed
+    mid-write."""
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+@shared_task(bind=True)
+def run_training(self, job_id: str) -> str:
+    """Runs one in-app training job (Issue #57) on the dedicated GPU training
+    worker: reuses auto_train.run_curriculum (Issue #54) to train the requested
+    curriculum stages from a base checkpoint, streams per-stage progress to the
+    job's Channels group (consumed by chat.consumers.TrainingConsumer over
+    WebSocket), and on success registers the produced checkpoint as a new
+    ModelVersion.
+
+    Routed to the ``training`` queue (CELERY_TASK_ROUTES) so it runs on a
+    separate worker from chat inference - an hours-long GPU-saturating run must
+    never starve chat latency. Cancellation is cooperative: the view sets the
+    job to ``cancelling`` and the progress callback (checked at each stage
+    boundary) raises so the run stops after the current stage's checkpoint is
+    safely written.
+    """
+    from django.utils import timezone
+
+    # torch/hvn are heavy and GPU-bound - keep them off the import path until a
+    # job actually runs (same discipline as generate_response above).
+    from auto_train import run_curriculum
+
+    job = TrainingJob.objects.get(id=job_id)
+    channel_layer = get_channel_layer()
+    group = training_group_name(job_id)
+
+    def stream(msg_type: str, **data) -> None:
+        async_to_sync(channel_layer.group_send)(group, {"type": msg_type, **data})
+
+    job.status = TrainingJob.Status.RUNNING
+    job.started_at = timezone.now()
+    job.celery_task_id = self.request.id or ""
+    job.detail = "Starting…"
+    job.save(update_fields=["status", "started_at", "celery_task_id", "detail"])
+    stream("training.status", status=job.status, detail=job.detail)
+
+    cfg = job.config
+    stages = cfg["stages"]
+
+    def progress_cb(event: dict) -> None:
+        # Re-read only the status column so a concurrent cancel is seen at the
+        # next stage boundary; raising here aborts run_curriculum cooperatively.
+        job.refresh_from_db(fields=["status"])
+        if job.status == TrainingJob.Status.CANCELLING:
+            raise _TrainingCancelled()
+
+        ev = event.get("event")
+        if ev == "run_start":
+            job.stages_total = len(event.get("stages", stages))
+            job.stages_done = len(event.get("done", []))
+            job.detail = f"Running {len(event.get('todo', []))} stage(s)."
+            job.save(update_fields=["stages_total", "stages_done", "detail"])
+        elif ev == "stage_start":
+            job.current_stage = event["stage"]
+            job.detail = f"Training stage '{event['stage']}'…"
+            job.save(update_fields=["current_stage", "detail"])
+        elif ev == "stage_complete":
+            job.stages_done += 1
+            job.last_metrics = event.get("metrics")
+            job.detail = f"Stage '{event['stage']}' done."
+            job.save(update_fields=["stages_done", "last_metrics", "detail"])
+        elif ev == "run_complete":
+            job.current_stage = ""
+            job.save(update_fields=["current_stage"])
+        stream("training.progress", event=event)
+
+    try:
+        base_ckpt = cfg["base_checkpoint_path"]
+        out_dir = os.path.join(settings.HVN_CHECKPOINT_DIR, f"training_{job_id}")
+        state = run_curriculum(
+            base_checkpoint=base_ckpt,
+            stages=stages,
+            out_dir=out_dir,
+            epochs_per_stage=cfg["epochs_per_stage"],
+            seq_len=cfg["seq_len"],
+            batch_size=cfg["batch_size"],
+            lr=cfg["lr"],
+            precision=cfg["precision"],
+            max_train_chars=cfg.get("max_train_chars"),
+            max_eval_chars=cfg.get("max_eval_chars"),
+            local_dir=cfg.get("local_dir"),
+            allow_download=cfg.get("download", False),
+            resume=False,  # each job is a fresh run in its own out_dir
+            progress_cb=progress_cb,
+        )
+    except _TrainingCancelled:
+        job.refresh_from_db()
+        job.status = TrainingJob.Status.CANCELLED
+        job.finished_at = timezone.now()
+        job.detail = "Cancelled."
+        job.save(update_fields=["status", "finished_at", "detail"])
+        stream("training.done", status=job.status, detail=job.detail)
+        return job.status
+    except Exception as exc:  # noqa: BLE001 - report any failure to the UI, don't crash silently
+        logger.exception("Training job %s failed", job_id)
+        job.refresh_from_db()
+        job.status = TrainingJob.Status.FAILED
+        job.finished_at = timezone.now()
+        job.error = f"{type(exc).__name__}: {exc}"
+        job.detail = "Failed."
+        job.save(update_fields=["status", "finished_at", "error", "detail"])
+        stream("training.done", status=job.status, detail=job.detail, error=job.error)
+        return job.status
+
+    # Register the produced checkpoint as a new ModelVersion (if any stage ran).
+    final_ckpt = state.get("current_checkpoint")
+    model_version = None
+    if final_ckpt and os.path.isfile(final_ckpt) and os.path.realpath(final_ckpt) != os.path.realpath(base_ckpt):
+        tag = f"train-{str(job_id)[:8]}-{state['completed'][-1]['stage']}" if state.get("completed") else f"train-{str(job_id)[:8]}"
+        model_version = ModelVersion.objects.create(
+            tag=tag,
+            checkpoint_path=final_ckpt,
+            checkpoint_sha256=_sha256_file(final_ckpt),
+            created_by=job.created_by,
+        )
+
+    job.refresh_from_db()
+    job.status = TrainingJob.Status.SUCCEEDED
+    job.finished_at = timezone.now()
+    job.result_model_version = model_version
+    job.detail = "Complete."
+    job.save(update_fields=["status", "finished_at", "result_model_version", "detail"])
+    stream(
+        "training.done",
+        status=job.status,
+        detail=job.detail,
+        model_version_id=str(model_version.id) if model_version else None,
+        model_version_tag=model_version.tag if model_version else None,
+    )
+    return job.status
 
 
 @shared_task
