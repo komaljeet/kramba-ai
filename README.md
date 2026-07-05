@@ -525,6 +525,7 @@ BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 
 | #50 | `--full` meta-flag — one-switch recommended fast-training stack (Category A exact speed levers: fused AdamW, per-epoch loss sync, pinned/async loading, `--compile`, `--grad_checkpoint`; Category B recommended model/precision: bf16 + DeltaNet). Explicit flags override; steady-state **1.58×** faster; Category-A primitives proven bit-exact | `train.py`, `tests/test_issue50.py` |
 | #45/#47 | Final real-scale benchmark pass under corrected #46 routing — 4-model WikiText-103 sweep; corrected routing **improves default HVN 6–12%**, DeltaNet confirmed quality leader (recommended default), weightless real-scale cost measured (§8.12) | `eval/scaling_laws.py`, `results/scaling_final_pass.*` |
 | #51 | Chat/base checkpoint pipeline — one command wires BPE tokenizer → WikiText-103 pretrain (DeltaNet + bf16 + #50 speed levers) → instruction/chat fine-tune → checkpoint+tokenizer, with a non-degenerate smoke-gate. Produces the first real servable checkpoint (Milestone 1, feeds #52/#53/#54/#55) | `build_chat_checkpoint.py`, `tests/test_issue51.py` |
+| #52 | Wire the #51 checkpoint into the Django app + end-to-end chat smoke test (Milestone 1, Issue B). Worker rebuilds the model with the checkpoint's `use_deltanet`/`weightless` flags (the #51 checkpoint is a DeltaNet model — default-block load raised); `StateCheckpoint` now serializes conversation state structure-agnostically (v2 tensor-tagged tree) so the DeltaNet `{"S","conv"}` per-block state round-trips (old nested-list serializer crashed on every turn); compose/env point at `hvn_chat_checkpoint.pt`; smoke test drives the real serving path (`hvn_worker` → `ChatSession.user_turn`/streaming) for a non-degenerate reply + save→load round-trip | `web/hvn_worker/worker.py`, `hvn/chat.py`, `web/docker-compose.yml`, `web/README.md`, `web/tests/test_chat_smoke.py` |
 
 ---
 
@@ -1267,10 +1268,13 @@ back to CPU.
 login wall + Cloudflare challenge). Examples: `glab issue view <id> --repo komalbarun/kramba-ai`,
 `glab issue list`, `glab work-items list`. Per-issue workflow:
 
-1. **Always branch from an up-to-date `main`.** First sync local `main` with the remote,
-   then cut the branch off it — never off whatever branch happens to be checked out (that
-   inherits unrelated in-flight work):
+1. **ALWAYS pull `main` and branch off `main` — no exceptions.** Even if a dependency issue
+   isn't merged yet, still `git fetch` and branch from the updated remote `main`; **never**
+   cut the branch off whatever branch happens to be checked out (that inherits unrelated
+   in-flight work and produces a polluted MR diff). If a prerequisite has since merged, the
+   dependency is already in `main` — that's exactly why you pull first:
    ```bash
+   git fetch origin
    git checkout main && git pull origin main
    git checkout -b issue-NN-short-description
    ```
@@ -1279,9 +1283,12 @@ login wall + Cloudflare challenge). Examples: `glab issue view <id> --repo komal
 3. Commit referencing the issue (`git commit -m "Fix: … for issue #NN"`).
 4. Push the branch (`git push origin <branch>`).
 5. **Always open a Merge Request** with `glab mr create` — target `main`, put `Closes #NN`
-   in the description so the issue auto-closes on merge, and add a `glab issue note NN`
-   summarizing the result + linking the MR. Never push to or merge `main` directly; the
-   maintainer reviews and merges the MR manually.
+   in the description so the issue auto-closes on merge. Never push to or merge `main`
+   directly; the maintainer reviews and merges the MR manually.
+6. **On merge to `main`, always post a closing comment on the issue** with
+   `glab issue note NN` — summarize what shipped and link the merged MR, then confirm the
+   issue is closed (`Closes #NN` auto-closes it on merge; add the note regardless). Do this
+   for every handled issue so each one has a durable record of the delivered change.
 
 GitLab project: https://gitlab.com/komalbarun/kramba-ai
 

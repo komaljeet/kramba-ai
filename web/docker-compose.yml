@@ -79,9 +79,18 @@ services:
       # Dev stand-in for the rsync/scp-to-server workflow (see
       # ISSUE_30_PLAN.md / prior session discussion): in production the
       # checkpoint is copied onto the `checkpoints` volume out of band, not
-      # baked into the image. Locally, bind-mounting the repo's existing
-      # trained checkpoint achieves the same thing without needing an actual
-      # rsync round-trip.
+      # baked into the image. Locally, bind-mounting the repo's trained
+      # checkpoints achieves the same thing without needing an actual rsync
+      # round-trip.
+      #
+      # The #51 chat/base checkpoint is the one the app actually serves (a
+      # BPE + Gated-DeltaNet model). Build it once on the host before
+      # `docker compose up`:  python build_chat_checkpoint.py --out hvn_chat_checkpoint.pt
+      # then register it as the active ModelVersion with checkpoint_path
+      # /data/checkpoints/hvn_chat_checkpoint.pt (see web/README.md).
+      - ../hvn_chat_checkpoint.pt:/data/checkpoints/hvn_chat_checkpoint.pt:ro
+      - ../hvn_chat_checkpoint_tokenizer.json:/data/checkpoints/hvn_chat_checkpoint_tokenizer.json:ro
+      # Legacy tiny char checkpoint, kept mounted for smoke/back-compat use.
       - ../hvn_checkpoint.pt:/data/checkpoints/hvn_checkpoint.pt:ro
       - ../hvn_checkpoint_tokenizer.json:/data/checkpoints/hvn_checkpoint_tokenizer.json:ro
     # GPU access for the HVN model - requires the NVIDIA Container Toolkit

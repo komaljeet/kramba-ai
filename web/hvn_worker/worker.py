@@ -18,12 +18,23 @@ _cache: dict[str, tuple] = {}
 
 def _load(checkpoint_path: str, device: torch.device):
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    # Rebuild with the SAME hyperparameters the checkpoint was trained with -
+    # in particular use_deltanet/deltanet_conv_kernel (Issue #34) and the
+    # weightless projections (Issue #40). The #51 chat checkpoint is a
+    # Gated-DeltaNet model, so omitting these flags builds the wrong block and
+    # load_state_dict fails on missing/unexpected keys. Mirrors generate.py's
+    # load_model so the worker serves exactly what generate.py / the #51
+    # pipeline produced.
     model = HamiltonianVortexNetwork(
         vocab_size=ckpt["vocab_size"],
         d_model=ckpt["d_model"],
         num_layers=ckpt["num_layers"],
         n_heads=ckpt.get("n_heads", 4),
         chunk_size=ckpt.get("chunk_size", 64),
+        use_deltanet=ckpt.get("use_deltanet", False),
+        deltanet_conv_kernel=ckpt.get("deltanet_conv_kernel", 4),
+        weightless=ckpt.get("weightless", False),
+        weightless_seed=ckpt.get("weightless_seed", 1234),
     )
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)
