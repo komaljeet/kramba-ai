@@ -431,7 +431,7 @@
                         <tr><td>Inference memory</td><td>2.46 GB</td><td>6.29 MB</td><td><span class="tag tag-green">0.26% ✓</span></td></tr>
                         <tr><td>Scaling in N</td><td>O(Nd)</td><td>O(d²r) = O(1)</td><td><span class="tag tag-green">Constant ✓</span></td></tr>
                         <tr><td>Parameters</td><td>461K</td><td>265K</td><td><span class="tag tag-green">57% ✓</span></td></tr>
-                        <tr><td>Quality (PPL, Shakespeare)</td><td>1.90</td><td>8.13</td><td><span class="tag tag-red">4.3× gap</span></td></tr>
+                        <tr><td>Quality (PPL, --use_deltanet #34)</td><td>1.90</td><td>3.42</td><td><span class="tag tag-yellow">1.8× gap</span></td></tr>
                     </tbody>
                 </table>
             </div>
@@ -464,6 +464,17 @@
                     <span class="pill">✅ Fused Triton kernel (2.1-7.2× gen)</span>
                     <span class="pill">✅ Parallel scan (1.6× train)</span>
                     <span class="pill">✅ Multi-chunk barrier sync (1.1× train)</span>
+                    <span class="pill">✅ Gated-DeltaNet block (PPL 8.8→3.4, #34)</span>
+                    <span class="pill">✅ --full recommended stack (1.58× train, #50)</span>
+                    <span class="pill">✅ Activation checkpointing (−64% mem, #49)</span>
+                    <span class="pill">✅ Weightless DeltaNet (#40)</span>
+                    <span class="pill">✅ Trainable [THINK] reasoning (+52pp, #42)</span>
+                    <span class="pill">✅ Correct concurrent-serving decode (#43/#46)</span>
+                    <span class="pill">✅ Chat/base checkpoint pipeline (#51)</span>
+                    <span class="pill">✅ Django app wiring + chat smoke (#52)</span>
+                    <span class="pill">✅ Curriculum dataset loaders (#53)</span>
+                    <span class="pill">✅ Auto-train orchestrator (#54)</span>
+                    <span class="pill">✅ Coding eval harness (#55)</span>
                 </div>
             </div>
         </div>
@@ -573,6 +584,22 @@
                     <div class="checkbox-group"><input type="checkbox" id="cross_head_mixing"><label for="cross_head_mixing">Cross-head mixing (Strategy 3)</label></div>
                     <div class="checkbox-group"><input type="checkbox" id="swiglu"><label for="swiglu">SwiGLU FFN (Strategy 6)</label></div>
                     <div class="checkbox-group"><input type="checkbox" id="per_token_eta"><label for="per_token_eta">Per-token η (Strategy 5)</label></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>🚀 Recommended Stack <span class="badge">Issue #34 · #49 · #50</span></h3>
+                <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                    The levers that actually move quality/speed at real scale. <strong>DeltaNet</strong> is the biggest
+                    quality win (eval PPL 8.81 → 3.42), and <strong>--full</strong> bundles the whole recommended
+                    fast-training stack into one switch.
+                </p>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <div class="checkbox-group"><input type="checkbox" id="full"><label for="full"><strong>--full</strong> — one-switch recommended stack (bf16 + DeltaNet + fused AdamW + compile + grad checkpoint). Explicit flags override.</label></div>
+                    <div class="checkbox-group"><input type="checkbox" id="use_deltanet" checked><label for="use_deltanet"><strong>--use_deltanet</strong> — Gated-DeltaNet block (Issue #34): eval PPL 8.81 → 3.42, quality leader at every width</label></div>
+                    <div class="checkbox-group"><input type="checkbox" id="grad_checkpoint"><label for="grad_checkpoint"><strong>--grad_checkpoint</strong> — exact activation checkpointing (Issue #49): −64% peak activation memory, ~20-30% slower/step</label></div>
+                    <div class="checkbox-group"><input type="checkbox" id="use_parallel_scan"><label for="use_parallel_scan"><strong>--use_parallel_scan</strong> — associative parallel scan (Issue #33), 1.59× train forward (no-op under DeltaNet)</label></div>
+                    <div class="checkbox-group"><input type="checkbox" id="weightless"><label for="weightless"><strong>--weightless</strong> — freeze DeltaNet q/k/v/out as seed-regenerated random features (Issue #40; needs DeltaNet)</label></div>
                 </div>
             </div>
 
@@ -870,21 +897,53 @@
             <h2>Training Guide</h2>
             <p class="subtitle">How to train and use the HVN model.</p>
 
+            <div class="info-banner">
+                💡 <strong>Start here:</strong> the single most impactful flag is <span class="code">--use_deltanet</span> (Issue #34) —
+                it swaps each block for a Gated-DeltaNet block and cuts eval PPL <strong>8.81 → 3.42 (61% better)</strong> while
+                preserving O(1) inference. Or use <span class="code">--full</span> (Issue #50) to enable the whole recommended
+                stack (bf16 + DeltaNet + fused AdamW + compile + grad checkpoint) in one switch.
+            </div>
+
             <div class="card">
                 <h3>🚀 Quick Start</h3>
-                <div class="cli-output"><span class="copy-btn" onclick="copyText('python train.py --epochs 50 --precision bf16 --generate --prompt \"The \"')">Copy</span>
+                <div class="cli-output"><span class="copy-btn" onclick="copyText('python train.py --full --epochs 50 --generate --prompt \"The \"')">Copy</span>
 # Install dependencies (CUDA GPU version)
 pip install torch --index-url https://download.pytorch.org/whl/cu126
 pip install numpy
 
 # Run the architecture demo
-python demo.py
+python demos/demo.py
 
-# Train on bundled sample text
-python train.py --epochs 50 --precision bf16 --generate --prompt "The "
+# Train on bundled sample text — recommended stack in one switch (Issue #50)
+python train.py --full --epochs 50 --generate --prompt "The "
+
+# Equivalent explicit form (the DeltaNet quality lever, Issue #34)
+python train.py --use_deltanet --precision bf16 --compile --epochs 50 --generate --prompt "The "
 
 # Generate text from a trained checkpoint
 python generate.py --prompt "The " --tokens 200 --temp 0.7</div>
+            </div>
+
+            <div class="card">
+                <h3>🧵 End-to-End Pipelines <span class="badge">Issue #51 · #54 · #55</span></h3>
+                <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                    Beyond a single <span class="code">train.py</span> run, three commands wire the pieces into a real servable checkpoint and a coding curriculum.
+                </p>
+                <div class="cli-output"><span class="copy-btn" onclick="copyText('python build_chat_checkpoint.py --out hvn_chat_checkpoint.pt')">Copy</span>
+# 1. Build the first real servable checkpoint (Issue #51):
+#    BPE tokenizer → WikiText-103 pretrain (DeltaNet + bf16 + #50 speed levers)
+#    → instruction/chat fine-tune → checkpoint + tokenizer, gated by a smoke test
+python build_chat_checkpoint.py --out hvn_chat_checkpoint.pt
+python build_chat_checkpoint.py --smoke --out hvn_chat_smoke.pt   # fast CI loop-validation
+
+# 2. Auto-train the coding curriculum in order (Issue #54), resuming after any kill:
+#    HTML → CSS → JS → PHP → Python → DevOps, continuing from the #51 checkpoint
+python auto_train.py --from hvn_chat_checkpoint.pt --stages html,css,js,php,python,devops
+python auto_train.py --from hvn_chat_checkpoint.pt          # re-run to RESUME (skips done stages)
+
+# 3. Score a checkpoint per language — held-out completion eval (Issue #55):
+python -m eval.coding --checkpoint hvn_chat_checkpoint.pt --lang python
+python -m eval.coding --checkpoint hvn_chat_checkpoint.pt --lang all --json results/coding_baseline.json</div>
             </div>
 
             <div class="card">
@@ -902,16 +961,25 @@ python generate.py --prompt "The " --tokens 200 --temp 0.7</div>
 
             <div class="card">
                 <h3>🎯 Recommended Commands</h3>
-                <div class="cli-output"><span class="copy-btn" onclick="copyText('python train.py --d_model 256 --num_layers 4 --bond_dim 64 --batch_size 16 --seq_len 128 --precision bf16 --compile --epochs 100 --generate --prompt \"Chapter 1 \"')">Copy</span>
-# Best balance (medium model, mixed precision, compiled)
-python train.py \
+                <div class="cli-output"><span class="copy-btn" onclick="copyText('python train.py --full --d_model 256 --num_layers 4 --bond_dim 64 --batch_size 16 --seq_len 128 --epochs 100 --generate --prompt \"Chapter 1 \"')">Copy</span>
+# Recommended: --full enables bf16 + DeltaNet + fused AdamW + compile + grad checkpoint
+# (Issue #50 — steady-state 1.58× faster; explicit flags always override the preset)
+python train.py --full \
     --d_model 256 --num_layers 4 --bond_dim 64 \
     --batch_size 16 --seq_len 128 \
-    --precision bf16 --compile \
+    --epochs 100 --generate --prompt "Chapter 1 "</div>
+                <br>
+                <div class="cli-output"><span class="copy-btn" onclick="copyText('python train.py --use_deltanet --precision bf16 --compile --grad_checkpoint --d_model 256 --num_layers 4 --bond_dim 64 --batch_size 16 --seq_len 128 --epochs 100 --generate --prompt \"Chapter 1 \"')">Copy</span>
+# Explicit form: the DeltaNet quality lever (#34) + speed levers, spelled out
+python train.py \
+    --use_deltanet --precision bf16 --compile --grad_checkpoint \
+    --d_model 256 --num_layers 4 --bond_dim 64 \
+    --batch_size 16 --seq_len 128 \
     --epochs 100 --generate --prompt "Chapter 1 "</div>
                 <br>
                 <div class="cli-output"><span class="copy-btn" onclick="copyText('python train.py --epochs 100 --precision bf16 --n_threads 4 --rank_k 8 --nonlinear_update --causal_reinjection --cross_head_mixing --swiglu --per_token_eta --generate --prompt \"The \"')">Copy</span>
-# All quality strategies + multi-thread memory
+# Legacy default-block quality strategies (Issue #21/#22) — kept for the non-DeltaNet path.
+# DeltaNet (above) is the recommended default and outperforms this at real scale.
 python train.py \
     --epochs 100 --precision bf16 \
     --n_threads 4 --rank_k 8 --nonlinear_update \
@@ -939,6 +1007,7 @@ python train.py \
                     <thead><tr><th>Technique</th><th>Flag</th><th>Memory Saved</th><th>Speed Gain</th></tr></thead>
                     <tbody>
                         <tr><td>Mixed precision (bf16)</td><td><span class="code">--precision bf16</span></td><td>~50%</td><td>2-3×</td></tr>
+                        <tr><td>Activation checkpointing (Issue #49)</td><td><span class="code">--grad_checkpoint</span></td><td>~64% peak activation</td><td>~0.7-0.8× (slower)</td></tr>
                         <tr><td>Gradient accumulation</td><td><span class="code">--grad_accum N</span></td><td>Use smaller batch</td><td>—</td></tr>
                         <tr><td>torch.compile</td><td><span class="code">--compile</span></td><td>—</td><td>14×</td></tr>
                         <tr><td>Smaller batch size</td><td><span class="code">--batch_size 4</span></td><td>Up to 4×</td><td>—</td></tr>
@@ -1084,6 +1153,11 @@ function generateCLI() {
     if (document.getElementById('cross_head_mixing').checked) parts.push('--cross_head_mixing');
     if (document.getElementById('swiglu').checked) parts.push('--swiglu');
     if (document.getElementById('per_token_eta').checked) parts.push('--per_token_eta');
+    if (document.getElementById('full').checked) parts.push('--full');
+    if (document.getElementById('use_deltanet').checked) parts.push('--use_deltanet');
+    if (document.getElementById('grad_checkpoint').checked) parts.push('--grad_checkpoint');
+    if (document.getElementById('use_parallel_scan').checked) parts.push('--use_parallel_scan');
+    if (document.getElementById('weightless').checked) parts.push('--weightless');
     if (document.getElementById('generate').checked) {
         parts.push('--generate');
         parts.push(`--prompt "${document.getElementById('prompt').value}"`);
@@ -1766,6 +1840,59 @@ python train.py \\
 | \`--swiglu\` | (flag) | SwiGLU FFN |
 | \`--per_token_eta\` | (flag) | Per-token entanglement rate |
 | \`--n_threads\` | 1 | Independent Hamiltonian threads per head |
+| \`--use_deltanet\` | (flag) | **Gated-DeltaNet block (Issue #34) — the real PPL lever: 8.81 → 3.42** |
+| \`--weightless\` | (flag) | Freeze DeltaNet q/k/v/out as seed-regenerated random features (Issue #40; needs \`--use_deltanet\`) |
+| \`--use_parallel_scan\` | (flag) | Associative parallel scan (Issue #33), 1.59× train forward (no-op under DeltaNet) |
+| \`--grad_checkpoint\` | (flag) | Exact activation checkpointing (Issue #49): −64% peak activation memory, ~20-30% slower/step |
+| \`--full\` | (flag) | **One-switch recommended stack (Issue #50)**: bf16 + DeltaNet + fused AdamW + per-epoch loss sync + pinned/async H2D + compile + grad checkpoint |
+
+## The \`--use_deltanet\` Block (Issue #34) — the Real Quality Lever
+
+Everything in the Issue #21 strategy table below tweaks the *default* Hamiltonian block. The single
+biggest quality jump comes from swapping the block entirely for a **Gated-DeltaNet** block
+(\`hvn/core/deltanet.py\`):
+
+- Per-channel data-dependent decay gate \`α_t = σ(W_α x)\` (replaces the Frobenius clamp)
+- Per-head output RMSNorm on the read
+- Gated DeltaNet update \`S_t = diag(α_t)·S_{t-1} + β_t(v_t − S_{t-1}k_t)k_tᵀ\` with separate k/v projections
+- Query read \`o_t = S_t q_t\` (drops the ill-conditioned HPH term)
+- Output gate \`SiLU(W_g x)\` + short causal depthwise conv
+
+**Result: eval PPL 8.81 → 3.42 (61% better), O(1) inference preserved.** At real scale (WikiText-103,
+BPE-8000) DeltaNet is the quality leader at every width and is the **recommended default block**.
+
+\`\`\`bash
+python train.py --use_deltanet --precision bf16 --compile --epochs 20 --generate --prompt "The "
+\`\`\`
+
+## The \`--full\` Meta-Flag (Issue #50)
+
+One switch that turns on the whole recommended fast-training stack so you don't have to combine half a
+dozen flags. It expands into two honestly-labelled categories:
+
+| Category | What it enables | Honesty |
+|----------|-----------------|---------|
+| **A — exact speed levers** (model bit-identical) | fused AdamW · per-epoch loss sync · pinned/async H2D · \`--compile\` · \`--grad_checkpoint\` | Speed **only** — trained model unchanged |
+| **B — recommended defaults** (change model/precision) | \`--precision bf16\` · \`--use_deltanet\` | **Not** quality-neutral — trains the best recommended model |
+
+Measured **1.58× faster** steady-state (5.53 → 3.51 s/epoch, d=256/3L/seq128/B32, RTX 4050). Explicit
+flags always override the preset, so \`--full --precision fp32\` trains in fp32.
+
+## End-to-End Pipelines (Issues #51 / #54 / #55)
+
+For a real servable checkpoint and a coding curriculum, three commands wire the pieces together:
+
+\`\`\`bash
+# Build the first servable chat/base checkpoint (Issue #51)
+python build_chat_checkpoint.py --out hvn_chat_checkpoint.pt
+
+# Auto-train the coding curriculum in order, resuming after any kill (Issue #54)
+# HTML → CSS → JS → PHP → Python → DevOps
+python auto_train.py --from hvn_chat_checkpoint.pt --stages html,css,js,php,python,devops
+
+# Score a checkpoint per language — held-out completion eval (Issue #55)
+python -m eval.coding --checkpoint hvn_chat_checkpoint.pt --lang all --json results/coding_baseline.json
+\`\`\`
 
 ## Quality Improvement Strategies (Issue #21)
 
@@ -1811,29 +1938,37 @@ python generate.py --prompt "Hamiltonian " --tokens 300 --temp 0.5 --top_k 5
 
 ## Honest Assessment & Known Limitations
 
-### The Quality Gap
+### The Quality Gap — Largely Closed by DeltaNet (Issue #34)
 
-| Model | Eval PPL | Train Time |
-|-------|----------|------------|
-| HVN (multi-head) | 8.37 | 467.8s |
-| Transformer | 1.90 | 3.4s |
-| SSM | 1.12 | 68.6s |
+On 34K chars of sample text, the *default* Hamiltonian block leaves a gap to the Transformer. The
+Gated-DeltaNet block (\`--use_deltanet\`) closes most of it:
 
-The gap is significant. Main reasons:
-1. **Rank-1 entanglement update** — less expressive than attention's full QK^T
-2. **Chunked approximation** — tokens within a chunk share the same H state
-3. **Poor scaling** — HVN PPL barely improves with size
-4. **Small training data** — 34K characters
+| Model | Eval PPL | Notes |
+|-------|----------|-------|
+| HVN (default block) | 8.81 | rank-1 entanglement update |
+| **HVN (--use_deltanet, #34)** | **3.42** | **61% better, O(1) inference preserved** |
+| Transformer | 1.90 | small-data reference |
 
-### The Scaling Problem
+Use \`--use_deltanet\` (or \`--full\`) as the default. The default-block strategies (Issue #21/#22)
+remain available for the non-DeltaNet path.
 
-| Metric | HVN | Transformer |
-|--------|-----|------------|
-| Scaling exponent | PPL ∝ params^-0.007 | PPL ∝ params^-0.090 |
-| PPL at smallest | 14.24 | 9.12 |
-| PPL at largest | 13.82 | 6.91 |
+### The Scaling Story — the "−0.007" Was a Small-Data Artifact (Issues #35 / #39)
 
-HVN's perplexity barely improves when the model is made larger. This is the fundamental open research challenge.`,
+The original "HVN doesn't scale" claim (\`PPL ∝ params^-0.007\`) was **fit on saturated 34K-char data** and
+is now known to be an artifact. Re-measured on real-scale, **compute-matched, unsaturated** WikiText-103
+(BPE-8000, 5M-token budget), every architecture is still improving and HVN scales normally:
+
+| Model | Scaling exponent (PPL ∝ N^b) | Verdict |
+|-------|------------------------------|---------|
+| HVN (default) | **−0.42** (corrected #46 routing: −0.397) | scales, ≈ Transformer |
+| Transformer | −0.41 | reference |
+| SSM | −0.53 | steepest |
+
+The flat exponent reproduces **only** on saturated small data — where every model size saturates early, so
+the exponent measures saturation noise, not architecture. On unsaturated real-scale data the flatness
+vanishes: HVN's PPL drops 521 → 206 (2.5×) across a 9× param increase. The "HVN doesn't scale" narrative is
+**refuted**. Remaining open challenge: large-width bf16 stability for DeltaNet was the #39 blocker and is now
+fixed (Issue #44), so DeltaNet is the recommended default at every width.`,
 
     'benchmark-results': `# Benchmark Results: HVN vs Transformer vs SSM
 
@@ -2429,7 +2564,22 @@ const closedIssues = [
     [27, 'Multimodal Fusion: Joint Image-Text Training'],
     [28, 'Conversation Memory: Multi-Turn Chat with Persistent State'],
     [29, 'Fine-Tuning: LoRA, QLoRA, and Instruction Tuning'],
+    [31, 'OpenAI-compatible API server'],
+    [32, 'Extreme weight compression (Phase 1 + edge-devices branch)'],
     [33, 'Custom Kernels & Parallel Processing'],
+    [34, 'Gated-DeltaNet readout/update dynamics — PPL 8.8→3.4'],
+    [40, 'Weightless DeltaNet (seed-regenerated random features)'],
+    [42, 'Real reasoning — trainable [THINK] chain-of-thought (+52pp)'],
+    [43, 'Correct, fused concurrent-serving decode (~2.5× tok/s)'],
+    [44, 'Large-width bf16 stability fix for Gated-DeltaNet'],
+    [46, 'Systemic batch-ordering fix (batched == single-stream)'],
+    [49, 'Exact activation checkpointing (−64% peak activation mem)'],
+    [50, '--full meta-flag — one-switch recommended fast-training stack'],
+    [51, 'Chat/base checkpoint pipeline (first servable checkpoint)'],
+    [52, 'Wire checkpoint into Django app + end-to-end chat smoke test'],
+    [53, 'Curriculum dataset loaders (HTML→CSS→JS→PHP→Python→DevOps)'],
+    [54, 'Auto-train orchestrator — staged curriculum scheduler'],
+    [55, 'Coding eval harness — per-language held-out completion scoring'],
 ];
 const tbody = document.getElementById('closed-issues');
 closedIssues.forEach(([num, title]) => {
