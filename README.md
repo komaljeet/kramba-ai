@@ -361,6 +361,24 @@ error) via `hvn.quantize.QuantizedHVNInference` and `estimate_memory_savings`.
 exposes `/v1/chat/completions`, `/v1/completions`, `/v1/models`, `/v1/health` (SSE
 streaming + tool calling), built directly on `forward_step` — no KV cache, O(1) preserved.
 
+**Real chat/base checkpoint pipeline (Issue #51).** One command wires the existing pieces
+into the first *servable* checkpoint: BPE tokenizer → WikiText-103 pretrain (DeltaNet + bf16 +
+the #50 speed levers) → instruction/chat fine-tune → `hvn_chat_checkpoint.pt` +
+`hvn_chat_checkpoint_tokenizer.json`, gated by a non-degenerate smoke test.
+
+```bash
+# Recommended run (d=256, 3 layers, streams WikiText-103 from ./wikitext-103-v1):
+python build_chat_checkpoint.py --out hvn_chat_checkpoint.pt
+# Fast loop-validation (tiny budget/model — CI):
+python build_chat_checkpoint.py --smoke --out hvn_chat_smoke.pt
+```
+
+The smoke gate requires a non-degenerate, on-topic completion — e.g. `Create a function that
+adds two numbers` → `def add(a, b):\n    return a + b`. Held-out **bits-per-char** (tokenization-
+invariant) is reported against the bundled char baseline. This is the first of a 5-issue milestone
+tree (#51 → #52 app wiring → #53/#54/#55 coding curriculum); it is a loop-validation, not a
+frontier-quality model.
+
 ---
 
 ## 6. Training & Usage Guide
@@ -506,6 +524,7 @@ BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 
 | #49 | Exact gradient (activation) checkpointing (`--grad_checkpoint`) — bit-identical gradients, −64% peak activation memory, unlocks a larger model on the 6 GB card | `model.py`, `train.py`, `eval/scaling_laws.py`, `tests/test_issue49.py` |
 | #50 | `--full` meta-flag — one-switch recommended fast-training stack (Category A exact speed levers: fused AdamW, per-epoch loss sync, pinned/async loading, `--compile`, `--grad_checkpoint`; Category B recommended model/precision: bf16 + DeltaNet). Explicit flags override; steady-state **1.58×** faster; Category-A primitives proven bit-exact | `train.py`, `tests/test_issue50.py` |
 | #45/#47 | Final real-scale benchmark pass under corrected #46 routing — 4-model WikiText-103 sweep; corrected routing **improves default HVN 6–12%**, DeltaNet confirmed quality leader (recommended default), weightless real-scale cost measured (§8.12) | `eval/scaling_laws.py`, `results/scaling_final_pass.*` |
+| #51 | Chat/base checkpoint pipeline — one command wires BPE tokenizer → WikiText-103 pretrain (DeltaNet + bf16 + #50 speed levers) → instruction/chat fine-tune → checkpoint+tokenizer, with a non-degenerate smoke-gate. Produces the first real servable checkpoint (Milestone 1, feeds #52/#53/#54/#55) | `build_chat_checkpoint.py`, `tests/test_issue51.py` |
 
 ---
 
@@ -1133,6 +1152,15 @@ regress >2% per fix; Triton kernel dtype-agnostic.
   B>1` streams got the wrong head's weights — served is batch-outer and equals single-stream
   (torch ~1e-6, fused ~1e-2). O(1)/no-KV preserved; `test_issue43.py` 7/7. Benefits #31 under
   multi-user load (see §8.9).
+- **#51 — Chat/base checkpoint pipeline** ✅ **Done** (2026-07-05): `build_chat_checkpoint.py`
+  wires BPE tokenizer → WikiText-103 pretrain (DeltaNet + bf16 + #50 Category-A speed levers) →
+  synthetic instruction (`hvn/lora.py`) + chat (`hvn/chat.py`) fine-tune → `hvn_chat_checkpoint.pt`
+  (+`_tokenizer.json`), gated by a non-degenerate smoke test. On a d=256/3L run the coding prompt
+  emits `def add(a, b): return a + b` and held-out fine-tune is **0.051 bits/char** vs the char
+  baseline's **4.577** (tokenization-invariant comparison). DeltaNet flag persisted; O(1) preserved;
+  `test_issue51.py` 4/4, `demo.py`/`test_issue34.py` regressions pass. Milestone 1 — the first real
+  servable checkpoint; **blocks #52**, prereq for #53/#54/#55. *Note for #52:* `web/hvn_worker/worker.py`
+  must rebuild the model with `use_deltanet=True` (it currently omits the flag) to serve this checkpoint.
 - **#25 — Agentic mode**: ReAct-style loop with planning, tool chaining, self-correction.
   Depends on #24 (done).
 - **#26 — Training dashboard**: single-page HTML/CSS/JS (Chart.js via CDN), no server.
