@@ -439,6 +439,11 @@ def main():
                         help="Enable tool-calling training data (Issue #24). Adds synthetic tool-call examples to the training data.")
     parser.add_argument("--tool_examples", type=int, default=50,
                         help="Number of tool-calling training examples to generate (only used with --tool_training)")
+    # --- Issue #42: Reasoning / chain-of-thought training ---
+    parser.add_argument("--reasoning_training", action="store_true",
+                        help="Enable reasoning training data (Issue #42). Adds synthetic multi-step arithmetic examples with [THINK] chain-of-thought traces.")
+    parser.add_argument("--reasoning_examples", type=int, default=200,
+                        help="Number of reasoning training examples to generate (only used with --reasoning_training)")
     # --- Issue #29: LoRA / QLoRA / Instruction tuning ---
     parser.add_argument("--lora", action="store_true",
                         help="Enable LoRA fine-tuning (Issue #29). Freezes base model, trains low-rank adapters.")
@@ -470,48 +475,55 @@ def main():
         text = SAMPLE_TEXT * 50  # repeat to have enough data
         print(f"Using bundled sample text ({len(text)} characters)")
 
-    # --- Build tokenizer ---
-    if args.tokenizer == "bpe":
-        from hvn.tokenizer import BPETokenizer
-        tokenizer = BPETokenizer.train(text, vocab_size=args.bpe_vocab)
-        print(f"Vocabulary size: {tokenizer.vocab_size} BPE tokens")
-    else:
-        tokenizer = CharTokenizer(text, add_tool_tokens=args.tool_training)
-        print(f"Vocabulary size: {tokenizer.vocab_size} characters")
-        if args.tool_training:
-            print(f"  (includes {len(tokenizer.special_tokens)} tool-calling special tokens)")
+    # --- Generate auxiliary training data (tool / reasoning / instruction) ---
+    # Generated BEFORE the tokenizer is built so their characters (e.g. digits,
+    # arithmetic operators) are included in the char vocabulary — otherwise they
+    # are OOV and silently dropped at encode time (which previously stripped every
+    # digit out of the reasoning/tool examples).
+    aux_segments = []  # list of (label, text) appended to the training stream
 
-    # --- Prepare dataset ---
-    token_ids = tokenizer.encode(text)
-
-    # --- Tool-calling training data (Issue #24) ---
     if args.tool_training:
-        from hvn.tools import generate_tool_training_data, TOOL_TOKENS
+        from hvn.tools import generate_tool_training_data
         print(f"\nGenerating {args.tool_examples} tool-calling training examples...")
         tool_examples = generate_tool_training_data(num_examples=args.tool_examples)
-        tool_token_ids = []
-        for ex in tool_examples:
-            # Encode prompt + response as a single training sequence
-            full_text = ex["prompt"] + ex["response"]
-            ex_ids = tokenizer.encode(full_text)
-            tool_token_ids.extend(ex_ids)
-        # Append tool-calling data to the main training data
-        token_ids = token_ids + tool_token_ids
-        print(f"  Added {len(tool_token_ids)} tool-calling tokens to training data")
-        print(f"  Total training tokens: {len(token_ids)}")
+        tool_text = "".join(ex["prompt"] + ex["response"] for ex in tool_examples)
+        aux_segments.append(("tool-calling", tool_text))
 
-    # --- Instruction tuning data (Issue #29) ---
+    if args.reasoning_training:
+        from hvn.reasoning import generate_reasoning_training_data
+        print(f"\nGenerating {args.reasoning_examples} reasoning (chain-of-thought) training examples...")
+        reasoning_examples = generate_reasoning_training_data(num_examples=args.reasoning_examples)
+        reasoning_text = "".join(ex["prompt"] + ex["response"] for ex in reasoning_examples)
+        aux_segments.append(("reasoning", reasoning_text))
+
     if args.instruction:
         from hvn.lora import generate_instruction_training_data, format_instruction_example
         print(f"\nGenerating {args.instruction_examples} instruction-tuning examples...")
         instruction_examples = generate_instruction_training_data(num_examples=args.instruction_examples)
-        instruction_token_ids = []
-        for ex in instruction_examples:
-            formatted = format_instruction_example(ex)
-            ex_ids = tokenizer.encode(formatted)
-            instruction_token_ids.extend(ex_ids)
-        token_ids = token_ids + instruction_token_ids
-        print(f"  Added {len(instruction_token_ids)} instruction-tuning tokens to training data")
+        instruction_text = "".join(format_instruction_example(ex) for ex in instruction_examples)
+        aux_segments.append(("instruction-tuning", instruction_text))
+
+    # --- Build tokenizer (vocab spans base text + all auxiliary data) ---
+    vocab_text = text + "".join(seg for _, seg in aux_segments)
+    if args.tokenizer == "bpe":
+        from hvn.tokenizer import BPETokenizer
+        tokenizer = BPETokenizer.train(vocab_text, vocab_size=args.bpe_vocab)
+        print(f"Vocabulary size: {tokenizer.vocab_size} BPE tokens")
+    else:
+        tokenizer = CharTokenizer(
+            vocab_text, add_tool_tokens=args.tool_training or args.reasoning_training
+        )
+        print(f"Vocabulary size: {tokenizer.vocab_size} characters")
+        if args.tool_training or args.reasoning_training:
+            print(f"  (includes {len(tokenizer.special_tokens)} tool-calling/reasoning special tokens)")
+
+    # --- Prepare dataset ---
+    token_ids = tokenizer.encode(text)
+    for label, seg in aux_segments:
+        seg_ids = tokenizer.encode(seg)
+        token_ids = token_ids + seg_ids
+        print(f"  Added {len(seg_ids)} {label} tokens to training data")
+    if aux_segments:
         print(f"  Total training tokens: {len(token_ids)}")
 
     dataset = TextDataset(token_ids, seq_len=args.seq_len)

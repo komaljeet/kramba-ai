@@ -38,6 +38,11 @@ from .tools import (
     create_demo_registry,
     generate_tool_training_data,
 )
+from .reasoning import (
+    generate_arithmetic_problem,
+    format_reasoning_example,
+    generate_reasoning_training_data,
+)
 from .chat import (
     CHAT_TOKENS,
     CHAT_SPECIAL_TOKEN_STRINGS,
@@ -100,6 +105,10 @@ __all__ = [
     "SPECIAL_TOKEN_STRINGS",
     "create_demo_registry",
     "generate_tool_training_data",
+    # Reasoning / chain-of-thought (Issue #42)
+    "generate_arithmetic_problem",
+    "format_reasoning_example",
+    "generate_reasoning_training_data",
     # Chat / conversation memory (Issue #28)
     "CHAT_TOKENS",
     "CHAT_SPECIAL_TOKEN_STRINGS",
