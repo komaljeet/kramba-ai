@@ -41,5 +41,9 @@ RUN useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /data/checkpoints
 USER appuser
 
-ENTRYPOINT ["/srv/web/docker-entrypoint.sh"]
+# Invoke through `sh` rather than execing the script directly, so a stray CRLF
+# shebang (#!/bin/sh\r from a Windows checkout) can't cause
+# "exec .../docker-entrypoint.sh: no such file or directory". The .gitattributes
+# eol=lf rule is the primary fix; this is belt-and-suspenders (issue #58).
+ENTRYPOINT ["sh", "/srv/web/docker-entrypoint.sh"]
 CMD ["web"]
