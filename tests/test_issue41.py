@@ -16,6 +16,10 @@ Pure tool-layer feature — no GPU / model needed:  python test_issue41.py
 
 import json
 
+# --- repo-root path bootstrap (added during reorg, issue #48) ---
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+# --- end path bootstrap ---
 import hvn.tools as tools
 from hvn.tools import (
     web_search,

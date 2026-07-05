@@ -18,6 +18,10 @@ Usage:
 """
 
 import torch
+# --- repo-root path bootstrap (added during reorg, issue #48) ---
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+# --- end path bootstrap ---
 from hvn.tools import (
     ToolRegistry,
     ToolCallParser,
