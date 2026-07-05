@@ -8,7 +8,12 @@ ROLE="${1:-web}"
 case "$ROLE" in
   web)
     python manage.py migrate --noinput
-    python manage.py collectstatic --noinput
+    # collectstatic can fail on a Windows Docker bind mount: WhiteNoise's gzip
+    # post-processing calls os.utime() on STATIC_ROOT, which the mounted
+    # filesystem rejects ("Operation not permitted"). Don't let that abort
+    # startup - with DEBUG=True Django's staticfiles app serves assets directly.
+    python manage.py collectstatic --noinput \
+      || echo "WARN: collectstatic failed (continuing; dev bind-mount utime issue?)" >&2
     exec daphne -b 0.0.0.0 -p 8000 web.asgi:application
     ;;
   worker)
