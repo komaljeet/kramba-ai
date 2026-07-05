@@ -7,6 +7,7 @@ from celery import shared_task
 from channels.layers import get_channel_layer
 
 from django.conf import settings
+from django.core.cache import cache
 from django.utils import timezone
 
 from .models import AuditLog, Conversation, Message, ModelVersion, TrainingJob
@@ -17,6 +18,16 @@ logger = logging.getLogger(__name__)
 
 def conversation_group_name(conversation_id) -> str:
     return f"conversation_{conversation_id}"
+
+
+def cancel_key(conversation_id) -> str:
+    """Redis cache key for the cross-process "stop generation" flag (Issue #61).
+
+    The web role (ConversationViewSet.stop) sets it; the generate_response task
+    running on the GPU worker polls it between tokens. Must live on the shared
+    Redis cache (not LocMem) since those are separate processes - see CACHES in
+    web/settings/base.py."""
+    return f"chat_cancel:{conversation_id}"
 
 
 def training_group_name(job_id) -> str:
@@ -49,9 +60,14 @@ def generate_response(
 
     channel_layer = get_channel_layer()
     group = conversation_group_name(conversation_id)
-
+    key = cancel_key(conversation_id)
+    # NB: deliberately do NOT clear the flag here. The Stop button is only shown
+    # while a turn is generating, so the flag is always set against *this* running
+    # task and consumed below; a start-of-task delete would instead race with (and
+    # silently swallow) a stop issued in the enqueue→start window. The `finally`
+    # clears it after every turn, so it can't leak into the next one.
     result: dict = {}
-    for delta in stream_turn(
+    gen = stream_turn(
         conversation_id=conversation.id,
         user_message=user_message.content,
         model_tag=conversation.model_version.tag,
@@ -59,36 +75,62 @@ def generate_response(
         result=result,
         thinking=thinking,
         web_search=web_search,
-    ):
-        async_to_sync(channel_layer.group_send)(group, {"type": "chat.token", "delta": delta})
-
-    # Sanitizes the finished, persisted message. The live per-delta stream
-    # already sent over WebSocket above is NOT re-sanitized retroactively -
-    # cleaning HTML tags that may be split across delta boundaries mid-stream
-    # isn't reliably possible without risking corrupting legitimate text, and
-    # the attacker doesn't control model output directly (only the prompt,
-    # which is itself guarded by MessageCreateSerializer's injection check).
-    # Accepted as a known limitation rather than a gap silently left in.
-    clean_content = filter_profanity(sanitize_output(result["content"]))
-    assistant_message = Message.objects.create(
-        conversation=conversation, role=Message.Role.ASSISTANT, content=clean_content
     )
+    try:
+        stopped = False
+        for delta in gen:
+            if cache.get(key):
+                # Stop requested (Issue #61). Close the generator: its post-yield
+                # state-save (hvn.chat.user_turn_streaming's finalize) never runs,
+                # so this turn is discarded cleanly - the Hamiltonian state file
+                # keeps its pre-turn value rather than being left half-updated.
+                stopped = True
+                gen.close()
+                break
+            async_to_sync(channel_layer.group_send)(group, {"type": "chat.token", "delta": delta})
 
-    async_to_sync(channel_layer.group_send)(
-        group, {"type": "chat.done", "message_id": str(assistant_message.id)}
-    )
+        if stopped:
+            async_to_sync(channel_layer.group_send)(
+                group, {"type": "chat.done", "message_id": "", "stopped": True}
+            )
+            return "stopped"
 
-    AuditLog.objects.create(
-        user_id=conversation.owner_id,
-        action="generate",
-        path=f"/api/conversations/{conversation.id}/messages/",
-        method="POST",
-        status_code=201,
-        prompt_hash=hashlib.sha256(user_message.content.encode()).hexdigest(),
-        model_version=conversation.model_version,
-    )
+        # Sanitizes the finished, persisted message. The live per-delta stream
+        # already sent over WebSocket above is NOT re-sanitized retroactively -
+        # cleaning HTML tags that may be split across delta boundaries mid-stream
+        # isn't reliably possible without risking corrupting legitimate text, and
+        # the attacker doesn't control model output directly (only the prompt,
+        # which is itself guarded by MessageCreateSerializer's injection check).
+        # Accepted as a known limitation rather than a gap silently left in.
+        clean_content = filter_profanity(sanitize_output(result["content"]))
+        assistant_message = Message.objects.create(
+            conversation=conversation, role=Message.Role.ASSISTANT, content=clean_content
+        )
 
-    return str(assistant_message.id)
+        async_to_sync(channel_layer.group_send)(
+            group, {"type": "chat.done", "message_id": str(assistant_message.id)}
+        )
+
+        AuditLog.objects.create(
+            user_id=conversation.owner_id,
+            action="generate",
+            path=f"/api/conversations/{conversation.id}/messages/",
+            method="POST",
+            status_code=201,
+            prompt_hash=hashlib.sha256(user_message.content.encode()).hexdigest(),
+            model_version=conversation.model_version,
+        )
+        return str(assistant_message.id)
+    except Exception:  # noqa: BLE001 - any generation failure must reach the UI,
+        # not hang it. Without this the task would die silently and the client
+        # would sit on "Generating…" forever with no terminal frame (Issue #60).
+        logger.exception("generate_response failed for conversation %s", conversation_id)
+        async_to_sync(channel_layer.group_send)(
+            group, {"type": "chat.error", "detail": "Generation failed. Please try again."}
+        )
+        return "error"
+    finally:
+        cache.delete(key)
 
 
 class _TrainingCancelled(Exception):

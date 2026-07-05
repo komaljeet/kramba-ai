@@ -76,6 +76,38 @@ class ChatConsumerTests(TransactionTestCase):
 
         self.assertEqual(first, {"type": "token", "delta": "Hel"})
         self.assertEqual(second, {"type": "token", "delta": "lo"})
-        self.assertEqual(third, {"type": "done", "message_id": "abc-123"})
+        # `stopped` (Issue #61) rides along on every done frame; False for a
+        # normal completion, True when a turn was stopped early.
+        self.assertEqual(third, {"type": "done", "message_id": "abc-123", "stopped": False})
 
+        await communicator.disconnect()
+
+    async def test_error_frame_is_relayed(self):
+        # Issue #60: a failed generation must reach the client so it stops
+        # waiting on "Generating…" instead of hanging forever.
+        communicator = WebsocketCommunicator(self.application, self._ws_path(self.owner_token))
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        channel_layer = get_channel_layer()
+        group = conversation_group_name(self.conversation.id)
+        await channel_layer.group_send(group, {"type": "chat.error", "detail": "boom"})
+
+        frame = json.loads(await communicator.receive_from())
+        self.assertEqual(frame, {"type": "error", "detail": "boom"})
+        await communicator.disconnect()
+
+    async def test_stopped_done_frame_is_relayed(self):
+        # Issue #61: a stopped turn sends a done frame with stopped=True and no
+        # persisted message id.
+        communicator = WebsocketCommunicator(self.application, self._ws_path(self.owner_token))
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        channel_layer = get_channel_layer()
+        group = conversation_group_name(self.conversation.id)
+        await channel_layer.group_send(group, {"type": "chat.done", "message_id": "", "stopped": True})
+
+        frame = json.loads(await communicator.receive_from())
+        self.assertEqual(frame, {"type": "done", "message_id": "", "stopped": True})
         await communicator.disconnect()

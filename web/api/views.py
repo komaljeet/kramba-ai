@@ -11,10 +11,10 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
-
-from django.utils import timezone
 
 from .models import Conversation, Message, ModelVersion, TrainingJob
 from .permissions import IsAdminOrReadOnly, IsConversationOwner
@@ -27,7 +27,7 @@ from .serializers import (
     TrainingJobCreateSerializer,
     TrainingJobSerializer,
 )
-from .tasks import generate_response, run_training
+from .tasks import cancel_key, generate_response, run_training
 
 User = get_user_model()
 
@@ -195,6 +195,16 @@ class ConversationViewSet(viewsets.ModelViewSet):
         if self.action == "messages" and self.request.method == "POST":
             return [GenerationRateThrottle()]
         return super().get_throttles()
+
+    @action(detail=True, methods=["post"])
+    def stop(self, request, pk=None):
+        # Issue #61: cooperatively stop an in-flight generation. Sets a shared
+        # Redis flag the generate_response task polls between tokens; it closes
+        # the generator at the next token and emits a terminal "done" frame.
+        # No-op (still 202) if nothing is generating - the flag simply expires.
+        conversation = self.get_object()  # enforces ownership
+        cache.set(cancel_key(str(conversation.id)), "1", timeout=300)
+        return Response(status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=["get", "post"], url_path="messages")
     def messages(self, request, pk=None):
