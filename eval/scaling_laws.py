@@ -333,6 +333,7 @@ def run_scaling_laws(
     max_eval_chars: int | None = None,
     max_eval_batches: int | None = None,
     use_deltanet: bool = False,
+    grad_checkpoint: bool = False,
 ) -> dict:
     """Train HVN / Transformer / SSM at multiple d_model sizes under a fixed
     per-model token budget (compute-matched) and collect scaling data."""
@@ -390,7 +391,7 @@ def run_scaling_laws(
             model_specs["HVN"] = HamiltonianVortexNetwork(
                 vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
                 bond_dimension=bond_dim, chunk_size=64, dropout=0.1,
-                use_deltanet=use_deltanet,
+                use_deltanet=use_deltanet, grad_checkpoint=grad_checkpoint,
             )
         if "HVN-DeltaNet" in models:
             # Issue #39: sweep the Gated-DeltaNet block (Issue #34) alongside the
@@ -398,7 +399,7 @@ def run_scaling_laws(
             model_specs["HVN-DeltaNet"] = HamiltonianVortexNetwork(
                 vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
                 bond_dimension=bond_dim, chunk_size=64, dropout=0.1,
-                use_deltanet=True,
+                use_deltanet=True, grad_checkpoint=grad_checkpoint,
             )
         if "HVN-DeltaNet-Weightless" in models:
             # Issue #40 / #45: the hybrid weightless DeltaNet — freeze the four
@@ -409,7 +410,7 @@ def run_scaling_laws(
             model_specs["HVN-DeltaNet-Weightless"] = HamiltonianVortexNetwork(
                 vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
                 bond_dimension=bond_dim, chunk_size=64, dropout=0.1,
-                use_deltanet=True, weightless=True,
+                use_deltanet=True, weightless=True, grad_checkpoint=grad_checkpoint,
             )
         if "Transformer" in models:
             model_specs["Transformer"] = TransformerLM(
@@ -701,6 +702,10 @@ def main() -> None:
                         help="Cap number of eval batches per PPL measurement (speed).")
     parser.add_argument("--use_deltanet", action="store_true",
                         help="Use Gated-DeltaNet HVN blocks (Issue #34) in the sweep.")
+    parser.add_argument("--grad_checkpoint", action="store_true",
+                        help="Gradient (activation) checkpointing (Issue #49): exact, "
+                             "training-only activation-memory saving for the HVN variants so a "
+                             "larger d_model fits in 6 GB (~20-30%% slower/step).")
     args = parser.parse_args()
 
     d_models = [int(x.strip()) for x in args.d_models.split(",")]
@@ -720,6 +725,7 @@ def main() -> None:
         tokenizer_kind=args.tokenizer, bpe_vocab=args.bpe_vocab,
         max_train_chars=args.max_train_chars, max_eval_chars=args.max_eval_chars,
         max_eval_batches=args.max_eval_batches, use_deltanet=args.use_deltanet,
+        grad_checkpoint=args.grad_checkpoint,
     )
 
 
