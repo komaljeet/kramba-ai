@@ -70,12 +70,16 @@ from .datasets import DATASET_REGISTRY  # noqa: E402
 
 _MODEL_COLORS = {
     "HVN": "tab:blue", "HVN-DeltaNet": "tab:red",
+    "HVN-DeltaNet-Weightless": "tab:purple",
     "Transformer": "tab:orange", "SSM": "tab:green",
 }
-_MODEL_MARKERS = {"HVN": "o", "HVN-DeltaNet": "D", "Transformer": "s", "SSM": "^"}
+_MODEL_MARKERS = {
+    "HVN": "o", "HVN-DeltaNet": "D", "HVN-DeltaNet-Weightless": "v",
+    "Transformer": "s", "SSM": "^",
+}
 
 # Models that are HVN variants (used by the analysis to compare against the baselines).
-_HVN_VARIANTS = ("HVN", "HVN-DeltaNet")
+_HVN_VARIANTS = ("HVN", "HVN-DeltaNet", "HVN-DeltaNet-Weightless")
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +400,17 @@ def run_scaling_laws(
                 bond_dimension=bond_dim, chunk_size=64, dropout=0.1,
                 use_deltanet=True,
             )
+        if "HVN-DeltaNet-Weightless" in models:
+            # Issue #40 / #45: the hybrid weightless DeltaNet — freeze the four
+            # d×d q/k/v/out projections as seed-regenerated random features (one
+            # int on disk each) while keeping the learned gates/conv. Included so
+            # the final pass quantifies its real-scale PPL cost vs dense DeltaNet
+            # (previously only measured at d=128 on tiny-Shakespeare, §8.8).
+            model_specs["HVN-DeltaNet-Weightless"] = HamiltonianVortexNetwork(
+                vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
+                bond_dimension=bond_dim, chunk_size=64, dropout=0.1,
+                use_deltanet=True, weightless=True,
+            )
         if "Transformer" in models:
             model_specs["Transformer"] = TransformerLM(
                 vocab_size=vocab_size, d_model=d_model, n_layers=n_layers, n_heads=4,
@@ -667,9 +682,11 @@ def main() -> None:
     parser.add_argument("--output-plot", type=str, default=None)
     parser.add_argument("--compile", action="store_true", help="Use torch.compile.")
     parser.add_argument("--models", type=str, nargs="+", default=None,
-                        choices=["HVN", "HVN-DeltaNet", "Transformer", "SSM"],
+                        choices=["HVN", "HVN-DeltaNet", "HVN-DeltaNet-Weightless",
+                                 "Transformer", "SSM"],
                         help="Which models to compare (default: HVN, Transformer, SSM). "
-                             "Add 'HVN-DeltaNet' to sweep the Issue #34 block (Issue #39).")
+                             "Add 'HVN-DeltaNet' to sweep the Issue #34 block (Issue #39); "
+                             "'HVN-DeltaNet-Weightless' for the Issue #40 hybrid.")
     parser.add_argument("--precision", type=str, default="fp32",
                         choices=["fp32", "fp16", "bf16"])
     parser.add_argument("--tokenizer", type=str, default="char", choices=["char", "bpe"],
