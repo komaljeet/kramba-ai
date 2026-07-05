@@ -395,6 +395,30 @@ document. Resolution mirrors the WikiText-103 loader — local dir → best-effo
 download → **offline synthetic fallback**, so `python -m eval.curriculum` smoke-loads all six
 stages with no network. This feeds the #54 orchestrator and #55 coding eval.
 
+**Auto-train orchestrator — staged curriculum scheduler (Issue #54).** `auto_train.py` is a
+single command that trains the #53 stages **in order**, continuing from the #51 base checkpoint,
+evaluating + checkpointing each stage, and **resuming** cleanly after an interruption (kill / cron /
+`/loop`):
+
+```bash
+# Full curriculum, continuing from the #51 checkpoint:
+python auto_train.py --from hvn_chat_checkpoint.pt --stages html,css,js,php,python,devops
+# Re-run the same command to RESUME — completed stages are skipped, the last
+# stage checkpoint is carried forward (state in auto_train_state.json):
+python auto_train.py --from hvn_chat_checkpoint.pt
+# Fast offline loop-validation (tiny budget/epochs — CI / 6 GB box):
+python auto_train.py --from tiny_base.pt --smoke
+```
+
+It reuses `train.train_model` (the #50 Category-A exact speed levers: fused AdamW, per-epoch loss
+sync, pinned/async H2D — carrying the model **weights** forward, a fresh optimizer per stage) and
+the #53 loaders; each stage writes `checkpoint_stage_{name}.pt` (+ tokenizer, so every stage is
+independently servable) and appends a metrics row (held-out **bits-per-char**/PPL + non-degenerate
+completion) to `auto_train_metrics.jsonl`. Progress is committed to `auto_train_state.json`
+**atomically after every stage**, so a re-run picks up at the next unfinished stage instead of
+restarting. `evaluate_stage()` is the seam the #55 coding-eval harness plugs into. O(1) inference is
+preserved (orchestration only; the served model is exactly what `train_model` produces).
+
 ---
 
 ## 6. Training & Usage Guide
@@ -542,6 +566,7 @@ BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 
 | #45/#47 | Final real-scale benchmark pass under corrected #46 routing — 4-model WikiText-103 sweep; corrected routing **improves default HVN 6–12%**, DeltaNet confirmed quality leader (recommended default), weightless real-scale cost measured (§8.12) | `eval/scaling_laws.py`, `results/scaling_final_pass.*` |
 | #51 | Chat/base checkpoint pipeline — one command wires BPE tokenizer → WikiText-103 pretrain (DeltaNet + bf16 + #50 speed levers) → instruction/chat fine-tune → checkpoint+tokenizer, with a non-degenerate smoke-gate. Produces the first real servable checkpoint (Milestone 1, feeds #52/#53/#54/#55) | `build_chat_checkpoint.py`, `tests/test_issue51.py` |
 | #52 | Wire the #51 checkpoint into the Django app + end-to-end chat smoke test (Milestone 1, Issue B). Worker rebuilds the model with the checkpoint's `use_deltanet`/`weightless` flags (the #51 checkpoint is a DeltaNet model — default-block load raised); `StateCheckpoint` now serializes conversation state structure-agnostically (v2 tensor-tagged tree) so the DeltaNet `{"S","conv"}` per-block state round-trips (old nested-list serializer crashed on every turn); compose/env point at `hvn_chat_checkpoint.pt`; smoke test drives the real serving path (`hvn_worker` → `ChatSession.user_turn`/streaming) for a non-degenerate reply + save→load round-trip | `web/hvn_worker/worker.py`, `hvn/chat.py`, `web/docker-compose.yml`, `web/README.md`, `web/tests/test_chat_smoke.py` |
+| #54 | Auto-train orchestrator (Milestone 2, Issue D) — `auto_train.py` trains the #53 curriculum stages **in order** from the #51 base checkpoint, carrying the model weights forward, evaluating + checkpointing each stage (`checkpoint_stage_{name}.pt` + tokenizer + `auto_train_metrics.jsonl`), and **resuming** from the last completed stage after a kill (atomic `auto_train_state.json`; `--restart` to ignore it). Reuses `train.train_model` (#50 speed levers) + the #53 loaders; `evaluate_stage()` is the #55 eval seam. O(1) inference preserved | `auto_train.py`, `tests/test_issue54.py` |
 | #53 | Curriculum dataset loaders (Milestone 2, Issue C) — `load_curriculum_stage('html'\|'css'\|'js'\|'php'\|'python'\|'devops')` returns `(train, eval)` streams for the coding-curriculum order, mirroring the WikiText-103 loader. **Permissive-only license filtering** (rejects GPL/LGPL/AGPL/MPL/EPL/CC-BY-SA), **near-dedup** (exact + MinHash-Jaccard over word-shingles), per-stage compute-matched char budgets + 90/10 doc split, and streaming/local-cache resolution (local dir → best-effort curated permissive download → offline synthetic fallback so every stage smoke-loads on the 6 GB box with no network). Feeds #54 (orchestrator) and #55 (eval) | `eval/curriculum.py`, `eval/datasets.py`, `tests/test_issue53.py` |
 
 ---
