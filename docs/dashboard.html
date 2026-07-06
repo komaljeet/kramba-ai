@@ -955,8 +955,11 @@ python -m eval.coding --checkpoint hvn_chat_checkpoint.pt --lang all --json resu
                         <tr><td>Medium</td><td>256</td><td>4</td><td>~1M</td><td>~50-100 MB</td><td><span class="tag tag-green">✓ Easily</span></td></tr>
                         <tr><td>Large</td><td>512</td><td>8</td><td>~5-10M</td><td>~200-500 MB</td><td><span class="tag tag-green">✓ Yes</span></td></tr>
                         <tr><td>Very Large</td><td>512</td><td>12</td><td>~15M</td><td>~1-2 GB</td><td><span class="tag tag-green">✓ Yes</span></td></tr>
+                        <tr><td>~1B</td><td>—</td><td>—</td><td>1B</td><td>~16 GB train state</td><td><span class="tag tag-red">✗ No</span></td></tr>
+                        <tr><td>~10B</td><td>—</td><td>—</td><td>10B</td><td>~160 GB train / 20 GB bf16 weights</td><td><span class="tag tag-red">✗ No (off ~30×)</span></td></tr>
                     </tbody>
                 </table>
+                <p style="font-size: 13px; color: var(--text-muted);">Training state ≈ 16 bytes/param (bf16 weights + fp32 grads + fused AdamW). Architecture-independent — HVN's O(1) win is <em>inference</em> memory, not optimizer state. See <a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/69" target="_blank">#69</a>/<a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/70" target="_blank">#70</a>. A 10B model <em>served</em> on 6 GB is reachable only via edge/ternary (BitNet b1.58, ~2 GB) — a separate QAT training run (<a href="https://gitlab.com/komalbarun/kramba-ai/-/issues/32" target="_blank">#32</a>).</p>
             </div>
 
             <div class="card">
@@ -1076,6 +1079,48 @@ python train.py \
                             <td><span class="tag tag-green">Compression</span></td>
                             <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/issues/32" target="_blank">View ↗</a></td>
                         </tr>
+                        <tr>
+                            <td>64</td>
+                            <td><strong>Epic:</strong> Frontier-scale training readiness — distributed (DDP/FSDP + tensor-parallel) HVN training</td>
+                            <td><span class="tag tag-purple">Frontier</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/64" target="_blank">View ↗</a></td>
+                        </tr>
+                        <tr>
+                            <td>65</td>
+                            <td>Data-parallel training path (DDP/FSDP) for train.py / auto_train.py</td>
+                            <td><span class="tag tag-purple">Frontier</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/65" target="_blank">View ↗</a></td>
+                        </tr>
+                        <tr>
+                            <td>66</td>
+                            <td>Tensor/model parallelism for the HVN/DeltaNet block (shard per-head state)</td>
+                            <td><span class="tag tag-purple">Frontier</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/66" target="_blank">View ↗</a></td>
+                        </tr>
+                        <tr>
+                            <td>67</td>
+                            <td>Multi-node launch + sharded-checkpoint I/O compatible with ModelVersion registry</td>
+                            <td><span class="tag tag-purple">Frontier</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/67" target="_blank">View ↗</a></td>
+                        </tr>
+                        <tr>
+                            <td>68</td>
+                            <td>Frontier training plan/spec — config from scaling exponents, budget, data, edge/ternary lane fork</td>
+                            <td><span class="tag tag-purple">Frontier</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/68" target="_blank">View ↗</a></td>
+                        </tr>
+                        <tr>
+                            <td>69</td>
+                            <td>RTX 4050 (6 GB) training envelope — measure real limits (10B is infeasible)</td>
+                            <td><span class="tag tag-yellow">Hardware</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/69" target="_blank">View ↗</a></td>
+                        </tr>
+                        <tr>
+                            <td>70</td>
+                            <td>RTX 4060 (8 GB) training envelope — measure real limits (10B is infeasible)</td>
+                            <td><span class="tag tag-yellow">Hardware</span></td>
+                            <td><a href="https://gitlab.com/komalbarun/kramba-ai/-/work_items/70" target="_blank">View ↗</a></td>
+                        </tr>
                     </tbody>
                 </table>
             </div>
@@ -1090,7 +1135,8 @@ python train.py \
                     <strong>Phase 5 (Done):</strong> #25 (Agents) → #28 (Chat) — depends on #24<br>
                     <strong>Phase 6 (Done):</strong> #29 (LoRA) — enables all agentic features<br>
                     <strong>Phase 7 (Done):</strong> #33 (Custom Kernels & Parallel Processing) — 2-7× generation speedup<br>
-                    <strong>Phase 8 (Open):</strong> #32 (Extreme Weight Compression) — depends on #33's dtype-agnostic kernel
+                    <strong>Phase 8 (Open):</strong> #32 (Extreme Weight Compression) — depends on #33's dtype-agnostic kernel<br>
+                    <strong>Phase 9 — Frontier training (Open):</strong> epic #64 → #65 (data-parallel) + #66 (tensor-parallel) → #67 (multi-node + sharded ckpt) → #68 (plan/spec); on-box envelopes #69 (4050) / #70 (4060). <em>10B needs a cluster to train (§1.1); 10B <strong>served</strong> on 6 GB only via edge/ternary #32 at ~2 GB — a separate QAT run, not a free export.</em>
                 </div>
             </div>
         </div>

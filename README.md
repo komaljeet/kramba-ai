@@ -1101,6 +1101,15 @@ research-size requires multi-GPU data/tensor parallelism, and every batched path
 #46-correct (`batched == single-stream`), which is the prerequisite for correct data-parallel
 training. This should be the next priority when moving off the RTX 4050.
 
+**Now tracked** as epic **#64** (frontier-scale training readiness) with sub-issues: data-parallel
+DDP/FSDP path (#65), tensor/model-parallel HVN block (#66), multi-node launch + sharded-checkpoint
+I/O (#67), and the frontier training plan/spec (#68). Two companion issues quantify the on-box
+ceiling — **RTX 4050 (6 GB)** and **RTX 4060 (8 GB)** training envelopes (#69/#70) — and record the
+hard reality that a **10B model cannot be trained (or bf16-inferenced) on these cards** (10B ≈ 160 GB
+of training state, 20 GB of bf16 weights; off by ~30×). A 10B model *served* on 6 GB is only reachable
+via the **edge/ternary (BitNet b1.58) path** (#32) at ~2 GB — but that is a **separate, quantization-
+aware training run**, not a free export of a full-precision flagship (see #68's lane table).
+
 ### Phase 8: Fine-Tuning & Instruction Tuning — ✅ Complete
 
 LoRA, QLoRA, instruction tuning, LoRA save/load, demo (#29).
