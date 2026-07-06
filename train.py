@@ -247,7 +247,12 @@ def train_model(
 
     if compile:
         print("Compiling model with torch.compile (first epoch will be slower)...")
-        model = torch.compile(model, mode="reduce-overhead")
+        # Use "default" mode — "reduce-overhead" uses CUDA Graphs which are
+        # incompatible with EdgeHVN's embedding + ternary weight structure
+        # (causes "accessing tensor output of CUDAGraphs that has been
+        # overwritten by a subsequent run" errors).  The "default" mode
+        # still gives kernel fusion + Triton codegen speedups (Issue #71).
+        model = torch.compile(model, mode="default")
 
     # Move params to the device BEFORE building the optimizer — the fused AdamW
     # kernel requires its params to already live on CUDA at construction time.
@@ -301,6 +306,12 @@ def train_model(
         for step, (batch_x, batch_y) in enumerate(dataloader):
             batch_x = batch_x.to(device, non_blocking=non_blocking)  # [B, S]
             batch_y = batch_y.to(device, non_blocking=non_blocking)  # [B, S]
+
+            # Mark step boundary for CUDA Graphs (torch.compile reduce-overhead mode)
+            # — prevents "accessing tensor output of CUDAGraphs that has been
+            # overwritten by a subsequent run" errors (Issue #71).
+            if compile:
+                torch.compiler.cudagraph_mark_step_begin()
 
             # Forward pass (with autocast for mixed precision)
             with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
