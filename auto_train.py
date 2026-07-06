@@ -69,6 +69,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from hvn.core import HamiltonianVortexNetwork
+from hvn import distributed as hvn_dist
 from train import CharTokenizer, TextDataset, train_model
 from eval.curriculum import CURRICULUM_STAGES, load_curriculum_stage
 # Per-stage scoring lives in the #55 coding-eval harness (eval.coding), imported
@@ -218,6 +219,8 @@ def run_curriculum(
     device: torch.device | None = None,
     seed: int = 42,
     progress_cb=None,
+    distributed: bool = False,
+    fsdp: bool = False,
 ) -> dict:
     """Train ``stages`` in order from ``base_checkpoint``, one checkpoint each.
 
@@ -232,9 +235,18 @@ def run_curriculum(
     raises (e.g. on a user cancel) propagates out and stops the run cleanly after
     the current stage's checkpoint/state have been committed. The CLI passes no
     callback, so this is a no-op for ``python auto_train.py``.
+
+    ``distributed`` (Issue #65) runs each stage's training data-parallel under
+    an already-initialised process group (``torchrun auto_train.py
+    --distributed``): each rank trains a disjoint shard, while the resume state,
+    metrics JSONL, stage checkpoints, and tokenizer files are written **rank-0
+    only, atomically** — the #54 resume contract is unchanged. Evaluation runs
+    on rank 0.
     """
+    is_main = hvn_dist.is_main_process() if distributed else True
+
     def _emit(event: dict) -> None:
-        if progress_cb is not None:
+        if progress_cb is not None and is_main:
             progress_cb(event)
     os.makedirs(out_dir, exist_ok=True)
     if state_path is None:
@@ -258,8 +270,9 @@ def run_curriculum(
         if completed:
             carry_checkpoint = prior.get("current_checkpoint") or base_checkpoint
             done = [c["stage"] for c in completed]
-            print(f"[resume] {len(done)} stage(s) already done: {', '.join(done)}")
-            print(f"[resume] carrying forward: {carry_checkpoint}")
+            if is_main:
+                print(f"[resume] {len(done)} stage(s) already done: {', '.join(done)}")
+                print(f"[resume] carrying forward: {carry_checkpoint}")
     elif prior and not resume:
         pass
 
@@ -280,7 +293,8 @@ def run_curriculum(
         "completed": completed,
         "current_checkpoint": carry_checkpoint,
     }
-    _atomic_write_json(state_path, state)
+    if is_main:
+        _atomic_write_json(state_path, state)
 
     todo = [s for s in stages if s not in done_stages]
     _emit({"event": "run_start", "stages": stages, "done": sorted(done_stages),
@@ -298,7 +312,8 @@ def run_curriculum(
                "index": len(completed), "total": len(stages),
                "from": carry_checkpoint})
 
-        print(f"\n{'=' * 64}\n=== stage '{stage}'  (from {carry_checkpoint}) ===\n{'=' * 64}")
+        if is_main:
+            print(f"\n{'=' * 64}\n=== stage '{stage}'  (from {carry_checkpoint}) ===\n{'=' * 64}")
         t0 = time.time()
 
         # 1. Load the carried-forward model + tokenizer.
@@ -314,26 +329,46 @@ def run_curriculum(
         #    checkpoint — BPE handles new code subwords via its byte fallback).
         train_ids = tokenizer.encode(train_text)
         ds = TextDataset(train_ids, seq_len=seq_len)
-        loader = DataLoader(
-            ds, batch_size=batch_size, shuffle=True, drop_last=False,
-            pin_memory=use_cuda,
-        )
-        print(f"  train tokens: {len(train_ids):,} | batches/epoch: {len(loader)}")
+        if distributed:
+            # Disjoint per-rank shards (Issue #65); reshuffled per epoch via
+            # set_epoch inside train_model.
+            from torch.utils.data.distributed import DistributedSampler
+            loader = DataLoader(
+                ds, batch_size=batch_size,
+                sampler=DistributedSampler(ds, shuffle=True, seed=seed),
+                drop_last=False, pin_memory=use_cuda,
+            )
+        else:
+            loader = DataLoader(
+                ds, batch_size=batch_size, shuffle=True, drop_last=False,
+                pin_memory=use_cuda,
+            )
+        if is_main:
+            print(f"  train tokens: {len(train_ids):,} | batches/epoch: {len(loader)}")
 
         # 4. Train this stage, carrying the model weights forward. Saves the
-        #    stage checkpoint (train_model writes save_path itself).
+        #    stage checkpoint (train_model writes save_path itself — rank-0
+        #    only + barrier under distribution).
         stage_ckpt = _stage_checkpoint_path(out_dir, stage)
         train_model(
             model, loader, epochs=epochs_per_stage, lr=lr, device=device,
             save_path=stage_ckpt, precision=precision,
             fused_optimizer=use_cuda, defer_loss_sync=True, non_blocking=use_cuda,
+            distributed=distributed, fsdp=fsdp,
         )
         # Save the tokenizer alongside so each stage checkpoint is independently
         # servable (worker/generate auto-detect <stem>_tokenizer.json).
-        tokenizer.save(stage_ckpt.replace(".pt", "_tokenizer.json"))
+        if is_main:
+            tokenizer.save(stage_ckpt.replace(".pt", "_tokenizer.json"))
+        if distributed:
+            hvn_dist.barrier()
 
-        # 5. Evaluate the trained stage (the #55 seam).
-        metrics = evaluate_stage(model, tokenizer, stage, eval_text, seq_len, device)
+        # 5. Evaluate the trained stage (the #55 seam) — rank 0 only; other
+        #    ranks carry a stub row (only "stage"/"checkpoint" drive resume).
+        if is_main:
+            metrics = evaluate_stage(model, tokenizer, stage, eval_text, seq_len, device)
+        else:
+            metrics = {"ppl": None, "bits_per_char": None, "non_degenerate": None}
         elapsed = time.time() - t0
 
         row = {
@@ -347,20 +382,23 @@ def run_curriculum(
             "seconds": round(elapsed, 1),
             "metrics": metrics,
         }
-        _append_metrics(metrics_path, row)
-        print(f"  ✓ stage '{stage}' done in {elapsed:.1f}s | "
-              f"PPL {metrics['ppl']} | {metrics['bits_per_char']} bits/char | "
-              f"coding_score={metrics.get('coding_score')} "
-              f"({metrics.get('metric_kind')}) | "
-              f"non_degenerate={metrics['non_degenerate']}")
-        print(f"  ✓ checkpoint: {stage_ckpt}")
+        if is_main:
+            _append_metrics(metrics_path, row)
+            print(f"  ✓ stage '{stage}' done in {elapsed:.1f}s | "
+                  f"PPL {metrics['ppl']} | {metrics['bits_per_char']} bits/char | "
+                  f"coding_score={metrics.get('coding_score')} "
+                  f"({metrics.get('metric_kind')}) | "
+                  f"non_degenerate={metrics['non_degenerate']}")
+            print(f"  ✓ checkpoint: {stage_ckpt}")
 
-        # 6. Commit progress to the resume state (atomic) and carry forward.
+        # 6. Commit progress to the resume state (atomic, rank-0 only) and
+        #    carry forward (all ranks: the path is deterministic).
         completed.append(row)
         carry_checkpoint = stage_ckpt
         state["completed"] = completed
         state["current_checkpoint"] = carry_checkpoint
-        _atomic_write_json(state_path, state)
+        if is_main:
+            _atomic_write_json(state_path, state)
 
         _emit({"event": "stage_complete", "stage": stage,
                "index": len(completed) - 1, "total": len(stages),
@@ -370,12 +408,13 @@ def run_curriculum(
     _emit({"event": "run_complete", "completed": len(completed),
            "total": len(stages), "final_checkpoint": state["current_checkpoint"]})
 
-    print(f"\n{'=' * 64}")
-    print(f"Curriculum complete: {len(completed)}/{len(stages)} stage(s).")
-    print(f"  state:   {state_path}")
-    print(f"  metrics: {metrics_path}")
-    print(f"  final checkpoint: {state['current_checkpoint']}")
-    print(f"{'=' * 64}")
+    if is_main:
+        print(f"\n{'=' * 64}")
+        print(f"Curriculum complete: {len(completed)}/{len(stages)} stage(s).")
+        print(f"  state:   {state_path}")
+        print(f"  metrics: {metrics_path}")
+        print(f"  final checkpoint: {state['current_checkpoint']}")
+        print(f"{'=' * 64}")
     return state
 
 
@@ -414,6 +453,13 @@ def main():
                    help="Ignore any prior state and start the curriculum from scratch")
     p.add_argument("--smoke", action="store_true",
                    help="Fast offline loop-validation: tiny budget/epochs (CI / 6 GB box)")
+    p.add_argument("--distributed", action="store_true",
+                   help="Data-parallel curriculum training (Issue #65): launch with "
+                        "torchrun --nproc_per_node=K auto_train.py --distributed ... "
+                        "State/metrics/checkpoints are written rank-0 only; resume "
+                        "semantics unchanged.")
+    p.add_argument("--fsdp", action="store_true",
+                   help="With --distributed: FSDP sharding instead of DDP replication.")
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()
 
@@ -439,6 +485,13 @@ def main():
               f"  Build one first with build_chat_checkpoint.py (Issue #51).")
         return 2
 
+    if args.distributed or hvn_dist.distributed_env_present():
+        args.distributed = True
+        _, _, local_rank = hvn_dist.init_distributed()
+        device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+    else:
+        device = None  # run_curriculum picks cuda/cpu itself
+
     torch.manual_seed(args.seed)
     run_curriculum(
         base_checkpoint=args.base,
@@ -456,8 +509,13 @@ def main():
         local_dir=args.local_dir,
         allow_download=allow_download,
         resume=not args.restart,
+        device=device,
         seed=args.seed,
+        distributed=args.distributed,
+        fsdp=args.fsdp,
     )
+    if args.distributed:
+        hvn_dist.cleanup()
     return 0
 
 
