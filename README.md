@@ -490,6 +490,39 @@ python train.py --text my_corpus.txt \
 **On OOM, reduce in order:** `--batch_size 8|4` → `--seq_len 64` → `--d_model 128`, then
 add `--grad_accum 4` to recover effective batch.
 
+#### Measured RTX 4050 training envelope (Issue #69)
+
+Measured with `python -m eval.vram_envelope` (DeltaNet block, vocab 8000, B=8,
+S=128, bf16, fused AdamW; full grid in `results/vram_envelope_rtx4050.json`):
+
+| Config | Params | Peak VRAM | s/step | Trains in 6 GB? |
+|---|---:|---:|---:|---|
+| d=512, 8L | 29M | 1.0 GiB | 0.39 | ✅ |
+| d=768, 12L | 83M | 2.5 GiB | 0.49 | ✅ |
+| d=1024, 12L | 143M | 3.6 GiB | 0.52 | ✅ **max without `--grad_checkpoint`** |
+| d=1024, 24L | 268M | 6.9 GiB | 2.28 | ❌ (spills → 4.4× slower) |
+| d=1024, 24L `+ckpt` | 268M | **4.3 GiB** | 1.13 | ✅ **recommended ceiling config** |
+| d=1024, 24L, B=16, S=256 `+ckpt` | 268M | 4.7 GiB | 2.28 | ✅ (ckpt crushes activations) |
+| d=1280, 24L `+ckpt` | 414M | 7.0 GiB | 1.46 | ❌ (fits 8 GB — see #70) |
+| d=1536, 24L `+ckpt` | 592M | 10.0 GiB | 1.95 | ❌ |
+| d=2048, 24L (±ckpt) | ~1B | — | — | ❌ hard OOM at allocation |
+
+**Honest ceiling: ~270M params** (d=1024, 24L, bf16 + `--grad_checkpoint`,
+4.3 GiB peak) — measured **16.8 bytes/param** end-to-end, confirming the
+16 B/param training-state model (bf16 weights + grads + fp32 AdamW moments +
+master). **1B (~16 GB) and 10B (~160 GB) cannot train on this card — off by
+~3× and ~30×** — and 10B can't even bf16-load (20 GB weights). The knobs,
+ranked by measured effect: bf16 (#19/#44) → `--grad_checkpoint` (#49; −38%
+peak at d=1024/24L, and the difference between fitting and spilling) →
+smaller batch/seq (+`--grad_accum` to recover) → 8-bit optimizer (not wired —
+the gap to push past ~400M) → CPU/NVMe offload (not wired).
+
+> **Windows WDDM spill-over caveat:** past ~6 GiB the driver silently spills
+> into system RAM instead of OOM-ing — steps get 4–15× slower (see the 6.9 GiB
+> row) and the run *looks* alive. On Linux the same configs hard-OOM. Treat
+> `peak < 6 GiB` as the envelope, not "it didn't crash"; the >6 GiB rows in the
+> JSON record true allocator demand (used for the #70 8 GB projection).
+
 ### Key Training Flags
 
 | Flag | Default | Description |
