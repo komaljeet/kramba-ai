@@ -1095,13 +1095,32 @@ re-measurement on real WikiText-103 (BPE, compute-matched, unsaturated):** HVN s
 ### Phase 7: Inference Optimization & Production — ✅ / ⬜ mixed
 
 Quantization INT8/NF4 (#20 ✅), BPE tokenizer (#11 ✅), HuggingFace integration (#3/#6 ✅),
-mixed precision (#19 ✅). ⬜ **Distributed training (DDP/FSDP) — the critical open dependency
-for the §1.1 frontier north star.** Single-GPU validation is complete; scaling beyond
-research-size requires multi-GPU data/tensor parallelism, and every batched path is already
-#46-correct (`batched == single-stream`), which is the prerequisite for correct data-parallel
-training. This should be the next priority when moving off the RTX 4050.
+mixed precision (#19 ✅). ✅ **Distributed training (DDP/FSDP + tensor-parallel) — epic #64
+delivered (2026-07-06).** Every piece shipped with a laptop-runnable **parity artifact**
+(the #46 `batched == single-stream` discipline extended to distribution):
 
-**Now tracked** as epic **#64** (frontier-scale training readiness) with sub-issues: data-parallel
+- **#65 Data parallelism** — `train.py`/`auto_train.py --distributed [--fsdp]` under
+  `torchrun` (`hvn/distributed.py`): 2-process gloo run == single-process weights
+  (max|Δw| 1.2e-7, grad-accum `no_sync` included), per-epoch loss all-reduce (extends #50),
+  rank-0-only atomic writes, single-GPU checkpoint layout unchanged (`tests/test_issue65.py` 5/5).
+- **#66 Tensor parallelism** — head-parallel DeltaNet (`hvn/core/head_parallel.py`,
+  Megatron-style f/g pair, one all-gather per block, 1/W per-rank state) + full design
+  (`docs/TENSOR_PARALLEL_DESIGN.md`, incl. within-head sharding and why the default block's
+  `HPH` term is TP-hostile while DeltaNet needs zero recurrence collectives) —
+  `tests/test_issue66.py` 5/5 forward+gradient parity.
+- **#67 Multi-node launch + checkpoint I/O** — `hvn/launch.py` (torchrun/SLURM bring-up,
+  FSDP full-state-dict consolidation → rank-0 atomic single-file layout) +
+  `docs/DISTRIBUTED_LAUNCH.md`; a 2-proc-DDP checkpoint serves **unchanged** through
+  `generate.load_model` → `ModelVersion` (`tests/test_issue67.py`, param parity 2.4e-7).
+- **#68 Frontier plan** — `docs/FRONTIER_TRAINING_PLAN.md`: config from the measured −0.504
+  DeltaNet exponent, Chinchilla-style budgets (~$8 pilot / ~$210 @1B / ~$21K @10B, MFU
+  labelled), data plan extending #53, the edge/ternary lane fork costed, risk register,
+  go/no-go Gates 0–3. **This is the frontier ramp.**
+
+O(1) inference and #46 batched-equality preserved throughout; the cluster run itself remains
+gated on budget/environment (Gate 1+ of the plan).
+
+**Epic #64** (frontier-scale training readiness) tracked the above sub-issues: data-parallel
 DDP/FSDP path (#65), tensor/model-parallel HVN block (#66), multi-node launch + sharded-checkpoint
 I/O (#67), and the frontier training plan/spec (#68). Two companion issues quantify the on-box
 ceiling — **RTX 4050 (6 GB)** and **RTX 4060 (8 GB)** training envelopes (#69/#70) — and record the
