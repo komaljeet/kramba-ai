@@ -523,6 +523,37 @@ the gap to push past ~400M) → CPU/NVMe offload (not wired).
 > `peak < 6 GiB` as the envelope, not "it didn't crash"; the >6 GiB rows in the
 > JSON record true allocator demand (used for the #70 8 GB projection).
 
+#### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
+
+Memory **demand** below is measured (card-independent; the WDDM spill rows of
+the #69 grid record true allocator demand past 6 GiB); the 8 GB **fit** column
+is arithmetic against 8192 MiB — a **projection, not a physical-4060
+measurement** (step times don't transfer: a real 4060 is faster and
+spill-free). Derived table: `results/vram_envelope_rtx4060_projection.json`;
+validate on real hardware with `python -m eval.vram_envelope`.
+
+| Config | Params | Demand | 6 GB (4050) | 8 GB (4060) |
+|---|---:|---:|---|---|
+| d=1024, 12L | 143M | 3.6 GiB | ✅ | ✅ |
+| d=1024, 24L (no ckpt) | 268M | 6.9 GiB | ❌ | ✅ **max without ckpt** |
+| d=1024, 24L `+ckpt` | 268M | 4.3 GiB | ✅ | ✅ comfortable |
+| d=1280, 20L (no ckpt) | 349M | 8.3 GiB | ❌ | ❌ just misses |
+| d=1280, 24L `+ckpt` | 414M | 7.0 GiB | ❌ | ✅ **recommended 4060 ceiling** |
+| d=1408, 24L `+ckpt` | 499M | 9.5 GiB | ❌ | ❌ |
+| ~1B / 10B | — | ~16 / ~160 GB | ❌ | ❌ (off by ~2× / ~20×) |
+
+**What the extra 2 GB buys:** the no-checkpoint ceiling roughly doubles
+(143M → ~270M) and the checkpointed ceiling rises ~54% (270M → ~415M,
+d=1280/24L bf16 `+ckpt` at 7.0 GiB) — a bigger comfortable config and more
+bf16 width headroom (#44), **not a categorical change**: 1B (~16 GB training
+state) and 10B (~160 GB) remain infeasible on 8 GB, same 16 B/param math.
+
+> **"RTX 4060" caveat:** laptop and desktop 4060 are 8 GB, but the desktop
+> **4060 Ti** ships in 8 GB *or 16 GB* variants. A 16 GB Ti roughly doubles
+> this envelope (the measured 592M-`+ckpt` config at 10.0 GiB and the ~1B
+> no-go both flip within reach of ~800M–1B with an 8-bit optimizer) — still
+> far short of training 1B comfortably or 10B at all.
+
 ### Key Training Flags
 
 | Flag | Default | Description |
