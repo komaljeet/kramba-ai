@@ -1,0 +1,162 @@
+{
+ "provenance": "Memory DEMAND measured on the RTX 4050 (Windows WDDM host-spill records true allocator demand past 6 GiB; see vram_envelope_rtx4050.json). Demand is card-independent; the fits_8gb column is arithmetic against an 8192 MiB budget. PROJECTION, not a physical-4060 measurement: step times do NOT transfer (the 4060 is faster and spill-free), and a real-4060 validation pass should re-run eval/vram_envelope.py on the card.",
+ "assumed_vram_mb": 8192,
+ "rows": [
+  {
+   "d_model": 512,
+   "num_layers": 8,
+   "params": 29254528,
+   "batch_size": 8,
+   "seq_len": 128,
+   "precision": "bf16",
+   "grad_checkpoint": false,
+   "demand_mb_reserved": 1020,
+   "fits_6gb": true,
+   "fits_8gb": true
+  },
+  {
+   "d_model": 768,
+   "num_layers": 12,
+   "params": 83260832,
+   "batch_size": 8,
+   "seq_len": 128,
+   "precision": "bf16",
+   "grad_checkpoint": false,
+   "demand_mb_reserved": 2542,
+   "fits_6gb": true,
+   "fits_8gb": true
+  },
+  {
+   "d_model": 1024,
+   "num_layers": 12,
+   "params": 142469024,
+   "batch_size": 8,
+   "seq_len": 128,
+   "precision": "bf16",
+   "grad_checkpoint": false,
+   "demand_mb_reserved": 3644,
+   "fits_6gb": true,
+   "fits_8gb": true
+  },
+  {
+   "d_model": 1024,
+   "num_layers": 24,
+   "params": 268544000,
+   "batch_size": 8,
+   "seq_len": 128,
+   "precision": "bf16",
+   "grad_checkpoint": false,
+   "demand_mb_reserved": 6902,
+   "fits_6gb": false,
+   "fits_8gb": true
+  },
+  {
+   "d_model": 1024,
+   "num_layers": 24,
+   "params": 268544000,
+   "batch_size": 8,
+   "seq_len": 128,
+   "precision": "bf16",
+   "grad_checkpoint": true,
+   "demand_mb_reserved": 4302,
+   "fits_6gb": true,
+   "fits_8gb": true
+  },
+  {
+   "d_model": 1536,
+   "num_layers": 24,
+   "params": 591555584,
+   "batch_size": 8,
+   "seq_len": 128,
+   "precision": "bf16",
+   "grad_checkpoint": true,
+   "demand_mb_reserved": 9958,
+   "fits_6gb": false,
+   "fits_8gb": false
+  },
+  {
+   "d_model": 1024,
+   "num_layers": 12,
+   "params": 142469024,
+   "batch_size": 8,
+   "seq_len": 128,
+   "precision": "fp32",
+   "grad_checkpoint": false,
+   "demand_mb_reserved": 3792,
+   "fits_6gb": true,
+   "fits_8gb": true
+  },
+  {
+   "d_model": 1024,
+   "num_layers": 24,
+   "params": 268544000,
+   "batch_size": 8,
+   "seq_len": 128,
+   "precision": "fp32",
+   "grad_checkpoint": false,
+   "demand_mb_reserved": 7208,
+   "fits_6gb": false,
+   "fits_8gb": true
+  },
+  {
+   "d_model": 1024,
+   "num_layers": 24,
+   "params": 268544000,
+   "batch_size": 16,
+   "seq_len": 128,
+   "precision": "bf16",
+   "grad_checkpoint": false,
+   "demand_mb_reserved": 10108,
+   "fits_6gb": false,
+   "fits_8gb": false
+  },
+  {
+   "d_model": 1024,
+   "num_layers": 24,
+   "params": 268544000,
+   "batch_size": 16,
+   "seq_len": 256,
+   "precision": "bf16",
+   "grad_checkpoint": true,
+   "demand_mb_reserved": 4740,
+   "fits_6gb": true,
+   "fits_8gb": true
+  },
+  {
+   "d_model": 1280,
+   "num_layers": 24,
+   "params": 414321152,
+   "batch_size": 8,
+   "seq_len": 128,
+   "precision": "bf16",
+   "grad_checkpoint": true,
+   "demand_mb_reserved": 7016,
+   "fits_6gb": false,
+   "fits_8gb": true
+  },
+  {
+   "d_model": 1280,
+   "num_layers": 20,
+   "params": 348682720,
+   "batch_size": 8,
+   "seq_len": 128,
+   "precision": "bf16",
+   "grad_checkpoint": false,
+   "demand_mb_reserved": 8304,
+   "fits_6gb": false,
+   "fits_8gb": false
+  },
+  {
+   "d_model": 1408,
+   "num_layers": 24,
+   "params": 499006208,
+   "batch_size": 8,
+   "seq_len": 128,
+   "precision": "bf16",
+   "grad_checkpoint": true,
+   "demand_mb_reserved": 9462,
+   "fits_6gb": false,
+   "fits_8gb": false
+  }
+ ]
+}

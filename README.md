@@ -490,6 +490,70 @@ python train.py --text my_corpus.txt \
 **On OOM, reduce in order:** `--batch_size 8|4` → `--seq_len 64` → `--d_model 128`, then
 add `--grad_accum 4` to recover effective batch.
 
+#### Measured RTX 4050 training envelope (Issue #69)
+
+Measured with `python -m eval.vram_envelope` (DeltaNet block, vocab 8000, B=8,
+S=128, bf16, fused AdamW; full grid in `results/vram_envelope_rtx4050.json`):
+
+| Config | Params | Peak VRAM | s/step | Trains in 6 GB? |
+|---|---:|---:|---:|---|
+| d=512, 8L | 29M | 1.0 GiB | 0.39 | ✅ |
+| d=768, 12L | 83M | 2.5 GiB | 0.49 | ✅ |
+| d=1024, 12L | 143M | 3.6 GiB | 0.52 | ✅ **max without `--grad_checkpoint`** |
+| d=1024, 24L | 268M | 6.9 GiB | 2.28 | ❌ (spills → 4.4× slower) |
+| d=1024, 24L `+ckpt` | 268M | **4.3 GiB** | 1.13 | ✅ **recommended ceiling config** |
+| d=1024, 24L, B=16, S=256 `+ckpt` | 268M | 4.7 GiB | 2.28 | ✅ (ckpt crushes activations) |
+| d=1280, 24L `+ckpt` | 414M | 7.0 GiB | 1.46 | ❌ (fits 8 GB — see #70) |
+| d=1536, 24L `+ckpt` | 592M | 10.0 GiB | 1.95 | ❌ |
+| d=2048, 24L (±ckpt) | ~1B | — | — | ❌ hard OOM at allocation |
+
+**Honest ceiling: ~270M params** (d=1024, 24L, bf16 + `--grad_checkpoint`,
+4.3 GiB peak) — measured **16.8 bytes/param** end-to-end, confirming the
+16 B/param training-state model (bf16 weights + grads + fp32 AdamW moments +
+master). **1B (~16 GB) and 10B (~160 GB) cannot train on this card — off by
+~3× and ~30×** — and 10B can't even bf16-load (20 GB weights). The knobs,
+ranked by measured effect: bf16 (#19/#44) → `--grad_checkpoint` (#49; −38%
+peak at d=1024/24L, and the difference between fitting and spilling) →
+smaller batch/seq (+`--grad_accum` to recover) → 8-bit optimizer (not wired —
+the gap to push past ~400M) → CPU/NVMe offload (not wired).
+
+> **Windows WDDM spill-over caveat:** past ~6 GiB the driver silently spills
+> into system RAM instead of OOM-ing — steps get 4–15× slower (see the 6.9 GiB
+> row) and the run *looks* alive. On Linux the same configs hard-OOM. Treat
+> `peak < 6 GiB` as the envelope, not "it didn't crash"; the >6 GiB rows in the
+> JSON record true allocator demand (used for the #70 8 GB projection).
+
+#### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
+
+Memory **demand** below is measured (card-independent; the WDDM spill rows of
+the #69 grid record true allocator demand past 6 GiB); the 8 GB **fit** column
+is arithmetic against 8192 MiB — a **projection, not a physical-4060
+measurement** (step times don't transfer: a real 4060 is faster and
+spill-free). Derived table: `results/vram_envelope_rtx4060_projection.json`;
+validate on real hardware with `python -m eval.vram_envelope`.
+
+| Config | Params | Demand | 6 GB (4050) | 8 GB (4060) |
+|---|---:|---:|---|---|
+| d=1024, 12L | 143M | 3.6 GiB | ✅ | ✅ |
+| d=1024, 24L (no ckpt) | 268M | 6.9 GiB | ❌ | ✅ **max without ckpt** |
+| d=1024, 24L `+ckpt` | 268M | 4.3 GiB | ✅ | ✅ comfortable |
+| d=1280, 20L (no ckpt) | 349M | 8.3 GiB | ❌ | ❌ just misses |
+| d=1280, 24L `+ckpt` | 414M | 7.0 GiB | ❌ | ✅ **recommended 4060 ceiling** |
+| d=1408, 24L `+ckpt` | 499M | 9.5 GiB | ❌ | ❌ |
+| ~1B / 10B | — | ~16 / ~160 GB | ❌ | ❌ (off by ~2× / ~20×) |
+
+**What the extra 2 GB buys:** the no-checkpoint ceiling roughly doubles
+(143M → ~270M) and the checkpointed ceiling rises ~54% (270M → ~415M,
+d=1280/24L bf16 `+ckpt` at 7.0 GiB) — a bigger comfortable config and more
+bf16 width headroom (#44), **not a categorical change**: 1B (~16 GB training
+state) and 10B (~160 GB) remain infeasible on 8 GB, same 16 B/param math.
+
+> **"RTX 4060" caveat:** laptop and desktop 4060 are 8 GB, but the desktop
+> **4060 Ti** ships in 8 GB *or 16 GB* variants. A 16 GB Ti roughly doubles
+> this envelope (the measured 592M-`+ckpt` config at 10.0 GiB and the ~1B
+> no-go both flip within reach of ~800M–1B with an 8-bit optimizer) — still
+> far short of training 1B comfortably or 10B at all.
+
 ### Key Training Flags
 
 | Flag | Default | Description |
@@ -606,6 +670,12 @@ BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 
 | #53 | Curriculum dataset loaders (Milestone 2, Issue C) — `load_curriculum_stage('html'\|'css'\|'js'\|'php'\|'python'\|'devops')` returns `(train, eval)` streams for the coding-curriculum order, mirroring the WikiText-103 loader. **Permissive-only license filtering** (rejects GPL/LGPL/AGPL/MPL/EPL/CC-BY-SA), **near-dedup** (exact + MinHash-Jaccard over word-shingles), per-stage compute-matched char budgets + 90/10 doc split, and streaming/local-cache resolution (local dir → best-effort curated permissive download → offline synthetic fallback so every stage smoke-loads on the 6 GB box with no network). Feeds #54 (orchestrator) and #55 (eval) | `eval/curriculum.py`, `eval/datasets.py`, `tests/test_issue53.py` |
 | #57 | In-app "Start Training" — staff-only `POST /api/training/` enqueues a Celery training task onto a **dedicated GPU `training` queue** (routed by `CELERY_TASK_ROUTES` to a separate `app-train-worker`, so a GPU-saturating run never starves chat inference), reusing `auto_train.run_curriculum` (#54) to continue a curriculum/validation run from a registered `ModelVersion`. Per-stage progress streams over `ws/training/<job>/` (`TrainingConsumer`), **one job at a time** (409 otherwise), cancellable (cooperative — stops after the current stage's checkpoint commits), and the produced checkpoint is auto-registered as a new `ModelVersion`. Staff-only Start-Training panel added to the #56 chat SPA. Wind-tunnel caution documented (validation runs, not frontier training) | `web/api/{models,tasks,views,serializers}.py`, `web/chat/consumers.py`, `auto_train.py`, `web/docker-*.yml`, `web/Dockerfile`, `web/tests/test_training.py` |
 | #55 | Coding eval harness (Milestone 2, Issue E) — `python -m eval.coding --checkpoint X --lang python\|all` scores a checkpoint per language: **exec-based HumanEval-style pass@k** where a runtime exists (Python always; JS/PHP when `node`/`php` installed — sandboxed subprocess + timeout), **structural/compile validity** otherwise (balanced tags/braces, `compile()`, `yaml.safe_load`), and **always** tokenization-invariant held-out **bits-per-char**/PPL. Callable API (`score_stage`/`evaluate_coding`) is the #54 seam — `auto_train.evaluate_stage` delegates to it (keeps its `ppl`/`bits_per_char` keys, adds `coding_score`). #51 base baselines committed (`results/coding_baseline_issue51.json`) so curriculum gains are quantifiable. O(1) inference untouched | `eval/coding.py`, `auto_train.py`, `tests/test_issue55.py` |
+| #65 | Data-parallel training (DDP/FSDP) — `--distributed [--fsdp]` under `torchrun`; 2-proc gloo == single-process (max|Δw| 1.2e-7), per-epoch loss all-reduce, rank-0-only atomic writes, serving checkpoint layout unchanged | `hvn/distributed.py`, `train.py`, `auto_train.py`, `tests/test_issue65.py` |
+| #66 | Head-parallel tensor parallelism for the DeltaNet block (Megatron-style f/g pair, 1/W per-rank state, one all-gather/block) + within-head sharding design; DeltaNet shown TP-friendly vs the `HPH` default | `hvn/core/head_parallel.py`, `docs/TENSOR_PARALLEL_DESIGN.md`, `tests/test_issue66.py` |
+| #67 | Multi-node launch (torchrun/SLURM) + consolidated checkpoint I/O — FSDP/DDP → rank-0 atomic single-file layout, serves unchanged via `generate.load_model`/ModelVersion | `hvn/launch.py`, `docs/DISTRIBUTED_LAUNCH.md`, `tests/test_issue67.py` |
+| #68 | Frontier training plan/spec — config from measured exponents, Chinchilla budgets/cost, data plan, edge/ternary lane fork, risk register, go/no-go gates | `docs/FRONTIER_TRAINING_PLAN.md` |
+| #69 | Measured RTX 4050 (6 GB) training envelope — ceiling ~270M params (d=1024/24L bf16+ckpt, 4.3 GiB; 16.8 B/param measured); 1B/10B infeasibility measured; WDDM silent host-spill failure mode documented | `eval/vram_envelope.py`, `results/vram_envelope_rtx4050.json`, README §6 |
+| #70 | RTX 4060 (8 GB) envelope — measured demand, projected fit: no-ckpt ceiling 143M→~270M, ckpt 268M→~415M; 1B/10B still infeasible; 16 GB Ti caveat | `results/vram_envelope_rtx4060_projection.json`, README §6 |
 | #71 | Wire EdgeHVN + ternary + DeltaNet into `train.py` — `--edge` swaps in `EdgeHVN` (ALBERT-style weight sharing, GPTQ) in place of `HamiltonianVortexNetwork`; `--ternary` applies STE-trainable BitNet b1.58 `{-1,0,+1}` weights to `nn.Linear` layers, excluding the tiny `eta_proj`/`alpha_proj` gate projections (ternarizing them destabilizes DeltaNet's sigmoid decay/write gates) and the decoder; `--save_every_steps`/`--log_every_steps` add step-based checkpointing/logging (previously epoch-only); `_save_checkpoint()` correctly handles `EdgeHVN`/`DeltaNetBlock` metadata (`train_chunk`, not `chunk_size`) and shared-weight models. Also fixes a `torch.compile` CUDA Graphs crash under `--edge` (`mode='reduce-overhead'` → `'default'`, plus `cudagraph_mark_step_begin()`) | `train.py`, `tests/test_issue71.py` |
 
 ---
@@ -1096,11 +1166,39 @@ re-measurement on real WikiText-103 (BPE, compute-matched, unsaturated):** HVN s
 ### Phase 7: Inference Optimization & Production — ✅ / ⬜ mixed
 
 Quantization INT8/NF4 (#20 ✅), BPE tokenizer (#11 ✅), HuggingFace integration (#3/#6 ✅),
-mixed precision (#19 ✅). ⬜ **Distributed training (DDP/FSDP) — the critical open dependency
-for the §1.1 frontier north star.** Single-GPU validation is complete; scaling beyond
-research-size requires multi-GPU data/tensor parallelism, and every batched path is already
-#46-correct (`batched == single-stream`), which is the prerequisite for correct data-parallel
-training. This should be the next priority when moving off the RTX 4050.
+mixed precision (#19 ✅). ✅ **Distributed training (DDP/FSDP + tensor-parallel) — epic #64
+delivered (2026-07-06).** Every piece shipped with a laptop-runnable **parity artifact**
+(the #46 `batched == single-stream` discipline extended to distribution):
+
+- **#65 Data parallelism** — `train.py`/`auto_train.py --distributed [--fsdp]` under
+  `torchrun` (`hvn/distributed.py`): 2-process gloo run == single-process weights
+  (max|Δw| 1.2e-7, grad-accum `no_sync` included), per-epoch loss all-reduce (extends #50),
+  rank-0-only atomic writes, single-GPU checkpoint layout unchanged (`tests/test_issue65.py` 5/5).
+- **#66 Tensor parallelism** — head-parallel DeltaNet (`hvn/core/head_parallel.py`,
+  Megatron-style f/g pair, one all-gather per block, 1/W per-rank state) + full design
+  (`docs/TENSOR_PARALLEL_DESIGN.md`, incl. within-head sharding and why the default block's
+  `HPH` term is TP-hostile while DeltaNet needs zero recurrence collectives) —
+  `tests/test_issue66.py` 5/5 forward+gradient parity.
+- **#67 Multi-node launch + checkpoint I/O** — `hvn/launch.py` (torchrun/SLURM bring-up,
+  FSDP full-state-dict consolidation → rank-0 atomic single-file layout) +
+  `docs/DISTRIBUTED_LAUNCH.md`; a 2-proc-DDP checkpoint serves **unchanged** through
+  `generate.load_model` → `ModelVersion` (`tests/test_issue67.py`, param parity 2.4e-7).
+- **#68 Frontier plan** — `docs/FRONTIER_TRAINING_PLAN.md`: config from the measured −0.504
+  DeltaNet exponent, Chinchilla-style budgets (~$8 pilot / ~$210 @1B / ~$21K @10B, MFU
+  labelled), data plan extending #53, the edge/ternary lane fork costed, risk register,
+  go/no-go Gates 0–3. **This is the frontier ramp.**
+
+O(1) inference and #46 batched-equality preserved throughout; the cluster run itself remains
+gated on budget/environment (Gate 1+ of the plan).
+
+**Epic #64** (frontier-scale training readiness) tracked the above sub-issues: data-parallel
+DDP/FSDP path (#65), tensor/model-parallel HVN block (#66), multi-node launch + sharded-checkpoint
+I/O (#67), and the frontier training plan/spec (#68). Two companion issues quantify the on-box
+ceiling — **RTX 4050 (6 GB)** and **RTX 4060 (8 GB)** training envelopes (#69/#70) — and record the
+hard reality that a **10B model cannot be trained (or bf16-inferenced) on these cards** (10B ≈ 160 GB
+of training state, 20 GB of bf16 weights; off by ~30×). A 10B model *served* on 6 GB is only reachable
+via the **edge/ternary (BitNet b1.58) path** (#32) at ~2 GB — but that is a **separate, quantization-
+aware training run**, not a free export of a full-precision flagship (see #68's lane table).
 
 ### Phase 8: Fine-Tuning & Instruction Tuning — ✅ Complete
 

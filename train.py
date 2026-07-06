@@ -21,12 +21,15 @@ import argparse
 import math
 import os
 import sys
+from contextlib import nullcontext
+
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
 from hvn.core import HamiltonianVortexNetwork
 from hvn.edge.model import EdgeHVN
+from hvn import distributed as hvn_dist
 
 
 # ---------------------------------------------------------------------------
@@ -164,15 +167,18 @@ class TextDataset(Dataset):
 # 3. Training Loop
 # ---------------------------------------------------------------------------
 
-def _save_checkpoint(model, save_path: str, is_edge: bool = False):
+def _save_checkpoint(model, save_path: str, is_edge: bool = False, distributed: bool = False):
     """Save a model checkpoint with architecture metadata (Issue #71).
 
     Handles both ``HamiltonianVortexNetwork`` and ``EdgeHVN`` — the latter
     may use ``DeltaNetBlock`` (which has ``train_chunk`` not ``chunk_size``)
-    and may have ``shared_weights`` / ternary layers.
+    and may have ``shared_weights`` / ternary layers. Under data-parallel
+    training (Issue #65), FSDP shards are consolidated to rank 0 and only
+    rank 0 writes the file; every rank then barriers so nobody proceeds
+    before the checkpoint exists on disk.
     """
-    # Unwrap torch.compile for state_dict / attribute access
-    unwrapped = model._orig_mod if hasattr(model, "_orig_mod") else model
+    # Peels DDP/torch.compile wrappers for attribute access (single-GPU layout)
+    unwrapped = hvn_dist.unwrap_model(model)
 
     # Get the first block for architecture metadata — handle shared weights
     if hasattr(unwrapped, 'shared_block') and unwrapped.shared_block is not None:
@@ -182,22 +188,27 @@ def _save_checkpoint(model, save_path: str, is_edge: bool = False):
     else:
         first_block = None
 
-    ckpt = {
-        "model_state_dict": unwrapped.state_dict(),
-        "vocab_size": unwrapped.vocab_size,
-        "d_model": unwrapped.d_model,
-        "num_layers": unwrapped.num_layers,
-        "n_heads": getattr(unwrapped, "n_heads", 4),
-        "n_threads": getattr(unwrapped, "n_threads", 1),
-        "chunk_size": getattr(first_block, "chunk_size", 64) if first_block is not None else 64,
-        "use_deltanet": getattr(unwrapped, "use_deltanet", False),
-        "deltanet_conv_kernel": getattr(first_block, "conv_kernel", 4) if first_block is not None else 4,
-        "weightless": getattr(unwrapped, "weightless", False),
-        "weightless_seed": getattr(unwrapped, "weightless_seed", 1234),
-        "is_edge": is_edge,
-        "shared_weights": getattr(unwrapped, "shared_weights", False),
-    }
-    torch.save(ckpt, save_path)
+    state_dict = hvn_dist.consolidated_state_dict(model)
+
+    if not distributed or hvn_dist.is_main_process():
+        ckpt = {
+            "model_state_dict": state_dict,
+            "vocab_size": unwrapped.vocab_size,
+            "d_model": unwrapped.d_model,
+            "num_layers": unwrapped.num_layers,
+            "n_heads": getattr(unwrapped, "n_heads", 4),
+            "n_threads": getattr(unwrapped, "n_threads", 1),
+            "chunk_size": getattr(first_block, "chunk_size", 64) if first_block is not None else 64,
+            "use_deltanet": getattr(unwrapped, "use_deltanet", False),
+            "deltanet_conv_kernel": getattr(first_block, "conv_kernel", 4) if first_block is not None else 4,
+            "weightless": getattr(unwrapped, "weightless", False),
+            "weightless_seed": getattr(unwrapped, "weightless_seed", 1234),
+            "is_edge": is_edge,
+            "shared_weights": getattr(unwrapped, "shared_weights", False),
+        }
+        torch.save(ckpt, save_path)
+    if distributed:
+        hvn_dist.barrier()  # everyone waits until the checkpoint exists
 
 
 def train_model(
@@ -217,6 +228,8 @@ def train_model(
     save_every_steps: int = 0,
     log_every_steps: int = 0,
     is_edge: bool = False,
+    distributed: bool = False,
+    fsdp: bool = False,
 ):
     """Train the HVN model with next-token prediction (cross-entropy loss).
 
@@ -243,6 +256,20 @@ def train_model(
     non_blocking : bool
         Issue async (``non_blocking=True``) host→device transfers of the input
         batches.  Only effective with a pinned-memory DataLoader (Issue #50).
+    distributed : bool
+        Data-parallel training (Issue #65).  Requires an initialised process
+        group (``hvn.distributed.init_distributed`` under ``torchrun``).  The
+        model is wrapped in DDP (or FSDP with ``fsdp=True``); each rank must be
+        fed a disjoint shard via ``DistributedSampler``.  Gradient averaging
+        across equal-size rank micro-batches is provably equal to the
+        single-process batch (``tests/test_issue65.py``).  Checkpoints, loss
+        logging, and prints are rank-0-only; the loss all-reduce is per-epoch
+        (extends the #50 per-epoch sync).  The saved checkpoint layout is
+        identical to a single-GPU run.
+    fsdp : bool
+        Shard params/grads/optimizer state with FSDP instead of replicating
+        (DDP) — for models that outgrow one card.  Checkpoint is consolidated
+        to the single-file layout on rank 0.
     """
 
     if compile:
@@ -258,6 +285,17 @@ def train_model(
     # kernel requires its params to already live on CUDA at construction time.
     model.to(device)
     model.train()
+
+    # --- Data-parallel wrapping (Issue #65) ---
+    is_main = hvn_dist.is_main_process() if distributed else True
+    if distributed:
+        model = hvn_dist.wrap_model(model, device, fsdp=fsdp)
+        if is_main:
+            mode = "FSDP (sharded)" if fsdp else "DDP (replicated)"
+            print(f"Distributed data-parallel training: {mode}, "
+                  f"world_size={hvn_dist.get_world_size()} (Issue #65)")
+    # The unwrapped module: config attrs + single-GPU checkpoint layout.
+    unwrapped = hvn_dist.unwrap_model(model)
 
     # --- Optimizer: use only trainable (LoRA) params if use_lora ---
     # The fused kernel is CUDA-only; silently fall back on CPU.
@@ -276,6 +314,14 @@ def train_model(
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = nn.CrossEntropyLoss()
 
+    def clip_gradients():
+        # FSDP shards gradients, so the norm must be computed collectively via
+        # its own method; DDP/plain models use the standard utility.
+        if fsdp and hasattr(model, "clip_grad_norm_"):
+            model.clip_grad_norm_(max_norm=1.0)
+        else:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
     # --- Mixed-precision setup ---
     use_amp = precision in ("fp16", "bf16") and device.type == "cuda"
     amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
@@ -291,12 +337,18 @@ def train_model(
     if log_every_steps > 0:
         print(f"Step-based logging: every {log_every_steps} steps")
 
-    print(f"\nTraining for {epochs} epochs | lr={lr} | device={device}")
-    print("-" * 60)
+    if is_main:
+        print(f"\nTraining for {epochs} epochs | lr={lr} | device={device}")
+        print("-" * 60)
 
     global_step = 0  # cumulative step counter across all epochs (Issue #71)
-
+    n_loader_batches = len(dataloader)
     for epoch in range(1, epochs + 1):
+        # DistributedSampler reshuffles per epoch only if told the epoch number;
+        # without this every epoch would reuse the epoch-0 shard order.
+        if distributed and hasattr(getattr(dataloader, "sampler", None), "set_epoch"):
+            dataloader.sampler.set_epoch(epoch)
+
         # Accumulate the running loss on-device when defer_loss_sync is set so we
         # avoid a per-micro-batch host↔device sync; copy to host once at epoch end.
         total_loss = torch.zeros((), device=device) if defer_loss_sync else 0.0
@@ -313,21 +365,31 @@ def train_model(
             if compile:
                 torch.compiler.cudagraph_mark_step_begin()
 
-            # Forward pass (with autocast for mixed precision)
-            with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
-                logits = model(batch_x)  # [B, S, V]
-                loss = criterion(
-                    logits.reshape(-1, model.vocab_size),   # [B*S, V]
-                    batch_y.reshape(-1),                      # [B*S]
-                )
-                # Scale loss by accumulation steps so gradients average correctly
-                loss = loss / grad_accum_steps
+            # DDP syncs gradients on every backward by default; inside a
+            # gradient-accumulation window we defer the all-reduce to the
+            # boundary micro-batch (one collective per optimizer step, and
+            # exact equivalence with the single-process schedule).
+            sync_now = ((step + 1) % grad_accum_steps == 0
+                        or step == n_loader_batches - 1)
+            sync_ctx = (hvn_dist.grad_sync_context(model, sync_now)
+                        if distributed else nullcontext())
 
-            # Backward pass
-            if scaler is not None:
-                scaler.scale(loss).backward()
-            else:
-                loss.backward()
+            with sync_ctx:
+                # Forward pass (with autocast for mixed precision)
+                with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
+                    logits = model(batch_x)  # [B, S, V]
+                    loss = criterion(
+                        logits.reshape(-1, unwrapped.vocab_size),   # [B*S, V]
+                        batch_y.reshape(-1),                          # [B*S]
+                    )
+                    # Scale loss by accumulation steps so gradients average correctly
+                    loss = loss / grad_accum_steps
+
+                # Backward pass
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
 
             # restore unscaled loss for logging
             if defer_loss_sync:
@@ -340,11 +402,11 @@ def train_model(
             if (step + 1) % grad_accum_steps == 0:
                 if scaler is not None:
                     scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    clip_gradients()
                     scaler.step(optimizer)
                     scaler.update()
                 else:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    clip_gradients()
                     optimizer.step()
                 optimizer.zero_grad()
 
@@ -361,33 +423,45 @@ def train_model(
                 # Step-based checkpointing (Issue #71)
                 if save_every_steps > 0 and global_step % save_every_steps == 0:
                     ckpt_path = save_path.replace(".pt", f"_step{global_step}.pt")
-                    _save_checkpoint(model, ckpt_path, is_edge=is_edge)
-                    print(f"  ✓ Step checkpoint saved: {ckpt_path}")
+                    _save_checkpoint(model, ckpt_path, is_edge=is_edge, distributed=distributed)
+                    if is_main:
+                        print(f"  ✓ Step checkpoint saved: {ckpt_path}")
 
         # Handle any remaining accumulated gradients at epoch end
         if n_batches % grad_accum_steps != 0:
             if scaler is not None:
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                clip_gradients()
                 scaler.step(optimizer)
                 scaler.update()
             else:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                clip_gradients()
                 optimizer.step()
             optimizer.zero_grad()
 
         scheduler.step()
         if defer_loss_sync:
+            if distributed:
+                hvn_dist.all_reduce_mean_(total_loss)  # one collective per epoch
             total_loss = total_loss.item()  # single host sync per epoch
+        elif distributed:
+            # Per-epoch metric all-reduce (Issue #65) — extends the #50
+            # per-epoch loss sync; never a per-step collective.
+            t = torch.tensor(total_loss, device=device)
+            total_loss = hvn_dist.all_reduce_mean_(t).item()
         avg_loss = total_loss / max(n_batches, 1)
         perplexity = math.exp(min(avg_loss, 20))  # clamp to avoid overflow
 
-        if epoch % 5 == 0 or epoch == 1:
+        if is_main and (epoch % 5 == 0 or epoch == 1):
             print(f"Epoch {epoch:3d}/{epochs}  |  Loss: {avg_loss:.4f}  |  Perplexity: {perplexity:.2f}  |  LR: {scheduler.get_last_lr()[0]:.6f}")
 
-    # Save checkpoint (Issue #71: uses _save_checkpoint helper for EdgeHVN compat)
-    _save_checkpoint(model, save_path, is_edge=is_edge)
-    print(f"\n✓ Model saved to {save_path}")
+    # Save checkpoint (Issue #71: _save_checkpoint helper handles EdgeHVN
+    # metadata; rank-0-only write + FSDP consolidation under distribution
+    # (Issue #65) — layout is identical to a single-GPU checkpoint so
+    # serving (#51/#52 contract) is unchanged).
+    _save_checkpoint(model, save_path, is_edge=is_edge, distributed=distributed)
+    if is_main:
+        print(f"\n✓ Model saved to {save_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -548,6 +622,9 @@ def main():
     parser.add_argument("--grad_accum", type=int, default=1, help="Gradient accumulation steps (effective batch size = batch_size × grad_accum)")
     parser.add_argument("--grad_checkpoint", action="store_true", help="Gradient (activation) checkpointing (Issue #49): recompute block activations in the backward pass instead of storing them. Mathematically exact (bit-identical gradients/model), ~20-30% slower per step, but frees activation memory so a larger --d_model / --batch_size fits in the same VRAM. Training-only; inference unchanged.")
     parser.add_argument("--full", action="store_true", help="Issue #50 meta-flag: enable the complete recommended fast-training stack in one switch. Category A (exact, model-bit-identical speed levers): fused AdamW, per-epoch loss sync, pinned/async data loading, --compile, --grad_checkpoint. Category B (recommended defaults that CHANGE the model/precision): --precision bf16 + --use_deltanet. So --full trains the best/fastest RECOMMENDED model, not the same model faster. Any flag passed explicitly overrides the preset (e.g. --full --precision fp32).")
+    # --- Issue #65: distributed data-parallel training ---
+    parser.add_argument("--distributed", action="store_true", help="Data-parallel training (Issue #65). Launch with torchrun --nproc_per_node=K train.py --distributed ... — each rank trains a disjoint data shard (DistributedSampler) with gradient averaging provably equal to the single-process batch (tests/test_issue65.py). NCCL on GPU, gloo on CPU. Default single-GPU path is unchanged without this flag.")
+    parser.add_argument("--fsdp", action="store_true", help="With --distributed: shard params/grads/optimizer state via FSDP instead of replicating (DDP) — for models that outgrow one card. Checkpoint is consolidated to the standard single-file layout on rank 0.")
     parser.add_argument("--tokenizer", type=str, default="char", choices=["char", "bpe"], help="Tokenizer type: char or bpe")
     parser.add_argument("--bpe_vocab", type=int, default=1000, help="BPE vocabulary size (only used with --tokenizer bpe)")
     # --- Issue #21 quality strategies ---
@@ -639,8 +716,16 @@ def main():
             print(f"    • {item}")
         print("=" * 60)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    # --- Issue #65: initialise the process group before touching the device ---
+    if args.distributed or hvn_dist.distributed_env_present():
+        args.distributed = True
+        rank, world_size, local_rank = hvn_dist.init_distributed()
+        device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    is_main = hvn_dist.is_main_process()
+    if is_main:
+        print(f"Device: {device}")
 
     # --- Load training text ---
     if args.text and os.path.exists(args.text):
@@ -705,9 +790,18 @@ def main():
     dataset = TextDataset(token_ids, seq_len=args.seq_len)
     # Pinned-memory loading (Issue #50 --full) only helps CUDA async transfers.
     pin_memory = args.pin_memory and torch.cuda.is_available()
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
-                            drop_last=False, pin_memory=pin_memory)
-    print(f"Dataset: {len(dataset)} samples | DataLoader: {len(dataloader)} batches")
+    if args.distributed:
+        # Each rank sees a disjoint shard; shuffling lives in the sampler
+        # (reshuffled per epoch via set_epoch inside train_model).
+        from torch.utils.data.distributed import DistributedSampler
+        sampler = DistributedSampler(dataset, shuffle=True, seed=42)
+        dataloader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler,
+                                drop_last=False, pin_memory=pin_memory)
+    else:
+        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
+                                drop_last=False, pin_memory=pin_memory)
+    if is_main:
+        print(f"Dataset: {len(dataset)} samples | DataLoader: {len(dataloader)} batches")
 
     # --- Build model ---
     if args.edge:
@@ -809,12 +903,20 @@ def main():
         save_every_steps=args.save_every_steps,
         log_every_steps=args.log_every_steps,
         is_edge=args.edge,
+        distributed=args.distributed,
+        fsdp=args.fsdp,
     )
 
-    # --- Save tokenizer ---
-    tok_path = args.save.replace(".pt", "_tokenizer.json")
-    tokenizer.save(tok_path)
-    print(f"✓ Tokenizer saved to {tok_path}")
+    # --- Save tokenizer (rank-0 only under distribution) ---
+    if is_main:
+        tok_path = args.save.replace(".pt", "_tokenizer.json")
+        tokenizer.save(tok_path)
+        print(f"✓ Tokenizer saved to {tok_path}")
+
+    # Non-main ranks are done: skip the single-process demo paths below.
+    if args.distributed and not is_main:
+        hvn_dist.cleanup()
+        return
 
     # --- Merge LoRA weights if requested (Issue #29) ---
     if (args.lora or args.qlora) and args.merge_lora:
@@ -1111,6 +1213,9 @@ def main():
         )
         print(output)
         print("=" * 60)
+
+    if args.distributed:
+        hvn_dist.cleanup()
 
 
 if __name__ == "__main__":
