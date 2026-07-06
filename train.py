@@ -26,6 +26,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
 from hvn.core import HamiltonianVortexNetwork
+from hvn.edge.model import EdgeHVN
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +164,42 @@ class TextDataset(Dataset):
 # 3. Training Loop
 # ---------------------------------------------------------------------------
 
+def _save_checkpoint(model, save_path: str, is_edge: bool = False):
+    """Save a model checkpoint with architecture metadata (Issue #71).
+
+    Handles both ``HamiltonianVortexNetwork`` and ``EdgeHVN`` — the latter
+    may use ``DeltaNetBlock`` (which has ``train_chunk`` not ``chunk_size``)
+    and may have ``shared_weights`` / ternary layers.
+    """
+    # Unwrap torch.compile for state_dict / attribute access
+    unwrapped = model._orig_mod if hasattr(model, "_orig_mod") else model
+
+    # Get the first block for architecture metadata — handle shared weights
+    if hasattr(unwrapped, 'shared_block') and unwrapped.shared_block is not None:
+        first_block = unwrapped.shared_block.block
+    elif hasattr(unwrapped, 'blocks') and len(unwrapped.blocks) > 0:
+        first_block = unwrapped.blocks[0]
+    else:
+        first_block = None
+
+    ckpt = {
+        "model_state_dict": unwrapped.state_dict(),
+        "vocab_size": unwrapped.vocab_size,
+        "d_model": unwrapped.d_model,
+        "num_layers": unwrapped.num_layers,
+        "n_heads": getattr(unwrapped, "n_heads", 4),
+        "n_threads": getattr(unwrapped, "n_threads", 1),
+        "chunk_size": getattr(first_block, "chunk_size", 64) if first_block is not None else 64,
+        "use_deltanet": getattr(unwrapped, "use_deltanet", False),
+        "deltanet_conv_kernel": getattr(first_block, "conv_kernel", 4) if first_block is not None else 4,
+        "weightless": getattr(unwrapped, "weightless", False),
+        "weightless_seed": getattr(unwrapped, "weightless_seed", 1234),
+        "is_edge": is_edge,
+        "shared_weights": getattr(unwrapped, "shared_weights", False),
+    }
+    torch.save(ckpt, save_path)
+
+
 def train_model(
     model: HamiltonianVortexNetwork,
     dataloader: DataLoader,
@@ -177,6 +214,9 @@ def train_model(
     fused_optimizer: bool = False,
     defer_loss_sync: bool = False,
     non_blocking: bool = False,
+    save_every_steps: int = 0,
+    log_every_steps: int = 0,
+    is_edge: bool = False,
 ):
     """Train the HVN model with next-token prediction (cross-entropy loss).
 
@@ -241,9 +281,15 @@ def train_model(
     if grad_accum_steps > 1:
         print(f"Gradient accumulation: {grad_accum_steps} steps "
               f"(effective batch size = {dataloader.batch_size * grad_accum_steps})")
+    if save_every_steps > 0:
+        print(f"Step-based checkpointing: every {save_every_steps} steps")
+    if log_every_steps > 0:
+        print(f"Step-based logging: every {log_every_steps} steps")
 
     print(f"\nTraining for {epochs} epochs | lr={lr} | device={device}")
     print("-" * 60)
+
+    global_step = 0  # cumulative step counter across all epochs (Issue #71)
 
     for epoch in range(1, epochs + 1):
         # Accumulate the running loss on-device when defer_loss_sync is set so we
@@ -291,6 +337,22 @@ def train_model(
                     optimizer.step()
                 optimizer.zero_grad()
 
+                global_step += 1
+
+                # Step-based logging (Issue #71)
+                if log_every_steps > 0 and global_step % log_every_steps == 0:
+                    step_loss = loss.item() * grad_accum_steps
+                    step_ppl = math.exp(min(step_loss, 20))
+                    print(f"  Step {global_step:>6d} (epoch {epoch})  |  "
+                          f"Loss: {step_loss:.4f}  |  PPL: {step_ppl:.2f}  |  "
+                          f"LR: {scheduler.get_last_lr()[0]:.6f}")
+
+                # Step-based checkpointing (Issue #71)
+                if save_every_steps > 0 and global_step % save_every_steps == 0:
+                    ckpt_path = save_path.replace(".pt", f"_step{global_step}.pt")
+                    _save_checkpoint(model, ckpt_path, is_edge=is_edge)
+                    print(f"  ✓ Step checkpoint saved: {ckpt_path}")
+
         # Handle any remaining accumulated gradients at epoch end
         if n_batches % grad_accum_steps != 0:
             if scaler is not None:
@@ -312,20 +374,8 @@ def train_model(
         if epoch % 5 == 0 or epoch == 1:
             print(f"Epoch {epoch:3d}/{epochs}  |  Loss: {avg_loss:.4f}  |  Perplexity: {perplexity:.2f}  |  LR: {scheduler.get_last_lr()[0]:.6f}")
 
-    # Save checkpoint
-    torch.save({
-        "model_state_dict": model.state_dict(),
-        "vocab_size": model.vocab_size,
-        "d_model": model.d_model,
-        "num_layers": model.num_layers,
-        "n_heads": model.n_heads,
-        "n_threads": model.n_threads,
-        "chunk_size": model.blocks[0].chunk_size if hasattr(model.blocks[0], 'chunk_size') else 64,
-        "use_deltanet": getattr(model, "use_deltanet", False),
-        "deltanet_conv_kernel": getattr(model.blocks[0], "conv_kernel", 4),
-        "weightless": getattr(model, "weightless", False),
-        "weightless_seed": getattr(model, "weightless_seed", 1234),
-    }, save_path)
+    # Save checkpoint (Issue #71: uses _save_checkpoint helper for EdgeHVN compat)
+    _save_checkpoint(model, save_path, is_edge=is_edge)
     print(f"\n✓ Model saved to {save_path}")
 
 
@@ -505,6 +555,17 @@ def main():
     # --- Issue #40: hybrid weightless projections ---
     parser.add_argument("--weightless", action="store_true", help="Issue #40 (requires --use_deltanet): freeze the q/k/v/out DeltaNet projections as seed-regenerated random features (stored as one integer, not d² floats each) while keeping the learned data-dependent gates/conv. Shrinks the checkpoint; A/B the PPL cost. Preserves O(1) inference.")
     parser.add_argument("--weightless_seed", type=int, default=1234, help="Base PRNG seed for the frozen weightless projections (Issue #40).")
+    # --- Issue #71: EdgeHVN + ternary + step-based checkpointing/logging ---
+    parser.add_argument("--edge", action="store_true",
+                        help="Issue #71: use EdgeHVN (hvn/edge/model.py) instead of HamiltonianVortexNetwork. Enables edge-deployment features: ALBERT-style weight sharing, ternary BitNet weights, GPTQ compression.")
+    parser.add_argument("--ternary", action="store_true",
+                        help="Issue #71: apply ternary BitNet b1.58 weight quantization (STE-trainable {-1,0,+1} weights) to the model's nn.Linear layers. Excludes tiny gate projections (beta_proj, alpha_proj) that feed sigmoid gates and would destabilize training if ternarized.")
+    parser.add_argument("--shared_weights", action="store_true",
+                        help="Issue #71/#32: use ALBERT-style weight sharing across all layers (only with --edge). All blocks share one set of weights, reducing storage by ~Nx.")
+    parser.add_argument("--save_every_steps", type=int, default=0,
+                        help="Issue #71: save a checkpoint every N optimizer steps (0=disabled, save only at end of training). Checkpoints are named {save}_step{N}.pt.")
+    parser.add_argument("--log_every_steps", type=int, default=0,
+                        help="Issue #71: log loss and PPL to console every N optimizer steps (0=disabled, use per-epoch logging only).")
     # --- Issue #23: Vision / multimodal ---
     parser.add_argument("--vision", action="store_true", help="Enable vision/multimodal mode (Issue #23). Trains image+text with patch embeddings.")
     parser.add_argument("--image_size", type=int, default=64, help="Image size (square, default 64 for fast demo)")
@@ -638,33 +699,72 @@ def main():
     print(f"Dataset: {len(dataset)} samples | DataLoader: {len(dataloader)} batches")
 
     # --- Build model ---
-    model = HamiltonianVortexNetwork(
-        vocab_size=tokenizer.vocab_size,
-        d_model=args.d_model,
-        num_layers=args.num_layers,
-        n_heads=args.n_heads,
-        bond_dimension=args.bond_dim,
-        chunk_size=args.chunk_size,
-        dropout=0.1,
-        rank_k=args.rank_k,
-        use_nonlinear_update=args.nonlinear_update,
-        use_causal_reinjection=args.causal_reinjection,
-        use_cross_head_mixing=args.cross_head_mixing,
-        use_swiglu=args.swiglu,
-        use_per_token_eta=args.per_token_eta,
-        n_threads=args.n_threads,
-        use_parallel_scan=args.use_parallel_scan,
-        use_deltanet=args.use_deltanet,
-        deltanet_conv_kernel=args.deltanet_conv_kernel,
-        weightless=args.weightless,
-        weightless_seed=args.weightless_seed,
-        grad_checkpoint=args.grad_checkpoint,
-    )
+    if args.edge:
+        # Issue #71: EdgeHVN edge-deployment variant
+        model = EdgeHVN(
+            vocab_size=tokenizer.vocab_size,
+            d_model=args.d_model,
+            num_layers=args.num_layers,
+            n_heads=args.n_heads,
+            bond_dimension=args.bond_dim,
+            chunk_size=args.chunk_size,
+            dropout=0.1,
+            shared_weights=args.shared_weights,
+            use_deltanet=args.use_deltanet,
+            deltanet_conv_kernel=args.deltanet_conv_kernel,
+        )
+        print(f"Model type: EdgeHVN (Issue #71) | shared_weights={args.shared_weights} | "
+              f"use_deltanet={args.use_deltanet}")
+    else:
+        model = HamiltonianVortexNetwork(
+            vocab_size=tokenizer.vocab_size,
+            d_model=args.d_model,
+            num_layers=args.num_layers,
+            n_heads=args.n_heads,
+            bond_dimension=args.bond_dim,
+            chunk_size=args.chunk_size,
+            dropout=0.1,
+            rank_k=args.rank_k,
+            use_nonlinear_update=args.nonlinear_update,
+            use_causal_reinjection=args.causal_reinjection,
+            use_cross_head_mixing=args.cross_head_mixing,
+            use_swiglu=args.swiglu,
+            use_per_token_eta=args.per_token_eta,
+            n_threads=args.n_threads,
+            use_parallel_scan=args.use_parallel_scan,
+            use_deltanet=args.use_deltanet,
+            deltanet_conv_kernel=args.deltanet_conv_kernel,
+            weightless=args.weightless,
+            weightless_seed=args.weightless_seed,
+            grad_checkpoint=args.grad_checkpoint,
+        )
     if args.grad_checkpoint:
         print("Gradient (activation) checkpointing enabled (Issue #49): "
               "exact gradients, ~20-30% slower/step, lower activation memory.")
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {param_count:,}")
+
+    # --- Issue #71: Apply ternary BitNet b1.58 weights ---
+    if args.ternary:
+        from hvn.edge.ternary import apply_ternary_to_model
+        # Exclude tiny gate projections that feed sigmoid gates — ternarizing
+        # them destabilizes the data-dependent decay/write gates (Issue #71).
+        # Also exclude the decoder (vocab projection) — too important for
+        # output quality to ternarize at small scale.
+        all_linears = {name: mod for name, mod in model.named_modules()
+                       if isinstance(mod, nn.Linear)}
+        exclude_patterns = ("beta_proj", "alpha_proj", "decoder")
+        target_names = [name for name in all_linears
+                        if not any(p in name for p in exclude_patterns)]
+        replaced = apply_ternary_to_model(model, target_names=target_names)
+        print(f"Ternary BitNet b1.58 (Issue #71): replaced {len(replaced)} nn.Linear layers "
+              f"with TernaryLinear (STE-trainable). Excluded {len(all_linears) - len(replaced)} "
+              f"gate/decoder layers.")
+        # Report memory savings
+        ternary_bytes = sum(mod.memory_bytes() for mod in replaced.values())
+        dense_bytes = sum(mod.in_features * mod.out_features * 4 for mod in replaced.values())
+        print(f"  Weight storage: {dense_bytes:,} → {ternary_bytes:,} bytes "
+              f"({dense_bytes / max(ternary_bytes, 1):.2f}x compression)")
 
     # --- Apply LoRA / QLoRA (Issue #29) ---
     if args.qlora:
@@ -695,6 +795,9 @@ def main():
         fused_optimizer=args.fused_adamw,
         defer_loss_sync=args.defer_loss_sync,
         non_blocking=pin_memory,
+        save_every_steps=args.save_every_steps,
+        log_every_steps=args.log_every_steps,
+        is_edge=args.edge,
     )
 
     # --- Save tokenizer ---
@@ -707,19 +810,7 @@ def main():
         print("\nMerging LoRA weights into base model...")
         model = model.merge_lora()
         # Re-save the merged model
-        torch.save({
-            "model_state_dict": model.state_dict(),
-            "vocab_size": model.vocab_size,
-            "d_model": model.d_model,
-            "num_layers": model.num_layers,
-            "n_heads": model.n_heads,
-            "n_threads": model.n_threads,
-            "chunk_size": model.blocks[0].chunk_size if hasattr(model.blocks[0], 'chunk_size') else 64,
-            "use_deltanet": getattr(model, "use_deltanet", False),
-            "deltanet_conv_kernel": getattr(model.blocks[0], "conv_kernel", 4),
-            "weightless": getattr(model, "weightless", False),
-            "weightless_seed": getattr(model, "weightless_seed", 1234),
-        }, args.save)
+        _save_checkpoint(model, args.save, is_edge=args.edge)
         print(f"✓ Merged model saved to {args.save}")
     elif args.lora or args.qlora:
         # Save LoRA adapter separately
