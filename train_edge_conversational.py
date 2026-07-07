@@ -397,28 +397,48 @@ class MixedLocalDataset(Dataset):
         oasst_tokens = _fit(oasst_tokens, target_oasst)
         wt103_tokens = _fit(wt103_tokens, target_wt103)
 
-        # Concatenate and shuffle the token stream
+        # Build per-chunk token arrays with source tags.
+        # Source IDs: 0=TinyStories (language foundation), 1=OpenAssistant, 2=WikiText-103
+        # Each sample is a seq_len chunk from ONE source (no cross-source mixing
+        # within a sample), so per-source loss is cleanly attributable.
         import random
         rng = random.Random(42)
-        all_tokens = lang_tokens + oasst_tokens + wt103_tokens
-        rng.shuffle(all_tokens)
 
-        self.token_ids = all_tokens
-        print(f"\n    Mixed dataset: {len(self.token_ids)} total tokens")
-        print(f"    Samples (seq_len={seq_len}): {max(1, (len(self.token_ids) - 1) // seq_len)}")
+        # Build (tokens, source_id) chunks for each source
+        chunks = []  # list of (token_list, source_id)
+
+        for src_tokens, src_id in [(lang_tokens, 0), (oasst_tokens, 1), (wt103_tokens, 2)]:
+            for start in range(0, len(src_tokens) - seq_len - 1, seq_len):
+                chunk = src_tokens[start:start + seq_len + 1]
+                if len(chunk) == seq_len + 1:
+                    chunks.append((chunk, src_id))
+
+        rng.shuffle(chunks)
+
+        # Flatten into parallel arrays for __getitem__
+        self.token_ids = []
+        self.source_ids = []
+        for chunk_tokens, src_id in chunks:
+            self.token_ids.append(chunk_tokens)
+            self.source_ids.append(src_id)
+
+        print(f"\n    Mixed dataset: {len(self.token_ids)} samples (seq_len={seq_len})")
+        src_counts = [0, 0, 0]
+        for s in self.source_ids:
+            src_counts[s] += 1
+        print(f"    Per-source: TinyStories={src_counts[0]} ({100*src_counts[0]/max(1,len(self.source_ids)):.1f}%)"
+              f"  OpenAssistant={src_counts[1]} ({100*src_counts[1]/max(1,len(self.source_ids)):.1f}%)"
+              f"  WikiText-103={src_counts[2]} ({100*src_counts[2]/max(1,len(self.source_ids)):.1f}%)")
 
     def __len__(self):
-        return max(1, (len(self.token_ids) - 1) // self.seq_len)
+        return len(self.token_ids)
 
     def __getitem__(self, idx):
-        start = idx * self.seq_len
-        end = start + self.seq_len + 1
-        chunk = self.token_ids[start:end]
-        if len(chunk) < self.seq_len + 1:
-            chunk = chunk + [0] * (self.seq_len + 1 - len(chunk))
+        chunk = self.token_ids[idx]
+        src_id = self.source_ids[idx]
         x = torch.tensor(chunk[:-1], dtype=torch.long)
         y = torch.tensor(chunk[1:], dtype=torch.long)
-        return x, y
+        return x, y, src_id
 
 
 class WikiText103LocalDataset(Dataset):
@@ -654,7 +674,14 @@ def pre_training_audit(
     # --- Check 1: DataLoader produces correct token shapes ---
     print("\n  [Check 1] DataLoader token shapes...")
     try:
-        batch_x, batch_y = next(iter(dataloader))
+        batch = next(iter(dataloader))
+        # MixedLocalDataset returns (x, y, src_id); WikiText103LocalDataset returns (x, y)
+        if len(batch) == 3:
+            batch_x, batch_y, batch_src = batch
+            print(f"    batch_src (source IDs): {batch_src}")
+        else:
+            batch_x, batch_y = batch
+            batch_src = None
 
         expected_shape = (config["batch_size"], config["seq_len"])
         print(f"    batch_x shape: {batch_x.shape} (expected {expected_shape})")
@@ -663,7 +690,6 @@ def pre_training_audit(
         print(f"    batch_x range: [{batch_x.min().item()}, {batch_x.max().item()}]")
 
         if batch_x.shape != expected_shape:
-            # For streaming datasets, the last batch may be smaller — that's OK
             if batch_x.shape[0] <= config["batch_size"] and batch_x.shape[1] == config["seq_len"]:
                 print(f"    ✓ Shapes OK (partial batch: {batch_x.shape[0]} ≤ {config['batch_size']})")
             else:
@@ -960,6 +986,12 @@ def train(
     optimizer.zero_grad()
     accumulated_loss = 0.0
 
+    # Per-source loss tracking (for diagnosing dataset quality variance)
+    # Source IDs: 0=TinyStories, 1=OpenAssistant, 2=WikiText-103
+    source_names = ["TinyStories", "OpenAssistant", "WikiText-103"]
+    source_loss_accum = [0.0, 0.0, 0.0]  # accumulated loss per source
+    source_count = [0, 0, 0]  # sample count per source
+
     # For iterable datasets, we need to cycle through epochs manually
     data_iter = iter(dataloader)
     micro_step = 0  # micro-batches within a grad-accum window
@@ -970,15 +1002,22 @@ def train(
 
         # Get next batch — handle epoch boundaries
         try:
-            batch_x, batch_y = next(data_iter)
+            batch = next(data_iter)
         except StopIteration:
             epoch += 1
             data_iter = iter(dataloader)
             try:
-                batch_x, batch_y = next(data_iter)
+                batch = next(data_iter)
             except StopIteration:
                 print(f"\n  Dataset exhausted after {epoch} epochs.")
                 break
+
+        # MixedLocalDataset returns (x, y, src_id); WikiText103LocalDataset returns (x, y)
+        if len(batch) == 3:
+            batch_x, batch_y, batch_src = batch
+        else:
+            batch_x, batch_y = batch
+            batch_src = None
 
         batch_x = batch_x.to(device, non_blocking=True)
         batch_y = batch_y.to(device, non_blocking=True)
@@ -995,6 +1034,19 @@ def train(
         # Backward pass
         loss.backward()
         accumulated_loss += loss.item()
+
+        # Track per-source loss (for diagnosing dataset quality variance)
+        if batch_src is not None:
+            with torch.no_grad():
+                per_sample_loss = torch.nn.functional.cross_entropy(
+                    logits.reshape(-1, GPT2_VOCAB_SIZE),
+                    batch_y.reshape(-1),
+                    reduction="none",
+                ).reshape(batch_x.shape[0], -1).mean(dim=1)  # [B] per-sample loss
+                for i in range(batch_x.shape[0]):
+                    src = batch_src[i].item() if isinstance(batch_src[i], torch.Tensor) else batch_src[i]
+                    source_loss_accum[src] += per_sample_loss[i].item()
+                    source_count[src] += 1
 
         micro_step += 1
 
@@ -1037,11 +1089,24 @@ def train(
                       f"LR: {current_lr:.6f}  |  "
                       f"{steps_per_sec:.1f} steps/s")
 
+                # Per-source loss reporting
+                if any(source_count):
+                    src_str = "  |  ".join(
+                        f"{source_names[s]}: {source_loss_accum[s]/max(1,source_count[s]):.4f}"
+                        f" (n={source_count[s]})"
+                        for s in range(3) if source_count[s] > 0
+                    )
+                    print(f"    Per-source: {src_str}")
+
                 csv_writer.writerow([
                     global_step, epoch, f"{step_loss:.6f}", f"{step_ppl:.4f}",
                     f"{current_lr:.8f}", time.strftime("%Y-%m-%d %H:%M:%S"),
                 ])
                 csv_file.flush()
+
+                # Reset per-source accumulators after logging
+                source_loss_accum = [0.0, 0.0, 0.0]
+                source_count = [0, 0, 0]
 
                 # Estimate time per epoch based on first 10 steps
                 if global_step == config["log_every_steps"]:
