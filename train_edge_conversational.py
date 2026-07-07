@@ -249,13 +249,23 @@ def hardware_scan() -> dict:
 GPT2_VOCAB_SIZE = 50257
 
 
-def _download_language_foundation(max_bytes: int, cache_dir: str) -> str:
-    """Download a language foundation dataset to a local text file.
+def _download_language_foundation(max_bytes: int, cache_dir: str, slimpajama_dir: str | None = None) -> str:
+    """Prepare the SlimPajama-627B language foundation corpus.
 
-    SlimPajama-627B is available via the gmongaras/SlimPajama-627B_Reupload
-    reupload on HuggingFace Hub. This is the real SlimPajama corpus
-    (RedPajama subset, English, multi-source: C4, CommonCrawl, etc.).
-    Returns the path to the downloaded text file.
+    Uses local parquet files downloaded via `hf download` CLI (not Python
+    streaming, which crashes on Windows). Reads the parquet files directly
+    with pandas/pyarrow and extracts text to a flat .txt file.
+    Returns the path to the extracted text file.
+
+    Parameters
+    ----------
+    max_bytes : int
+        Cap on total bytes extracted.
+    cache_dir : str
+        Directory for the output .txt file.
+    slimpajama_dir : str or None
+        Directory containing SlimPajama parquet files. If None, defaults
+        to <cache_dir>/slimpajama/data.
     """
     out_path = os.path.join(cache_dir, "slimpajama_en.txt")
     if os.path.exists(out_path):
@@ -263,22 +273,45 @@ def _download_language_foundation(max_bytes: int, cache_dir: str) -> str:
         print(f"    SlimPajama cached: {out_path} ({size / 1024**2:.1f} MB)")
         return out_path
 
-    from datasets import load_dataset
-    print(f"    Downloading SlimPajama-627B (cap {max_bytes / 1024**3:.1f} GB)...")
-    ds = load_dataset("gmongaras/SlimPajama-627B_Reupload", split="train", streaming=True)
+    # Look for locally downloaded parquet files (from `hf download`)
+    if slimpajama_dir:
+        parquet_dir = slimpajama_dir
+    else:
+        parquet_dir = os.path.join(cache_dir, "slimpajama", "data")
+    if not os.path.exists(parquet_dir):
+        raise FileNotFoundError(
+            f"SlimPajama parquet files not found at {parquet_dir}.\n"
+            "Download them first with:\n"
+            "  hf download gmongaras/SlimPajama-627B_Reupload --repo-type dataset "
+            "--local-dir data_cache/slimpajama "
+            "--include 'data/train-00000-of-00250.parquet' "
+            "--include 'data/train-00001-of-00250.parquet' "
+            "--include 'data/train-00002-of-00250.parquet'"
+        )
+
+    import pandas as pd
+    parquet_files = sorted([
+        os.path.join(parquet_dir, f)
+        for f in os.listdir(parquet_dir)
+        if f.startswith("train-") and f.endswith(".parquet")
+    ])
+    print(f"    Found {len(parquet_files)} SlimPajama parquet files in {parquet_dir}")
     bytes_seen = 0
     with open(out_path, "w", encoding="utf-8") as f:
-        for example in ds:
+        for pf in parquet_files:
             if bytes_seen >= max_bytes:
                 break
-            text = example.get("text", "")
-            if not text:
-                continue
-            f.write(text)
-            f.write("\n")
-            bytes_seen += len(text.encode("utf-8"))
-            if bytes_seen % (500 * 1024**2) < 1024:
-                print(f"      {bytes_seen / 1024**3:.2f} GB downloaded...")
+            print(f"    Reading {os.path.basename(pf)}...")
+            df = pd.read_parquet(pf, columns=["text"])
+            for text in df["text"]:
+                if bytes_seen >= max_bytes:
+                    break
+                if not text or not text.strip():
+                    continue
+                f.write(text)
+                f.write("\n")
+                bytes_seen += len(text.encode("utf-8"))
+            print(f"      {bytes_seen / 1024**3:.2f} GB extracted so far...")
     print(f"    SlimPajama saved: {out_path} ({os.path.getsize(out_path) / 1024**2:.1f} MB)")
     return out_path
 
@@ -334,6 +367,7 @@ class MixedLocalDataset(Dataset):
         tokenizer,
         seq_len: int = 512,
         cache_dir: str = "data_cache",
+        slimpajama_dir: str | None = None,
         slimpajama_max_bytes: int = 5 * 1024**3,
         max_chars_per_source: int | None = None,
     ):
@@ -345,7 +379,7 @@ class MixedLocalDataset(Dataset):
 
         # 1. SlimPajama-627B (50%) — language foundation
         # (gmongaras/SlimPajama-627B_Reupload on HuggingFace)
-        lang_path = _download_language_foundation(slimpajama_max_bytes, cache_dir)
+        lang_path = _download_language_foundation(slimpajama_max_bytes, cache_dir, slimpajama_dir)
         print(f"    Reading SlimPajama...")
         with open(lang_path, "r", encoding="utf-8", errors="replace") as f:
             lang_text = f.read(max_chars_per_source) if max_chars_per_source else f.read()
@@ -485,8 +519,18 @@ def build_dataset_pipeline(
     seq_len: int,
     batch_size: int,
     smoke: bool = False,
+    data_dir: str = "data_cache",
+    slimpajama_dir: str | None = None,
 ) -> tuple[DataLoader, dict]:
-    """Build the mixed-source streaming DataLoader and report dataset stats.
+    """Build the mixed-source DataLoader and report dataset stats.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory for cached dataset files (oasst1.txt, slimpajama_en.txt).
+    slimpajama_dir : str or None
+        Directory containing SlimPajama parquet files. If None, defaults
+        to <data_dir>/slimpajama/data.
 
     Returns (dataloader, stats_dict).
     """
@@ -513,11 +557,12 @@ def build_dataset_pipeline(
         print(f"  Samples: {stats['num_samples']}")
     else:
         # Full mode: download all three sources to local files, then mix
-        print("\n  Downloading datasets to local files (no streaming threads)...")
+        print(f"\n  Loading datasets from {data_dir}...")
         dataset = MixedLocalDataset(
             tokenizer=tokenizer,
             seq_len=seq_len,
-            cache_dir="data_cache",
+            cache_dir=data_dir,
+            slimpajama_dir=slimpajama_dir,
             slimpajama_max_bytes=5 * 1024**3,
         )
         stats["source"] = "mixed_local"
@@ -1170,6 +1215,17 @@ def main():
     parser.add_argument("--checkpoint-dir", type=str,
                         default="checkpoints/edge_conversational",
                         help="Checkpoint directory")
+    parser.add_argument("--data-dir", type=str,
+                        default="data_cache",
+                        help="Directory for cached dataset files (oasst1.txt, slimpajama_en.txt, etc.)")
+    parser.add_argument("--slimpajama-dir", type=str,
+                        default=None,
+                        help="Directory containing SlimPajama parquet files (downloaded via hf CLI). "
+                             "If not set, defaults to <data-dir>/slimpajama/data")
+    parser.add_argument("--hf-cache-dir", type=str,
+                        default=None,
+                        help="HuggingFace cache directory for tokenizer/dataset downloads. "
+                             "If not set, uses the default HF cache (~/.cache/huggingface).")
     args = parser.parse_args()
 
     # Force UTF-8 for Windows console
@@ -1200,7 +1256,10 @@ def main():
     # Use GPT-2 tokenizer as the baseline BPE tokenizer
     from transformers import GPT2Tokenizer
     print("\n  Loading GPT-2 tokenizer...")
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    tokenizer_kwargs = {}
+    if args.hf_cache_dir:
+        tokenizer_kwargs["cache_dir"] = args.hf_cache_dir
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2", **tokenizer_kwargs)
     # Add padding token
     tokenizer.pad_token = tokenizer.eos_token
     print(f"  GPT-2 tokenizer loaded: vocab_size = {tokenizer.vocab_size}")
@@ -1210,6 +1269,8 @@ def main():
         seq_len=settings["seq_len"],
         batch_size=settings["batch_size"],
         smoke=args.smoke,
+        data_dir=args.data_dir,
+        slimpajama_dir=args.slimpajama_dir,
     )
 
     # === Step 3: Training Configuration ===
