@@ -909,7 +909,10 @@ def train(
 
     # --- Cosine LR schedule with warmup ---
     total_steps = max_steps if max_steps is not None else 10_000
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
+    # When resuming, the cosine schedule is reset — T_max should be the
+    # remaining steps so the decay reaches ~0 at the end of training.
+    scheduler_t_max = total_steps - resume_step if resume_step > 0 else total_steps
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=scheduler_t_max)
 
     # Warmup: linearly increase LR for the first warmup_steps, then let the
     # cosine scheduler take over. During warmup we override the LR manually;
@@ -925,9 +928,14 @@ def train(
     global_step = resume_step
     if global_step > 0:
         print(f"  Resuming from step {global_step}")
-        # Advance scheduler to the right position
-        for _ in range(global_step):
-            scheduler.step()
+        # When resuming with a potentially different LR, reset the cosine
+        # schedule to start fresh from the checkpoint (don't advance the
+        # scheduler to the old step position). The model weights are carried
+        # forward; the optimizer and schedule are fresh.
+        print(f"  Resetting cosine schedule (fresh from checkpoint)")
+        warmup_done = True  # skip warmup on resume — model is already trained
+    else:
+        warmup_done = False
 
     # --- CSV logging ---
     log_file = config["log_file"]
