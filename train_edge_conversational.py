@@ -32,6 +32,8 @@ import subprocess
 import sys
 import time
 
+import numpy as np
+
 # Force UTF-8 stdout/stderr so the ✓/→ characters don't crash on cp1252 Windows.
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -340,6 +342,58 @@ def _download_oasst(cache_dir: str) -> str:
     return out_path
 
 
+def _tokenize_text_to_bin(
+    text_path: str,
+    bin_path: str,
+    tokenizer,
+    max_bytes: int | None = None,
+    block_chars: int = 4_000_000,
+) -> int:
+    """Stream-tokenize a UTF-8 text file into an on-disk uint16 .bin of token ids.
+
+    Reads the text in fixed-size character blocks, encodes each block with the
+    (fast) GPT-2 tokenizer, and appends the ids to `bin_path` as native-endian
+    uint16 (GPT-2 vocab 50257 < 65536, so 2 bytes/token suffices). Only one block
+    is held in RAM at a time, so memory stays flat regardless of corpus size —
+    this is what lets multi-GB SlimPajama tokenize on a 16 GB laptop.
+
+    The result is cached: if `bin_path` already exists non-empty it is reused.
+    `max_bytes` caps how much source text is consumed (by UTF-8 byte count).
+    Returns the total number of tokens written.
+    """
+    if os.path.exists(bin_path) and os.path.getsize(bin_path) > 0:
+        n = os.path.getsize(bin_path) // 2
+        print(f"    Tokenized cache hit: {bin_path} ({n:,} tokens)")
+        return n
+
+    os.makedirs(os.path.dirname(bin_path), exist_ok=True)
+    tmp_path = bin_path + ".tmp"
+    total_tokens = 0
+    bytes_read = 0
+    blocks = 0
+    t0 = time.time()
+    with open(text_path, "r", encoding="utf-8", errors="replace") as fin, \
+         open(tmp_path, "wb") as fout:
+        while True:
+            if max_bytes is not None and bytes_read >= max_bytes:
+                break
+            block = fin.read(block_chars)
+            if not block:
+                break
+            bytes_read += len(block.encode("utf-8"))
+            ids = tokenizer.encode(block)
+            np.asarray(ids, dtype=np.uint16).tofile(fout)
+            total_tokens += len(ids)
+            blocks += 1
+            if blocks % 20 == 0:
+                print(f"      {os.path.basename(bin_path)}: {total_tokens:,} tokens "
+                      f"({bytes_read / 1024**2:.0f} MB, {time.time() - t0:.0f}s)", flush=True)
+    os.replace(tmp_path, bin_path)
+    print(f"    Tokenized {os.path.basename(text_path)} -> {bin_path} "
+          f"({total_tokens:,} tokens, {time.time() - t0:.0f}s)")
+    return total_tokens
+
+
 class MixedLocalDataset(Dataset):
     """Map-style dataset mixing three local text files at a fixed ratio.
 
@@ -369,109 +423,131 @@ class MixedLocalDataset(Dataset):
         cache_dir: str = "data_cache",
         slimpajama_dir: str | None = None,
         slimpajama_max_bytes: int = 5 * 1024**3,
-        max_chars_per_source: int | None = None,
+        slimpajama_token_bytes: int = 500 * 1024**2,
+        max_repeat: int = 3,
     ):
+        """Build the mixed dataset from on-disk memory-mapped token files.
+
+        Each source is tokenized once to a cached uint16 .bin (streaming — flat
+        RAM) and memory-mapped read-only. Samples are seq_len windows referenced
+        by (source_id, start_offset); only the windows actually read are paged in
+        from disk, so RAM stays flat no matter how large the corpus is.
+
+        `slimpajama_token_bytes` caps how much SlimPajama text is tokenized (the
+        full .txt may be much larger; we only need a slice). `max_repeat` bounds
+        how many times any single source may repeat to satisfy the 50/35/15 mix,
+        preventing tiny OpenAssistant (~12M tokens) from being duplicated ~40x
+        against multi-GB SlimPajama.
+        """
         self.seq_len = seq_len
         os.makedirs(cache_dir, exist_ok=True)
+        tok_dir = os.path.join(cache_dir, "tokenized")
 
-        # --- Download / locate each source ---
-        print("\n  Preparing datasets (download to local files, no streaming)...")
+        # Use a fast tokenizer for the one-time encode pass: identical BPE ids to
+        # the slow GPT2Tokenizer but far faster on large corpora. Fall back to the
+        # provided tokenizer if the fast one can't be loaded.
+        enc = tokenizer
+        try:
+            from transformers import GPT2TokenizerFast
+            enc = GPT2TokenizerFast.from_pretrained("gpt2")
+            enc.model_max_length = 10 ** 9  # we chunk ourselves; silence length warnings
+        except Exception as e:  # pragma: no cover - environment dependent
+            print(f"    (fast tokenizer unavailable, using provided tokenizer: {e})")
+
+        print("\n  Preparing datasets (tokenize once -> memmap, flat RAM)...")
 
         # 1. SlimPajama-627B (50%) — language foundation
-        # (gmongaras/SlimPajama-627B_Reupload on HuggingFace)
         lang_path = _download_language_foundation(slimpajama_max_bytes, cache_dir, slimpajama_dir)
-        print(f"    Reading SlimPajama...")
-        with open(lang_path, "r", encoding="utf-8", errors="replace") as f:
-            lang_text = f.read(max_chars_per_source) if max_chars_per_source else f.read()
-        lang_tokens = tokenizer.encode(lang_text)
-        print(f"    SlimPajama: {len(lang_text)} chars → {len(lang_tokens)} tokens")
-        del lang_text
+        print(f"    Tokenizing SlimPajama (cap {slimpajama_token_bytes / 1024**2:.0f} MB)...")
+        slim_bin = os.path.join(tok_dir, "slimpajama.bin")
+        _tokenize_text_to_bin(lang_path, slim_bin, enc, max_bytes=slimpajama_token_bytes)
 
         # 2. OpenAssistant (35%)
         oasst_path = _download_oasst(cache_dir)
-        print(f"    Reading OpenAssistant...")
-        with open(oasst_path, "r", encoding="utf-8", errors="replace") as f:
-            oasst_text = f.read(max_chars_per_source) if max_chars_per_source else f.read()
-        oasst_tokens = tokenizer.encode(oasst_text)
-        print(f"    OpenAssistant: {len(oasst_text)} chars → {len(oasst_tokens)} tokens")
-        del oasst_text
+        print(f"    Tokenizing OpenAssistant...")
+        oasst_bin = os.path.join(tok_dir, "oasst.bin")
+        _tokenize_text_to_bin(oasst_path, oasst_bin, enc)
 
         # 3. WikiText-103 (15%) — local files already in the codebase
-        # Cap at 100M chars to avoid OOM on the ~517MB file with limited RAM
         local_wt103 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wikitext-103-v1")
         wt103_path = os.path.join(local_wt103, "wiki.train.tokens")
+        wt_bin = None
         if os.path.exists(wt103_path):
-            print(f"    Reading WikiText-103 from {wt103_path}...")
-            wt103_char_cap = max_chars_per_source or 100_000_000  # 100M chars max
-            with open(wt103_path, "r", encoding="utf-8", errors="replace") as f:
-                wt103_text = f.read(wt103_char_cap)
-            wt103_tokens = tokenizer.encode(wt103_text)
-            print(f"    WikiText-103: {len(wt103_text)} chars → {len(wt103_tokens)} tokens")
-            del wt103_text
+            print(f"    Tokenizing WikiText-103 from {wt103_path}...")
+            wt_bin = os.path.join(tok_dir, "wikitext.bin")
+            _tokenize_text_to_bin(wt103_path, wt_bin, enc)
         else:
-            print(f"    ⚠ WikiText-103 not found locally, skipping")
-            wt103_tokens = []
+            print(f"    WikiText-103 not found locally, skipping")
 
-        # --- Mix at target ratio (50/35/15) ---
-        # Scale each source to its target proportion of the total
-        total = len(lang_tokens) + len(oasst_tokens) + len(wt103_tokens)
-        target_lang = int(total * 0.50)
-        target_oasst = int(total * 0.35)
-        target_wt103 = int(total * 0.15)
+        # --- Memory-map each tokenized source (read-only, paged on demand) ---
+        # Source IDs: 0=SlimPajama, 1=OpenAssistant, 2=WikiText-103
+        source_paths = [slim_bin, oasst_bin]
+        ratios = [0.50, 0.35]
+        if wt_bin is not None:
+            source_paths.append(wt_bin)
+            ratios.append(0.15)
+        ratios = [r / sum(ratios) for r in ratios]  # renormalise if wikitext missing
 
-        # Trim or repeat each source to hit the target
-        def _fit(tokens, target):
-            if len(tokens) >= target:
-                return tokens[:target]
-            # Repeat to fill (wrapping)
-            repeats = (target // max(1, len(tokens))) + 1
-            return (tokens * repeats)[:target]
+        self.sources: list[np.memmap] = []
+        avail = []  # number of non-overlapping seq_len windows per source
+        for p in source_paths:
+            arr = np.memmap(p, dtype=np.uint16, mode="r")
+            self.sources.append(arr)
+            n_win = max(0, (len(arr) - seq_len - 1) // seq_len + 1) if len(arr) >= seq_len + 1 else 0
+            avail.append(n_win)
+        self.total_tokens = int(sum(len(a) for a in self.sources))
 
-        lang_tokens = _fit(lang_tokens, target_lang)
-        oasst_tokens = _fit(oasst_tokens, target_oasst)
-        wt103_tokens = _fit(wt103_tokens, target_wt103)
+        # --- Mix at the chunk level with a repetition cap ---
+        # Pick the largest total window count such that no source must repeat
+        # more than `max_repeat` times to hit its target share.
+        total_cap = min(
+            (max_repeat * n) / r
+            for n, r in zip(avail, ratios) if n > 0 and r > 0
+        )
+        total_chunks = int(min(sum(avail), total_cap))
 
-        # Build per-chunk token arrays with source tags.
-        # Source IDs: 0=TinyStories (language foundation), 1=OpenAssistant, 2=WikiText-103
-        # Each sample is a seq_len chunk from ONE source (no cross-source mixing
-        # within a sample), so per-source loss is cleanly attributable.
-        import random
-        rng = random.Random(42)
+        starts_parts, src_parts = [], []
+        for sid, (n_avail, r) in enumerate(zip(avail, ratios)):
+            if n_avail == 0:
+                continue
+            target = int(total_chunks * r)
+            if target <= 0:
+                continue
+            offs = np.arange(n_avail, dtype=np.int64) * seq_len
+            if target <= n_avail:
+                sel = offs[:target]
+            else:
+                sel = np.tile(offs, target // n_avail + 1)[:target]
+            starts_parts.append(sel)
+            src_parts.append(np.full(sel.shape, sid, dtype=np.uint8))
 
-        # Build (tokens, source_id) chunks for each source
-        chunks = []  # list of (token_list, source_id)
+        self.starts = np.concatenate(starts_parts)
+        self.src_ids = np.concatenate(src_parts)
 
-        for src_tokens, src_id in [(lang_tokens, 0), (oasst_tokens, 1), (wt103_tokens, 2)]:
-            for start in range(0, len(src_tokens) - seq_len - 1, seq_len):
-                chunk = src_tokens[start:start + seq_len + 1]
-                if len(chunk) == seq_len + 1:
-                    chunks.append((chunk, src_id))
+        # Deterministic shuffle of the (source, offset) index.
+        perm = np.random.RandomState(42).permutation(len(self.starts))
+        self.starts = self.starts[perm]
+        self.src_ids = self.src_ids[perm]
 
-        rng.shuffle(chunks)
-
-        # Flatten into parallel arrays for __getitem__
-        self.token_ids = []
-        self.source_ids = []
-        for chunk_tokens, src_id in chunks:
-            self.token_ids.append(chunk_tokens)
-            self.source_ids.append(src_id)
-
-        print(f"\n    Mixed dataset: {len(self.token_ids)} samples (seq_len={seq_len})")
-        src_counts = [0, 0, 0]
-        for s in self.source_ids:
-            src_counts[s] += 1
-        print(f"    Per-source: TinyStories={src_counts[0]} ({100*src_counts[0]/max(1,len(self.source_ids)):.1f}%)"
-              f"  OpenAssistant={src_counts[1]} ({100*src_counts[1]/max(1,len(self.source_ids)):.1f}%)"
-              f"  WikiText-103={src_counts[2]} ({100*src_counts[2]/max(1,len(self.source_ids)):.1f}%)")
+        names = ["SlimPajama", "OpenAssistant", "WikiText-103"]
+        counts = [int((self.src_ids == s).sum()) for s in range(len(self.sources))]
+        tot = max(1, len(self.src_ids))
+        print(f"\n    Mixed dataset: {len(self.starts):,} samples (seq_len={seq_len})")
+        print(f"    Unique tokens on disk: {self.total_tokens:,}  |  windows/source: {avail}")
+        print("    Per-source: " + "  ".join(
+            f"{names[s]}={counts[s]:,} ({100 * counts[s] / tot:.1f}%)"
+            for s in range(len(self.sources))))
 
     def __len__(self):
-        return len(self.token_ids)
+        return len(self.starts)
 
     def __getitem__(self, idx):
-        chunk = self.token_ids[idx]
-        src_id = self.source_ids[idx]
-        x = torch.tensor(chunk[:-1], dtype=torch.long)
-        y = torch.tensor(chunk[1:], dtype=torch.long)
+        src_id = int(self.src_ids[idx])
+        start = int(self.starts[idx])
+        arr = self.sources[src_id]
+        chunk = np.asarray(arr[start:start + self.seq_len + 1], dtype=np.int64)
+        x = torch.from_numpy(chunk[:-1])
+        y = torch.from_numpy(chunk[1:])
         return x, y, src_id
 
 
@@ -566,7 +642,7 @@ def build_dataset_pipeline(
             slimpajama_max_bytes=5 * 1024**3,
         )
         stats["source"] = "mixed_local"
-        stats["total_tokens"] = len(dataset.token_ids)
+        stats["total_tokens"] = dataset.total_tokens
         stats["num_samples"] = len(dataset)
         print(f"  Tokens: {stats['total_tokens']}")
         print(f"  Samples: {stats['num_samples']}")
