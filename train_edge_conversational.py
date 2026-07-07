@@ -952,7 +952,11 @@ def train(
     total_steps = max_steps if max_steps is not None else 10_000
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
 
-    # Warmup: linearly increase LR for the first warmup_steps
+    # Warmup: linearly increase LR for the first warmup_steps, then let the
+    # cosine scheduler take over. During warmup we override the LR manually;
+    # after warmup we call scheduler.step() every optimizer step so the cosine
+    # decay actually happens.
+    warmup_done = resume_step >= warmup_steps
     def get_lr_scale(step):
         if step < warmup_steps:
             return step / max(1, warmup_steps)
@@ -1032,19 +1036,29 @@ def train(
             # Clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-            # Apply warmup LR scaling
-            lr_scale = get_lr_scale(global_step)
-            for pg in optimizer.param_groups:
-                pg["lr"] = lr * lr_scale
+            # Apply warmup LR scaling (during warmup only)
+            if not warmup_done:
+                lr_scale = get_lr_scale(global_step)
+                for pg in optimizer.param_groups:
+                    pg["lr"] = lr * lr_scale
+                if global_step + 1 >= warmup_steps:
+                    warmup_done = True
 
             optimizer.step()
             optimizer.zero_grad()
             micro_step = 0
             global_step += 1
 
+            # After warmup, advance the cosine scheduler every step
+            if warmup_done:
+                scheduler.step()
+
             # Logging every log_every_steps
             if global_step % config["log_every_steps"] == 0:
-                step_loss = accumulated_loss * grad_accum  # un-scale
+                # accumulated_loss is the sum of grad_accum micro-batch losses,
+                # each already divided by grad_accum — so the average loss is
+                # accumulated_loss (not accumulated_loss * grad_accum).
+                step_loss = accumulated_loss
                 step_ppl = math.exp(min(step_loss, 20))
                 current_lr = optimizer.param_groups[0]["lr"]
                 elapsed = time.time() - step_start_time
