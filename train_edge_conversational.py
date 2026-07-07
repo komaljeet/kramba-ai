@@ -252,20 +252,20 @@ GPT2_VOCAB_SIZE = 50257
 def _download_language_foundation(max_bytes: int, cache_dir: str) -> str:
     """Download a language foundation dataset to a local text file.
 
-    SlimPajama is no longer available on HuggingFace Hub, so we use
-    TinyStories (roneneldan/TinyStories) as the primary language foundation
-    source — a high-quality English corpus of short stories.
+    SlimPajama-627B is available via the gmongaras/SlimPajama-627B_Reupload
+    reupload on HuggingFace Hub. This is the real SlimPajama corpus
+    (RedPajama subset, English, multi-source: C4, CommonCrawl, etc.).
     Returns the path to the downloaded text file.
     """
-    out_path = os.path.join(cache_dir, "language_foundation.txt")
+    out_path = os.path.join(cache_dir, "slimpajama_en.txt")
     if os.path.exists(out_path):
         size = os.path.getsize(out_path)
-        print(f"    Language foundation cached: {out_path} ({size / 1024**2:.1f} MB)")
+        print(f"    SlimPajama cached: {out_path} ({size / 1024**2:.1f} MB)")
         return out_path
 
     from datasets import load_dataset
-    print(f"    Downloading TinyStories (cap {max_bytes / 1024**3:.1f} GB)...")
-    ds = load_dataset("roneneldan/TinyStories", split="train", streaming=True)
+    print(f"    Downloading SlimPajama-627B (cap {max_bytes / 1024**3:.1f} GB)...")
+    ds = load_dataset("gmongaras/SlimPajama-627B_Reupload", split="train", streaming=True)
     bytes_seen = 0
     with open(out_path, "w", encoding="utf-8") as f:
         for example in ds:
@@ -279,7 +279,7 @@ def _download_language_foundation(max_bytes: int, cache_dir: str) -> str:
             bytes_seen += len(text.encode("utf-8"))
             if bytes_seen % (500 * 1024**2) < 1024:
                 print(f"      {bytes_seen / 1024**3:.2f} GB downloaded...")
-    print(f"    TinyStories saved: {out_path} ({os.path.getsize(out_path) / 1024**2:.1f} MB)")
+    print(f"    SlimPajama saved: {out_path} ({os.path.getsize(out_path) / 1024**2:.1f} MB)")
     return out_path
 
 
@@ -343,14 +343,14 @@ class MixedLocalDataset(Dataset):
         # --- Download / locate each source ---
         print("\n  Preparing datasets (download to local files, no streaming)...")
 
-        # 1. Language foundation — TinyStories (50%)
-        # (SlimPajama is no longer on HuggingFace Hub; TinyStories is the replacement)
+        # 1. SlimPajama-627B (50%) — language foundation
+        # (gmongaras/SlimPajama-627B_Reupload on HuggingFace)
         lang_path = _download_language_foundation(slimpajama_max_bytes, cache_dir)
-        print(f"    Reading TinyStories...")
+        print(f"    Reading SlimPajama...")
         with open(lang_path, "r", encoding="utf-8", errors="replace") as f:
             lang_text = f.read(max_chars_per_source) if max_chars_per_source else f.read()
         lang_tokens = tokenizer.encode(lang_text)
-        print(f"    TinyStories: {len(lang_text)} chars → {len(lang_tokens)} tokens")
+        print(f"    SlimPajama: {len(lang_text)} chars → {len(lang_tokens)} tokens")
         del lang_text
 
         # 2. OpenAssistant (35%)
@@ -988,7 +988,7 @@ def train(
 
     # Per-source loss tracking (for diagnosing dataset quality variance)
     # Source IDs: 0=TinyStories, 1=OpenAssistant, 2=WikiText-103
-    source_names = ["TinyStories", "OpenAssistant", "WikiText-103"]
+    source_names = ["SlimPajama", "OpenAssistant", "WikiText-103"]
     source_loss_accum = [0.0, 0.0, 0.0]  # accumulated loss per source
     source_count = [0, 0, 0]  # sample count per source
 
