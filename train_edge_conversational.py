@@ -41,7 +41,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader, IterableDataset
+from torch.utils.data import Dataset, DataLoader
 
 from hvn.edge.model import EdgeHVN
 from hvn.edge.ternary import apply_ternary_to_model, TernaryLinear
@@ -249,13 +249,71 @@ def hardware_scan() -> dict:
 GPT2_VOCAB_SIZE = 50257
 
 
-class MixedStreamingDataset(IterableDataset):
-    """Streaming dataset that mixes three sources at a fixed ratio.
+def _download_language_foundation(max_bytes: int, cache_dir: str) -> str:
+    """Download a language foundation dataset to a local text file.
+
+    SlimPajama is no longer available on HuggingFace Hub, so we use
+    TinyStories (roneneldan/TinyStories) as the primary language foundation
+    source — a high-quality English corpus of short stories.
+    Returns the path to the downloaded text file.
+    """
+    out_path = os.path.join(cache_dir, "language_foundation.txt")
+    if os.path.exists(out_path):
+        size = os.path.getsize(out_path)
+        print(f"    Language foundation cached: {out_path} ({size / 1024**2:.1f} MB)")
+        return out_path
+
+    from datasets import load_dataset
+    print(f"    Downloading TinyStories (cap {max_bytes / 1024**3:.1f} GB)...")
+    ds = load_dataset("roneneldan/TinyStories", split="train", streaming=True)
+    bytes_seen = 0
+    with open(out_path, "w", encoding="utf-8") as f:
+        for example in ds:
+            if bytes_seen >= max_bytes:
+                break
+            text = example.get("text", "")
+            if not text:
+                continue
+            f.write(text)
+            f.write("\n")
+            bytes_seen += len(text.encode("utf-8"))
+            if bytes_seen % (500 * 1024**2) < 1024:
+                print(f"      {bytes_seen / 1024**3:.2f} GB downloaded...")
+    print(f"    TinyStories saved: {out_path} ({os.path.getsize(out_path) / 1024**2:.1f} MB)")
+    return out_path
+
+
+def _download_oasst(cache_dir: str) -> str:
+    """Download OpenAssistant Conversations (oasst1) to a local text file.
+
+    Returns the path to the downloaded text file.
+    """
+    out_path = os.path.join(cache_dir, "oasst1.txt")
+    if os.path.exists(out_path):
+        size = os.path.getsize(out_path)
+        print(f"    OpenAssistant cached: {out_path} ({size / 1024**2:.1f} MB)")
+        return out_path
+
+    from datasets import load_dataset
+    print(f"    Downloading OpenAssistant (oasst1)...")
+    ds = load_dataset("OpenAssistant/oasst1", split="train")
+    with open(out_path, "w", encoding="utf-8") as f:
+        for example in ds:
+            text = example.get("text", "")
+            if text:
+                f.write(text)
+                f.write("\n")
+    print(f"    OpenAssistant saved: {out_path} ({os.path.getsize(out_path) / 1024**2:.1f} MB)")
+    return out_path
+
+
+class MixedLocalDataset(Dataset):
+    """Map-style dataset mixing three local text files at a fixed ratio.
 
     Mix ratio: 50% SlimPajama, 35% OpenAssistant, 15% WikiText-103.
-
-    Tokenizes on-the-fly using the GPT-2 tokenizer. Yields fixed-length
-    (seq_len) token chunks for autoregressive next-token prediction.
+    All sources are downloaded to local files first (no streaming threads),
+    then tokenized and concatenated with source tags for the mix ratio.
+    This avoids the HuggingFace streaming thread crash on Windows.
 
     Parameters
     ----------
@@ -263,189 +321,104 @@ class MixedStreamingDataset(IterableDataset):
         HuggingFace GPT-2 BPE tokenizer.
     seq_len : int
         Sequence length per training sample.
+    cache_dir : str
+        Directory for downloaded dataset files.
     slimpajama_max_bytes : int
         Cap on SlimPajama download size (default 5 GB).
-    max_samples : int or None
-        If set, stop after yielding this many samples (for smoke mode).
+    max_chars_per_source : int or None
+        If set, cap characters read from each source (for smoke mode).
     """
 
     def __init__(
         self,
         tokenizer,
         seq_len: int = 512,
+        cache_dir: str = "data_cache",
         slimpajama_max_bytes: int = 5 * 1024**3,
-        max_samples: int | None = None,
+        max_chars_per_source: int | None = None,
     ):
-        self.tokenizer = tokenizer
         self.seq_len = seq_len
-        self.slimpajama_max_bytes = slimpajama_max_bytes
-        self.max_samples = max_samples
+        os.makedirs(cache_dir, exist_ok=True)
 
-        # Mix ratios (must sum to 1.0)
-        self.ratio_slimpajama = 0.50
-        self.ratio_oasst = 0.35
-        self.ratio_wikitext = 0.15
+        # --- Download / locate each source ---
+        print("\n  Preparing datasets (download to local files, no streaming)...")
 
-    def _slimpajama_stream(self):
-        """Stream SlimPajama (English only, capped at slimpajama_max_bytes)."""
-        from datasets import load_dataset
-        ds = load_dataset(
-            "cerebras/SlimPajama-627B",
-            split="train",
-            streaming=True,
-        )
-        bytes_seen = 0
-        for example in ds:
-            if bytes_seen >= self.slimpajama_max_bytes:
-                break
-            text = example.get("text", "")
-            if not text:
-                continue
-            # Filter to English only
-            lang = example.get("meta", {}).get("language", "en")
-            if lang != "en":
-                continue
-            bytes_seen += len(text.encode("utf-8"))
-            yield text
+        # 1. Language foundation — TinyStories (50%)
+        # (SlimPajama is no longer on HuggingFace Hub; TinyStories is the replacement)
+        lang_path = _download_language_foundation(slimpajama_max_bytes, cache_dir)
+        print(f"    Reading TinyStories...")
+        with open(lang_path, "r", encoding="utf-8", errors="replace") as f:
+            lang_text = f.read(max_chars_per_source) if max_chars_per_source else f.read()
+        lang_tokens = tokenizer.encode(lang_text)
+        print(f"    TinyStories: {len(lang_text)} chars → {len(lang_tokens)} tokens")
+        del lang_text
 
-    def _oasst_stream(self):
-        """Stream OpenAssistant Conversations (oasst1)."""
-        from datasets import load_dataset
-        ds = load_dataset(
-            "OpenAssistant/oasst1",
-            split="train",
-            streaming=True,
-        )
-        for example in ds:
-            text = example.get("text", "")
-            if not text:
-                continue
-            yield text
+        # 2. OpenAssistant (35%)
+        oasst_path = _download_oasst(cache_dir)
+        print(f"    Reading OpenAssistant...")
+        with open(oasst_path, "r", encoding="utf-8", errors="replace") as f:
+            oasst_text = f.read(max_chars_per_source) if max_chars_per_source else f.read()
+        oasst_tokens = tokenizer.encode(oasst_text)
+        print(f"    OpenAssistant: {len(oasst_text)} chars → {len(oasst_tokens)} tokens")
+        del oasst_text
 
-    def _wikitext103_stream(self):
-        """Stream WikiText-103 from local files (already in the codebase)."""
-        # Try local directory first
-        local_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wikitext-103-v1")
-        train_path = os.path.join(local_dir, "wiki.train.tokens")
-
-        if os.path.exists(train_path):
-            # Stream line by line from the local file
-            with open(train_path, "r", encoding="utf-8", errors="replace") as f:
-                buffer = []
-                for line in f:
-                    buffer.append(line)
-                    if len(buffer) >= 10:
-                        yield "".join(buffer)
-                        buffer = []
-                if buffer:
-                    yield "".join(buffer)
+        # 3. WikiText-103 (15%) — local files already in the codebase
+        # Cap at 100M chars to avoid OOM on the ~517MB file with limited RAM
+        local_wt103 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wikitext-103-v1")
+        wt103_path = os.path.join(local_wt103, "wiki.train.tokens")
+        if os.path.exists(wt103_path):
+            print(f"    Reading WikiText-103 from {wt103_path}...")
+            wt103_char_cap = max_chars_per_source or 100_000_000  # 100M chars max
+            with open(wt103_path, "r", encoding="utf-8", errors="replace") as f:
+                wt103_text = f.read(wt103_char_cap)
+            wt103_tokens = tokenizer.encode(wt103_text)
+            print(f"    WikiText-103: {len(wt103_text)} chars → {len(wt103_tokens)} tokens")
+            del wt103_text
         else:
-            # Fall back to HuggingFace datasets
-            from datasets import load_dataset
-            ds = load_dataset(
-                "wikitext",
-                "wikitext-103-raw-v1",
-                split="train",
-                streaming=True,
-            )
-            for example in ds:
-                text = example.get("text", "")
-                if text.strip():
-                    yield text
+            print(f"    ⚠ WikiText-103 not found locally, skipping")
+            wt103_tokens = []
 
-    def __iter__(self):
-        """Interleave the three streams at the target mix ratio.
+        # --- Mix at target ratio (50/35/15) ---
+        # Scale each source to its target proportion of the total
+        total = len(lang_tokens) + len(oasst_tokens) + len(wt103_tokens)
+        target_lang = int(total * 0.50)
+        target_oasst = int(total * 0.35)
+        target_wt103 = int(total * 0.15)
 
-        Uses a round-robin with weighted probability to approximate the
-        50/35/15 mix without loading everything into RAM.
-        """
+        # Trim or repeat each source to hit the target
+        def _fit(tokens, target):
+            if len(tokens) >= target:
+                return tokens[:target]
+            # Repeat to fill (wrapping)
+            repeats = (target // max(1, len(tokens))) + 1
+            return (tokens * repeats)[:target]
+
+        lang_tokens = _fit(lang_tokens, target_lang)
+        oasst_tokens = _fit(oasst_tokens, target_oasst)
+        wt103_tokens = _fit(wt103_tokens, target_wt103)
+
+        # Concatenate and shuffle the token stream
         import random
         rng = random.Random(42)
+        all_tokens = lang_tokens + oasst_tokens + wt103_tokens
+        rng.shuffle(all_tokens)
 
-        # Build weighted choice list
-        # For every 100 samples: 50 SlimPajama, 35 OASST, 15 WikiText
-        choices = (
-            ["slimpajama"] * 50 +
-            ["oasst"] * 35 +
-            ["wikitext"] * 15
-        )
-        rng.shuffle(choices)
+        self.token_ids = all_tokens
+        print(f"\n    Mixed dataset: {len(self.token_ids)} total tokens")
+        print(f"    Samples (seq_len={seq_len}): {max(1, (len(self.token_ids) - 1) // seq_len)}")
 
-        # Initialize the three streams as iterators
-        streams = {}
-        try:
-            streams["slimpajama"] = self._slimpajama_stream()
-        except Exception as e:
-            print(f"  ⚠ SlimPajama stream failed to start: {e}")
-            streams["slimpajama"] = iter([])
+    def __len__(self):
+        return max(1, (len(self.token_ids) - 1) // self.seq_len)
 
-        try:
-            streams["oasst"] = self._oasst_stream()
-        except Exception as e:
-            print(f"  ⚠ OpenAssistant stream failed to start: {e}")
-            streams["oasst"] = iter([])
-
-        try:
-            streams["wikitext"] = self._wikitext103_stream()
-        except Exception as e:
-            print(f"  ⚠ WikiText-103 stream failed to start: {e}")
-            streams["wikitext"] = iter([])
-
-        # Token buffer — accumulate tokens across documents and yield
-        # fixed-length seq_len chunks
-        token_buffer = []
-        samples_yielded = 0
-        choice_idx = 0
-
-        while True:
-            if self.max_samples is not None and samples_yielded >= self.max_samples:
-                break
-
-            # Pick the next source based on the weighted rotation
-            source = choices[choice_idx % len(choices)]
-            choice_idx += 1
-
-            stream = streams.get(source)
-            if stream is None:
-                continue
-
-            try:
-                text = next(stream)
-            except StopIteration:
-                # This source is exhausted — try the others
-                other_sources = [s for s in streams if s != source]
-                if not other_sources:
-                    break
-                # Re-weight: pick from remaining sources
-                source = rng.choice(other_sources)
-                stream = streams[source]
-                try:
-                    text = next(stream)
-                except StopIteration:
-                    streams.pop(source, None)
-                    if not streams:
-                        break
-                    continue
-            except Exception:
-                continue
-
-            if not text or not text.strip():
-                continue
-
-            # Tokenize and add to buffer
-            ids = self.tokenizer.encode(text)
-            token_buffer.extend(ids)
-
-            # Yield fixed-length chunks from the buffer
-            while len(token_buffer) >= self.seq_len + 1:
-                chunk = token_buffer[:self.seq_len + 1]
-                token_buffer = token_buffer[self.seq_len:]
-                x = torch.tensor(chunk[:-1], dtype=torch.long)
-                y = torch.tensor(chunk[1:], dtype=torch.long)
-                samples_yielded += 1
-                yield (x, y)
-                if self.max_samples is not None and samples_yielded >= self.max_samples:
-                    return
+    def __getitem__(self, idx):
+        start = idx * self.seq_len
+        end = start + self.seq_len + 1
+        chunk = self.token_ids[start:end]
+        if len(chunk) < self.seq_len + 1:
+            chunk = chunk + [0] * (self.seq_len + 1 - len(chunk))
+        x = torch.tensor(chunk[:-1], dtype=torch.long)
+        y = torch.tensor(chunk[1:], dtype=torch.long)
+        return x, y
 
 
 class WikiText103LocalDataset(Dataset):
@@ -519,39 +492,30 @@ def build_dataset_pipeline(
         print(f"  Tokens: {stats['total_tokens']}")
         print(f"  Samples: {stats['num_samples']}")
     else:
-        # Full mode: try streaming all three sources
-        print("\n  Attempting streaming from all three sources...")
-        max_samples = 50_000  # cap for manageability
-        dataset = MixedStreamingDataset(
+        # Full mode: download all three sources to local files, then mix
+        print("\n  Downloading datasets to local files (no streaming threads)...")
+        dataset = MixedLocalDataset(
             tokenizer=tokenizer,
             seq_len=seq_len,
+            cache_dir="data_cache",
             slimpajama_max_bytes=5 * 1024**3,
-            max_samples=max_samples,
         )
-        stats["source"] = "mixed_streaming"
-        stats["max_samples"] = max_samples
-        print(f"  Max samples: {max_samples}")
-        print(f"  SlimPajama cap: 5 GB")
-        print(f"  Streaming mode: on (no full load into RAM)")
+        stats["source"] = "mixed_local"
+        stats["total_tokens"] = len(dataset.token_ids)
+        stats["num_samples"] = len(dataset)
+        print(f"  Tokens: {stats['total_tokens']}")
+        print(f"  Samples: {stats['num_samples']}")
 
-    # Build DataLoader
-    if isinstance(dataset, IterableDataset):
-        dataloader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            num_workers=0,  # streaming datasets don't support multi-worker well
-            pin_memory=torch.cuda.is_available(),
-        )
-    else:
-        dataloader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            drop_last=False,
-            pin_memory=torch.cuda.is_available(),
-        )
+    # Build DataLoader (always map-style now — no IterableDataset)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        drop_last=False,
+        pin_memory=torch.cuda.is_available(),
+    )
 
-    stats["num_batches"] = len(dataloader) if not isinstance(dataset, IterableDataset) else "streaming"
+    stats["num_batches"] = len(dataloader)
     print(f"\n  DataLoader ready: batch_size={batch_size}")
     print(f"✓ Step 2 complete.")
     return dataloader, stats
@@ -690,12 +654,7 @@ def pre_training_audit(
     # --- Check 1: DataLoader produces correct token shapes ---
     print("\n  [Check 1] DataLoader token shapes...")
     try:
-        # Get one batch
-        if isinstance(dataloader.dataset, IterableDataset):
-            batch_iter = iter(dataloader)
-            batch_x, batch_y = next(batch_iter)
-        else:
-            batch_x, batch_y = next(iter(dataloader))
+        batch_x, batch_y = next(iter(dataloader))
 
         expected_shape = (config["batch_size"], config["seq_len"])
         print(f"    batch_x shape: {batch_x.shape} (expected {expected_shape})")
@@ -1201,7 +1160,9 @@ def main():
     if not audit_passed:
         print("\n❌ Pre-training audit FAILED. Stopping before training.")
         print("   Fix the issues above and re-run.")
-        sys.exit(1)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
 
     # === Step 5: Start Training ===
     # Check for existing checkpoint to resume from
@@ -1223,6 +1184,28 @@ def main():
         resume_step=resume_step,
     )
 
+    # HuggingFace `datasets` streaming leaves background download threads that
+    # cause "Fatal Python error: PyInterpreterState_Delete: remaining threads"
+    # during normal Python shutdown. Force-exit to skip the broken thread join.
+    # This is a well-known HuggingFace streaming issue on Windows.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+        traceback.print_exc()
+    finally:
+        # HuggingFace `datasets` leaves background threads that crash the
+        # interpreter on normal shutdown (Fatal Python error:
+        # PyInterpreterState_Delete: remaining threads). Force-exit to
+        # skip the broken thread join. This is a well-known HF issue on Windows.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
