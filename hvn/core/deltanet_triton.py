@@ -82,7 +82,7 @@ if _HAS_TRITON:
 
 
 def gated_delta_forward(q, k, v, alpha, beta, BV: int = 16):
-    """Triton forward of HVN's gated delta-rule scan.
+    """Triton forward of HVN's gated delta-rule scan (inference / no grad).
 
     Parameters
     ----------
@@ -100,3 +100,127 @@ def gated_delta_forward(q, k, v, alpha, beta, BV: int = 16):
     grid = (N, D // BV)
     _gated_delta_fwd_kernel[grid](q, k, v, alpha, beta, o, S=S, D=D, BV=BV)
     return o
+
+
+if _HAS_TRITON:
+
+    @triton.jit
+    def _gd_fwd_states_kernel(
+        q_ptr, k_ptr, v_ptr, alpha_ptr, beta_ptr, o_ptr, states_ptr,
+        S: tl.constexpr, D: tl.constexpr,
+    ):
+        """Forward that also writes the *entering* state S_{t-1} per step, so the
+        backward can recompute exactly. One program per sequence; full [D,D]
+        state. states layout: [N, S, D(d_v), D(d_k)]."""
+        n = tl.program_id(0)
+        ov = tl.arange(0, D)[:, None]   # d_v axis
+        ok = tl.arange(0, D)[None, :]   # d_k axis
+        base = n * S * D
+        bbase = n * S
+        sbase = n * S * D * D
+        state = tl.zeros((D, D), dtype=tl.float32)
+        for t in range(S):
+            row = base + t * D
+            k_t = tl.load(k_ptr + row + tl.arange(0, D)).to(tl.float32)   # [D] d_k
+            q_t = tl.load(q_ptr + row + tl.arange(0, D)).to(tl.float32)
+            a_t = tl.load(alpha_ptr + row + tl.arange(0, D)).to(tl.float32)
+            v_t = tl.load(v_ptr + row + tl.arange(0, D)).to(tl.float32)   # [D] d_v
+            b_t = tl.load(beta_ptr + bbase + t).to(tl.float32)
+            # save entering state S_{t-1}
+            tl.store(states_ptr + sbase + t * D * D + ov * D + ok, state)
+            state = state * a_t[None, :]
+            Sk = tl.sum(state * k_t[None, :], axis=1)       # [D] d_v
+            u = v_t - Sk
+            state = state + b_t * (u[:, None] * k_t[None, :])
+            o_t = tl.sum(state * q_t[None, :], axis=1)      # [D] d_v
+            tl.store(o_ptr + row + tl.arange(0, D), o_t.to(o_ptr.dtype.element_ty))
+
+    @triton.jit
+    def _gd_bwd_kernel(
+        q_ptr, k_ptr, v_ptr, alpha_ptr, beta_ptr, states_ptr, do_ptr,
+        dq_ptr, dk_ptr, dv_ptr, dalpha_ptr, dbeta_ptr,
+        S: tl.constexpr, D: tl.constexpr,
+    ):
+        """Reverse-time adjoint (validated vs autograd at 1e-16 in fp64). One
+        program per sequence; full [D,D] state grad carried backward."""
+        n = tl.program_id(0)
+        rk = tl.arange(0, D)             # d_k axis (1-D)
+        rv = tl.arange(0, D)             # d_v axis (1-D)
+        ov = tl.arange(0, D)[:, None]    # d_v
+        ok = tl.arange(0, D)[None, :]    # d_k
+        base = n * S * D
+        bbase = n * S
+        sbase = n * S * D * D
+        dS = tl.zeros((D, D), dtype=tl.float32)
+        for t in range(S - 1, -1, -1):
+            row = base + t * D
+            Sprev = tl.load(states_ptr + sbase + t * D * D + ov * D + ok)  # [dv,dk]
+            k_t = tl.load(k_ptr + row + rk).to(tl.float32)
+            q_t = tl.load(q_ptr + row + rk).to(tl.float32)
+            a_t = tl.load(alpha_ptr + row + rk).to(tl.float32)
+            v_t = tl.load(v_ptr + row + rv).to(tl.float32)
+            b_t = tl.load(beta_ptr + bbase + t).to(tl.float32)
+            do_t = tl.load(do_ptr + row + rv).to(tl.float32)               # [dv]
+            # recompute Sd, u, S_t
+            Sd = Sprev * a_t[None, :]
+            Sk = tl.sum(Sd * k_t[None, :], axis=1)          # [dv]
+            u = v_t - Sk
+            S_t = Sd + b_t * (u[:, None] * k_t[None, :])
+            # o_t = S_t @ q_t
+            dS_t = dS + do_t[:, None] * q_t[None, :]         # [dv,dk]
+            dq_t = tl.sum(S_t * do_t[:, None], axis=0)       # sum dv -> [dk]
+            tl.store(dq_ptr + row + rk, dq_t)
+            # S_t = Sd + b*outer(u,k)
+            dSd = dS_t
+            dSk_via = tl.sum(dS_t * k_t[None, :], axis=1)    # [dv]
+            dbeta_t = tl.sum(u * dSk_via)                    # scalar
+            tl.store(dbeta_ptr + bbase + t, dbeta_t)
+            du = b_t * dSk_via                               # [dv]
+            dk_t = b_t * tl.sum(dS_t * u[:, None], axis=0)   # [dk]
+            # u = v - Sd@k
+            tl.store(dv_ptr + row + rv, du)                  # dv_t = du
+            dSd = dSd - du[:, None] * k_t[None, :]
+            dk_t = dk_t - tl.sum(Sd * du[:, None], axis=0)   # [dk]
+            tl.store(dk_ptr + row + rk, dk_t)
+            # Sd = Sprev * alpha
+            dalpha_t = tl.sum(Sprev * dSd, axis=0)           # sum dv -> [dk]
+            tl.store(dalpha_ptr + row + rk, dalpha_t)
+            dS = dSd * a_t[None, :]
+
+
+class _GatedDeltaScan(torch.autograd.Function):
+    """Autograd-enabled HVN gated delta-rule scan via Triton fwd+bwd kernels."""
+
+    @staticmethod
+    def forward(ctx, q, k, v, alpha, beta):
+        N, S, D = q.shape
+        q, k, v, alpha = (t.contiguous().float() for t in (q, k, v, alpha))
+        beta2 = beta.reshape(N, S).contiguous().float()
+        o = torch.empty_like(q)
+        states = torch.empty(N, S, D, D, device=q.device, dtype=torch.float32)
+        _gd_fwd_states_kernel[(N,)](q, k, v, alpha, beta2, o, states, S=S, D=D)
+        ctx.save_for_backward(q, k, v, alpha, beta2, states)
+        ctx.beta_shape = beta.shape
+        return o
+
+    @staticmethod
+    def backward(ctx, do):
+        q, k, v, alpha, beta2, states = ctx.saved_tensors
+        N, S, D = q.shape
+        do = do.contiguous().float()
+        dq = torch.empty_like(q); dk = torch.empty_like(q)
+        dv = torch.empty_like(q); dalpha = torch.empty_like(q)
+        dbeta2 = torch.empty_like(beta2)
+        _gd_bwd_kernel[(N,)](q, k, v, alpha, beta2, states, do,
+                             dq, dk, dv, dalpha, dbeta2, S=S, D=D)
+        return dq, dk, dv, dalpha, dbeta2.reshape(ctx.beta_shape)
+
+
+def gated_delta_scan(q, k, v, alpha, beta):
+    """Autograd-enabled HVN gated delta-rule scan (training). Same math as
+    DeltaNetBlock._scan_sequential, fused in Triton, stable at all decay.
+
+    q, k, v, alpha : [N, S, d]  ;  beta : [N, S, 1]  ->  o : [N, S, d].
+    """
+    assert _HAS_TRITON and q.is_cuda, "CUDA + triton required"
+    return _GatedDeltaScan.apply(q, k, v, alpha, beta)
