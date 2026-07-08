@@ -396,6 +396,32 @@ def _tokenize_text_to_bin(
     return total_tokens
 
 
+class _WindowDataset(Dataset):
+    """Minimal (source_id, offset) window dataset over shared memmap sources.
+
+    Yields (x, y, src_id) for each seq_len window, matching MixedLocalDataset's
+    item format. Used for the token-disjoint held-out validation split.
+    """
+
+    def __init__(self, sources, src_ids, starts, seq_len):
+        self.sources = sources
+        self.src_ids = src_ids
+        self.starts = starts
+        self.seq_len = seq_len
+
+    def __len__(self):
+        return len(self.starts)
+
+    def __getitem__(self, idx):
+        src_id = int(self.src_ids[idx])
+        start = int(self.starts[idx])
+        arr = self.sources[src_id]
+        chunk = np.asarray(arr[start:start + self.seq_len + 1], dtype=np.int64)
+        x = torch.from_numpy(chunk[:-1])
+        y = torch.from_numpy(chunk[1:])
+        return x, y, src_id
+
+
 class MixedLocalDataset(Dataset):
     """Map-style dataset mixing three local text files at a fixed ratio.
 
@@ -427,6 +453,7 @@ class MixedLocalDataset(Dataset):
         slimpajama_max_bytes: int = 5 * 1024**3,
         slimpajama_token_bytes: int = 500 * 1024**2,
         max_repeat: int = 3,
+        val_fraction: float = 0.0,
     ):
         """Build the mixed dataset from on-disk memory-mapped token files.
 
@@ -508,37 +535,67 @@ class MixedLocalDataset(Dataset):
         )
         total_chunks = int(min(sum(avail), total_cap))
 
+        # Hold out the last `val_fraction` of each source's UNIQUE windows as a
+        # token-disjoint validation set: those offsets never enter the train
+        # index, so there is no leakage (whole seq_len windows are disjoint).
         starts_parts, src_parts = [], []
+        val_starts_parts, val_src_parts = [], []
         for sid, (n_avail, r) in enumerate(zip(avail, ratios)):
             if n_avail == 0:
                 continue
-            target = int(total_chunks * r)
-            if target <= 0:
-                continue
             offs = np.arange(n_avail, dtype=np.int64) * seq_len
-            if target <= n_avail:
-                sel = offs[:target]
-            else:
-                sel = np.tile(offs, target // n_avail + 1)[:target]
-            starts_parts.append(sel)
-            src_parts.append(np.full(sel.shape, sid, dtype=np.uint8))
+            n_val = int(n_avail * val_fraction)
+            train_offs = offs[: n_avail - n_val] if n_val > 0 else offs
+            val_offs = offs[n_avail - n_val:] if n_val > 0 else offs[:0]
+            n_train = len(train_offs)
+
+            target = int(total_chunks * r)
+            if target > 0 and n_train > 0:
+                if target <= n_train:
+                    sel = train_offs[:target]
+                else:  # repeat (wrapping) to hit the mix target
+                    sel = np.tile(train_offs, target // n_train + 1)[:target]
+                starts_parts.append(sel)
+                src_parts.append(np.full(sel.shape, sid, dtype=np.uint8))
+            if n_val > 0:
+                val_starts_parts.append(val_offs)
+                val_src_parts.append(np.full(val_offs.shape, sid, dtype=np.uint8))
 
         self.starts = np.concatenate(starts_parts)
         self.src_ids = np.concatenate(src_parts)
 
-        # Deterministic shuffle of the (source, offset) index.
+        # Deterministic shuffle of the (source, offset) train index.
         perm = np.random.RandomState(42).permutation(len(self.starts))
         self.starts = self.starts[perm]
         self.src_ids = self.src_ids[perm]
 
+        # Validation index — deterministically shuffled (fixed seed) so a capped
+        # eval samples a representative per-source mix rather than one source.
+        if val_starts_parts:
+            self.val_starts = np.concatenate(val_starts_parts)
+            self.val_src_ids = np.concatenate(val_src_parts)
+            vperm = np.random.RandomState(1234).permutation(len(self.val_starts))
+            self.val_starts = self.val_starts[vperm]
+            self.val_src_ids = self.val_src_ids[vperm]
+        else:
+            self.val_starts = np.zeros(0, dtype=np.int64)
+            self.val_src_ids = np.zeros(0, dtype=np.uint8)
+
         names = ["SlimPajama", "OpenAssistant", "WikiText-103"]
         counts = [int((self.src_ids == s).sum()) for s in range(len(self.sources))]
         tot = max(1, len(self.src_ids))
-        print(f"\n    Mixed dataset: {len(self.starts):,} samples (seq_len={seq_len})")
+        print(f"\n    Mixed dataset: {len(self.starts):,} train samples "
+              f"({len(self.val_starts):,} held-out val), seq_len={seq_len}")
         print(f"    Unique tokens on disk: {self.total_tokens:,}  |  windows/source: {avail}")
-        print("    Per-source: " + "  ".join(
+        print("    Per-source (train): " + "  ".join(
             f"{names[s]}={counts[s]:,} ({100 * counts[s] / tot:.1f}%)"
             for s in range(len(self.sources))))
+
+    def val_dataset(self) -> "_WindowDataset":
+        """Return a Dataset over the held-out validation windows (token-disjoint
+        from train), sharing the same memory-mapped sources."""
+        return _WindowDataset(self.sources, self.val_src_ids, self.val_starts,
+                              self.seq_len)
 
     def __len__(self):
         return len(self.starts)
@@ -599,8 +656,12 @@ def build_dataset_pipeline(
     smoke: bool = False,
     data_dir: str = "data_cache",
     slimpajama_dir: str | None = None,
-) -> tuple[DataLoader, dict]:
-    """Build the mixed-source DataLoader and report dataset stats.
+    val_fraction: float = 0.0,
+) -> tuple[DataLoader, "DataLoader | None", dict]:
+    """Build the mixed-source train (and held-out val) DataLoaders + stats.
+
+    Returns (train_loader, val_loader, stats). ``val_loader`` is None when
+    ``val_fraction`` is 0 or in smoke mode.
 
     Parameters
     ----------
@@ -642,6 +703,7 @@ def build_dataset_pipeline(
             cache_dir=data_dir,
             slimpajama_dir=slimpajama_dir,
             slimpajama_max_bytes=5 * 1024**3,
+            val_fraction=val_fraction,
         )
         stats["source"] = "mixed_local"
         stats["total_tokens"] = dataset.total_tokens
@@ -658,10 +720,24 @@ def build_dataset_pipeline(
         pin_memory=torch.cuda.is_available(),
     )
 
+    # Held-out validation loader (full mode only; deterministic order, no shuffle).
+    val_loader = None
+    val_starts = getattr(dataset, "val_starts", None)
+    if not smoke and val_starts is not None and len(val_starts) > 0:
+        val_loader = DataLoader(
+            dataset.val_dataset(),
+            batch_size=batch_size,
+            shuffle=False,
+            drop_last=False,
+            pin_memory=torch.cuda.is_available(),
+        )
+        stats["val_samples"] = int(len(val_starts))
+        print(f"  Held-out val: {stats['val_samples']:,} samples")
+
     stats["num_batches"] = len(dataloader)
     print(f"\n  DataLoader ready: batch_size={batch_size}")
     print(f"✓ Step 2 complete.")
-    return dataloader, stats
+    return dataloader, val_loader, stats
 
 
 # ---------------------------------------------------------------------------
@@ -1031,6 +1107,46 @@ def load_checkpoint_for_resume(
     return model, global_step, ckpt
 
 
+@torch.no_grad()
+def evaluate(model, val_loader, device, max_batches: int = 100):
+    """Held-out validation: mean loss overall + per-source.
+
+    Returns (overall_loss, [slim, oasst, wiki] losses) or None if no val set.
+    Deterministic (val_loader is unshuffled); capped at ``max_batches`` for speed.
+    """
+    if val_loader is None:
+        return None
+    was_training = model.training
+    model.eval()
+    crit = nn.CrossEntropyLoss(reduction="none")
+    tot_loss, tot_n = 0.0, 0
+    src_loss, src_n = [0.0, 0.0, 0.0], [0, 0, 0]
+    for i, batch in enumerate(val_loader):
+        if i >= max_batches:
+            break
+        x, y, src = batch
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            logits = model(x)
+            per_sample = crit(
+                logits.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1)
+            ).reshape(x.shape[0], -1).mean(dim=1)
+        for b in range(x.shape[0]):
+            l = per_sample[b].item()
+            tot_loss += l
+            tot_n += 1
+            s = int(src[b])
+            if 0 <= s < 3:
+                src_loss[s] += l
+                src_n[s] += 1
+    if was_training:
+        model.train()
+    overall = tot_loss / max(1, tot_n)
+    per_src = [src_loss[s] / src_n[s] if src_n[s] else float("nan") for s in range(3)]
+    return overall, per_src
+
+
 def train(
     model: EdgeHVN,
     dataloader: DataLoader,
@@ -1039,6 +1155,7 @@ def train(
     checkpoint_dir: str,
     max_steps: int | None = None,
     resume_step: int = 0,
+    val_loader=None,
 ) -> None:
     """Run the training loop with all configured settings.
 
@@ -1120,6 +1237,17 @@ def train(
     if not file_exists:
         csv_writer.writerow(["step", "epoch", "loss", "ppl", "lr", "timestamp"])
     csv_file.flush()
+
+    # --- Held-out validation logging (A/B primary metric) ---
+    val_every = config.get("val_every_steps", config["save_every_steps"])
+    val_log = os.path.join(checkpoint_dir, "val_log.csv")
+    val_exists = os.path.exists(val_log)
+    val_file = open(val_log, "a", newline="", encoding="utf-8") if val_loader is not None else None
+    val_writer = csv.writer(val_file) if val_file is not None else None
+    if val_writer is not None and not val_exists:
+        val_writer.writerow(["step", "val_loss", "val_ppl",
+                             "val_slim", "val_oasst", "val_wiki", "timestamp"])
+        val_file.flush()
 
     # --- Training loop ---
     criterion = nn.CrossEntropyLoss()
@@ -1268,6 +1396,19 @@ def train(
                     print(f"  ⏱ Estimated {est_per_step:.2f}s/step | "
                           f"~{est_per_step * config['save_every_steps']:.0f}s per checkpoint interval")
 
+            # Held-out validation eval (A/B primary metric)
+            if val_writer is not None and global_step % val_every == 0:
+                v_overall, v_src = evaluate(model, val_loader, device)
+                v_ppl = math.exp(min(v_overall, 20))
+                print(f"    ↳ VAL step {global_step}: loss {v_overall:.4f} | ppl {v_ppl:.2f} | "
+                      f"Slim {v_src[0]:.4f}  OA {v_src[1]:.4f}  Wiki {v_src[2]:.4f}", flush=True)
+                val_writer.writerow([
+                    global_step, f"{v_overall:.6f}", f"{v_ppl:.4f}",
+                    f"{v_src[0]:.6f}", f"{v_src[1]:.6f}", f"{v_src[2]:.6f}",
+                    time.strftime("%Y-%m-%d %H:%M:%S"),
+                ])
+                val_file.flush()
+
             # Checkpoint every save_every_steps
             if global_step % config["save_every_steps"] == 0:
                 ckpt_path = os.path.join(checkpoint_dir, f"edge_conversational_step{global_step}.pt")
@@ -1281,6 +1422,8 @@ def train(
     _save_edge_checkpoint(model, final_ckpt_path, global_step=global_step)
 
     csv_file.close()
+    if val_file is not None:
+        val_file.close()
 
     total_elapsed = time.time() - start_time
     print(f"\n{'=' * 70}")
@@ -1341,6 +1484,11 @@ def main():
     parser.add_argument("--no-ternary", action="store_true",
                         help="Disable ternary quantization — train fp32 weights. "
                              "Use for the fp32 A/B (no ternary either side).")
+    parser.add_argument("--val-fraction", type=float, default=0.0,
+                        help="Fraction of each source's unique windows held out as a "
+                             "token-disjoint validation set (e.g. 0.02). 0 disables.")
+    parser.add_argument("--val-every", type=int, default=None,
+                        help="Run held-out val eval every N steps (default: checkpoint interval).")
     args = parser.parse_args()
 
     # Force UTF-8 for Windows console
@@ -1379,13 +1527,14 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
     print(f"  GPT-2 tokenizer loaded: vocab_size = {tokenizer.vocab_size}")
 
-    dataloader, dataset_stats = build_dataset_pipeline(
+    dataloader, val_loader, dataset_stats = build_dataset_pipeline(
         tokenizer=tokenizer,
         seq_len=settings["seq_len"],
         batch_size=settings["batch_size"],
         smoke=args.smoke,
         data_dir=args.data_dir,
         slimpajama_dir=args.slimpajama_dir,
+        val_fraction=args.val_fraction,
     )
 
     # === Step 3: Training Configuration ===
@@ -1398,6 +1547,8 @@ def main():
         apply_ternary=not args.no_ternary,
     )
     config["lr"] = args.lr
+    if args.val_every is not None:
+        config["val_every_steps"] = args.val_every
 
     # === Step 4: Pre-Training Audit ===
     audit_passed = pre_training_audit(
@@ -1433,6 +1584,7 @@ def main():
         checkpoint_dir=args.checkpoint_dir,
         max_steps=args.max_steps,
         resume_step=resume_step,
+        val_loader=val_loader,
     )
 
     # HuggingFace `datasets` streaming leaves background download threads that
