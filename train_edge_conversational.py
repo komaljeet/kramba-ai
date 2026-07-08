@@ -77,6 +77,8 @@ def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
         "chunk_size": getattr(first_block, 'chunk_size', 64) if first_block is not None else 64,
         "use_deltanet": getattr(model, 'use_deltanet', False),
         "deltanet_conv_kernel": getattr(first_block, 'conv_kernel', 4) if first_block is not None else 4,
+        "block_type": getattr(model, 'block_type', None),
+        "ternary": any(isinstance(m, TernaryLinear) for m in model.modules()),
         "weightless": getattr(model, 'weightless', False),
         "weightless_seed": getattr(model, 'weightless_seed', 1234),
         "is_edge": True,
@@ -671,8 +673,19 @@ def build_model_and_config(
     tokenizer,
     device: torch.device,
     checkpoint_dir: str,
+    arch: str = "hvn",
+    apply_ternary: bool = True,
 ) -> tuple[EdgeHVN, dict]:
-    """Build the EdgeHVN model with DeltaNet + ternary weights and training config.
+    """Build the EdgeHVN model with DeltaNet (or transformer baseline) + config.
+
+    Parameters
+    ----------
+    arch : {"hvn", "transformer"}
+        "hvn" uses the DeltaNet block (default); "transformer" swaps in the
+        matched causal-MHA baseline for the A/B (#73). Only the block differs.
+    apply_ternary : bool
+        If False, keep fp32 weights (used for the fp32 A/B — no ternary either
+        side). Default True preserves the original EdgeHVN behaviour.
 
     Returns (model, training_config).
     """
@@ -681,7 +694,9 @@ def build_model_and_config(
     print("=" * 70)
 
     config = {
-        "use_deltanet": True,
+        "arch": arch,
+        "ternary": apply_ternary,
+        "use_deltanet": arch == "hvn",
         "bf16": True,
         "batch_size": settings["batch_size"],
         "grad_accum": settings["grad_accum"],
@@ -715,26 +730,33 @@ def build_model_and_config(
     print(f"  resume:            auto-resume from {checkpoint_dir}/ if checkpoint exists")
 
     # Build the model
-    print(f"\n  Building EdgeHVN model...")
+    print(f"\n  Building EdgeHVN model (arch={arch})...")
     model = EdgeHVN(
         vocab_size=GPT2_VOCAB_SIZE,
         d_model=settings["d_model"],
         num_layers=settings["num_layers"],
         n_heads=settings["n_heads"],
-        use_deltanet=True,
+        use_deltanet=(arch == "hvn"),
         deltanet_conv_kernel=4,
+        block_type=("transformer" if arch == "transformer" else None),
     )
+    param_count = sum(p.numel() for p in model.parameters())
+    config["param_count"] = param_count
+    print(f"  Architecture: {arch}  |  total params: {param_count:,}")
 
-    # Apply ternary BitNet b1.58 weights
-    print(f"  Applying ternary BitNet b1.58 weight quantization...")
-    all_linears = {name: mod for name, mod in model.named_modules()
-                   if isinstance(mod, nn.Linear)}
-    exclude_patterns = ("beta_proj", "alpha_proj", "decoder")
-    target_names = [name for name in all_linears
-                    if not any(p in name for p in exclude_patterns)]
-    replaced = apply_ternary_to_model(model, target_names=target_names)
-    print(f"  Ternary: replaced {len(replaced)} nn.Linear layers with TernaryLinear (STE)")
-    print(f"  Excluded {len(all_linears) - len(replaced)} gate/decoder layers")
+    # Apply ternary BitNet b1.58 weights (skipped for the fp32 A/B)
+    if apply_ternary:
+        print(f"  Applying ternary BitNet b1.58 weight quantization...")
+        all_linears = {name: mod for name, mod in model.named_modules()
+                       if isinstance(mod, nn.Linear)}
+        exclude_patterns = ("beta_proj", "alpha_proj", "decoder")
+        target_names = [name for name in all_linears
+                        if not any(p in name for p in exclude_patterns)]
+        replaced = apply_ternary_to_model(model, target_names=target_names)
+        print(f"  Ternary: replaced {len(replaced)} nn.Linear layers with TernaryLinear (STE)")
+        print(f"  Excluded {len(all_linears) - len(replaced)} gate/decoder layers")
+    else:
+        print(f"  Ternary: DISABLED — fp32 weights (A/B mode)")
 
     # Move to device
     model = model.to(device)
@@ -899,14 +921,17 @@ def pre_training_audit(
             n_heads=ckpt.get("n_heads", 4),
             use_deltanet=ckpt.get("use_deltanet", False),
             deltanet_conv_kernel=ckpt.get("deltanet_conv_kernel", 4),
+            block_type=ckpt.get("block_type", None),
         )
-        # Apply ternary to rebuilt model (same layers as original)
-        all_linears = {name: mod for name, mod in rebuilt.named_modules()
-                       if isinstance(mod, nn.Linear)}
-        exclude_patterns = ("beta_proj", "alpha_proj", "decoder")
-        target_names = [name for name in all_linears
-                        if not any(p in name for p in exclude_patterns)]
-        apply_ternary_to_model(rebuilt, target_names=target_names)
+        # Apply ternary to rebuilt model (same layers as original) — only if the
+        # checkpoint was ternary (fp32 A/B runs skip it).
+        if ckpt.get("ternary", True):
+            all_linears = {name: mod for name, mod in rebuilt.named_modules()
+                           if isinstance(mod, nn.Linear)}
+            exclude_patterns = ("beta_proj", "alpha_proj", "decoder")
+            target_names = [name for name in all_linears
+                            if not any(p in name for p in exclude_patterns)]
+            apply_ternary_to_model(rebuilt, target_names=target_names)
         rebuilt = rebuilt.to(device)
         rebuilt.load_state_dict(ckpt["model_state_dict"])
         print(f"    ✓ State dict loads into rebuilt model")
@@ -986,15 +1011,18 @@ def load_checkpoint_for_resume(
         n_heads=ckpt.get("n_heads", 4),
         use_deltanet=ckpt.get("use_deltanet", False),
         deltanet_conv_kernel=ckpt.get("deltanet_conv_kernel", 4),
+        block_type=ckpt.get("block_type", None),
     )
 
-    # Apply ternary to match the saved model
-    all_linears = {name: mod for name, mod in model.named_modules()
-                   if isinstance(mod, nn.Linear)}
-    exclude_patterns = ("beta_proj", "alpha_proj", "decoder")
-    target_names = [name for name in all_linears
-                    if not any(p in name for p in exclude_patterns)]
-    apply_ternary_to_model(model, target_names=target_names)
+    # Apply ternary to match the saved model — only if it was ternary. Older
+    # checkpoints predate the "ternary" flag, so default True for back-compat.
+    if ckpt.get("ternary", True):
+        all_linears = {name: mod for name, mod in model.named_modules()
+                       if isinstance(mod, nn.Linear)}
+        exclude_patterns = ("beta_proj", "alpha_proj", "decoder")
+        target_names = [name for name in all_linears
+                        if not any(p in name for p in exclude_patterns)]
+        apply_ternary_to_model(model, target_names=target_names)
 
     model = model.to(device)
     model.load_state_dict(ckpt["model_state_dict"])
@@ -1306,6 +1334,13 @@ def main():
                         default=None,
                         help="HuggingFace cache directory for tokenizer/dataset downloads. "
                              "If not set, uses the default HF cache (~/.cache/huggingface).")
+    parser.add_argument("--arch", type=str, default="hvn",
+                        choices=["hvn", "transformer"],
+                        help="Block architecture: 'hvn' (DeltaNet, default) or "
+                             "'transformer' (matched causal-MHA baseline for the A/B, #73).")
+    parser.add_argument("--no-ternary", action="store_true",
+                        help="Disable ternary quantization — train fp32 weights. "
+                             "Use for the fp32 A/B (no ternary either side).")
     args = parser.parse_args()
 
     # Force UTF-8 for Windows console
@@ -1359,6 +1394,8 @@ def main():
         tokenizer=tokenizer,
         device=device,
         checkpoint_dir=args.checkpoint_dir,
+        arch=args.arch,
+        apply_ternary=not args.no_ternary,
     )
     config["lr"] = args.lr
 
