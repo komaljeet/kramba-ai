@@ -8,7 +8,7 @@ using the existing EdgeHVN + DeltaNet + ternary BitNet b1.58 implementation.
 Steps (executed in order — each step stops and reports if it fails):
   1. Hardware scan         — nvidia-smi, RAM, torch device checks → optimal settings
   2. Dataset pipeline      — SlimPajama (50%) + OpenAssistant (35%) + WikiText-103 (15%)
-  3. Training configuration — DeltaNet, bf16, grad accum, cosine LR, checkpointing
+  3. Training configuration — DeltaNet, precision (fp32/bf16/fp16, Issue #80), grad accum, cosine LR, checkpointing
   4. Pre-training audit     — shape check, forward pass, checkpoint cycle
   5. Start training         — param count, compression ratio, loss/PPL logging
 
@@ -40,6 +40,12 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
     except (AttributeError, ValueError):
         pass
+
+# Force UTF-8 for the process — torch.compile's inductor codecache writes
+# generated Python source to temp files, and on Windows cp1252 this crashes
+# on Unicode characters in docstrings/comments (e.g. α, β in deltanet.py).
+# PYTHONUTF8=1 makes all file I/O default to UTF-8, fixing the inductor crash.
+os.environ.setdefault("PYTHONUTF8", "1")
 
 import torch
 import torch.nn as nn
@@ -660,6 +666,7 @@ def build_dataset_pipeline(
     data_dir: str = "data_cache",
     slimpajama_dir: str | None = None,
     val_fraction: float = 0.0,
+    num_workers: int = 0,
 ) -> tuple[DataLoader, "DataLoader | None", dict]:
     """Build the mixed-source train (and held-out val) DataLoaders + stats.
 
@@ -715,13 +722,22 @@ def build_dataset_pipeline(
         print(f"  Samples: {stats['num_samples']}")
 
     # Build DataLoader (always map-style now — no IterableDataset)
-    dataloader = DataLoader(
-        dataset,
+    # Issue #91: num_workers > 0 enables async batch preparation overlapping
+    # with GPU compute. persistent_workers avoids per-epoch spawn overhead.
+    # prefetch_factor=2 (default) keeps 2 batches ready per worker.
+    loader_kwargs = dict(
         batch_size=batch_size,
         shuffle=True,
         drop_last=False,
         pin_memory=torch.cuda.is_available(),
     )
+    if num_workers > 0:
+        loader_kwargs.update(
+            num_workers=num_workers,
+            persistent_workers=True,
+            prefetch_factor=2,
+        )
+    dataloader = DataLoader(dataset, **loader_kwargs)
 
     # Held-out validation loader (full mode only; deterministic order, no shuffle).
     val_loader = None
@@ -733,6 +749,8 @@ def build_dataset_pipeline(
             shuffle=False,
             drop_last=False,
             pin_memory=torch.cuda.is_available(),
+            num_workers=num_workers if num_workers > 0 else 0,
+            persistent_workers=num_workers > 0,
         )
         stats["val_samples"] = int(len(val_starts))
         print(f"  Held-out val: {stats['val_samples']:,} samples")
@@ -776,7 +794,7 @@ def build_model_and_config(
         "arch": arch,
         "ternary": apply_ternary,
         "use_deltanet": arch == "hvn",
-        "bf16": True,
+        "precision": "bf16",  # overridden by caller via config["precision"]
         "batch_size": settings["batch_size"],
         "grad_accum": settings["grad_accum"],
         "seq_len": settings["seq_len"],
@@ -795,7 +813,7 @@ def build_model_and_config(
     }
 
     print(f"\n  use_deltanet:      {config['use_deltanet']}")
-    print(f"  precision:         bf16")
+    print(f"  precision:         {config['precision']}")
     print(f"  batch_size:        {config['batch_size']}")
     print(f"  grad_accum:        {config['grad_accum']} (effective batch = {config['batch_size'] * config['grad_accum']})")
     print(f"  seq_len:           {config['seq_len']}")
@@ -933,7 +951,10 @@ def pre_training_audit(
     try:
         model.eval()
         x = batch_x.to(device)
-        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        precision = config.get("precision", "bf16")
+        use_amp = precision in ("fp16", "bf16")
+        amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
+        with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
             logits = model(x)
         print(f"    Input shape:  {x.shape}")
         print(f"    Output shape: {logits.shape} (expected [{x.shape[0]}, {x.shape[1]}, {GPT2_VOCAB_SIZE}])")
@@ -949,7 +970,7 @@ def pre_training_audit(
         # Also test backward pass
         model.train()
         y = batch_y.to(device)
-        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
             logits = model(x)
             loss = nn.CrossEntropyLoss()(
                 logits.reshape(-1, GPT2_VOCAB_SIZE),
@@ -1111,11 +1132,18 @@ def load_checkpoint_for_resume(
 
 
 @torch.no_grad()
-def evaluate(model, val_loader, device, max_batches: int = 100):
+def evaluate(model, val_loader, device, max_batches: int = 100,
+             precision: str = "bf16"):
     """Held-out validation: mean loss overall + per-source.
 
     Returns (overall_loss, [slim, oasst, wiki] losses) or None if no val set.
     Deterministic (val_loader is unshuffled); capped at ``max_batches`` for speed.
+
+    Parameters
+    ----------
+    precision : str
+        Mixed-precision mode for eval (Issue #80): "fp32" (no autocast),
+        "bf16", or "fp16". Should match training precision.
     """
     if val_loader is None:
         return None
@@ -1124,13 +1152,16 @@ def evaluate(model, val_loader, device, max_batches: int = 100):
     crit = nn.CrossEntropyLoss(reduction="none")
     tot_loss, tot_n = 0.0, 0
     src_loss, src_n = [0.0, 0.0, 0.0], [0, 0, 0]
+    # Precision-aware autocast (Issue #80): fp32 = no autocast, bf16/fp16 = autocast.
+    use_amp = precision in ("fp16", "bf16")
+    amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
     for i, batch in enumerate(val_loader):
         if i >= max_batches:
             break
         x, y, src = batch
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
-        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
             logits = model(x)
             per_sample = crit(
                 logits.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1)
@@ -1162,7 +1193,7 @@ def train(
 ) -> None:
     """Run the training loop with all configured settings.
 
-    - bf16 mixed precision
+    - Mixed precision (Issue #80): fp32 (no autocast), bf16, or fp16 (with GradScaler)
     - Gradient accumulation to effective batch ≥ 32
     - AdamW with cosine LR schedule + warmup
     - Checkpoint every 500 steps
@@ -1256,6 +1287,16 @@ def train(
     criterion = nn.CrossEntropyLoss()
     model.train()
 
+    # --- Mixed-precision setup (Issue #80) ---
+    precision = config.get("precision", "bf16")
+    use_amp = precision in ("fp16", "bf16") and device.type == "cuda"
+    amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
+    scaler = torch.amp.GradScaler("cuda") if (use_amp and precision == "fp16") else None
+    if use_amp:
+        print(f"  Mixed-precision: {precision.upper()} (Issue #80)")
+    else:
+        print(f"  Mixed-precision: fp32 (no autocast)")
+
     print(f"\n  Training for up to {total_steps} steps (effective batch = {config['batch_size'] * grad_accum})")
     print(f"  Logging every {config['log_every_steps']} steps | Checkpoint every {config['save_every_steps']} steps")
     print("-" * 70)
@@ -1306,8 +1347,8 @@ def train(
         batch_x = batch_x.to(device, non_blocking=True)
         batch_y = batch_y.to(device, non_blocking=True)
 
-        # Forward pass with bf16 autocast
-        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        # Forward pass with mixed-precision autocast (Issue #80)
+        with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
             logits = model(batch_x)
             loss = criterion(
                 logits.reshape(-1, GPT2_VOCAB_SIZE),
@@ -1316,7 +1357,10 @@ def train(
             loss = loss / grad_accum
 
         # Backward pass
-        loss.backward()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
         accumulated_loss += loss.item()
 
         # Track per-source loss (for diagnosing dataset quality variance)
@@ -1336,7 +1380,9 @@ def train(
 
         # Optimizer step every grad_accum micro-batches
         if micro_step >= grad_accum:
-            # Clip gradients
+            # Clip gradients (unscale first if using fp16 GradScaler)
+            if scaler is not None:
+                scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             # Apply warmup LR scaling (during warmup only)
@@ -1347,7 +1393,11 @@ def train(
                 if global_step + 1 >= warmup_steps:
                     warmup_done = True
 
-            optimizer.step()
+            if scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
             optimizer.zero_grad()
             micro_step = 0
             global_step += 1
@@ -1401,7 +1451,8 @@ def train(
 
             # Held-out validation eval (A/B primary metric)
             if val_writer is not None and global_step % val_every == 0:
-                v_overall, v_src = evaluate(model, val_loader, device)
+                v_overall, v_src = evaluate(model, val_loader, device,
+                                             precision=precision)
                 v_ppl = math.exp(min(v_overall, 20))
                 print(f"    ↳ VAL step {global_step}: loss {v_overall:.4f} | ppl {v_ppl:.2f} | "
                       f"Slim {v_src[0]:.4f}  OA {v_src[1]:.4f}  Wiki {v_src[2]:.4f}", flush=True)
@@ -1492,6 +1543,12 @@ def main():
                              "token-disjoint validation set (e.g. 0.02). 0 disables.")
     parser.add_argument("--val-every", type=int, default=None,
                         help="Run held-out val eval every N steps (default: checkpoint interval).")
+    parser.add_argument("--precision", type=str, default="fp32",
+                        choices=["fp32", "fp16", "bf16"],
+                        help="Mixed-precision training mode (Issue #80). "
+                             "fp32 (default) keeps A/B fairness — both arms fp32. "
+                             "bf16 enables autocast bf16 (~1.5-2x compute speedup, "
+                             "RTX 40-series+). fp16 uses GradScaler (older GPUs).")
     parser.add_argument("--compile", action="store_true",
                         help="Wrap the model in torch.compile for training (#83). "
                              "Identity-preserving (same math/loss); ~2.4x faster + ~15%% less "
@@ -1501,11 +1558,37 @@ def main():
                              "Identity-preserving (grads match autograd ~1e-7); ~2.6x faster "
                              "full-model + less VRAM, stable at all decay. HVN arch only. Can "
                              "combine with --compile (compile fuses the non-scan parts).")
+    parser.add_argument("--tf32", action="store_true",
+                        help="Enable TF32 for fp32 matmuls (Issue #81). TF32 uses 19-bit "
+                             "precision (10 mantissa bits) for the internal matmul accumulate, "
+                             "giving ~1.2-1.5x speedup on Ampere+ (RTX 30/40-series, A100). "
+                             "Only affects fp32 matmuls — bf16/fp16 autocast already uses "
+                             "tensor cores. Identity-preserving (same forward math, negligible "
+                             "numerical difference). Default off for fp32 A/B fairness.")
+    parser.add_argument("--num-workers", type=int, default=0,
+                        help="Number of DataLoader worker processes for async batch "
+                             "preparation (Issue #91). 0 = main-thread (default, A/B-fair). "
+                             "2-4 recommended for real training — overlaps data loading "
+                             "with GPU compute. Identity-preserving (same data, same order "
+                             "with fixed seed).")
     args = parser.parse_args()
 
     # Force UTF-8 for Windows console
     if sys.platform == "win32":
         os.system("chcp 65001 >nul 2>&1")
+
+    # --- Issue #81: TF32 matmul acceleration (Ampere+) ---
+    # TF32 uses 19-bit precision for fp32 matmul internals — a free speedup on
+    # RTX 30/40-series and A100. Default off for fp32 A/B fairness; opt in with
+    # --tf32. Only affects fp32 matmuls (bf16/fp16 autocast already uses tensor
+    # cores). Identity-preserving: same forward math, negligible numerical diff.
+    if args.tf32 and torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        print("TF32 matmul enabled (Issue #81): fp32 matmuls use TF32 on Ampere+ tensor cores.")
+    else:
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
 
     # === Step 1: Hardware Scan ===
     hw = hardware_scan()
@@ -1547,6 +1630,7 @@ def main():
         data_dir=args.data_dir,
         slimpajama_dir=args.slimpajama_dir,
         val_fraction=args.val_fraction,
+        num_workers=args.num_workers,
     )
 
     # === Step 3: Training Configuration ===
@@ -1559,6 +1643,7 @@ def main():
         apply_ternary=not args.no_ternary,
     )
     config["lr"] = args.lr
+    config["precision"] = args.precision
     if args.val_every is not None:
         config["val_every_steps"] = args.val_every
 
