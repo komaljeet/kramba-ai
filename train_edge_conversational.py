@@ -56,6 +56,9 @@ def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
     EdgeHVN doesn't expose as a model-level attribute, so the generic
     getattr fallback would default to 4 instead of the real value).
     """
+    # Unwrap torch.compile's OptimizedModule so state_dict keys and attribute
+    # access refer to the original EdgeHVN (no "_orig_mod." key prefix).
+    model = getattr(model, "_orig_mod", model)
     # Find the first block to extract architecture details
     if hasattr(model, 'shared_block') and model.shared_block is not None:
         first_block = model.shared_block.block
@@ -1489,6 +1492,10 @@ def main():
                              "token-disjoint validation set (e.g. 0.02). 0 disables.")
     parser.add_argument("--val-every", type=int, default=None,
                         help="Run held-out val eval every N steps (default: checkpoint interval).")
+    parser.add_argument("--compile", action="store_true",
+                        help="Wrap the model in torch.compile for training (#83). "
+                             "Identity-preserving (same math/loss); ~2.4x faster + ~15%% less "
+                             "VRAM on the DeltaNet path. Checkpoints are saved unwrapped.")
     args = parser.parse_args()
 
     # Force UTF-8 for Windows console
@@ -1575,6 +1582,13 @@ def main():
         print(f"  Resuming training from this checkpoint...")
         model, resume_step, _ = load_checkpoint_for_resume(resume_ckpt, device)
         print(f"  Resumed at step {resume_step}")
+
+    # torch.compile (#83): identity-preserving ~2.4x training speedup. Applied
+    # after resume so checkpoint loading sees the plain module; saving unwraps
+    # the OptimizedModule (see _save_edge_checkpoint).
+    if args.compile:
+        print("\n  Compiling model with torch.compile (first steps will be slow)...")
+        model = torch.compile(model)
 
     train(
         model=model,
