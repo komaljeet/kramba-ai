@@ -1496,6 +1496,11 @@ def main():
                         help="Wrap the model in torch.compile for training (#83). "
                              "Identity-preserving (same math/loss); ~2.4x faster + ~15%% less "
                              "VRAM on the DeltaNet path. Checkpoints are saved unwrapped.")
+    parser.add_argument("--triton-scan", action="store_true",
+                        help="Use the fused Triton gated-delta scan on DeltaNet blocks (#83). "
+                             "Identity-preserving (grads match autograd ~1e-7); ~2.6x faster "
+                             "full-model + less VRAM, stable at all decay. HVN arch only. Can "
+                             "combine with --compile (compile fuses the non-scan parts).")
     args = parser.parse_args()
 
     # Force UTF-8 for Windows console
@@ -1583,9 +1588,22 @@ def main():
         model, resume_step, _ = load_checkpoint_for_resume(resume_ckpt, device)
         print(f"  Resumed at step {resume_step}")
 
+    # Fused Triton scan (#83): identity-preserving ~2.6x training speedup + less
+    # VRAM, numerically stable at all decay. Enabled per-DeltaNet-block. Set
+    # before compile so torch.compile fuses the non-scan parts around it.
+    if args.triton_scan:
+        blocks = model.blocks if getattr(model, "blocks", None) is not None else \
+            ([model.shared_block.block] if getattr(model, "shared_block", None) is not None else [])
+        n_set = 0
+        for blk in blocks:
+            if hasattr(blk, "use_triton_scan"):
+                blk.use_triton_scan = True
+                n_set += 1
+        print(f"\n  Fused Triton scan enabled on {n_set} DeltaNet block(s) (#83).")
+
     # torch.compile (#83): identity-preserving ~2.4x training speedup. Applied
     # after resume so checkpoint loading sees the plain module; saving unwraps
-    # the OptimizedModule (see _save_edge_checkpoint).
+    # the OptimizedModule (see _save_edge_checkpoint). Composable with --triton-scan.
     if args.compile:
         print("\n  Compiling model with torch.compile (first steps will be slow)...")
         model = torch.compile(model)
