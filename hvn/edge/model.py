@@ -31,6 +31,7 @@ import torch.nn as nn
 from ..core.decoder import HVNDecoder
 from ..core.hvn_block import HVNBlock
 from ..core.deltanet import DeltaNetBlock
+from ..core.transformer_block import TransformerBlock
 from .shared import SharedWeightHVN
 from .ternary import TernaryLinear, apply_ternary_to_model
 
@@ -66,6 +67,7 @@ class EdgeHVN(nn.Module):
         shared_weights: bool = False,
         use_deltanet: bool = False,
         deltanet_conv_kernel: int = 4,
+        block_type: Optional[str] = None,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -73,10 +75,18 @@ class EdgeHVN(nn.Module):
         self.num_layers = num_layers
         self.shared_weights = shared_weights
         self.use_deltanet = use_deltanet
+        # Optional explicit block override (A/B baseline). None → existing
+        # use_deltanet/HVNBlock behaviour, unchanged.
+        self.block_type = block_type
 
         self.token_embedding = nn.Embedding(vocab_size, d_model)
 
         def _make_block():
+            if block_type == "transformer":
+                # Matched transformer baseline for the HVN-vs-Transformer A/B (#73)
+                return TransformerBlock(
+                    d_model=d_model, n_heads=n_heads, dropout=dropout,
+                )
             if use_deltanet:
                 return DeltaNetBlock(
                     d_model=d_model, n_heads=n_heads, dropout=dropout,
