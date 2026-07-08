@@ -1118,7 +1118,11 @@ def train(
     micro_step = 0  # micro-batches within a grad-accum window
 
     while True:
-        if max_steps is not None and global_step >= max_steps:
+        # Stop at total_steps (== max_steps when given, else the 10k default that
+        # sizes the LR schedule). Previously this checked `max_steps is not None`,
+        # so an unset --max-steps left the loop unbounded — it ran past the LR
+        # schedule's end forever at LR~=0. Tie the stop to the schedule horizon.
+        if global_step >= total_steps:
             break
 
         # Get next batch — handle epoch boundaries
