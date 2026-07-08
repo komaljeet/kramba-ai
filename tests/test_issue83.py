@@ -90,6 +90,32 @@ def test_triton_backward_matches_autograd():
         print(f"[bwd] N={N} S={S} d={d}  all grads match (<2e-3)  OK")
 
 
+def test_full_block_parity():
+    """Integration: a full DeltaNetBlock with use_triton_scan matches the eager
+    block in output AND every parameter gradient (identity-preserving swap)."""
+    assert _HAS_TRITON, "triton not available"
+    dev = _device()
+    torch.manual_seed(0)
+    B, S, D, H = 4, 256, 512, 8
+    blk = DeltaNetBlock(d_model=D, n_heads=H, dropout=0.0).to(dev)
+    x = torch.randn(B, S, D, device=dev, requires_grad=True)
+    go = torch.randn(B, S, D, device=dev)
+
+    blk.use_triton_scan = False
+    o1 = blk(x); (o1 * go).sum().backward()
+    g1 = {n: p.grad.clone() for n, p in blk.named_parameters()}
+    xg1 = x.grad.clone()
+    x.grad = None; blk.zero_grad()
+
+    blk.use_triton_scan = True
+    o2 = blk(x); (o2 * go).sum().backward()
+    assert _rel(o2, o1) < 2e-3, f"output rel {_rel(o2, o1):.2e}"
+    assert _rel(x.grad, xg1) < 2e-3, f"x.grad rel {_rel(x.grad, xg1):.2e}"
+    worst = max(_rel(p.grad, g1[n]) for n, p in blk.named_parameters())
+    assert worst < 2e-3, f"worst param grad rel {worst:.2e}"
+    print(f"[block] output+all grads match (worst {worst:.2e}) — identity-preserving  OK")
+
+
 def bench_forward(N=32, S=512, d=64):
     """Time Triton forward vs eager _scan_chunked (forward only)."""
     dev = _device()
@@ -113,5 +139,6 @@ def bench_forward(N=32, S=512, d=64):
 if __name__ == "__main__":
     test_triton_forward_matches_sequential_all_decay()
     test_triton_backward_matches_autograd()
+    test_full_block_parity()
     bench_forward()
-    print("\nMilestones 1-2 (forward + backward) complete.")
+    print("\nMilestones 1-3 (forward + backward + block integration) complete.")

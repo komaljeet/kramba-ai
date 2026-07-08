@@ -196,18 +196,26 @@ class _GatedDeltaScan(torch.autograd.Function):
         N, S, D = q.shape
         q, k, v, alpha = (t.contiguous().float() for t in (q, k, v, alpha))
         beta2 = beta.reshape(N, S).contiguous().float()
+        # States-free forward: save only the (small) inputs. The [N,S,D,D] state
+        # tensor is NOT kept — storing it for all layers blows past 6GB VRAM and
+        # WDDM-spills (kills the speedup). Backward recomputes states transiently.
         o = torch.empty_like(q)
-        states = torch.empty(N, S, D, D, device=q.device, dtype=torch.float32)
-        _gd_fwd_states_kernel[(N,)](q, k, v, alpha, beta2, o, states, S=S, D=D)
-        ctx.save_for_backward(q, k, v, alpha, beta2, states)
+        BV = 16 if D % 16 == 0 else 1
+        _gated_delta_fwd_kernel[(N, D // BV)](q, k, v, alpha, beta2, o, S=S, D=D, BV=BV)
+        ctx.save_for_backward(q, k, v, alpha, beta2)
         ctx.beta_shape = beta.shape
         return o
 
     @staticmethod
     def backward(ctx, do):
-        q, k, v, alpha, beta2, states = ctx.saved_tensors
+        q, k, v, alpha, beta2 = ctx.saved_tensors
         N, S, D = q.shape
         do = do.contiguous().float()
+        # Recompute the entering states here (transient — freed when this layer's
+        # backward returns, so peak = one layer's states, not all L).
+        states = torch.empty(N, S, D, D, device=q.device, dtype=torch.float32)
+        o_scratch = torch.empty_like(q)
+        _gd_fwd_states_kernel[(N,)](q, k, v, alpha, beta2, o_scratch, states, S=S, D=D)
         dq = torch.empty_like(q); dk = torch.empty_like(q)
         dv = torch.empty_like(q); dalpha = torch.empty_like(q)
         dbeta2 = torch.empty_like(beta2)

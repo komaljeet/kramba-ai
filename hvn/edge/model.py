@@ -68,6 +68,7 @@ class EdgeHVN(nn.Module):
         use_deltanet: bool = False,
         deltanet_conv_kernel: int = 4,
         block_type: Optional[str] = None,
+        use_triton_scan: bool = False,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -91,6 +92,7 @@ class EdgeHVN(nn.Module):
                 return DeltaNetBlock(
                     d_model=d_model, n_heads=n_heads, dropout=dropout,
                     conv_kernel=deltanet_conv_kernel,
+                    use_triton_scan=use_triton_scan,
                 )
             return HVNBlock(
                 d_model=d_model, n_heads=n_heads, bond_dimension=bond_dimension,
