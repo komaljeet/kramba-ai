@@ -598,6 +598,10 @@ def apply_full_preset(args, explicit_flags):
     enabled.append("per-epoch loss sync (no per-step host sync)  [A]")
     args.pin_memory = True
     enabled.append("pinned-memory + async H2D transfers  [A]")
+    args.tf32 = True
+    enabled.append("TF32 matmul (#81)  [A]")
+    args.num_workers = 2
+    enabled.append("async data loading (#91, 2 workers)  [A]")
 
     return enabled
 
@@ -619,6 +623,8 @@ def main():
     parser.add_argument("--prompt", type=str, default="The ", help="Prompt for generation")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile for faster training (GPU recommended)")
     parser.add_argument("--precision", type=str, default="fp32", choices=["fp32", "fp16", "bf16"], help="Mixed-precision training mode (fp16/bf16 require CUDA)")
+    parser.add_argument("--tf32", action="store_true", help="Enable TF32 for fp32 matmuls (Issue #81): ~1.2-1.5x speedup on Ampere+ (RTX 30/40-series, A100). Only affects fp32 matmuls — bf16/fp16 autocast already uses tensor cores. Identity-preserving (negligible numerical difference). Default off for fp32 A/B fairness.")
+    parser.add_argument("--num_workers", type=int, default=0, help="Number of DataLoader worker processes for async batch preparation (Issue #91). 0 = main-thread (default, A/B-fair). 2-4 recommended for real training — overlaps data loading with GPU compute. Identity-preserving (same data, same order with fixed seed).")
     parser.add_argument("--grad_accum", type=int, default=1, help="Gradient accumulation steps (effective batch size = batch_size × grad_accum)")
     parser.add_argument("--grad_checkpoint", action="store_true", help="Gradient (activation) checkpointing (Issue #49): recompute block activations in the backward pass instead of storing them. Mathematically exact (bit-identical gradients/model), ~20-30% slower per step, but frees activation memory so a larger --d_model / --batch_size fits in the same VRAM. Training-only; inference unchanged.")
     parser.add_argument("--full", action="store_true", help="Issue #50 meta-flag: enable the complete recommended fast-training stack in one switch. Category A (exact, model-bit-identical speed levers): fused AdamW, per-epoch loss sync, pinned/async data loading, --compile, --grad_checkpoint. Category B (recommended defaults that CHANGE the model/precision): --precision bf16 + --use_deltanet. So --full trains the best/fastest RECOMMENDED model, not the same model faster. Any flag passed explicitly overrides the preset (e.g. --full --precision fp32).")
@@ -727,6 +733,16 @@ def main():
     if is_main:
         print(f"Device: {device}")
 
+    # --- Issue #81: TF32 matmul acceleration (Ampere+) ---
+    if args.tf32 and torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        if is_main:
+            print("TF32 matmul enabled (Issue #81): fp32 matmuls use TF32 on Ampere+ tensor cores.")
+    else:
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+
     # --- Load training text ---
     if args.text and os.path.exists(args.text):
         with open(args.text, "r", encoding="utf-8") as f:
@@ -790,16 +806,21 @@ def main():
     dataset = TextDataset(token_ids, seq_len=args.seq_len)
     # Pinned-memory loading (Issue #50 --full) only helps CUDA async transfers.
     pin_memory = args.pin_memory and torch.cuda.is_available()
+    # Issue #91: num_workers > 0 enables async batch prep overlapping with GPU.
+    loader_kwargs = dict(drop_last=False, pin_memory=pin_memory)
+    if args.num_workers > 0:
+        loader_kwargs.update(num_workers=args.num_workers,
+                             persistent_workers=True, prefetch_factor=2)
     if args.distributed:
         # Each rank sees a disjoint shard; shuffling lives in the sampler
         # (reshuffled per epoch via set_epoch inside train_model).
         from torch.utils.data.distributed import DistributedSampler
         sampler = DistributedSampler(dataset, shuffle=True, seed=42)
         dataloader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler,
-                                drop_last=False, pin_memory=pin_memory)
+                                **loader_kwargs)
     else:
         dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
-                                drop_last=False, pin_memory=pin_memory)
+                                **loader_kwargs)
     if is_main:
         print(f"Dataset: {len(dataset)} samples | DataLoader: {len(dataloader)} batches")
 
