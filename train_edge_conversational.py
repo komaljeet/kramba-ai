@@ -53,6 +53,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from hvn.edge.model import EdgeHVN
 from hvn.edge.ternary import apply_ternary_to_model, TernaryLinear
+from hvn.optimizers import build_optimizer
 
 
 def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
@@ -1223,15 +1224,24 @@ def train(
     warmup_steps = config["warmup_steps"]
     grad_accum = config["grad_accum"]
 
-    use_fused = device.type == "cuda"
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
+    # Issue #86: pluggable optimizer (adamw | muon | lion). Training-time only —
+    # the HVN forward pass is untouched, so a model trained with any of these is
+    # the *same* HVN, judged on convergence efficiency + final val-loss parity.
+    opt_name = config.get("optimizer", "adamw").lower()
+    use_fused = device.type == "cuda" and opt_name == "adamw"
+    optimizer, opt_desc = build_optimizer(
+        model, opt_name,
         lr=lr,
         weight_decay=weight_decay,
         fused=use_fused,
+        muon_lr=config.get("muon_lr"),
     )
-    if use_fused:
-        print(f"  Optimizer: fused AdamW (CUDA)")
+    print(f"  Optimizer: {opt_desc}")
+
+    # Capture each group's base LR before warmup/cosine mutate it, so multi-group
+    # optimizers (Muon: high-LR matrices + low-LR AdamW aux) keep their LR ratio
+    # through warmup. For single-group AdamW this is exactly the old behaviour.
+    base_lrs = [pg["lr"] for pg in optimizer.param_groups]
 
     # --- Cosine LR schedule with warmup ---
     total_steps = max_steps if max_steps is not None else 10_000
@@ -1385,11 +1395,12 @@ def train(
                 scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-            # Apply warmup LR scaling (during warmup only)
+            # Apply warmup LR scaling (during warmup only). Scale each group from
+            # its own base LR so multi-group optimizers keep their LR ratio.
             if not warmup_done:
                 lr_scale = get_lr_scale(global_step)
-                for pg in optimizer.param_groups:
-                    pg["lr"] = lr * lr_scale
+                for pg, base in zip(optimizer.param_groups, base_lrs):
+                    pg["lr"] = base * lr_scale
                 if global_step + 1 >= warmup_steps:
                     warmup_done = True
 
@@ -1571,7 +1582,49 @@ def main():
                              "2-4 recommended for real training — overlaps data loading "
                              "with GPU compute. Identity-preserving (same data, same order "
                              "with fixed seed).")
+    parser.add_argument("--optimizer", type=str, default="adamw",
+                        choices=["adamw", "muon", "lion"],
+                        help="Optimizer (Issue #86). 'muon' orthogonalises 2-D "
+                             "weight-matrix updates (faster convergence); 'lion' "
+                             "is sign-momentum. Training-time only — HVN forward "
+                             "is untouched. Default: adamw.")
+    parser.add_argument("--muon-lr", type=float, default=0.02,
+                        help="Muon LR for 2-D hidden matrices (default 0.02; "
+                             "only used with --optimizer muon).")
+    parser.add_argument("--fast", action="store_true",
+                        help="Meta-flag: enable the full recommended fast-training "
+                             "stack in one switch — bf16 + TF32 + torch.compile + "
+                             "Triton scan + async DataLoader (4 workers). The bit-"
+                             "identical levers (compile/triton/workers) never change "
+                             "the model; bf16/TF32 change precision negligibly. Use "
+                             "for real training runs. NOT for the fp32 A/B — that "
+                             "needs the bare fp32 default. Any lever passed explicitly "
+                             "overrides the preset (e.g. --fast --precision fp32). "
+                             "Triton scan is skipped under --arch transformer.")
     args = parser.parse_args()
+
+    # --- Issue #86: expand the --fast meta-flag into the recommended stack ---
+    # One switch instead of five flags. Any lever the user passed explicitly on
+    # the command line wins over the preset (mirrors train.py's --full). The
+    # bit-identical levers (compile/triton/workers) leave the model unchanged;
+    # bf16/TF32 change precision negligibly — so --fast is for real training,
+    # not the fp32 A/B (which needs the bare default).
+    if args.fast:
+        explicit = {tok.split("=")[0] for tok in sys.argv[1:] if tok.startswith("--")}
+        fast_enabled = []
+        if "--precision" not in explicit:
+            args.precision = "bf16"; fast_enabled.append("precision=bf16")
+        if "--tf32" not in explicit:
+            args.tf32 = True; fast_enabled.append("tf32")
+        if "--compile" not in explicit:
+            args.compile = True; fast_enabled.append("compile")
+        # Triton scan targets the DeltaNet/HVN block — skip it for the transformer
+        # A/B arm, where it's a no-op at best and a shape mismatch at worst.
+        if "--triton-scan" not in explicit and args.arch == "hvn":
+            args.triton_scan = True; fast_enabled.append("triton-scan")
+        if "--num-workers" not in explicit and args.num_workers == 0:
+            args.num_workers = 4; fast_enabled.append("num-workers=4")
+        print(f"[--fast] Enabled recommended training stack: {', '.join(fast_enabled)}")
 
     # Force UTF-8 for Windows console
     if sys.platform == "win32":
@@ -1644,6 +1697,8 @@ def main():
     )
     config["lr"] = args.lr
     config["precision"] = args.precision
+    config["optimizer"] = args.optimizer
+    config["muon_lr"] = args.muon_lr
     if args.val_every is not None:
         config["val_every_steps"] = args.val_every
 
