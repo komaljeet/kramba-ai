@@ -1587,6 +1587,15 @@ def main():
                              "Identity-preserving (grads match autograd ~1e-7); ~2.6x faster "
                              "full-model + less VRAM, stable at all decay. HVN arch only. Can "
                              "combine with --compile (compile fuses the non-scan parts).")
+    parser.add_argument("--adaptive-chunk", action="store_true",
+                        help="Grow the DeltaNet chunk to the largest size that stays "
+                             "numerically EXACT for the current decay (#95): fast at "
+                             "trained decay (α~0.95 → chunk 256, ~4x scan), safe at hard "
+                             "decay. Identity-preserving (fwd+bwd parity ~1e-7 at all "
+                             "decay) and fixes a latent bug (fixed chunk-32 is wrong at "
+                             "α<0.31). Beats --compile alone (196 vs 232 ms/microbatch); "
+                             "does NOT combine with --compile (data-dependent chunk). "
+                             "HVN arch only; mutually exclusive with --triton-scan.")
     parser.add_argument("--tf32", action="store_true",
                         help="Enable TF32 for fp32 matmuls (Issue #81). TF32 uses 19-bit "
                              "precision (10 mantissa bits) for the internal matmul accumulate, "
@@ -1769,6 +1778,19 @@ def main():
                 blk.use_triton_scan = True
                 n_set += 1
         print(f"\n  Fused Triton scan enabled on {n_set} DeltaNet block(s) (#83).")
+
+    # Adaptive-exact chunk (#95): pick the largest numerically-exact chunk per
+    # forward given the decay. Faster than fixed chunk32 AND than --compile alone
+    # at trained decay; do not combine with --compile (data-dependent trip count).
+    if args.adaptive_chunk:
+        blocks = model.blocks if getattr(model, "blocks", None) is not None else \
+            ([model.shared_block.block] if getattr(model, "shared_block", None) is not None else [])
+        n_set = 0
+        for blk in blocks:
+            if hasattr(blk, "adaptive_chunk"):
+                blk.adaptive_chunk = True
+                n_set += 1
+        print(f"\n  Adaptive-exact chunk enabled on {n_set} DeltaNet block(s) (#95).")
 
     # torch.compile (#83): identity-preserving ~2.4x training speedup. Applied
     # after resume so checkpoint loading sees the plain module; saving unwraps
