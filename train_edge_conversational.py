@@ -1284,7 +1284,6 @@ def train(
         val_file.flush()
 
     # --- Training loop ---
-    criterion = nn.CrossEntropyLoss()
     model.train()
 
     # --- Mixed-precision setup (Issue #80) ---
@@ -1305,13 +1304,20 @@ def train(
     start_time = time.time()
     step_start_time = start_time
     optimizer.zero_grad()
-    accumulated_loss = 0.0
 
     # Per-source loss tracking (for diagnosing dataset quality variance)
     # Source IDs: 0=TinyStories, 1=OpenAssistant, 2=WikiText-103
     source_names = ["SlimPajama", "OpenAssistant", "WikiText-103"]
     source_loss_accum = [0.0, 0.0, 0.0]  # accumulated loss per source
     source_count = [0, 0, 0]  # sample count per source
+
+    # GPU-side accumulators (deferred host sync): accumulating loss/per-source
+    # stats on-device and syncing only at log time avoids a GPU->CPU stall on
+    # every micro-batch, which stalls the async H2D/compute pipeline. Values are
+    # exact — identical to the per-step .item() sums, just synced less often.
+    loss_accum_t = torch.zeros((), device=device)      # current step's summed micro-losses
+    src_loss_t = torch.zeros(3, device=device)         # per-source summed per-sample loss
+    src_count_t = torch.zeros(3, device=device)        # per-source sample count
 
     # For iterable datasets, we need to cycle through epochs manually
     data_iter = iter(dataloader)
@@ -1347,34 +1353,40 @@ def train(
         batch_x = batch_x.to(device, non_blocking=True)
         batch_y = batch_y.to(device, non_blocking=True)
 
-        # Forward pass with mixed-precision autocast (Issue #80)
+        # Forward pass with mixed-precision autocast (Issue #80). Compute the
+        # per-token cross-entropy ONCE (reduction="none"); the scalar training
+        # loss is its mean, and the per-source diagnostics reuse the same tensor
+        # — this drops the redundant second full-vocab CE pass the per-source
+        # tracking used to run every micro-batch.
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
             logits = model(batch_x)
-            loss = criterion(
+            tok_loss = torch.nn.functional.cross_entropy(
                 logits.reshape(-1, GPT2_VOCAB_SIZE),
                 batch_y.reshape(-1),
+                reduction="none",
             )
-            loss = loss / grad_accum
+            loss = tok_loss.mean() / grad_accum
 
         # Backward pass
         if scaler is not None:
             scaler.scale(loss).backward()
         else:
             loss.backward()
-        accumulated_loss += loss.item()
+        # Accumulate on-device (no host sync); .item() happens once at log time.
+        loss_accum_t += loss.detach()
 
-        # Track per-source loss (for diagnosing dataset quality variance)
+        # Track per-source loss (for diagnosing dataset quality variance).
+        # Accumulate per-source sums/counts on the GPU via scatter_add — no
+        # per-sample .item() loop, so no host sync in the hot path.
         if batch_src is not None:
             with torch.no_grad():
-                per_sample_loss = torch.nn.functional.cross_entropy(
-                    logits.reshape(-1, GPT2_VOCAB_SIZE),
-                    batch_y.reshape(-1),
-                    reduction="none",
-                ).reshape(batch_x.shape[0], -1).mean(dim=1)  # [B] per-sample loss
-                for i in range(batch_x.shape[0]):
-                    src = batch_src[i].item() if isinstance(batch_src[i], torch.Tensor) else batch_src[i]
-                    source_loss_accum[src] += per_sample_loss[i].item()
-                    source_count[src] += 1
+                per_sample = tok_loss.detach().reshape(batch_x.shape[0], -1).mean(dim=1)  # [B]
+                src_ids = (batch_src.to(device=device, dtype=torch.long)
+                           if isinstance(batch_src, torch.Tensor)
+                           else torch.tensor(batch_src, device=device, dtype=torch.long))
+                src_loss_t.scatter_add_(0, src_ids, per_sample.to(src_loss_t.dtype))
+                src_count_t.scatter_add_(0, src_ids,
+                                         torch.ones_like(src_ids, dtype=src_count_t.dtype))
 
         micro_step += 1
 
@@ -1408,10 +1420,12 @@ def train(
 
             # Logging every log_every_steps
             if global_step % config["log_every_steps"] == 0:
-                # accumulated_loss is the sum of grad_accum micro-batch losses,
-                # each already divided by grad_accum — so the average loss is
-                # accumulated_loss (not accumulated_loss * grad_accum).
-                step_loss = accumulated_loss
+                # loss_accum_t is the sum of grad_accum micro-batch losses, each
+                # already divided by grad_accum — so it IS the step's average
+                # loss. Sync the deferred GPU accumulators to host once, here.
+                step_loss = loss_accum_t.item()
+                source_loss_accum = src_loss_t.tolist()
+                source_count = [int(c) for c in src_count_t.tolist()]
                 step_ppl = math.exp(min(step_loss, 20))
                 current_lr = optimizer.param_groups[0]["lr"]
                 elapsed = time.time() - step_start_time
@@ -1438,9 +1452,9 @@ def train(
                 ])
                 csv_file.flush()
 
-                # Reset per-source accumulators after logging
-                source_loss_accum = [0.0, 0.0, 0.0]
-                source_count = [0, 0, 0]
+                # Reset per-source accumulators after logging (on device)
+                src_loss_t.zero_()
+                src_count_t.zero_()
 
                 # Estimate time per epoch based on first 10 steps
                 if global_step == config["log_every_steps"]:
@@ -1469,7 +1483,7 @@ def train(
                 _save_edge_checkpoint(model, ckpt_path, global_step=global_step)
                 print(f"  ✓ Checkpoint saved: {ckpt_path}")
 
-            accumulated_loss = 0.0
+            loss_accum_t.zero_()
 
     # --- Final checkpoint ---
     final_ckpt_path = os.path.join(checkpoint_dir, "edge_conversational.pt")
