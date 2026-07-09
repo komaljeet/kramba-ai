@@ -50,6 +50,8 @@ token, with no KV cache.  ``forward`` (training) and ``forward_step``
 behaviour match.
 """
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -138,6 +140,10 @@ class DeltaNetBlock(nn.Module):
     ):
         super().__init__()
         self.train_chunk = int(train_chunk) if train_chunk and train_chunk > 1 else 0
+        # Issue #95: grow the chunk to the largest size that stays numerically
+        # EXACT for the current decay (no cumprod underflow) — fast at mild decay
+        # (trained α~0.95 → near full-seq chunk), safe at hard decay. Opt-in.
+        self.adaptive_chunk = False
         # Use the fused Triton scan (#83) for the training forward when available.
         # Identity-preserving (same math as _scan_sequential, validated to ~1e-7)
         # and numerically stable at all decay, unlike the eager _scan_chunked.
@@ -383,6 +389,41 @@ class DeltaNetBlock(nn.Module):
             return oN, S_in.to(orig_dtype)                       # final [N, d_v, d_k]
         return oN
 
+    @staticmethod
+    def _safe_chunk(alphaN, base_chunk: int, S: int) -> int:
+        """Largest chunk whose worst-case intra-chunk cumprod-α stays above
+        ``_P_FLOOR`` (#95).
+
+        When the cumprod never underflows, ``_scan_chunked`` runs WITHOUT the
+        ``P_FLOOR`` clamp and is therefore numerically exact (fp32 roundoff
+        ~1e-7) at any decay. The safe length is ``C < log(_P_FLOOR)/log(α_min)``;
+        we take a power-of-2 bucket ≤ that bound (with margin) so torch.compile
+        sees only a handful of distinct trip counts. Grows when decay is mild
+        (fast), shrinks when hard (safe), never below ``base_chunk``.
+        """
+        if alphaN is None:
+            return min(base_chunk, S) if base_chunk else S
+        a_min = float(alphaN.detach().min().clamp_min(1e-6))  # one host sync/forward
+        if a_min >= 0.999:
+            bound = S
+        else:
+            # a_min**C > _P_FLOOR → C < log(_P_FLOOR)/log(a_min); keep 1e4 margin
+            # so the cumprod stays clear of the floor (→ no clamp → exact).
+            bound = int(math.log(_P_FLOOR * 1e4) / math.log(a_min))
+        bound = min(bound, S)
+        # Largest power-of-2 bucket ≤ bound (bounded recompiles under compile).
+        # NOTE: may go BELOW base_chunk at hard decay — correctness over speed;
+        # 32 itself underflows once α_min ≲ 0.31, so we must be free to shrink.
+        # Cap at 256: beyond it the O(chunk²) intra-chunk solve outweighs the
+        # fewer-chunks win (measured sweet spot at S=512).
+        chunk = 0
+        for c in (16, 32, 64, 128, 256):
+            if c <= bound:
+                chunk = c
+        if chunk == 0:            # bound < 16 (very hard decay, rare): exact raw
+            chunk = max(2, bound)
+        return chunk
+
     # ------------------------------------------------------------------
     # Training forward (sequential delta-rule scan, O(1) memory in N)
     # ------------------------------------------------------------------
@@ -428,7 +469,9 @@ class DeltaNetBlock(nn.Module):
         # Reassociated (chunked-parallel) delta rule for training speed; falls
         # back to the plain sequential scan for short sequences or when disabled.
         elif self.train_chunk and S > 1:
-            oN = self._scan_chunked(qN, kN, vN, alphaN, betaN, self.train_chunk,
+            chunk = (self._safe_chunk(alphaN, self.train_chunk, S)
+                     if self.adaptive_chunk else self.train_chunk)
+            oN = self._scan_chunked(qN, kN, vN, alphaN, betaN, chunk,
                                     return_state=return_state)
         else:
             oN = self._scan_sequential(qN, kN, vN, alphaN, betaN,
