@@ -455,6 +455,23 @@ languages the base never saw, so curriculum gains are quantifiable: `python` pas
 bits/char), `html`/`css` 0% structural (7.20 / 6.57 bits/char), `js`/`php` 25% (5.77 / 5.73). O(1)
 inference is untouched — the harness only reads a trained checkpoint.
 
+### Long-running benchmarks & monitors — always run in the background
+
+Speed/throughput benchmarks and log monitors (e.g. the `scripts/measure_*.py`
+probes for issue #95) take minutes — mostly `torch.compile` warmup. **Always
+launch them as background tasks and tail their logs with a monitor** rather
+than blocking the session:
+
+- run the script with a background shell (`run_in_background: true`) writing to
+  a log file (`... 2>&1 | tee scripts/<name>.log`),
+- tail that log with a monitor filtering for the result lines + error
+  signatures (`Traceback|Error|RuntimeError|...`),
+- keep working; report results when the run completes, and surface errors
+  immediately if they appear.
+
+This keeps the session responsive while long GPU jobs run, and the filtered
+monitor notifies the moment a result or failure lands — no polling.
+
 ---
 
 ## 6. Training & Usage Guide
