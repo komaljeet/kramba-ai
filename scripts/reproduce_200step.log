@@ -1,0 +1,12 @@
+Running 200 HVN steps (--fast), timing EVERY step incl. compile warmup...
+  step  50: last-50 steps/s = 0.67  (1501 ms/step)
+  step 100: last-50 steps/s = 0.80  (1248 ms/step)
+  step 150: last-50 steps/s = 0.79  (1258 ms/step)
+  step 200: last-50 steps/s = 0.81  (1241 ms/step)
+
+========================================================================
+WHOLE-RUN  (200 steps, incl compile warmup): 0.76 steps/s  (1312 ms/step)
+LAST-50   (steady state):                  0.81 steps/s  (1241 ms/step)
+========================================================================
+If WHOLE-RUN ~0.4 and LAST-50 ~0.8 -> the 0.4 was compile warmup; real gap is 2x.
+If both ~0.8 -> the reported 0.4 came from something else; 4x stands.
