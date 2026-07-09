@@ -1,0 +1,24 @@
+GPU: NVIDIA GeForce RTX 4050 Laptop GPU
+
+========================================================================
+ISOLATE — HVN (no ternary)  (--fast: compile+triton-scan+bf16+TF32, grad_accum=8)
+========================================================================
+  ternary OFF (fp32 weights)
+  warming up 8 steps (compile)...
+  -> 1239 ms/step  =  0.81 steps/s
+
+========================================================================
+ISOLATE — HVN + ternary STE  (--fast: compile+triton-scan+bf16+TF32, grad_accum=8)
+========================================================================
+  ternary ON: replaced 84 Linear layers (STE)
+  warming up 8 steps (compile)...
+  -> 1245 ms/step  =  0.80 steps/s
+
+========================================================================
+RESULT — ternary isolation (same loop, only ternary differs)
+========================================================================
+  HVN (no ternary) : 0.81 steps/s  (1239 ms/step)
+  HVN + ternary STE: 0.80 steps/s  (1245 ms/step)
+  ternary overhead : +7 ms/step  (1.01x slower)
+  real script reports 0.4 steps/s with ternary -> matches ON arm if 0.80 ~ 0.4
+========================================================================

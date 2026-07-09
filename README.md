@@ -472,6 +472,66 @@ than blocking the session:
 This keeps the session responsive while long GPU jobs run, and the filtered
 monitor notifies the moment a result or failure lands — no polling.
 
+### ⏸ Speed-ceiling investigation — in progress (handoff note, 2026-07-09)
+
+> **Status: paused mid-investigation.** This note exists so a fresh session can
+> pick up without re-deriving the context. Work happens on the
+> `measure-speed-ceiling` worktree (branch `issue-95-measure-speed-ceiling`).
+> Uncommitted probe scripts live in `scripts/isolate_*.py` + logs.
+
+**Goal.** HVN pretraining is the project bottleneck. Param-matched HVN vs
+Transformer on the RTX 4050 (both `--fast`, d=512/L=12/H=8, batch 4 × grad-accum 8,
+seq 512, ternary BitNet): Transformer = **1.60 steps/s**, HVN = **0.40 steps/s**
+(real `train_edge_conversational.py`, 200-step run, `scripts/repro_realtrain.log`)
+→ a **4× gap**. Prior optimizations already took it 7× → 4×; the target is
+**≤2×**. User framing: "transformer 700 ms / 50 steps, HVN 4900 ms (7×), optims
+dropped to 2800 ms (4×); get to ≤2×."
+
+**The core mystery.** A faithful *replicated* training loop (same EdgeHVN,
+`--fast`, real `MixedLocalDataset` DataLoader, ternary, per-source scatter,
+`clip_grad_norm_`, fused AdamW, `torch.compile`) measures **0.81–0.82 steps/s**.
+The *real* `train_edge_conversational.py` measures **0.40**. The replication
+does **not** reproduce 0.40, so it cannot diagnose it — that is the flaw to fix.
+
+**Ruled out (do NOT re-test these — each was measured):**
+- `torch.compile` warmup — refuted (`scripts/reproduce_200step.py`: whole-run 0.76,
+  last-50 0.81; 0.40 persists at steps 100/150/200).
+- Ternary BitNet STE — refuted (`scripts/isolate_ternary.py`: OFF 0.81 → ON 0.80,
+  +7 ms only).
+- DataLoader / loading — refuted (`scripts/measure_dataloader.py`: real loader
+  0.49 ms/batch, loop-with-loader 0.81 = identical to GPU-only; overlaps).
+- Per-source sync `batch_src.to` + `scatter_add` + `clip_grad_norm_` — refuted
+  (`scripts/isolate_trainloop.py`: full 0.81, no_src 0.82, async_src 0.82).
+- Triton-scan absence — refuted (`scripts/isolate_triton.py`): `_HAS_TRITON_SCAN
+  = True` (triton IS importable, so the real script uses it); triton ON 0.82 vs
+  OFF 0.60 — only 1.37×, and OFF (0.60) is still faster than the real 0.40.
+- `#92` sequence padding — refuted (`scripts/measure_speed_ceiling.py`: 0 padding).
+
+**Confirmed facts worth keeping:** scan share ≈ 60% of step at `--fast` (not
+86%); GPU-only steady-state step (my replication) ≈ 0.81 steps/s; `#95` large
+chunk caps at 1.81× and breaks at hard decay (needs a stable-large-chunk kernel,
+not a config bump); loader overlaps and is **not** a bottleneck.
+
+**Next step (do this first).** Stop building minimal copies — they all return
+0.81 and cannot see the 0.40. **Instrument the real `train_edge_conversational.py`
+`train()` loop directly** (hot path ~lines 1344–1425): wrap each section with
+`torch.cuda.synchronize()` + `time.perf_counter()` — `next(data_iter)`, the
+`.to(device)` moves, `model(batch_x)` forward, `cross_entropy`, `loss.backward()`,
+the per-source block, and `clip_grad_norm_`+`optimizer.step()` — for ~30 timed
+steps after warmup, so the 2.5 s/step gets *attributed* to a real section. Only
+that can end the guessing. Likely suspects once attributed: something in the real
+model-build path not diffed exactly (triton-scan is set *post-hoc* on blocks at
+lines ~1772–1780 vs passed at construction in the replication), a per-step op not
+replicated (`scheduler.step()`, `model.train()` mode, audit checks, CSV/print
+flush), or `torch.compile` graph-breaking in the real script for a structural
+reason the replication avoids. Run any such profiling **in the background** per
+the subsection above.
+
+**When the cause is found:** correct the now-stale memory
+`speed-ceiling-2x-needs-both-halves.md` (it wrongly claims "0.4 was a
+compile-warmup artifact, real ~0.81, real gap ~2×" — the real script genuinely
+hits 0.40 / 4×), then identify the real lever toward the ≤2× goal.
+
 ---
 
 ## 6. Training & Usage Guide
