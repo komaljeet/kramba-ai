@@ -1526,6 +1526,10 @@ def main():
                         help="Override number of heads from hardware scan")
     parser.add_argument("--grad-accum", type=int, default=None,
                         help="Override gradient accumulation steps")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Seed torch/numpy/random before model build for "
+                             "reproducible init + data shuffling. Use for fair "
+                             "optimizer/arch A/Bs (#86) so both arms start identical.")
     parser.add_argument("--lr", type=float, default=3e-4,
                         help="Learning rate (default 3e-4)")
     parser.add_argument("--checkpoint-dir", type=str,
@@ -1642,6 +1646,17 @@ def main():
     else:
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
+
+    # Reproducible init for fair A/B comparisons (#86): seed all RNGs before the
+    # model is built and data is shuffled, so two runs differing only in
+    # --optimizer start from identical weights and see the same data order.
+    if args.seed is not None:
+        import random as _random
+        _random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+        print(f"Seeded all RNGs with {args.seed} (reproducible init + shuffling).")
 
     # === Step 1: Hardware Scan ===
     hw = hardware_scan()
