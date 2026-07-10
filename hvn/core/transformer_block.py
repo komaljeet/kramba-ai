@@ -63,6 +63,7 @@ class TransformerBlock(nn.Module):
         dropout: float = 0.1,
         ffn_expansion: int = 3,
         rope_base: float = 10000.0,
+        window: int | None = None,
         **_unused,  # swallow DeltaNet/HVN-only kwargs (conv_kernel, bond_dimension, …)
     ):
         super().__init__()
@@ -73,6 +74,12 @@ class TransformerBlock(nn.Module):
         self.n_heads = n_heads
         self.d_head = d_model // n_heads
         self.rope_base = rope_base
+        # Sliding-window width (hybrid token-recall). None = full causal (the A/B
+        # baseline + the training path). When set and the sequence is longer than
+        # `window`, attention is masked to the last `window` keys per query — the
+        # bounded-KV-cache design (see EdgeHVN block_plan). At training seq_len=512
+        # (< window 4096) this path is NOT taken; is_causal=True stays the fast path.
+        self.window = window
 
         # Pre-norm (parallel-residual, matches DeltaNetBlock)
         self.norm = RMSNorm(d_model)
@@ -108,8 +115,21 @@ class TransformerBlock(nn.Module):
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
 
-        # Fused causal scaled-dot-product attention (flash when available)
-        o = F.scaled_dot_product_attention(q, k, v, is_causal=True)  # [B, H, S, d]
+        if self.window is not None and S > self.window:
+            # Sliding-window causal attention: query i attends to keys in
+            # [i-window+1, i] (no future). This is the bounded-KV-cache design —
+            # only taken when the sequence exceeds the window (inference/gate).
+            # At training seq_len=512 (< W=4096) the else branch runs, so the
+            # flash is_causal=True fast path is unchanged → no training regression.
+            pos = torch.arange(S, device=x_norm.device)
+            dist = pos[:, None] - pos[None, :]              # [S, S], dist[i,j]=i-j
+            mask = torch.zeros(S, S, device=x_norm.device, dtype=q.dtype)
+            mask = mask.masked_fill(dist < 0, float("-inf"))            # future keys
+            mask = mask.masked_fill(dist >= self.window, float("-inf"))  # beyond window
+            o = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, is_causal=False)
+        else:
+            # Fused causal scaled-dot-product attention (flash when available)
+            o = F.scaled_dot_product_attention(q, k, v, is_causal=True)  # [B, H, S, d]
         o = o.transpose(1, 2).reshape(B, S, D)
         return self.out_proj(o)
 
