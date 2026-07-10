@@ -808,13 +808,91 @@ if _HAS_TRITON:
                 # --- end adjoint body ---
             b = b - 1
 
+    @triton.jit
+    def _mk_bwd_kernel_buf(
+        q_ptr, k_ptr, v_ptr, alpha_ptr, beta_ptr, ckpt_ptr, do_ptr,
+        dq_ptr, dk_ptr, dv_ptr, dalpha_ptr, dbeta_ptr, nblk_ptr,
+        S: tl.constexpr, D: tl.constexpr, B: tl.constexpr,
+    ):
+        """Buffered variant of _mk_bwd_kernel: O(B) recompute instead of O(B^2).
+        Per block, ONE forward pass buffers the B entering states in SRAM (a
+        [B,D,D] tile, written/read via tl.where slot-masking with constexpr j —
+        Triton can't index a [D,D] tile by a runtime step), then ONE reverse
+        adjoint pass reads them. Cuts the recompute compute + redundant input
+        reads that capped the O(B^2) kernel at ~1.19x; trades B*16 KB of SRAM
+        (B=4 -> 64 KB) — the register-pressure risk. Adjoint body identical."""
+        n = tl.program_id(0)
+        nblk = tl.load(nblk_ptr)
+        base = n * S * D
+        bbase = n * S
+        cbase = n * nblk * D * D
+        rk = tl.arange(0, D)
+        rv = tl.arange(0, D)
+        ov = tl.arange(0, D)[:, None]
+        ok = tl.arange(0, D)[None, :]
+        idx = tl.arange(0, B)[:, None, None]   # [B,1,1] slot selector
+        dS = tl.zeros((D, D), dtype=tl.float32)
+        b = nblk - 1
+        while b >= 0:
+            s = b * B
+            S_start = tl.load(ckpt_ptr + cbase + b * D * D + ov * D + ok)  # [D,D]
+            # --- forward pass: buffer the B entering states (O(B) recompute) ---
+            buf = tl.where(idx == 0, S_start[None, :, :], tl.zeros((B, D, D), dtype=tl.float32))
+            Sprev = S_start
+            for jj in range(B - 1):  # unrolled; fills slots 1..B-1
+                tt = s + jj
+                rrow = base + tt * D
+                k_tt = tl.load(k_ptr + rrow + rk).to(tl.float32)
+                a_tt = tl.load(alpha_ptr + rrow + rk).to(tl.float32)
+                v_tt = tl.load(v_ptr + rrow + rk).to(tl.float32)
+                b_tt = tl.load(beta_ptr + bbase + tt).to(tl.float32)
+                Sprev = Sprev * a_tt[None, :]
+                Skk = tl.sum(Sprev * k_tt[None, :], axis=1)
+                uu = v_tt - Skk
+                Sprev = Sprev + b_tt * (uu[:, None] * k_tt[None, :])
+                buf = tl.where(idx == (jj + 1), Sprev[None, :, :], buf)
+            # --- reverse adjoint: read entering states from the buffer ---
+            for j in range(B - 1, -1, -1):  # unrolled, j = B-1..0
+                t = s + j
+                row = base + t * D
+                Sprev = tl.sum(tl.where(idx == j, buf, 0.0), axis=0)  # [D,D]
+                # --- validated adjoint body (verbatim from _gd_bwd_kernel) ---
+                k_t = tl.load(k_ptr + row + rk).to(tl.float32)
+                q_t = tl.load(q_ptr + row + rk).to(tl.float32)
+                a_t = tl.load(alpha_ptr + row + rk).to(tl.float32)
+                v_t = tl.load(v_ptr + row + rv).to(tl.float32)
+                b_t = tl.load(beta_ptr + bbase + t).to(tl.float32)
+                do_t = tl.load(do_ptr + row + rv).to(tl.float32)
+                Sd = Sprev * a_t[None, :]
+                Sk = tl.sum(Sd * k_t[None, :], axis=1)
+                u = v_t - Sk
+                S_t = Sd + b_t * (u[:, None] * k_t[None, :])
+                dS_t = dS + do_t[:, None] * q_t[None, :]
+                dq_t = tl.sum(S_t * do_t[:, None], axis=0)
+                tl.store(dq_ptr + row + rk, dq_t)
+                dSd = dS_t
+                dSk_via = tl.sum(dS_t * k_t[None, :], axis=1)
+                dbeta_t = tl.sum(u * dSk_via)
+                tl.store(dbeta_ptr + bbase + t, dbeta_t)
+                du = b_t * dSk_via
+                dk_t = b_t * tl.sum(dS_t * u[:, None], axis=0)
+                tl.store(dv_ptr + row + rv, du)
+                dSd = dSd - du[:, None] * k_t[None, :]
+                dk_t = dk_t - tl.sum(Sd * du[:, None], axis=0)
+                tl.store(dk_ptr + row + rk, dk_t)
+                dalpha_t = tl.sum(Sprev * dSd, axis=0)
+                tl.store(dalpha_ptr + row + rk, dalpha_t)
+                dS = dSd * a_t[None, :]
+                # --- end adjoint body ---
+            b = b - 1
+
 
 class _MegaScan(torch.autograd.Function):
     """Design B autograd wrapper: optimal sequential forward (unchanged
     `_gated_delta_fwd_kernel`) + fused blockwise-recompute backward."""
 
     @staticmethod
-    def forward(ctx, q, k, v, alpha, beta, block=4):
+    def forward(ctx, q, k, v, alpha, beta, block=4, buffered=False):
         N, S, D = q.shape
         q, k, v, alpha = (t.contiguous().float() for t in (q, k, v, alpha))
         beta2 = beta.reshape(N, S).contiguous().float()
@@ -824,6 +902,7 @@ class _MegaScan(torch.autograd.Function):
         ctx.save_for_backward(q, k, v, alpha, beta2)
         ctx.beta_shape = beta.shape
         ctx.block = block
+        ctx.buffered = buffered
         return o
 
     @staticmethod
@@ -840,15 +919,21 @@ class _MegaScan(torch.autograd.Function):
         dq = torch.empty_like(q); dk = torch.empty_like(q)
         dv = torch.empty_like(q); dalpha = torch.empty_like(q)
         dbeta2 = torch.empty_like(beta2)
-        _mk_bwd_kernel[(N,)](q, k, v, alpha, beta2, ckpt, do,
-                            dq, dk, dv, dalpha, dbeta2, nblk_t, S=S, D=D, B=B)
-        return dq, dk, dv, dalpha, dbeta2.reshape(ctx.beta_shape), None
+        bwd = _mk_bwd_kernel_buf if ctx.buffered else _mk_bwd_kernel
+        bwd[(N,)](q, k, v, alpha, beta2, ckpt, do,
+                  dq, dk, dv, dalpha, dbeta2, nblk_t, S=S, D=D, B=B)
+        return dq, dk, dv, dalpha, dbeta2.reshape(ctx.beta_shape), None, None
 
 
-def megakernel_scan(q, k, v, alpha, beta, block: int = 4):
+def megakernel_scan(q, k, v, alpha, beta, block: int = 4, buffered: bool = False):
     """Design B: optimal sequential forward + fused blockwise-recompute
     backward. Drop-in for `gated_delta_scan` (autograd-enabled). `block` is the
     blockwise-recompute block size B (smaller = less recompute compute, more
-    states HBM; larger = the reverse). Not wired into training until it beats
-    the sequential bwd on the benchmark gate."""
-    return _MegaScan.apply(q, k, v, alpha, beta, block)
+    states HBM; larger = the reverse); B=4 is the measured sweet spot. `buffered`
+    selects the recompute strategy: False (default) = O(B^2) on-the-fly recompute
+    (the WINNER — keeps everything in registers, no shared-mem buffer); True =
+    O(B) buffered recompute (a DEAD END — Triton can't cheaply index a [B,D,D]
+    tile, so the per-step slot read costs a full-buffer masked reduction that
+    more than offsets the O(B) saving, plus register pressure at larger B).
+    Not wired into training until it beats the sequential bwd on the gate."""
+    return _MegaScan.apply(q, k, v, alpha, beta, block, buffered)

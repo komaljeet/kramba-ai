@@ -62,9 +62,15 @@ try:
     # Fused Triton scan (#83). Optional — falls back to the eager scans if
     # unavailable (e.g. no CUDA/triton). Import guarded so CPU imports still work.
     from .deltanet_triton import gated_delta_scan as _triton_gated_delta_scan
+    # Design B (#96): optimal sequential fwd + fused blockwise-recompute bwd.
+    # Same math as gated_delta_scan (parity 5e-8), ~1.18x faster scan + 4x less
+    # transient backward VRAM. Opt-in; gate-passed at d=64 but not yet verified
+    # end-to-end under --fast.
+    from .deltanet_triton import megakernel_scan as _triton_megakernel_scan
     _HAS_TRITON_SCAN = True
 except Exception:  # pragma: no cover
     _triton_gated_delta_scan = None
+    _triton_megakernel_scan = None
     _HAS_TRITON_SCAN = False
 
 
@@ -132,6 +138,7 @@ class DeltaNetBlock(nn.Module):
         use_swiglu: bool = False,
         train_chunk: int = 32,
         use_triton_scan: bool = False,
+        use_megakernel_scan: bool = False,
         # Accepted for interface compatibility with HVNBlock construction
         # (ignored — DeltaNet defines its own dynamics):
         bond_dimension: int | None = None,
@@ -148,6 +155,11 @@ class DeltaNetBlock(nn.Module):
         # Identity-preserving (same math as _scan_sequential, validated to ~1e-7)
         # and numerically stable at all decay, unlike the eager _scan_chunked.
         self.use_triton_scan = bool(use_triton_scan)
+        # Design B (#96): when use_triton_scan is on, route the scan through the
+        # fused blockwise-recompute backward instead of the 2-kernel sequential
+        # backward. Same math; opt-in until the end-to-end --fast A/B confirms a
+        # real step-level win (micro-bench: ~1.18x scan at d=64).
+        self.use_megakernel_scan = bool(use_megakernel_scan)
         assert d_model % n_heads == 0, (
             f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"
         )
@@ -565,7 +577,10 @@ class DeltaNetBlock(nn.Module):
         # for incremental/return_state generation (that path stays eager).
         if (self.use_triton_scan and _HAS_TRITON_SCAN and not return_state
                 and S > 1 and qN.is_cuda):
-            oN = _triton_gated_delta_scan(qN, kN, vN, alphaN, betaN)
+            if self.use_megakernel_scan:
+                oN = _triton_megakernel_scan(qN, kN, vN, alphaN, betaN)
+            else:
+                oN = _triton_gated_delta_scan(qN, kN, vN, alphaN, betaN)
         # Reassociated (chunked-parallel) delta rule for training speed; falls
         # back to the plain sequential scan for short sequences or when disabled.
         elif self.train_chunk and S > 1:

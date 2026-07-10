@@ -66,12 +66,14 @@ def main():
         seq_ms = _bench(gated_delta_scan, args)
         print(f"  [{decay:7s}] sequential  fwd+bwd : {seq_ms:7.3f} ms")
         bw = 0.0
-        for bb in (2, 4, 8, 16):
-            mega_ms = _bench(lambda *a: megakernel_scan(*a, block=bb), args)
-            win = seq_ms / mega_ms
-            tag = "WIN" if win > 1.0 else "lose"
-            bw = max(bw, win)
-            print(f"  [{decay:7s}] design-B B={bb:<3}      : {mega_ms:7.3f} ms   ({win:4.2f}x vs seq)  {tag}")
+        for bb in (2, 4, 8):
+            for buf in (True, False):
+                tag_b = "buf" if buf else "Ob2"
+                mega_ms = _bench(lambda *a: megakernel_scan(*a, block=bb, buffered=buf), args)
+                win = seq_ms / mega_ms
+                mark = "WIN" if win > 1.0 else "lose"
+                bw = max(bw, win)
+                print(f"  [{decay:7s}] design-B B={bb:<3} {tag_b:4s} : {mega_ms:7.3f} ms   ({win:4.2f}x vs seq)  {mark}")
         best[decay] = bw
         print()
     print("=" * 60)
