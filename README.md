@@ -579,6 +579,60 @@ ceiling.
 
 ---
 
+### 📊 EdgeHVN 83M — the measured PPL picture (2026-07-10)
+
+The 83M has **three separate PPL/capability readings on three different data types** —
+conflating them caused several wrong "ceiling" calls, so they're written down here:
+
+| Data | PPL | What it measures | Status |
+|---|---|---|---|
+| **Chat fine-tune (OpenAssistant)** | **~26.5–30** (low: 3.277 loss / 26.5 ppl, step 440) | conversational **fluency** — chat format, coherence | ✅ **solved & measured** |
+| **Pretrain (SlimPajama web)** | ~110 → **103 and still falling** | broad web **knowledge** | ❌ the gap (but not a wall — see below) |
+| **Grounded reading** (`eval/grounded_qa.py`) | 0/5 retrieval lift | **read + recall** exact tokens from context | ❓ TBD — the hybrid test |
+
+**So 83M is conversational in the fluent-chat sense** — ppl ~30 on chat data is a real,
+measured conversational model (that's why it responds to "hi" correctly), not a
+hypothetical one. What it is **not** is *knowledgeable* (ppl ~110 on web) or *grounded*
+(0/5 recall). The chatterbox is real and quantified; the gaps are knowledge + reading,
+**not** fluency.
+
+**The "~110 = 83M capacity ceiling" claim is REFUTED.** The old 10K-step run plateaued at
+SlimPajama ~110, but that run was **data-capped at ~135M tokens** (the OASST `max_repeat=3`
+bind) — it plateaued because it ran out of fresh data, not because 83M hit a wall. The
+Chinchilla-floor pretrain (bg `b2dytn9gk`, Muon, OASST dropped from pretrain) is **still
+descending and has gone below 110**: val PPL 182 (step 2K) → 133 (4K) → 114 (6K) →
+**102.9 (8K)**, still falling; train loss confirms (8.35 → 4.71 avg, with a mid-run flat
+patch ~step 3K–5.5K that then **broke through and accelerated** ~step 6K–7.5K — a phase
+transition, the opposite of a ceiling). **Do not draw capacity conclusions from a PPL
+that is still descending** — the undertrained-vs-capacity question is OPEN, tilting toward
+*undertrained*. The 50K grounded-QA probe (capability: can it *read*) is the decisive test;
+the PPL trajectory is now a positive signal. (Caveat that still holds: PPL improving ≠
+"properly conversational" — that's a capability question the probe measures, not PPL. But
+stop declaring 83M's ceiling from PPL; the run keeps disproving it.)
+
+> **Why the current pretrain shows val_ppl ~103 while the old run reported "~37 overall":**
+> that is a **mix change, not a regression.** The Chinchilla-floor pretrain deliberately
+> dropped OASST from pretrain (`--pretrain-mix 0.85,0.0,0.15` — OASST belongs in chat-FT),
+> so its val PPL is SlimPajama+Wiki only, with no easy chat data dragging it down. The old
+> "~37 overall" included 35% easy OASST. Apples-to-apples on the hard knowledge data: old
+> ~110 → new ~103 and falling — the new run is *better* on knowledge, the aggregate just
+> looks higher because the easy source was removed.
+
+**Note — "hi → unrelated/garbage text" is NOT a knowledge problem.** Knowledge is about
+facts ("capital of France"); "hi" needs none. A model with perfect knowledge and a broken
+decoder still emits garbage to "hi". The real causes: (1) **serving/decoding** — if EOS +
+the chat-format turn marker aren't hard-enforced, generation runs past "hello" into
+base-pretrain web continuation → "unrelated text" (no proper EdgeHVN decode path exists
+yet; the Phase B `chat_edgehvn.py` entrypoint / EOS-50256 format is exactly this fix);
+(2) **chat-FT too shallow** — only 640 steps / 3 epochs (noisy, bounced to ppl ~39), so
+the base-pretrain web-text prior leaks through on simple prompts instead of the chat
+manifold holding; (3) the **base pretrain itself emits web garbage** (`grounded_qa`:
+"emits HTML/web garbage, never answers"), which a shallow chat-FT doesn't fully override.
+Fix = **serving-side EOS/format enforcement + a real chat-FT + a cleaner trunk** — not more
+knowledge. Knowledge fixes "I don't know facts," not "I don't stop talking."
+
+---
+
 ### 🧪 Hybrid token-recall architecture — Phase A code landed (2026-07-10)
 
 **Problem.** Pure EdgeHVN (DeltaNet recurrence) **cannot recall exact tokens**: the
