@@ -1204,8 +1204,16 @@ def evaluate(model, val_loader, device, max_batches: int = 100,
     was_training = model.training
     model.eval()
     crit = nn.CrossEntropyLoss(reduction="none")
-    tot_loss, tot_n = 0.0, 0
-    src_loss, src_n = [0.0, 0.0, 0.0], [0, 0, 0]
+    # GPU-side accumulators (deferred host sync): accumulate per-sample loss
+    # and per-source sums/counts on-device, then sync ONCE at the end. The old
+    # per-sample .item() loop forced a GPU->CPU sync per sample (B syncs /
+    # batch); this mirrors the training loop's scatter_add pattern and drops
+    # to a single host sync for the whole eval. Values are identical to the
+    # per-sample sums, just synced less often.
+    tot_loss_t = torch.zeros((), device=device)
+    tot_n_t = torch.zeros((), device=device, dtype=torch.long)
+    src_loss_t = torch.zeros(3, device=device)
+    src_count_t = torch.zeros(3, device=device, dtype=torch.long)
     # Precision-aware autocast (Issue #80): fp32 = no autocast, bf16/fp16 = autocast.
     use_amp = precision in ("fp16", "bf16")
     amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
@@ -1220,17 +1228,27 @@ def evaluate(model, val_loader, device, max_batches: int = 100,
             per_sample = crit(
                 logits.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1)
             ).reshape(x.shape[0], -1).mean(dim=1)
-        for b in range(x.shape[0]):
-            l = per_sample[b].item()
-            tot_loss += l
-            tot_n += 1
-            s = int(src[b])
-            if 0 <= s < 3:
-                src_loss[s] += l
-                src_n[s] += 1
+        B = x.shape[0]
+        tot_loss_t += per_sample.detach().sum()
+        tot_n_t += B
+        src_ids = (src.to(device=device, dtype=torch.long)
+                   if isinstance(src, torch.Tensor)
+                   else torch.tensor(src, device=device, dtype=torch.long))
+        # Clamp out-of-range source IDs (defensive; matches the old `0 <= s < 3`
+        # guard) so scatter_add never indexes off the end of the 3-bucket tensors.
+        valid = (src_ids >= 0) & (src_ids < 3)
+        if valid.any():
+            v_ids = src_ids[valid]
+            v_loss = per_sample.detach()[valid].to(src_loss_t.dtype)
+            src_loss_t.scatter_add_(0, v_ids, v_loss)
+            src_count_t.scatter_add_(0, v_ids, torch.ones_like(v_ids, dtype=torch.long))
     if was_training:
         model.train()
-    overall = tot_loss / max(1, tot_n)
+    # Single host sync for the whole eval (was B * num_batches syncs).
+    tot_n = int(tot_n_t.item())
+    overall = float(tot_loss_t.item()) / max(1, tot_n)
+    src_n = src_count_t.tolist()
+    src_loss = src_loss_t.tolist()
     per_src = [src_loss[s] / src_n[s] if src_n[s] else float("nan") for s in range(3)]
     return overall, per_src
 

@@ -261,9 +261,15 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
     start = time.time()
     optimizer.zero_grad()
 
+    # On-device loss accumulator (deferred host sync): accumulate the
+    # micro-batch losses on the GPU and sync to the host ONLY at log time
+    # (every 20 opt steps). The old `accum_loss += loss.item()` forced a
+    # GPU->CPU sync every micro-batch, stalling the async compute/H2D
+    # pipeline. Mirrors the pretraining loop's deferred-accumulator pattern.
+    accum_loss_t = torch.zeros((), device=device)
+
     for epoch in range(epochs):
         micro = 0
-        accum_loss = 0.0
         for x, y in dataloader:
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
@@ -272,7 +278,7 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
                 loss = criterion(logits.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1))
                 loss = loss / grad_accum
             loss.backward()
-            accum_loss += loss.item()
+            accum_loss_t += loss.detach()
             micro += 1
 
             if micro >= grad_accum:
@@ -290,6 +296,9 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
                 micro = 0
 
                 if global_step % 20 == 0:
+                    # Single host sync per log interval (was grad_accum syncs).
+                    accum_loss = float(accum_loss_t.item())
+                    accum_loss_t.zero_()
                     cur_lr = optimizer.param_groups[0]["lr"]
                     ppl = math.exp(min(accum_loss, 20))
                     print(f"  Step {global_step:5d}/{total_steps} (epoch {epoch}) | "
@@ -299,7 +308,6 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
                                      f"{ppl:.4f}", f"{cur_lr:.8f}",
                                      time.strftime("%Y-%m-%d %H:%M:%S")])
                     csv_file.flush()
-                accum_loss = 0.0
 
         # Save at the end of each epoch.
         _save_edge_checkpoint(model, out_path, global_step=global_step)

@@ -5,6 +5,13 @@
 > guide, benchmarks, roadmap, execution plan, project context, and issue history).
 >
 > Status legend: ✅ Done · 🔄 In Progress · ⬜ Planned
+>
+> **Maintainer note — keep this file current.** Whenever a session reaches a conclusion worth
+> recording (a benchmark result, a confirmed/dead-end optimization, a parity or speed gate
+> outcome, an architecture decision, or a closed issue's verdict), update the relevant section
+> of this README **before ending the session**. Treat it as the durable log of what was tried
+> and what was concluded — don't leave a settled result only in a commit message or a session
+> transcript.
 
 ## Table of Contents
 
