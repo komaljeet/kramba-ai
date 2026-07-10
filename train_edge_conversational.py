@@ -24,6 +24,7 @@ is exactly what EdgeHVN produces (no KV cache, fixed-size Hamiltonian).
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import math
@@ -986,15 +987,25 @@ def pre_training_audit(
         all_passed = False
 
     # --- Check 2: Forward pass runs without error ---
+    # Runs on a THROWAWAY deepcopy of the model. The real `model` is about to be
+    # torch.compile'd by the caller; an eager forward+backward on it BEFORE
+    # compile perturbs the compiled graph (autograd/allocator state) and makes
+    # training ~0.1 s/step slower (measured: 0.7 vs 0.81 steps/s, #95). Running
+    # the audit on an identical copy leaves the real model pristine for compile
+    # while still validating that the architecture + ternary STE forward/backward
+    # works. The copy is freed immediately after.
     print("\n  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...")
+    audit_model = None
     try:
-        model.eval()
+        audit_model = copy.deepcopy(model)
         x = batch_x.to(device)
         precision = config.get("precision", "bf16")
         use_amp = precision in ("fp16", "bf16")
         amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
+
+        audit_model.eval()
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
-            logits = model(x)
+            logits = audit_model(x)
         print(f"    Input shape:  {x.shape}")
         print(f"    Output shape: {logits.shape} (expected [{x.shape[0]}, {x.shape[1]}, {GPT2_VOCAB_SIZE}])")
         if logits.shape[0] != x.shape[0] or logits.shape[1] != x.shape[1]:
@@ -1007,10 +1018,10 @@ def pre_training_audit(
             print(f"    ✓ Forward pass correct")
 
         # Also test backward pass
-        model.train()
+        audit_model.train()
         y = batch_y.to(device)
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
-            logits = model(x)
+            logits = audit_model(x)
             loss = nn.CrossEntropyLoss()(
                 logits.reshape(-1, GPT2_VOCAB_SIZE),
                 y.reshape(-1),
@@ -1020,7 +1031,7 @@ def pre_training_audit(
 
         # Check gradients exist on ternary weights
         has_grad = False
-        for name, mod in model.named_modules():
+        for name, mod in audit_model.named_modules():
             if isinstance(mod, TernaryLinear) and mod.weight.grad is not None:
                 has_grad = True
                 break
@@ -1029,13 +1040,17 @@ def pre_training_audit(
         else:
             print(f"    ⚠ No ternary weight gradients found (may be normal if all grads are None)")
 
-        # Zero gradients for training
-        model.zero_grad()
+        # Zero gradients (on the throwaway copy; the real model was never touched).
+        audit_model.zero_grad()
     except Exception as e:
         print(f"    ❌ Forward/backward check failed: {e}")
         import traceback
         traceback.print_exc()
         all_passed = False
+    finally:
+        # Free the throwaway copy's VRAM before training allocates activations.
+        del audit_model
+        torch.cuda.empty_cache()
 
     # --- Check 3: Checkpoint save and load cycle ---
     print("\n  [Check 3] Checkpoint save/load cycle...")
