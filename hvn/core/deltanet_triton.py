@@ -321,22 +321,141 @@ def _log_gram_ref(a, b, logP, strict):
     return torch.einsum('nid,njd,nijd->nij', a, b, ratio)     # [N,L,L]
 
 
+if _HAS_TRITON:
+
+    @triton.jit
+    def _loggram_bwd_da_kernel(dG_ptr, b_ptr, logP_ptr, da_ptr,
+                               N, L,
+                               D: tl.constexpr, STRICT: tl.constexpr,
+                               BLOCK_I: tl.constexpr,
+                               BLOCK_J: tl.constexpr,
+                               BLOCK_D: tl.constexpr):
+        """da[i,d] = sum_j dG[i,j] b[j,d] exp(logP[i,d]-logP[j,d]) over the
+        causal mask. Grid (N, L//BI, D//BD); loops over j-blocks."""
+        pid_n = tl.program_id(0)
+        pid_i = tl.program_id(1)
+        pid_d = tl.program_id(2)
+        ri = pid_i * BLOCK_I + tl.arange(0, BLOCK_I)
+        rd = pid_d * BLOCK_D + tl.arange(0, BLOCK_D)
+        li = ri < L
+        ld = rd < D
+        base = pid_n * L * D
+        lp_i = tl.load(logP_ptr + base + ri[:, None] * D + rd[None, :],
+                       mask=li[:, None] & ld[None, :], other=0.0)        # [BI, BD]
+        acc = tl.zeros((BLOCK_I, BLOCK_D), dtype=tl.float32)
+        for j0 in range(0, L, BLOCK_J):
+            rj = j0 + tl.arange(0, BLOCK_J)
+            lj = rj < L
+            if STRICT:
+                valid = rj[None, :] < ri[:, None]
+            else:
+                valid = rj[None, :] <= ri[:, None]
+            valid = valid & li[:, None] & lj[None, :]
+            b_jd = tl.load(b_ptr + base + rj[:, None] * D + rd[None, :],
+                           mask=lj[:, None] & ld[None, :], other=0.0)    # [BJ, BD]
+            lp_j = tl.load(logP_ptr + base + rj[:, None] * D + rd[None, :],
+                           mask=lj[:, None] & ld[None, :], other=0.0)
+            dG = tl.load(dG_ptr + pid_n * L * L + ri[:, None] * L + rj[None, :],
+                         mask=li[:, None] & lj[None, :], other=0.0)      # [BI, BJ]
+            logr = lp_i[:, None, :] - lp_j[None, :, :]                   # [BI, BJ, BD]
+            logr = tl.where(valid[:, :, None], logr, float('-inf'))
+            acc += tl.sum(dG[:, :, None] * b_jd[None, :, :] * tl.exp(logr), axis=1)
+        tl.store(da_ptr + base + ri[:, None] * D + rd[None, :], acc,
+                 mask=li[:, None] & ld[None, :])
+
+    @triton.jit
+    def _loggram_bwd_db_kernel(dG_ptr, a_ptr, logP_ptr, db_ptr,
+                               N, L,
+                               D: tl.constexpr, STRICT: tl.constexpr,
+                               BLOCK_I: tl.constexpr,
+                               BLOCK_J: tl.constexpr,
+                               BLOCK_D: tl.constexpr):
+        """db[j,d] = sum_i dG[i,j] a[i,d] exp(logP[i,d]-logP[j,d]) over the
+        causal mask. Grid (N, L//BJ, D//BD); loops over i-blocks."""
+        pid_n = tl.program_id(0)
+        pid_j = tl.program_id(1)
+        pid_d = tl.program_id(2)
+        rj = pid_j * BLOCK_J + tl.arange(0, BLOCK_J)
+        rd = pid_d * BLOCK_D + tl.arange(0, BLOCK_D)
+        lj = rj < L
+        ld = rd < D
+        base = pid_n * L * D
+        lp_j = tl.load(logP_ptr + base + rj[:, None] * D + rd[None, :],
+                       mask=lj[:, None] & ld[None, :], other=0.0)        # [BJ, BD]
+        acc = tl.zeros((BLOCK_J, BLOCK_D), dtype=tl.float32)
+        for i0 in range(0, L, BLOCK_I):
+            ri = i0 + tl.arange(0, BLOCK_I)
+            li = ri < L
+            if STRICT:
+                valid = rj[None, :] < ri[:, None]
+            else:
+                valid = rj[None, :] <= ri[:, None]
+            valid = valid & li[:, None] & lj[None, :]
+            a_id = tl.load(a_ptr + base + ri[:, None] * D + rd[None, :],
+                           mask=li[:, None] & ld[None, :], other=0.0)    # [BI, BD]
+            lp_i = tl.load(logP_ptr + base + ri[:, None] * D + rd[None, :],
+                           mask=li[:, None] & ld[None, :], other=0.0)
+            dG = tl.load(dG_ptr + pid_n * L * L + ri[:, None] * L + rj[None, :],
+                         mask=li[:, None] & lj[None, :], other=0.0)      # [BI, BJ]
+            logr = lp_i[:, None, :] - lp_j[None, :, :]                   # [BI, BJ, BD]
+            logr = tl.where(valid[:, :, None], logr, float('-inf'))
+            acc += tl.sum(dG[:, :, None] * a_id[:, None, :] * tl.exp(logr), axis=0)
+        tl.store(db_ptr + base + rj[:, None] * D + rd[None, :], acc,
+                 mask=lj[:, None] & ld[None, :])
+
+
+class _LogGram(torch.autograd.Function):
+    """Autograd-enabled fused per-channel causal log-space Gram.
+
+    Forward: G[i,j] = sum_d a[i,d] b[j,d] exp(logP[i,d]-logP[j,d]), masked.
+    Backward: da/db (causal reductions) + dlogP = a*da - b*db (elementwise).
+    Stable at all decay (the ratio is exp of a masked <=0 exponent).
+    """
+
+    @staticmethod
+    def forward(ctx, a, b, logP, strict):
+        N, L, D = a.shape
+        a = a.contiguous().float()
+        b = b.contiguous().float()
+        logP = logP.contiguous().float()
+        G = torch.empty(N, L, L, device=a.device, dtype=torch.float32)
+        BLOCK_I, BLOCK_J, BLOCK_D = 16, 16, 16
+        grid = (N, triton.cdiv(L, BLOCK_I), triton.cdiv(L, BLOCK_J))
+        _loggram_fwd_kernel[grid](a, b, logP, G, N, L, D=D, STRICT=int(strict),
+                                  BLOCK_I=BLOCK_I, BLOCK_J=BLOCK_J, BLOCK_D=BLOCK_D)
+        ctx.save_for_backward(a, b, logP)
+        ctx.strict = strict
+        ctx.L = L
+        ctx.D = D
+        return G
+
+    @staticmethod
+    def backward(ctx, dG):
+        a, b, logP = ctx.saved_tensors
+        N, L, D = a.shape
+        dG = dG.contiguous().float()
+        BLOCK_I, BLOCK_J, BLOCK_D = 16, 16, 16
+        da = torch.empty_like(a)
+        db = torch.empty_like(b)
+        grid_a = (N, triton.cdiv(L, BLOCK_I), triton.cdiv(D, BLOCK_D))
+        _loggram_bwd_da_kernel[grid_a](dG, b, logP, da, N, L, D=D,
+                                       STRICT=int(ctx.strict),
+                                       BLOCK_I=BLOCK_I, BLOCK_J=BLOCK_J,
+                                       BLOCK_D=BLOCK_D)
+        grid_b = (N, triton.cdiv(L, BLOCK_J), triton.cdiv(D, BLOCK_D))
+        _loggram_bwd_db_kernel[grid_b](dG, a, logP, db, N, L, D=D,
+                                       STRICT=int(ctx.strict),
+                                       BLOCK_I=BLOCK_I, BLOCK_J=BLOCK_J,
+                                       BLOCK_D=BLOCK_D)
+        dlogP = a * da - b * db
+        return da, db, dlogP, None
+
+
 def log_gram(a, b, logP, strict: bool):
-    """Fused per-channel causal log-space Gram (forward only — the autograd
-    Function is added once its backward is validated). a, b, logP : [N, L, d]
-    contiguous fp32 on CUDA. Returns G : [N, L, L]."""
+    """Fused per-channel causal log-space Gram, autograd-enabled. a, b, logP :
+    [N, L, d] fp32 on CUDA. Returns G : [N, L, L]."""
     assert _HAS_TRITON and a.is_cuda, "CUDA + triton required"
-    N, L, D = a.shape
-    a = a.contiguous().float()
-    b = b.contiguous().float()
-    logP = logP.contiguous().float()
-    G = torch.empty(N, L, L, device=a.device, dtype=torch.float32)
-    BLOCK_I, BLOCK_J, BLOCK_D = 16, 16, 16
-    grid = (N, triton.cdiv(L, BLOCK_I), triton.cdiv(L, BLOCK_J))
-    _loggram_fwd_kernel[grid](a, b, logP, G, N, L,
-                              D=D, STRICT=int(strict),
-                              BLOCK_I=BLOCK_I, BLOCK_J=BLOCK_J, BLOCK_D=BLOCK_D)
-    return G
+    return _LogGram.apply(a, b, logP, strict)
 
 
 def chunked_scan_forward(q, k, v, alpha, beta, chunk: int = 128):
