@@ -452,11 +452,33 @@ class _WindowDataset(Dataset):
     item format. Used for the token-disjoint held-out validation split.
     """
 
-    def __init__(self, sources, src_ids, starts, seq_len):
-        self.sources = sources
+    def __init__(self, source_paths, src_ids, starts, seq_len, dtype=np.uint16):
+        # Store backing file paths (absolute) + dtype, NOT the live memmap
+        # handles, so the dataset is picklable across a Windows DataLoader spawn
+        # pipe. numpy.memmap objects raise `OSError [Errno 22] Invalid argument`
+        # when serialized through the spawn pipe (and truncate it, killing the
+        # child with `_pickle.UnpicklingError: pickle data was truncated`); each
+        # worker re-mmaps from disk in __setstate__ instead. (This is the fix for
+        # the step-2000 first-val crash on the Chinchilla-floor pretrain.)
+        self.source_paths = [os.path.abspath(p) for p in source_paths]
+        self.dtype = np.dtype(dtype)
         self.src_ids = src_ids
         self.starts = starts
         self.seq_len = seq_len
+        self.sources = [np.memmap(p, dtype=self.dtype, mode="r")
+                        for p in self.source_paths]
+
+    def __getstate__(self):
+        # Drop the live memmap handles (un-picklable on the Windows spawn pipe);
+        # the worker re-opens them from source_paths in __setstate__.
+        state = self.__dict__.copy()
+        state.pop("sources", None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.sources = [np.memmap(p, dtype=self.dtype, mode="r")
+                        for p in self.source_paths]
 
     def __len__(self):
         return len(self.starts)
@@ -582,6 +604,12 @@ class MixedLocalDataset(Dataset):
                 self.source_names.append(_name)
         ratios = [r / sum(ratios) for r in ratios]  # renormalise over included sources
 
+        # Store absolute backing file paths + dtype so the dataset is picklable
+        # across a Windows DataLoader spawn pipe (numpy.memmap itself is not —
+        # see _WindowDataset.__getstate__).
+        self._source_paths = [os.path.abspath(p) for p in source_paths]
+        self._source_dtype = np.uint16
+
         self.sources: list[np.memmap] = []
         avail = []  # number of non-overlapping seq_len windows per source
         for p in source_paths:
@@ -659,8 +687,8 @@ class MixedLocalDataset(Dataset):
     def val_dataset(self) -> "_WindowDataset":
         """Return a Dataset over the held-out validation windows (token-disjoint
         from train), sharing the same memory-mapped sources."""
-        return _WindowDataset(self.sources, self.val_src_ids, self.val_starts,
-                              self.seq_len)
+        return _WindowDataset(self._source_paths, self.val_src_ids, self.val_starts,
+                              self.seq_len, self._source_dtype)
 
     def __len__(self):
         return len(self.starts)
@@ -673,6 +701,18 @@ class MixedLocalDataset(Dataset):
         x = torch.from_numpy(chunk[:-1])
         y = torch.from_numpy(chunk[1:])
         return x, y, src_id
+
+    def __getstate__(self):
+        # Drop the live memmap handles (un-picklable on a Windows spawn pipe);
+        # workers re-mmap from _source_paths in __setstate__.
+        state = self.__dict__.copy()
+        state.pop("sources", None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.sources = [np.memmap(p, dtype=self._source_dtype, mode="r")
+                        for p in self._source_paths]
 
 
 class WikiText103LocalDataset(Dataset):
@@ -806,14 +846,20 @@ def build_dataset_pipeline(
     val_loader = None
     val_starts = getattr(dataset, "val_starts", None)
     if not smoke and val_starts is not None and len(val_starts) > 0:
+        # Validation runs infrequently (every --val-every steps) on a small
+        # token-disjoint split, so async worker overlap buys little. Run it
+        # single-process (num_workers=0): no spawn -> no memmap pickling across
+        # the Windows spawn pipe -> the first-val crash that killed the
+        # Chinchilla-floor pretrain at step 2000 cannot recur here. (The train
+        # dataset's own pickle-safety covers its persistent workers.)
         val_loader = DataLoader(
             dataset.val_dataset(),
             batch_size=batch_size,
             shuffle=False,
             drop_last=False,
             pin_memory=torch.cuda.is_available(),
-            num_workers=num_workers if num_workers > 0 else 0,
-            persistent_workers=num_workers > 0,
+            num_workers=0,
+            persistent_workers=False,
         )
         stats["val_samples"] = int(len(val_starts))
         print(f"  Held-out val: {stats['val_samples']:,} samples")
