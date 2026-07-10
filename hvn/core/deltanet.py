@@ -62,9 +62,15 @@ try:
     # Fused Triton scan (#83). Optional — falls back to the eager scans if
     # unavailable (e.g. no CUDA/triton). Import guarded so CPU imports still work.
     from .deltanet_triton import gated_delta_scan as _triton_gated_delta_scan
+    # Design B (#96): optimal sequential fwd + fused blockwise-recompute bwd.
+    # Same math as gated_delta_scan (parity 5e-8), ~1.18x faster scan + 4x less
+    # transient backward VRAM. Opt-in; gate-passed at d=64 but not yet verified
+    # end-to-end under --fast.
+    from .deltanet_triton import megakernel_scan as _triton_megakernel_scan
     _HAS_TRITON_SCAN = True
 except Exception:  # pragma: no cover
     _triton_gated_delta_scan = None
+    _triton_megakernel_scan = None
     _HAS_TRITON_SCAN = False
 
 
@@ -132,6 +138,7 @@ class DeltaNetBlock(nn.Module):
         use_swiglu: bool = False,
         train_chunk: int = 32,
         use_triton_scan: bool = False,
+        use_megakernel_scan: bool = False,
         # Accepted for interface compatibility with HVNBlock construction
         # (ignored — DeltaNet defines its own dynamics):
         bond_dimension: int | None = None,
@@ -148,6 +155,11 @@ class DeltaNetBlock(nn.Module):
         # Identity-preserving (same math as _scan_sequential, validated to ~1e-7)
         # and numerically stable at all decay, unlike the eager _scan_chunked.
         self.use_triton_scan = bool(use_triton_scan)
+        # Design B (#96): when use_triton_scan is on, route the scan through the
+        # fused blockwise-recompute backward instead of the 2-kernel sequential
+        # backward. Same math; opt-in until the end-to-end --fast A/B confirms a
+        # real step-level win (micro-bench: ~1.18x scan at d=64).
+        self.use_megakernel_scan = bool(use_megakernel_scan)
         assert d_model % n_heads == 0, (
             f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"
         )
@@ -389,6 +401,106 @@ class DeltaNetBlock(nn.Module):
             return oN, S_in.to(orig_dtype)                       # final [N, d_v, d_k]
         return oN
 
+    # ------------------------------------------------------------------
+    # Stable chunked scan — bounded causal ratios, exact at ALL decay (#95)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _scan_chunked_stable(qN, kN, vN, alphaN, betaN, chunk,
+                             return_state: bool = False):
+        """Chunked-parallel gated delta rule, numerically stable at ALL decay.
+
+        Same recurrence/result as :meth:`_scan_chunked` and
+        :meth:`_scan_sequential`, but the per-channel causal ratios are formed in
+        log space as ``exp(logP_i,d − logP_j,d)`` and masked to the causal lower
+        triangle **before** the ``exp`` — so every ratio is in ``(0, 1]`` and the
+        computation never materializes ``1/P`` (the term that overflows fp32 to
+        Inf once ``P = cumprod(α)`` underflows, the bug that makes
+        :meth:`_scan_chunked` silently wrong on decayed channels at large chunks
+        / hard decay). Large chunks are now exact at any ``α`` — including the
+        untrained start (``α≈0.5``) and the hard-decay stress regime
+        (``α≈0.1``) — so chunk size is a pure cost tradeoff, not a stability
+        limit.
+
+        This is the **math reference** for the fused Triton kernel (#95): it is
+        written in plain PyTorch so autograd supplies the backward for free,
+        which lets the tests check fwd+bwd parity against
+        :meth:`_scan_sequential` at every decay before the kernel is trusted.
+        It is NOT the training fast path — the ``[N, L, L, d]`` per-channel
+        ratio it materializes is VRAM-prohibitive at the real shape
+        (N=32, L=256 → ~0.5 GB/chunk); the fused kernel computes that ratio in
+        SRAM tile-by-tile instead. See ``hvn/core/deltanet_triton.py``.
+
+        Layout: ``qN,kN,vN,alphaN`` are ``[N,S,d]``, ``betaN`` is ``[N,S,1]``.
+        Returns ``oN`` ``[N,S,d]`` (and the final ``[N,d,d]`` state if
+        ``return_state``).
+        """
+        N, S, d = qN.shape
+        dev = qN.device
+        orig_dtype = qN.dtype
+        with torch.autocast(device_type=dev.type, enabled=False):
+            qN = qN.float(); kN = kN.float(); vN = vN.float(); betaN = betaN.float()
+            if alphaN is not None:
+                alphaN = alphaN.float()
+            S_in = torch.zeros(N, d, d, device=dev, dtype=torch.float32)  # [d_v, d_k]
+            idx = torch.arange(chunk, device=dev)
+            # Causal masks (True = zero the ratio there). The exp only ever sees
+            # <=0 (or -inf), so the result is in (0, 1] u {0} — never overflows.
+            mask_strict = idx[None, :] >= idx[:, None]   # j >= i : A is strictly lower
+            mask_lower = idx[None, :] > idx[:, None]     # j >  i : QK keeps the diagonal
+            outs = []
+            for s in range(0, S, chunk):
+                e = min(s + chunk, S)
+                L = e - s
+                q = qN[:, s:e]; k = kN[:, s:e]; v = vN[:, s:e]   # [N, L, d]
+                beta = betaN[:, s:e]                            # [N, L, 1]
+
+                if alphaN is not None:
+                    a = alphaN[:, s:e].clamp_min(1e-30)          # [N, L, d]
+                    logP = torch.cumsum(torch.log(a), dim=1)      # inclusive [N, L, d]
+                else:
+                    logP = torch.zeros(N, L, d, device=dev, dtype=torch.float32)
+                P = torch.exp(logP)                            # [N,L,d], <=1, safe
+                P_last = P[:, -1, :]                            # [N, d]
+                logP_last = logP[:, -1, :]                      # [N, d]
+
+                # S_in read side: kbar = k⊙P, qbar = q⊙P (P <= 1, safe — no 1/P).
+                kbar = k * P
+                qbar = q * P
+                Sk = torch.einsum('nvk,nlk->nlv', S_in, kbar)    # [N, L, d_v]
+                R = beta * (v - Sk)                              # [N, L, d_v]
+
+                # Per-channel causal ratio: ratio[i,j,d] = exp(logP[i,d]-logP[j,d]).
+                # Masked to the causal triangle BEFORE exp so the exponent is
+                # always <=0 (or -inf); the [N,L,L,d] tensor is the oracle-only
+                # cost the fused kernel avoids by tiling it in SRAM.
+                logR = logP[:, :, None] - logP[:, None, :]       # [N, L, L, d]
+                ratio_strict = torch.exp(logR.masked_fill(mask_strict[:L, :L, None], float('-inf')))
+                ratio_lower = torch.exp(logR.masked_fill(mask_lower[:L, :L, None], float('-inf')))
+
+                # A[i,j] = beta_i * sum_d k_i,d k_j,d ratio[i,j,d]   (strictly lower)
+                A = beta * torch.einsum('nid,njd,nijd->nij', k, k, ratio_strict)  # [N,L,L]
+                M = torch.eye(L, device=dev, dtype=torch.float32) + A
+                U = torch.linalg.solve_triangular(
+                    M, R, upper=False, unitriangular=True)       # [N, L, d_v]
+
+                # O = qbar·S_inᵀ + QK·U,  QK[i,j] = sum_d q_i,d k_j,d ratio[i,j,d]
+                QK = torch.einsum('nid,njd,nijd->nij', q, k, ratio_lower)
+                O = (torch.einsum('nvk,nlk->nlv', S_in, qbar)
+                     + torch.einsum('nij,njv->niv', QK, U))
+                outs.append(O)
+
+                # S_out = S_in⊙P_last + Σ_i u_i (k_i ⊙ P_last/P_i)ᵀ
+                #   P_last/P_i = exp(logP_last - logP_i) <= 1 (i <= last), safe.
+                k_scaled = k * torch.exp(logP_last[:, None, :] - logP)
+                S_in = (S_in * P_last.unsqueeze(1)
+                        + torch.einsum('niv,nik->nvk', U, k_scaled))
+
+            oN = torch.cat(outs, dim=1)                          # [N, S, d]
+        oN = oN.to(orig_dtype) if oN.dtype != orig_dtype else oN
+        if return_state:
+            return oN, S_in.to(orig_dtype)
+        return oN
+
     @staticmethod
     def _safe_chunk(alphaN, base_chunk: int, S: int) -> int:
         """Largest chunk whose worst-case intra-chunk cumprod-α stays above
@@ -465,7 +577,10 @@ class DeltaNetBlock(nn.Module):
         # for incremental/return_state generation (that path stays eager).
         if (self.use_triton_scan and _HAS_TRITON_SCAN and not return_state
                 and S > 1 and qN.is_cuda):
-            oN = _triton_gated_delta_scan(qN, kN, vN, alphaN, betaN)
+            if self.use_megakernel_scan:
+                oN = _triton_megakernel_scan(qN, kN, vN, alphaN, betaN)
+            else:
+                oN = _triton_gated_delta_scan(qN, kN, vN, alphaN, betaN)
         # Reassociated (chunked-parallel) delta rule for training speed; falls
         # back to the plain sequential scan for short sequences or when disabled.
         elif self.train_chunk and S > 1:
