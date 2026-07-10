@@ -81,8 +81,46 @@ def test_safe_chunk_within_exact_bound():
         print(f"  bound decay [{lo},{hi}]  chunk {chunk:>3} <= {bound}  OK")
 
 
+# Hard-decay stress for the stable bounded-ratio scan (#95). The original
+# _scan_chunked uses the 1/P reparam and is silently wrong once cumprod-α
+# underflows (rel ~1..7 at α=0.1, even at chunk 32 — see scan-chunk finding).
+# _scan_chunked_stable forms the causal ratios in log space (exp(logP_i-logP_j),
+# masked before exp) so LARGE chunks stay exact at HARD decay. This locks that
+# invariant and is the math reference for the fused Triton kernel.
+STABLE_CHUNKS = (32, 64, 128, 256)
+
+
+def test_stable_chunk_forward_exact_all_decay():
+    dev = _device()
+    for lo, hi in DECAYS:
+        q, k, v, a, b = _inputs(dev, lo, hi)
+        ref = DeltaNetBlock._scan_sequential(q, k, v, a, b)
+        for chunk in STABLE_CHUNKS:
+            out = DeltaNetBlock._scan_chunked_stable(q, k, v, a, b, chunk)
+            rel = ((out - ref).norm() / ref.norm().clamp_min(1e-12)).item()
+            assert rel < 1e-5, f"stable decay [{lo},{hi}] chunk {chunk}: fwd rel {rel:.2e}"
+            print(f"  stable fwd  decay [{lo},{hi}]  chunk {chunk:>3}  rel {rel:.2e}  OK")
+
+
+def test_stable_chunk_backward_exact_all_decay():
+    dev = _device()
+    for lo, hi in DECAYS:
+        ins_ref0 = _inputs(dev, lo, hi, grad=True)
+        go = torch.randn(N, S, D, device=dev, generator=torch.Generator(dev).manual_seed(9))
+        DeltaNetBlock._scan_sequential(*ins_ref0).mul(go).sum().backward()
+        for chunk in STABLE_CHUNKS:
+            ins_c = _inputs(dev, lo, hi, grad=True)
+            DeltaNetBlock._scan_chunked_stable(*ins_c, chunk).mul(go).sum().backward()
+            worst = max(((x.grad - y.grad).norm() / (y.grad.norm() + 1e-9)).item()
+                       for x, y in zip(ins_c, ins_ref0))
+            assert worst < 1e-4, f"stable decay [{lo},{hi}] chunk {chunk}: grad rel {worst:.2e}"
+            print(f"  stable bwd  decay [{lo},{hi}]  chunk {chunk:>3}  grad rel {worst:.2e}  OK")
+
+
 if __name__ == "__main__":
     test_adaptive_forward_exact_all_decay()
     test_adaptive_backward_exact_all_decay()
     test_safe_chunk_within_exact_bound()
-    print("\nAll #95 adaptive-chunk parity tests passed.")
+    test_stable_chunk_forward_exact_all_decay()
+    test_stable_chunk_backward_exact_all_decay()
+    print("\nAll #95 adaptive-chunk + stable-scan parity tests passed.")
