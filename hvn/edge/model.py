@@ -69,6 +69,8 @@ class EdgeHVN(nn.Module):
         deltanet_conv_kernel: int = 4,
         block_type: Optional[str] = None,
         use_triton_scan: bool = False,
+        block_plan: Optional[list[str]] = None,
+        attn_window: Optional[int] = None,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -80,30 +82,60 @@ class EdgeHVN(nn.Module):
         # use_deltanet/HVNBlock behaviour, unchanged.
         self.block_type = block_type
 
+        # Per-layer block plan (hybrid token-recall). If given, a list of block-type
+        # strings of length num_layers ("deltanet" / "transformer" / "hvn");
+        # _make_block(i) dispatches by plan[i]. If None, the legacy single-type path
+        # broadcasts block_type/use_deltanet to all layers — back-compat with all
+        # existing pure-HVN/DeltaNet/transformer checkpoints and the A/B baselines.
+        if block_plan is not None:
+            if len(block_plan) != num_layers:
+                raise ValueError(
+                    f"block_plan length {len(block_plan)} != num_layers {num_layers}"
+                )
+            plan = list(block_plan)
+        else:
+            _bt = (
+                "transformer" if block_type == "transformer"
+                else ("deltanet" if use_deltanet else "hvn")
+            )
+            plan = [_bt] * num_layers
+        self.block_plan = plan
+        # Sliding-window width for transformer layers (None = full causal). Only
+        # bites at inference when context > window (see TransformerBlock._attention).
+        self.attn_window = attn_window
+
         self.token_embedding = nn.Embedding(vocab_size, d_model)
 
-        def _make_block():
-            if block_type == "transformer":
-                # Matched transformer baseline for the HVN-vs-Transformer A/B (#73)
+        def _make_block(i: int):
+            t = plan[i]
+            if t == "transformer":
+                # Matched transformer baseline (A/B #73) / hybrid attention layer
+                # (token-recall). `window` caps each layer's KV cache at W keys.
                 return TransformerBlock(
                     d_model=d_model, n_heads=n_heads, dropout=dropout,
+                    window=attn_window,
                 )
-            if use_deltanet:
+            if t == "deltanet":
                 return DeltaNetBlock(
                     d_model=d_model, n_heads=n_heads, dropout=dropout,
                     conv_kernel=deltanet_conv_kernel,
                     use_triton_scan=use_triton_scan,
                 )
-            return HVNBlock(
-                d_model=d_model, n_heads=n_heads, bond_dimension=bond_dimension,
-                chunk_size=chunk_size, dropout=dropout,
-            )
+            if t == "hvn":
+                return HVNBlock(
+                    d_model=d_model, n_heads=n_heads, bond_dimension=bond_dimension,
+                    chunk_size=chunk_size, dropout=dropout,
+                )
+            raise ValueError(f"unknown block type {t!r} at layer {i}")
 
         if shared_weights:
-            self.shared_block = SharedWeightHVN(_make_block(), num_layers)
+            # Degenerate for hybrid (shares one block type); hybrid uses
+            # shared_weights=False. Uses plan[0] for the shared block, unchanged
+            # for the existing shared-weight HVN path.
+            self.shared_block = SharedWeightHVN(_make_block(0), num_layers)
             self.blocks = None
         else:
-            self.blocks = nn.ModuleList([_make_block() for _ in range(num_layers)])
+            self.blocks = nn.ModuleList([_make_block(i) for i in range(num_layers)])
             self.shared_block = None
 
         self.final_norm = nn.LayerNorm(d_model)

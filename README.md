@@ -579,6 +579,69 @@ ceiling.
 
 ---
 
+### 🧪 Hybrid token-recall architecture — Phase A code landed (2026-07-10)
+
+**Problem.** Pure EdgeHVN (DeltaNet recurrence) **cannot recall exact tokens**: the
+whole stream compresses into a fixed `d_head×d_head` state (rank ≤ 64/head) that
+overwrites similar keys and reads back a blurry linear blend (no softmax
+sharpening). `eval/grounded_qa.py` confirms it — pure HVN scores **0/5 retrieval
+lift** (ignores a verbatim passage in context). **Agentic coding needs exact recent
+recall** (the precise variable name / code line / error message), so pure HVN can't
+be an agentic coder — and the user's P0 bar is "I won't use HVN if I can't do
+agentic coding with it."
+
+**Design (settled).** A **hybrid**: 2 sliding-attention `TransformerBlock` layers
+among 10 `DeltaNetBlock` layers (~layer 3 + ~layer 10 — lower bind + upper
+retrieve), with **W=4096** → KV cache locked at **~16 MB flat** (batch=1 bf16:
+`2 KB × 2 attn × 4096`). Older context stays a lossy gist via the DeltaNet state
+(no cache growth); exact older info is re-fetched via tools (how lean coding
+agents already work). VRAM stays **flat over an arbitrarily long agentic session**
+— the defining constraint ("not a RAM glutton"). W=4K (not 32K) is the v1 baseline
+because the model trains at seq_len=512 → W=4K is 8× training length (RoPE
+generalizes cleanly, reliable day one, no long-ctx FT needed) and a tight window
+forces tool-use discipline. v2 W=32K (128 MB) + long-ctx FT is deferred. This is
+HVN's production form (like Mamba→Jamba): 10/12 DeltaNet keeps the identity; the 2
+attention layers add the one thing recurrence structurally can't do.
+
+**Phase A code (landed on `feat/hybrid-attention-recall`, no GPU needed):**
+- **A1 — per-layer block plan** (`hvn/edge/model.py`): `EdgeHVN(block_plan=[...],
+  attn_window=...)` dispatches each layer by `plan[i]` (`"deltanet"` /
+  `"transformer"`). No `block_plan` → legacy single-type broadcast (back-compat
+  with all pure-HVN/DeltaNet/transformer checkpoints + the A/B baselines). The
+  forward loop is unchanged — both blocks share the contract. CLI:
+  `train_edge_conversational.py` gains `--arch hvn-hybrid --attn-layers "3,10"
+  --attn-window 4096`; checkpoint metadata widens `block_type` (string) →
+  `block_plan` (list) + `attn_window`.
+- **A2 — sliding-window mask** (`hvn/core/transformer_block.py`):
+  `TransformerBlock(window=W)` builds an additive causal mask
+  `mask[i,j] = -inf if (i-j) >= W`, used only when `S > W` (inference/gate). At
+  training seq_len=512 (< W=4096) the `is_causal=True` flash path is unchanged →
+  **no training regression**. No new params.
+- **A3 — filtered trunk-init** (`train_edge_conversational.py`):
+  `load_hybrid_trunk_into_model` warm-starts the hybrid's DeltaNet trunk from a
+  pure-HVN checkpoint — copies matching trunk keys, skips the attention
+  positions (fresh init), logs matched/missing/unexpected. Plumbed via
+  `--hybrid-trunk-init <ckpt>`. `load_checkpoint_for_resume` is now
+  `block_plan`-aware so a hybrid checkpoint resumes cleanly.
+- **Tests** (`tests/test_hybrid_forward.py`, 9/9 pass on CPU): block-plan
+  dispatch, sliding-mask correctness (a key beyond W has zero effect; a key
+  within W does), filtered-load key accounting, hybrid-checkpoint resume
+  roundtrip.
+
+**Sequencing.** Phase A *code* is done (no GPU). Phase A *training* (A4 short
+grounded continue-FT from the pure-HVN trunk → A5 gate = `grounded_qa.py`
+retrieval lift > 0) runs **after the 50K Chinchilla-floor probe verdict + GPU
+free** — the pretrain resolves undertrained-vs-capacity (gates whether 83M is
+the right scale) AND provides the trunk the hybrid inits from. **Do not kill
+the pretrain.** Phase B (serving: KV cache + `forward_step` + generate +
+entrypoint) and Phase C (tool-use FT, v2 long-ctx) follow only after recall is
+proven. The recipe is **scale-invariant** — if 83M is capacity-limited, scale up
+via #84 GaLore *with this same hybrid recipe* (count fills in by depth, W stays
+task-fixed). See `C:\Users\komal\.claude\plans\bubbly-waddling-sundae.md` for the
+full plan.
+
+---
+
 ## 6. Training & Usage Guide
 
 ### HVN vs Transformer — Fundamental Differences

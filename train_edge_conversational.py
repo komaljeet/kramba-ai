@@ -89,6 +89,10 @@ def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
         "use_deltanet": getattr(model, 'use_deltanet', False),
         "deltanet_conv_kernel": getattr(first_block, 'conv_kernel', 4) if first_block is not None else 4,
         "block_type": getattr(model, 'block_type', None),
+        # Per-layer block plan + sliding window (hybrid token-recall). Old pure-HVN
+        # checkpoints have neither field → load_* builds block_plan=None on resume.
+        "block_plan": getattr(model, 'block_plan', None),
+        "attn_window": getattr(model, 'attn_window', None),
         "ternary": any(isinstance(m, TernaryLinear) for m in model.modules()),
         "weightless": getattr(model, 'weightless', False),
         "weightless_seed": getattr(model, 'weightless_seed', 1234),
@@ -881,17 +885,25 @@ def build_model_and_config(
     checkpoint_dir: str,
     arch: str = "hvn",
     apply_ternary: bool = True,
+    attn_layers: list[int] | None = None,
+    attn_window: int | None = None,
 ) -> tuple[EdgeHVN, dict]:
     """Build the EdgeHVN model with DeltaNet (or transformer baseline) + config.
 
     Parameters
     ----------
-    arch : {"hvn", "transformer"}
+    arch : {"hvn", "transformer", "hvn-hybrid"}
         "hvn" uses the DeltaNet block (default); "transformer" swaps in the
-        matched causal-MHA baseline for the A/B (#73). Only the block differs.
+        matched causal-MHA baseline for the A/B (#73); "hvn-hybrid" builds a
+        per-layer block_plan (DeltaNet trunk + sliding-window attention at
+        ``attn_layers``) for token-recall. Only the block mix differs.
     apply_ternary : bool
         If False, keep fp32 weights (used for the fp32 A/B — no ternary either
         side). Default True preserves the original EdgeHVN behaviour.
+    attn_layers : list[int] | None
+        0-indexed layer positions for attention blocks (hvn-hybrid only).
+    attn_window : int | None
+        Sliding-window width for the attention blocks (hvn-hybrid only).
 
     Returns (model, training_config).
     """
@@ -937,6 +949,24 @@ def build_model_and_config(
 
     # Build the model
     print(f"\n  Building EdgeHVN model (arch={arch})...")
+    block_plan = None
+    if arch == "hvn-hybrid":
+        if not attn_layers:
+            raise SystemExit("--arch hvn-hybrid requires --attn-layers (e.g. '3,10')")
+        attn_set = sorted(set(int(x) for x in attn_layers))
+        for li in attn_set:
+            if not 0 <= li < settings["num_layers"]:
+                raise SystemExit(
+                    f"--attn-layers position {li} out of range for "
+                    f"num_layers={settings['num_layers']}"
+                )
+        block_plan = [
+            "transformer" if i in attn_set else "deltanet"
+            for i in range(settings["num_layers"])
+        ]
+        config["attn_layers"] = attn_set
+        config["attn_window"] = attn_window
+        print(f"  Hybrid block_plan: {block_plan} (window={attn_window})")
     model = EdgeHVN(
         vocab_size=GPT2_VOCAB_SIZE,
         d_model=settings["d_model"],
@@ -945,6 +975,8 @@ def build_model_and_config(
         use_deltanet=(arch == "hvn"),
         deltanet_conv_kernel=4,
         block_type=("transformer" if arch == "transformer" else None),
+        block_plan=block_plan,
+        attn_window=attn_window,
     )
     param_count = sum(p.numel() for p in model.parameters())
     config["param_count"] = param_count
@@ -1222,11 +1254,14 @@ def load_checkpoint_for_resume(
 ) -> tuple[EdgeHVN, int, dict]:
     """Load a checkpoint and return (model, global_step, ckpt_dict).
 
-    Rebuilds the EdgeHVN with the same architecture metadata, applies
-    ternary weights, and loads the state dict.
+    Rebuilds the EdgeHVN with the same architecture metadata (including the
+    per-layer block_plan for hybrid checkpoints), applies ternary weights,
+    and loads the state dict.
     """
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
+    block_plan = ckpt.get("block_plan", None)
+    attn_window = ckpt.get("attn_window", None)
     model = EdgeHVN(
         vocab_size=ckpt["vocab_size"],
         d_model=ckpt["d_model"],
@@ -1235,6 +1270,8 @@ def load_checkpoint_for_resume(
         use_deltanet=ckpt.get("use_deltanet", False),
         deltanet_conv_kernel=ckpt.get("deltanet_conv_kernel", 4),
         block_type=ckpt.get("block_type", None),
+        block_plan=block_plan,
+        attn_window=attn_window,
     )
 
     # Apply ternary to match the saved model — only if it was ternary. Older
@@ -1248,10 +1285,67 @@ def load_checkpoint_for_resume(
         apply_ternary_to_model(model, target_names=target_names)
 
     model = model.to(device)
-    model.load_state_dict(ckpt["model_state_dict"])
+    # strict=False + report so a hybrid checkpoint resumes cleanly (the state
+    # dict matches the rebuilt block_plan) and any drift is surfaced, not fatal.
+    missing, unexpected = model.load_state_dict(ckpt["model_state_dict"], strict=False)
+    if missing or unexpected:
+        print(f"  [resume] missing={len(missing)} unexpected={len(unexpected)} keys")
+        if missing:
+            print(f"    missing (first 8): {missing[:8]}")
+        if unexpected:
+            print(f"    unexpected (first 8): {unexpected[:8]}")
 
     global_step = ckpt.get("global_step", 0)
     return model, global_step, ckpt
+
+
+def load_hybrid_trunk_into_model(
+    model: EdgeHVN,
+    trunk_ckpt_path: str,
+    device: torch.device,
+) -> int:
+    """Warm-start a hybrid EdgeHVN's DeltaNet trunk from a pure-HVN checkpoint.
+
+    Copies all matching trunk keys (token_embedding, final_norm, decoder, and the
+    DeltaNet blocks at non-attention positions), leaves the new attention layers
+    at fresh init, and skips the orphaned DeltaNet params at the attention
+    positions (they no longer exist in the hybrid). Returns the trunk's step.
+    """
+    ckpt = torch.load(trunk_ckpt_path, map_location=device, weights_only=False)
+    trunk_sd = ckpt["model_state_dict"]
+    hybrid_sd = model.state_dict()
+
+    matched, copied = [], 0
+    skipped_attn_positions = set()
+    for i, t in enumerate(model.block_plan):
+        if t == "transformer":
+            skipped_attn_positions.add(i)
+
+    for key, tensor in trunk_sd.items():
+        # Skip blocks at attention positions entirely — the hybrid has a fresh
+        # TransformerBlock there, not the trunk's DeltaNet params.
+        if key.startswith("blocks."):
+            try:
+                li = int(key.split(".")[1])
+            except (IndexError, ValueError):
+                li = -1
+            if li in skipped_attn_positions:
+                continue
+        if key in hybrid_sd and hybrid_sd[key].shape == tensor.shape:
+            hybrid_sd[key] = tensor.to(hybrid_sd[key].dtype)
+            matched.append(key)
+            copied += 1
+
+    missing = [k for k in hybrid_sd if k not in matched]
+    unexpected = [k for k in trunk_sd if k not in matched]
+    model.load_state_dict(hybrid_sd, strict=True)
+
+    print(f"  [hybrid-trunk-init] copied {copied} trunk keys from {trunk_ckpt_path}")
+    print(f"    matched/copied: {copied}")
+    print(f"    missing (fresh-init, mostly attention): {len(missing)} (first 8: {missing[:8]})")
+    print(f"    unexpected (skipped, orphaned DeltaNet at attn positions): "
+          f"{len(unexpected)} (first 8: {unexpected[:8]})")
+    return ckpt.get("global_step", 0)
 
 
 @torch.no_grad()
@@ -1730,9 +1824,24 @@ def main():
                         help="HuggingFace cache directory for tokenizer/dataset downloads. "
                              "If not set, uses the default HF cache (~/.cache/huggingface).")
     parser.add_argument("--arch", type=str, default="hvn",
-                        choices=["hvn", "transformer"],
-                        help="Block architecture: 'hvn' (DeltaNet, default) or "
-                             "'transformer' (matched causal-MHA baseline for the A/B, #73).")
+                        choices=["hvn", "transformer", "hvn-hybrid"],
+                        help="Block architecture: 'hvn' (DeltaNet, default), "
+                             "'transformer' (matched causal-MHA baseline for the A/B, #73), "
+                             "or 'hvn-hybrid' (DeltaNet trunk + a few sliding-window "
+                             "attention layers for token-recall; requires --attn-layers).")
+    parser.add_argument("--attn-layers", type=str, default=None,
+                        help="Comma-separated 0-indexed layer positions for sliding-window "
+                             "attention blocks when --arch hvn-hybrid (e.g. '3,10'). "
+                             "Non-listed layers are DeltaNet. Required with hvn-hybrid.")
+    parser.add_argument("--attn-window", type=int, default=4096,
+                        help="Sliding-window width for hybrid attention layers (tokens). "
+                             "KV cache is capped at W keys/layer (~16MB at W=4096, batch=1 "
+                             "bf16). Defaults to 4096 = 8x training seq_len (RoPE "
+                             "generalizes cleanly, no long-ctx FT needed for v1).")
+    parser.add_argument("--hybrid-trunk-init", type=str, default=None,
+                        help="Path to a pure-HVN/DeltaNet checkpoint to warm-start the "
+                             "hybrid's DeltaNet trunk from (copy matching keys, leave the "
+                             "new attention layers at fresh init). Used by the continue-FT.")
     parser.add_argument("--no-ternary", action="store_true",
                         help="Disable ternary quantization — train fp32 weights. "
                              "Use for the fp32 A/B (no ternary either side).")
@@ -1921,6 +2030,9 @@ def main():
     )
 
     # === Step 3: Training Configuration ===
+    attn_layers = None
+    if args.attn_layers:
+        attn_layers = [int(x) for x in args.attn_layers.split(",") if x.strip() != ""]
     model, config = build_model_and_config(
         settings=settings,
         tokenizer=tokenizer,
@@ -1928,6 +2040,8 @@ def main():
         checkpoint_dir=args.checkpoint_dir,
         arch=args.arch,
         apply_ternary=not args.no_ternary,
+        attn_layers=attn_layers,
+        attn_window=args.attn_window,
     )
     config["lr"] = args.lr
     config["precision"] = args.precision
@@ -1961,6 +2075,16 @@ def main():
         print(f"  Resuming training from this checkpoint...")
         model, resume_step, _ = load_checkpoint_for_resume(resume_ckpt, device)
         print(f"  Resumed at step {resume_step}")
+    elif args.hybrid_trunk_init:
+        # First run of a hybrid continue-FT: warm-start the DeltaNet trunk from a
+        # pure-HVN checkpoint, leaving the fresh attention layers at init. Later
+        # resumes hit the branch above (the hybrid checkpoint in checkpoint_dir).
+        if args.arch != "hvn-hybrid":
+            raise SystemExit("--hybrid-trunk-init requires --arch hvn-hybrid")
+        print(f"\n  Warm-starting hybrid trunk from {args.hybrid_trunk_init}...")
+        trunk_step = load_hybrid_trunk_into_model(model, args.hybrid_trunk_init, device)
+        print(f"  Trunk warm-started (trunk was at step {trunk_step}); "
+              f"attention layers at fresh init. resume_step=0.")
 
     # Fused Triton scan (#83): identity-preserving ~2.6x training speedup + less
     # VRAM, numerically stable at all decay. Enabled per-DeltaNet-block. Set
