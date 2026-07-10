@@ -502,6 +502,7 @@ class MixedLocalDataset(Dataset):
         slimpajama_max_bytes: int = 5 * 1024**3,
         slimpajama_token_bytes: int = 500 * 1024**2,
         max_repeat: int = 3,
+        mix: tuple[float, float, float] | None = None,
         val_fraction: float = 0.0,
     ):
         """Build the mixed dataset from on-disk memory-mapped token files.
@@ -518,6 +519,13 @@ class MixedLocalDataset(Dataset):
         against multi-GB SlimPajama.
         """
         self.seq_len = seq_len
+        # Pretrain source mix (SlimPajama, OpenAssistant, WikiText-103). Default is
+        # the original conversational mix (0.50/0.35/0.15). A knowledge-heavy mix
+        # e.g. (0.85/0.0/0.15) DROPS OpenAssistant from PRETRAIN (it belongs in the
+        # chat fine-tune stage) so the tiny ~16M-token OASST source stops capping
+        # the dataset via the max_repeat bind (see total_cap below). Zero-fraction
+        # sources are excluded from the train index entirely.
+        self.mix = mix if mix is not None else (0.50, 0.35, 0.15)
         os.makedirs(cache_dir, exist_ok=True)
         tok_dir = os.path.join(cache_dir, "tokenized")
 
@@ -558,13 +566,21 @@ class MixedLocalDataset(Dataset):
             print(f"    WikiText-103 not found locally, skipping")
 
         # --- Memory-map each tokenized source (read-only, paged on demand) ---
-        # Source IDs: 0=SlimPajama, 1=OpenAssistant, 2=WikiText-103
-        source_paths = [slim_bin, oasst_bin]
-        ratios = [0.50, 0.35]
-        if wt_bin is not None:
-            source_paths.append(wt_bin)
-            ratios.append(0.15)
-        ratios = [r / sum(ratios) for r in ratios]  # renormalise if wikitext missing
+        # Source mix (SlimPajama, OpenAssistant, WikiText-103). Zero-fraction
+        # sources are excluded from the train index, so dropping OASST (0.0) stops
+        # the tiny ~16M-token source from capping the dataset via the max_repeat
+        # bind. Source IDs are reassigned densely over the included sources only.
+        slim_r, oasst_r, wt_r = self.mix
+        candidates = [("SlimPajama", slim_bin, slim_r),
+                      ("OpenAssistant", oasst_bin, oasst_r),
+                      ("WikiText-103", wt_bin, wt_r)]
+        source_paths, ratios, self.source_names = [], [], []
+        for _name, _path, _r in candidates:
+            if _r > 0 and _path is not None:
+                source_paths.append(_path)
+                ratios.append(_r)
+                self.source_names.append(_name)
+        ratios = [r / sum(ratios) for r in ratios]  # renormalise over included sources
 
         self.sources: list[np.memmap] = []
         avail = []  # number of non-overlapping seq_len windows per source
@@ -630,7 +646,7 @@ class MixedLocalDataset(Dataset):
             self.val_starts = np.zeros(0, dtype=np.int64)
             self.val_src_ids = np.zeros(0, dtype=np.uint8)
 
-        names = ["SlimPajama", "OpenAssistant", "WikiText-103"]
+        names = self.source_names
         counts = [int((self.src_ids == s).sum()) for s in range(len(self.sources))]
         tot = max(1, len(self.src_ids))
         print(f"\n    Mixed dataset: {len(self.starts):,} train samples "
@@ -707,6 +723,9 @@ def build_dataset_pipeline(
     slimpajama_dir: str | None = None,
     val_fraction: float = 0.0,
     num_workers: int = 0,
+    mix: tuple[float, float, float] | None = None,
+    slimpajama_token_bytes: int = 500 * 1024**2,
+    max_repeat: int = 3,
 ) -> tuple[DataLoader, "DataLoader | None", dict]:
     """Build the mixed-source train (and held-out val) DataLoaders + stats.
 
@@ -727,7 +746,8 @@ def build_dataset_pipeline(
     print("STEP 2 — DATASET PIPELINE")
     print("=" * 70)
 
-    mix_ratio = {"SlimPajama": 0.50, "OpenAssistant": 0.35, "WikiText-103": 0.15}
+    eff_mix = mix if mix is not None else (0.50, 0.35, 0.15)
+    mix_ratio = {"SlimPajama": eff_mix[0], "OpenAssistant": eff_mix[1], "WikiText-103": eff_mix[2]}
     print(f"\nMix ratio: {mix_ratio}")
     print(f"Sequence length: {seq_len}")
     print(f"Batch size: {batch_size}")
@@ -753,6 +773,9 @@ def build_dataset_pipeline(
             cache_dir=data_dir,
             slimpajama_dir=slimpajama_dir,
             slimpajama_max_bytes=5 * 1024**3,
+            slimpajama_token_bytes=slimpajama_token_bytes,
+            max_repeat=max_repeat,
+            mix=mix,
             val_fraction=val_fraction,
         )
         stats["source"] = "mixed_local"
@@ -1386,11 +1409,17 @@ def train(
     step_start_time = start_time
     optimizer.zero_grad()
 
-    # Per-source loss tracking (for diagnosing dataset quality variance)
-    # Source IDs: 0=TinyStories, 1=OpenAssistant, 2=WikiText-103
-    source_names = ["SlimPajama", "OpenAssistant", "WikiText-103"]
-    source_loss_accum = [0.0, 0.0, 0.0]  # accumulated loss per source
-    source_count = [0, 0, 0]  # sample count per source
+    # Per-source loss tracking (for diagnosing dataset quality variance).
+    # Source names come from the dataset (dense over the INCLUDED sources only),
+    # so a knowledge-heavy mix that drops OASST labels sid 1 as WikiText-103, not
+    # OpenAssistant. Fall back to the legacy 3-source names if unavailable.
+    try:
+        source_names = list(dataloader.dataset.source_names)
+    except AttributeError:
+        source_names = ["SlimPajama", "OpenAssistant", "WikiText-103"]
+    n_sources = len(source_names)
+    source_loss_accum = [0.0] * n_sources  # accumulated loss per source
+    source_count = [0] * n_sources  # sample count per source
 
     # GPU-side accumulators (deferred host sync): accumulating loss/per-source
     # stats on-device and syncing only at log time avoids a GPU->CPU stall on
@@ -1631,6 +1660,25 @@ def main():
                         default=None,
                         help="Directory containing SlimPajama parquet files (downloaded via hf CLI). "
                              "If not set, defaults to <data-dir>/slimpajama/data")
+    parser.add_argument("--pretrain-mix", type=str, default=None,
+                        help="Pretrain source mix as 'slim,oasst,wiki' fractions "
+                             "(e.g. '0.85,0.0,0.15' = knowledge-heavy mix that DROPS "
+                             "OpenAssistant from pretrain). Default None = 0.50,0.35,"
+                             "0.15 (the original conversational mix). Zero-fraction "
+                             "sources are excluded from the train index, so dropping the "
+                             "tiny ~16M-token OASST source stops it capping the dataset "
+                             "via the max_repeat bind (see build_dataset). OASST still "
+                             "goes into the separate chat fine-tune stage.")
+    parser.add_argument("--slimpajama-token-bytes", type=int, default=500 * 1024**2,
+                        help="Cap on bytes of SlimPajama text to tokenize (default "
+                             "500MB ~ 129M tokens). Set large (e.g. 6e9) to tokenize "
+                             "the full ~5.4GB slice (~1.35B tokens). Cached: reuses an "
+                             "existing non-empty slimpajama.bin regardless of this cap, "
+                             "so delete the old bin to force a full re-tokenize.")
+    parser.add_argument("--max-repeat", type=int, default=3,
+                        help="Max times any source may repeat to hit its mix share. "
+                             "Binds dataset size on the smallest source at its share. "
+                             "Default 3.")
     parser.add_argument("--hf-cache-dir", type=str,
                         default=None,
                         help="HuggingFace cache directory for tokenizer/dataset downloads. "
@@ -1743,6 +1791,15 @@ def main():
             args.num_workers = 4; fast_enabled.append("num-workers=4")
         print(f"[--fast] Enabled recommended training stack: {', '.join(fast_enabled)}")
 
+    # --- Issue #93: parse --pretrain-mix 'slim,oasst,wiki' -> float tuple (or None) ---
+    if args.pretrain_mix is not None:
+        parts = [float(x) for x in args.pretrain_mix.split(",")]
+        if len(parts) != 3:
+            parser.error("--pretrain-mix must be three comma-separated fractions 'slim,oasst,wiki'")
+        if sum(parts) <= 0:
+            parser.error("--pretrain-mix fractions must sum to > 0")
+        args.pretrain_mix = tuple(parts)
+
     # Force UTF-8 for Windows console
     if sys.platform == "win32":
         os.system("chcp 65001 >nul 2>&1")
@@ -1812,6 +1869,9 @@ def main():
         slimpajama_dir=args.slimpajama_dir,
         val_fraction=args.val_fraction,
         num_workers=args.num_workers,
+        mix=args.pretrain_mix,
+        slimpajama_token_bytes=args.slimpajama_token_bytes,
+        max_repeat=args.max_repeat,
     )
 
     # === Step 3: Training Configuration ===
