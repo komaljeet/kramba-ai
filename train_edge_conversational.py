@@ -1644,6 +1644,16 @@ def main():
                              "Identity-preserving (grads match autograd ~1e-7); ~2.6x faster "
                              "full-model + less VRAM, stable at all decay. HVN arch only. Can "
                              "combine with --compile (compile fuses the non-scan parts).")
+    parser.add_argument("--megakernel-scan", action="store_true",
+                        help="Route the DeltaNet scan through the Design B fused "
+                             "blockwise-recompute backward (#96) when --triton-scan is on: "
+                             "keeps the optimal sequential forward, replaces the 2-kernel "
+                             "backward (which dumps a 268 MB [N,S,D,D] states tensor to HBM) "
+                             "with one SRAM-recompute kernel + block-boundary checkpoints. "
+                             "Identity-preserving (grads match the sequential backward "
+                             "~5e-8); measured ~1.05x faster step end-to-end under --fast + "
+                             "~4x less transient backward VRAM. HVN arch only; requires "
+                             "--triton-scan.")
     parser.add_argument("--adaptive-chunk", action="store_true",
                         help="Grow the DeltaNet chunk to the largest size that stays "
                              "numerically EXACT for the current decay (#95): fast at "
@@ -1840,6 +1850,23 @@ def main():
                 blk.use_triton_scan = True
                 n_set += 1
         print(f"\n  Fused Triton scan enabled on {n_set} DeltaNet block(s) (#83).")
+
+    # Design B (#96): fused blockwise-recompute backward. Only meaningful with
+    # --triton-scan (it swaps the scan's backward, not the forward). Set on each
+    # DeltaNet block before compile so torch.compile bakes the dispatch in.
+    if args.megakernel_scan and args.triton_scan:
+        blocks = model.blocks if getattr(model, "blocks", None) is not None else \
+            ([model.shared_block.block] if getattr(model, "shared_block", None) is not None else [])
+        n_set = 0
+        for blk in blocks:
+            if hasattr(blk, "use_megakernel_scan"):
+                blk.use_megakernel_scan = True
+                n_set += 1
+        print(f"\n  Design B blockwise-recompute backward enabled on {n_set} "
+              f"DeltaNet block(s) (#96) -- ~1.05x faster step under --fast.")
+    elif args.megakernel_scan and not args.triton_scan:
+        print("\n  WARNING: --megakernel-scan requires --triton-scan; ignoring "
+              "(the sequential forward must already be the scan).")
 
     # Adaptive-exact chunk (#95): pick the largest numerically-exact chunk per
     # forward given the decay. Faster than fixed chunk32 AND than --compile alone

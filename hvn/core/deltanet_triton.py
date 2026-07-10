@@ -4,26 +4,26 @@ Custom Triton kernels for HVN's gated delta-rule scan (Issue #83).
 
 Why a custom kernel (not fla): HVN's recurrence is
 
-    S_t = S_{t-1}·diag(α_t)·(I − β_t k_t k_tᵀ) + β_t v_t k_tᵀ,      o_t = S_t q_t
+    S_t = S_{t-1}*diag(alpha_t)*(I - beta_t k_t k_tT) + beta_t v_t k_tT,      o_t = S_t q_t
 
-with **per-channel** decay α (a d-vector per head) and scalar write strength β.
-Its low-rank term −β(α⊙k)kᵀ is *asymmetric*, so fla's fast kernels do not fit
-(``gated_delta_rule`` assumes scalar decay → changes identity; the fast DPLR
-kernel assumes b=−a / symmetric low-rank). See #83. The only fla op that matched
+with **per-channel** decay alpha (a d-vector per head) and scalar write strength beta.
+Its low-rank term -beta(alpha*k)kT is *asymmetric*, so fla's fast kernels do not fit
+(``gated_delta_rule`` assumes scalar decay -> changes identity; the fast DPLR
+kernel assumes b=-a / symmetric low-rank). See #83. The only fla op that matched
 our math (``dplr.naive``) is a slow Python loop.
 
-This module implements the recurrence **directly** in Triton — the same
+This module implements the recurrence **directly** in Triton -- the same
 token-by-token math as :meth:`DeltaNetBlock._scan_sequential`, which is the
 ground-truth reference. Because it never forms ``1/P``, it is numerically
 **stable at all decay regimes**, unlike the eager ``_scan_chunked`` (which is
-correct only for α≳0.5 at chunk=32 — the bug the #79 harness caught).
+correct only for alpha>=0.5 at chunk=32 -- the bug the #79 harness caught).
 
 Milestones (this file grows across commits, each gated by tests/test_issue79.py):
-  1. forward kernel  ✅ (this commit) — validated vs _scan_sequential at all α.
-  2. backward kernel (training) — TODO.
-  3. chunk-parallel tiling for throughput — TODO.
+  1. forward kernel  [ok] (this commit) -- validated vs _scan_sequential at all alpha.
+  2. backward kernel (training) -- TODO.
+  3. chunk-parallel tiling for throughput -- TODO.
 
-Layout: all tensors are [N, S, d] with N = B*n_heads, d = d_head; β is [N, S].
+Layout: all tensors are [N, S, d] with N = B*n_heads, d = d_head; beta is [N, S].
 """
 
 from __future__ import annotations
@@ -48,8 +48,8 @@ if _HAS_TRITON:
         """Forward gated delta-rule recurrence, one program per (n, v-block).
 
         State tile is [BV, D] (BV rows of the d_v axis, all D=d_k columns), held
-        across the sequential scan over S. fp32 throughout — no reparameterization,
-        so stable at any α. Grid = (N, D // BV).
+        across the sequential scan over S. fp32 throughout -- no reparameterization,
+        so stable at any alpha. Grid = (N, D // BV).
         """
         pid_n = tl.program_id(0)
         pid_v = tl.program_id(1)
@@ -197,7 +197,7 @@ class _GatedDeltaScan(torch.autograd.Function):
         q, k, v, alpha = (t.contiguous().float() for t in (q, k, v, alpha))
         beta2 = beta.reshape(N, S).contiguous().float()
         # States-free forward: save only the (small) inputs. The [N,S,D,D] state
-        # tensor is NOT kept — storing it for all layers blows past 6GB VRAM and
+        # tensor is NOT kept -- storing it for all layers blows past 6GB VRAM and
         # WDDM-spills (kills the speedup). Backward recomputes states transiently.
         o = torch.empty_like(q)
         BV = 16 if D % 16 == 0 else 1
@@ -211,7 +211,7 @@ class _GatedDeltaScan(torch.autograd.Function):
         q, k, v, alpha, beta2 = ctx.saved_tensors
         N, S, D = q.shape
         do = do.contiguous().float()
-        # Recompute the entering states here (transient — freed when this layer's
+        # Recompute the entering states here (transient -- freed when this layer's
         # backward returns, so peak = one layer's states, not all L).
         states = torch.empty(N, S, D, D, device=q.device, dtype=torch.float32)
         o_scratch = torch.empty_like(q)
@@ -235,7 +235,7 @@ def gated_delta_scan(q, k, v, alpha, beta):
 
 
 # ===========================================================================
-# Chunk-parallel scan (#95) — stable at all decay, fast at all decay.
+# Chunk-parallel scan (#95) -- stable at all decay, fast at all decay.
 # ===========================================================================
 # The sequential kernel above is exact and alpha-independent but does S token
 # steps in series (~60% of the HVN training step at --fast). This chunk-parallel
@@ -459,7 +459,7 @@ def log_gram(a, b, logP, strict: bool):
 
 
 def chunked_scan_forward(q, k, v, alpha, beta, chunk: int = 128):
-    """Chunk-parallel gated delta-rule scan — FORWARD only (#95). Same math as
+    """Chunk-parallel gated delta-rule scan -- FORWARD only (#95). Same math as
     DeltaNetBlock._scan_chunked_stable, but the per-channel causal Gram (A, QK)
     is the fused Triton log-Gram and the solve / S_in matmuls / carry are stock
     cuBLAS ops. Exact at all decay; the [N,L,L,d] ratio never hits HBM.
@@ -507,7 +507,7 @@ def chunked_scan_forward(q, k, v, alpha, beta, chunk: int = 128):
 
 
 # ===========================================================================
-# Fused chunk-parallel scan MEGAKERNEL (#96) — one kernel, SRAM-resident.
+# Fused chunk-parallel scan MEGAKERNEL (#96) -- one kernel, SRAM-resident.
 # ===========================================================================
 # The hybrid `chunked_scan_forward` above was measured 2-4x SLOWER than the
 # sequential Triton kernel at d=64: it launches ~40 kernels/chunk and writes
@@ -516,8 +516,8 @@ def chunked_scan_forward(q, k, v, alpha, beta, chunk: int = 128):
 # U/O/R live in SRAM and never touch HBM (only the output O is streamed out).
 #
 # The triangular solve is the Neumann series  U = sum_{k<L} (-A)^k R  (A strictly
-# lower => nilpotent) — a chain of plain `tl.dot` matmuls, because classical
-# forward substitution (U[i]=R[i]-A[i,:i]·U[:i]) is not expressible in Triton
+# lower => nilpotent) -- a chain of plain `tl.dot` matmuls, because classical
+# forward substitution (U[i]=R[i]-A[i,:i]*U[:i]) is not expressible in Triton
 # (no dynamic tile indexing). Validated exact in fp32: scripts/probe_neumann_solve.py
 # (solve alone, rel ~1e-8) and scripts/probe_neumann_scan.py (full pipeline vs
 # _scan_sequential, rel ~1e-6) at all decay incl hard alpha=0.1, L=32..256.
@@ -543,11 +543,11 @@ if _HAS_TRITON:
         """Fused chunk-parallel gated-delta scan, forward.
 
         Grid (N, D//BV): one program per (sequence, d_v-block). The d_v axis is
-        tiled by BV so the carried state S_in is [BV, D] (not [D, D]) — holding
+        tiled by BV so the carried state S_in is [BV, D] (not [D, D]) -- holding
         the full [D,D] state plus all [L,D]/[L,L] tiles in one program blows the
         register file and ptxas segfaults. This is the same tiling the sequential
         kernel uses (BV=16). Cost: the [L,L] A/QK Grams (independent of d_v) are
-        recomputed per d_v-block (D//BV x redundant) — accepted to fit registers.
+        recomputed per d_v-block (D//BV x redundant) -- accepted to fit registers.
 
         S_in [BV, D] is carried in registers across CHUNK-sized chunks. The chunk
         count and Neumann term count are passed as 1-element TENSORS so Triton
@@ -605,7 +605,7 @@ if _HAS_TRITON:
                 G += tl.sum(kb[:, None, :] * kb[None, :, :] * tl.exp(logr), axis=2)
             A = bc[:, None] * G                                    # [L, L] strict lower
 
-            # --- U = sum_{k<L} (-A)^k R  (Neumann; A nilpotent) — rolled ---
+            # --- U = sum_{k<L} (-A)^k R  (Neumann; A nilpotent) -- rolled ---
             U = R                                                  # term_0 = R
             term = R
             k = tl.zeros((), dtype=tl.int32)
@@ -672,7 +672,7 @@ def megakernel_forward(q, k, v, alpha, beta, chunk: int = 32, bv: int = 16, bd: 
 # ============================================================================
 # Design B (#96): fused blockwise-recompute BACKWARD.
 #
-# Design A (chunk-parallel fwd megakernel) was killed by the speed gate — its
+# Design A (chunk-parallel fwd megakernel) was killed by the speed gate -- its
 # Neumann triangular solve is L-1 serial tl.dot MMAs, heavier than the
 # sequential kernel's pipelined elementwise steps. Design B attacks a DIFFERENT
 # bottleneck: the backward's HBM traffic. The current backward is 2 kernels:
@@ -680,18 +680,18 @@ def megakernel_forward(q, k, v, alpha, beta, chunk: int = 32, bv: int = 16, bd: 
 #                          (268 MB at N32 S512 d64) to HBM;
 #   _gd_bwd_kernel        : reverse adjoint, reads those 268 MB back.
 # Measured (scripts/probe_bwd_hbm.py) the backward runs at ~80% of peak HBM
-# bandwidth — it is memory-bound, dominated by the states roundtrip.
+# bandwidth -- it is memory-bound, dominated by the states roundtrip.
 #
 # Design B replaces that with blockwise recompute (flash-attention style):
 #   _mk_ckpt_kernel : forward recompute, writes only block-BOUNDARY entering
-#                    states [N, S/B, D, D] (67 MB at B=4 — 4x less);
+#                    states [N, S/B, D, D] (67 MB at B=4 -- 4x less);
 #   _mk_bwd_kernel  : reverse adjoint; per block, load the block's checkpoint
 #                    state and RECOMPUTE the B entering states in SRAM, then
 #                    run the (unchanged) per-step adjoint. Same compute as the
 #                    2-kernel path, ~4x less states HBM.
 #
 # The adjoint body is VERBATIM from _gd_bwd_kernel (validated vs autograd at
-# 1e-16 in fp64) — only the Sprev source changes (SRAM recompute, not the full
+# 1e-16 in fp64) -- only the Sprev source changes (SRAM recompute, not the full
 # HBM states array). The forward is the unchanged optimal _gated_delta_fwd_kernel.
 # ============================================================================
 
@@ -742,7 +742,7 @@ if _HAS_TRITON:
         """Reverse-time adjoint with blockwise SRAM recompute. One program per
         sequence; full [D,D] state grad carried backward. For each block (in
         reverse): load the block's checkpoint entering state, recompute each
-        step's entering state in SRAM (O(B^2) on-the-fly recompute — no [B,D,D]
+        step's entering state in SRAM (O(B^2) on-the-fly recompute -- no [B,D,D]
         buffer, since Triton cannot index a tile by a runtime step index), then
         run the validated per-step adjoint. The adjoint body is identical to
         _gd_bwd_kernel; only Sprev comes from recompute instead of HBM."""
@@ -816,11 +816,11 @@ if _HAS_TRITON:
     ):
         """Buffered variant of _mk_bwd_kernel: O(B) recompute instead of O(B^2).
         Per block, ONE forward pass buffers the B entering states in SRAM (a
-        [B,D,D] tile, written/read via tl.where slot-masking with constexpr j —
+        [B,D,D] tile, written/read via tl.where slot-masking with constexpr j --
         Triton can't index a [D,D] tile by a runtime step), then ONE reverse
         adjoint pass reads them. Cuts the recompute compute + redundant input
         reads that capped the O(B^2) kernel at ~1.19x; trades B*16 KB of SRAM
-        (B=4 -> 64 KB) — the register-pressure risk. Adjoint body identical."""
+        (B=4 -> 64 KB) -- the register-pressure risk. Adjoint body identical."""
         n = tl.program_id(0)
         nblk = tl.load(nblk_ptr)
         base = n * S * D
@@ -889,10 +889,23 @@ if _HAS_TRITON:
 
 class _MegaScan(torch.autograd.Function):
     """Design B autograd wrapper: optimal sequential forward (unchanged
-    `_gated_delta_fwd_kernel`) + fused blockwise-recompute backward."""
+    `_gated_delta_fwd_kernel`) + fused blockwise-recompute backward.
+
+    `.apply` takes ONLY tensor args (q,k,v,alpha,beta) -- matching
+    `_GatedDeltaScan` -- so it composes with `torch.compile` (AOT-autograd treats
+    an all-tensor custom Function the same as the working sequential scan;
+    non-tensor kwargs break inductor's backward codegen). `block` and `buffered`
+    are class attributes read in backward (baked in as constants at AOT trace
+    time); set them via `megakernel_scan(block=..., buffered=...)` BEFORE the
+    compiled forward is traced (i.e. once, at model build), not per-step.
+    Defaults: block=4 (the measured sweet spot), buffered=False (the O(B^2)
+    winner; the O(B) buffered variant is a documented dead end)."""
+
+    block = 4
+    buffered = False
 
     @staticmethod
-    def forward(ctx, q, k, v, alpha, beta, block=4, buffered=False):
+    def forward(ctx, q, k, v, alpha, beta):
         N, S, D = q.shape
         q, k, v, alpha = (t.contiguous().float() for t in (q, k, v, alpha))
         beta2 = beta.reshape(N, S).contiguous().float()
@@ -901,15 +914,13 @@ class _MegaScan(torch.autograd.Function):
         _gated_delta_fwd_kernel[(N, D // BV)](q, k, v, alpha, beta2, o, S=S, D=D, BV=BV)
         ctx.save_for_backward(q, k, v, alpha, beta2)
         ctx.beta_shape = beta.shape
-        ctx.block = block
-        ctx.buffered = buffered
         return o
 
     @staticmethod
     def backward(ctx, do):
         q, k, v, alpha, beta2 = ctx.saved_tensors
         N, S, D = q.shape
-        B = ctx.block
+        B = _MegaScan.block
         assert S % B == 0, f"S={S} must be divisible by block B={B}"
         nblocks = S // B
         do = do.contiguous().float()
@@ -919,21 +930,27 @@ class _MegaScan(torch.autograd.Function):
         dq = torch.empty_like(q); dk = torch.empty_like(q)
         dv = torch.empty_like(q); dalpha = torch.empty_like(q)
         dbeta2 = torch.empty_like(beta2)
-        bwd = _mk_bwd_kernel_buf if ctx.buffered else _mk_bwd_kernel
+        bwd = _mk_bwd_kernel_buf if _MegaScan.buffered else _mk_bwd_kernel
         bwd[(N,)](q, k, v, alpha, beta2, ckpt, do,
                   dq, dk, dv, dalpha, dbeta2, nblk_t, S=S, D=D, B=B)
-        return dq, dk, dv, dalpha, dbeta2.reshape(ctx.beta_shape), None, None
+        return dq, dk, dv, dalpha, dbeta2.reshape(ctx.beta_shape)
 
 
-def megakernel_scan(q, k, v, alpha, beta, block: int = 4, buffered: bool = False):
+def megakernel_scan(q, k, v, alpha, beta, block: int | None = None,
+                    buffered: bool | None = None):
     """Design B: optimal sequential forward + fused blockwise-recompute
-    backward. Drop-in for `gated_delta_scan` (autograd-enabled). `block` is the
-    blockwise-recompute block size B (smaller = less recompute compute, more
-    states HBM; larger = the reverse); B=4 is the measured sweet spot. `buffered`
-    selects the recompute strategy: False (default) = O(B^2) on-the-fly recompute
-    (the WINNER — keeps everything in registers, no shared-mem buffer); True =
-    O(B) buffered recompute (a DEAD END — Triton can't cheaply index a [B,D,D]
-    tile, so the per-step slot read costs a full-buffer masked reduction that
-    more than offsets the O(B) saving, plus register pressure at larger B).
-    Not wired into training until it beats the sequential bwd on the gate."""
-    return _MegaScan.apply(q, k, v, alpha, beta, block, buffered)
+    backward. Drop-in for `gated_delta_scan` (autograd-enabled, 5 tensor args).
+
+    `block`/`buffered` override the class defaults (block=4, buffered=False) and
+    are set as class attributes on `_MegaScan` -- pass them ONLY for eager
+    micro-benchmarking (e.g. the B-sweep). The compiled training path must call
+    this with no overrides (defaults), so the class attrs are stable at AOT
+    trace time. block=4 is the measured sweet spot; buffered=False is the O(B^2)
+    winner (the O(B) buffered variant is a documented dead end -- Triton can't
+    cheaply index a [B,D,D] tile, so the per-step slot read costs a full-buffer
+    masked reduction that offsets the O(B) saving, plus register pressure)."""
+    if block is not None:
+        _MegaScan.block = block
+    if buffered is not None:
+        _MegaScan.buffered = buffered
+    return _MegaScan.apply(q, k, v, alpha, beta)
