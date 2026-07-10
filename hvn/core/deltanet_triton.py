@@ -504,3 +504,166 @@ def chunked_scan_forward(q, k, v, alpha, beta, chunk: int = 128):
                     + torch.einsum('niv,nik->nvk', U, k_scaled))
         oN = torch.cat(outs, dim=1)                            # [N, S, d]
     return oN
+
+
+# ===========================================================================
+# Fused chunk-parallel scan MEGAKERNEL (#96) — one kernel, SRAM-resident.
+# ===========================================================================
+# The hybrid `chunked_scan_forward` above was measured 2-4x SLOWER than the
+# sequential Triton kernel at d=64: it launches ~40 kernels/chunk and writes
+# the [N,L,L] A/QK to HBM between them. This megakernel fuses the whole chunk
+# pipeline into ONE program per sequence so the [L,L] A/QK and the [L,d]
+# U/O/R live in SRAM and never touch HBM (only the output O is streamed out).
+#
+# The triangular solve is the Neumann series  U = sum_{k<L} (-A)^k R  (A strictly
+# lower => nilpotent) — a chain of plain `tl.dot` matmuls, because classical
+# forward substitution (U[i]=R[i]-A[i,:i]·U[:i]) is not expressible in Triton
+# (no dynamic tile indexing). Validated exact in fp32: scripts/probe_neumann_solve.py
+# (solve alone, rel ~1e-8) and scripts/probe_neumann_scan.py (full pipeline vs
+# _scan_sequential, rel ~1e-6) at all decay incl hard alpha=0.1, L=32..256.
+#
+# Grid (N,): one program owns its full chunk loop, with S_in [d,d] carried in
+# registers across chunks (no HBM state carry). Per chunk of length CHUNK:
+#   1. load q,k,v,alpha,beta; logP=cumsum(log alpha); P=exp(logP); P_last.
+#   2. kbar=k*P, qbar=q*P; R = beta*(v - S_in@kbar).
+#   3. A = beta * strict-log-Gram(k,k)   [L,L] resident (strict lower).
+#   4. U = Neumann solve (L-1 tl.dot(A,.) matmuls) = (I+A)^{-1} R.
+#   5. QK = lower-log-Gram(q,k)  [L,L] (reuses A's SRAM slot).
+#   6. O = S_in@qbar + QK@U  ->  store O to HBM.
+#   7. S_in = S_in*P_last + U^T@(k * exp(logP_last - logP))   (in registers).
+
+if _HAS_TRITON:
+
+    @triton.jit
+    def _mk_fwd_kernel(
+        q_ptr, k_ptr, v_ptr, alpha_ptr, beta_ptr, o_ptr,
+        s_ptr, nneum_ptr,
+        D: tl.constexpr, CHUNK: tl.constexpr, BV: tl.constexpr, BD: tl.constexpr,
+    ):
+        """Fused chunk-parallel gated-delta scan, forward.
+
+        Grid (N, D//BV): one program per (sequence, d_v-block). The d_v axis is
+        tiled by BV so the carried state S_in is [BV, D] (not [D, D]) — holding
+        the full [D,D] state plus all [L,D]/[L,L] tiles in one program blows the
+        register file and ptxas segfaults. This is the same tiling the sequential
+        kernel uses (BV=16). Cost: the [L,L] A/QK Grams (independent of d_v) are
+        recomputed per d_v-block (D//BV x redundant) — accepted to fit registers.
+
+        S_in [BV, D] is carried in registers across CHUNK-sized chunks. The chunk
+        count and Neumann term count are passed as 1-element TENSORS so Triton
+        does not specialize them into compile-time constants (which would unroll
+        the loops and crash ptxas on the resulting multi-10K-line PTX).
+        """
+        pid_n = tl.program_id(0)
+        pid_v = tl.program_id(1)
+        s_val = tl.load(s_ptr)            # runtime scalar: sequence length S
+        nneum = tl.load(nneum_ptr)        # runtime scalar: CHUNK - 1 (Neumann terms)
+        base = pid_n * s_val * D          # offset for sequence n in [N,S,D] tensors
+        bbase = pid_n * s_val             # offset for sequence n in [N,S] beta
+
+        ri = tl.arange(0, CHUNK)          # chunk-local row indices [L]
+        rd = tl.arange(0, D)             # full d_k indices [D]
+        offs_v = pid_v * BV + tl.arange(0, BV)   # this program's d_v rows [BV]
+        rj = tl.arange(0, CHUNK)          # for the [L,L] Gram tiles
+        mstrict = rj[None, :] < ri[:, None]      # [L,L]  j < i  (strict lower)
+        mlower = rj[None, :] <= ri[:, None]      # [L,L]  j <= i (lower incl diag)
+
+        S_in = tl.zeros((BV, D), dtype=tl.float32)   # [d_v_block, d_k] carried state
+
+        s = tl.zeros((), dtype=tl.int32)
+        while s < s_val:  # rolled chunk loop (S runtime); S % CHUNK == 0 by wrapper
+            grow = base + (s + ri)[:, None] * D + rd[None, :]      # [L, D] (full d_k)
+            vrow = base + (s + ri)[:, None] * D + offs_v[None, :]  # [L, BV] (this d_v block)
+
+            kc = tl.load(k_ptr + grow).to(tl.float32)            # [L, D]
+            qc = tl.load(q_ptr + grow).to(tl.float32)
+            ac = tl.load(alpha_ptr + grow).to(tl.float32)
+            vc = tl.load(v_ptr + vrow).to(tl.float32)            # [L, BV]
+            bc = tl.load(beta_ptr + bbase + s + ri).to(tl.float32)  # [L]
+
+            logA = tl.log(tl.maximum(ac, 1e-30))                 # [L, D]
+            logP = tl.cumsum(logA, axis=0)                        # [L, D] inclusive
+            P = tl.exp(logP)
+            logP_last = tl.sum(logA, axis=0)                      # [D]  (= last row)
+            P_last = tl.exp(logP_last)                            # [D]
+
+            kbar = kc * P                                          # [L, D]
+            qbar = qc * P                                          # [L, D]
+            Sk = tl.dot(kbar, tl.trans(S_in), input_precision="ieee")  # [L, BV]
+            R = bc[:, None] * (vc - Sk)                            # [L, BV]
+
+            # --- A = beta * strict log-Gram(k, k)  [L, L] resident ---
+            G = tl.zeros((CHUNK, CHUNK), dtype=tl.float32)
+            for d0 in range(0, D, BD):
+                rdb = d0 + tl.arange(0, BD)
+                gb = base + (s + ri)[:, None] * D + rdb[None, :]
+                kb = tl.load(k_ptr + gb).to(tl.float32)            # [L, BD]
+                ab = tl.load(alpha_ptr + gb).to(tl.float32)
+                lp = tl.cumsum(tl.log(tl.maximum(ab, 1e-30)), axis=0)  # [L, BD]
+                logr = lp[:, None, :] - lp[None, :, :]            # [L, L, BD]
+                logr = tl.where(mstrict[:, :, None], logr, float('-inf'))
+                G += tl.sum(kb[:, None, :] * kb[None, :, :] * tl.exp(logr), axis=2)
+            A = bc[:, None] * G                                    # [L, L] strict lower
+
+            # --- U = sum_{k<L} (-A)^k R  (Neumann; A nilpotent) — rolled ---
+            U = R                                                  # term_0 = R
+            term = R
+            k = tl.zeros((), dtype=tl.int32)
+            while k < nneum:
+                term = -tl.dot(A, term, input_precision="ieee")   # [L, BV]
+                U = U + term
+                k = k + 1
+
+            # --- QK = lower log-Gram(q, k)  [L, L] (reuses G's slot) ---
+            G = tl.zeros((CHUNK, CHUNK), dtype=tl.float32)
+            for d0 in range(0, D, BD):
+                rdb = d0 + tl.arange(0, BD)
+                gb = base + (s + ri)[:, None] * D + rdb[None, :]
+                qb = tl.load(q_ptr + gb).to(tl.float32)            # [L, BD]
+                kb = tl.load(k_ptr + gb).to(tl.float32)
+                ab = tl.load(alpha_ptr + gb).to(tl.float32)
+                lp = tl.cumsum(tl.log(tl.maximum(ab, 1e-30)), axis=0)
+                logr = lp[:, None, :] - lp[None, :, :]            # [L, L, BD]
+                logr = tl.where(mlower[:, :, None], logr, float('-inf'))
+                G += tl.sum(qb[:, None, :] * kb[None, :, :] * tl.exp(logr), axis=2)
+            QK = G                                                 # [L, L] lower incl diag
+
+            # --- O = S_in @ qbar + QK @ U ---
+            O = (tl.dot(qbar, tl.trans(S_in), input_precision="ieee")
+                 + tl.dot(QK, U, input_precision="ieee"))          # [L, BV]
+            tl.store(o_ptr + vrow, O.to(o_ptr.dtype.element_ty))
+
+            # --- cross-chunk carry: S_in = S_in*P_last + U^T @ (k*exp(logP_last-logP)) ---
+            ratio_c = tl.exp(logP_last[None, :] - logP)           # [L, D]  = P_last/P (<=1)
+            k_scaled = kc * ratio_c                                # [L, D]
+            S_in = (S_in * P_last[None, :]
+                    + tl.dot(tl.trans(U), k_scaled, input_precision="ieee"))  # [BV, D]
+
+            s = s + CHUNK
+
+
+def megakernel_forward(q, k, v, alpha, beta, chunk: int = 32, bv: int = 16, bd: int = 8):
+    """Fused chunk-parallel gated-delta scan, FORWARD only (#96). One Triton
+    kernel per (sequence, d_v-block); [L,L] A/QK live in SRAM, U/R/O are tiled
+    over d_v (BV). Same math as `_scan_chunked_stable` with the triangular solve
+    via the Neumann series (validated exact in fp32). Not autograd-enabled
+    (fwd-only); the backward is the next step.
+
+    q, k, v, alpha : [N, S, d]  ;  beta : [N, S, 1]  ->  o : [N, S, d].
+    """
+    assert _HAS_TRITON and q.is_cuda, "CUDA + triton required"
+    N, S, D = q.shape
+    assert S % chunk == 0, f"S={S} must be divisible by chunk={chunk}"
+    assert D % bv == 0, f"d={D} must be divisible by bv={bv}"
+    assert D % bd == 0, f"d={D} must be divisible by bd={bd}"
+    q, k, v, alpha = (t.contiguous().float() for t in (q, k, v, alpha))
+    beta2 = beta.reshape(N, S).contiguous().float()
+    o = torch.empty_like(q)
+    # Pass loop bounds as 1-element tensors so Triton does NOT specialize them
+    # (specialized int args would unroll the loops and crash ptxas).
+    s_t = torch.tensor([S], dtype=torch.int32, device=q.device)
+    n_t = torch.tensor([chunk - 1], dtype=torch.int32, device=q.device)
+    grid = (N, D // bv)
+    _mk_fwd_kernel[grid](q, k, v, alpha, beta2, o, s_t, n_t,
+                         D=D, CHUNK=chunk, BV=bv, BD=bd, num_warps=4)
+    return o
