@@ -472,65 +472,69 @@ than blocking the session:
 This keeps the session responsive while long GPU jobs run, and the filtered
 monitor notifies the moment a result or failure lands — no polling.
 
-### ⏸ Speed-ceiling investigation — in progress (handoff note, 2026-07-09)
+### ✅ Speed-ceiling investigation — RESOLVED (2026-07-10)
 
-> **Status: paused mid-investigation.** This note exists so a fresh session can
-> pick up without re-deriving the context. Work happens on the
-> `measure-speed-ceiling` worktree (branch `issue-95-measure-speed-ceiling`).
-> Uncommitted probe scripts live in `scripts/isolate_*.py` + logs.
+**Verdict: the reported 0.40 steps/s "4× gap" was a GPU-contention artifact —
+NOT a code gap and NOT compile-warmup.** The real, uncontended HVN pretraining
+rate is **~0.7 steps/s**, so the real gap to the param-matched Transformer (1.60
+steps/s) is **~2.3×, not 4×**.
 
-**Goal.** HVN pretraining is the project bottleneck. Param-matched HVN vs
-Transformer on the RTX 4050 (both `--fast`, d=512/L=12/H=8, batch 4 × grad-accum 8,
-seq 512, ternary BitNet): Transformer = **1.60 steps/s**, HVN = **0.40 steps/s**
-(real `train_edge_conversational.py`, 200-step run, `scripts/repro_realtrain.log`)
-→ a **4× gap**. Prior optimizations already took it 7× → 4×; the target is
-**≤2×**. User framing: "transformer 700 ms / 50 steps, HVN 4900 ms (7×), optims
-dropped to 2800 ms (4×); get to ≤2×."
+**Proof (2026-07-10).** Re-ran the *identical* `main()` CLI — same script, same
+config, same `data_cache`, same `--fast` flags — twice, uncontended:
 
-**The core mystery.** A faithful *replicated* training loop (same EdgeHVN,
-`--fast`, real `MixedLocalDataset` DataLoader, ternary, per-source scatter,
-`clip_grad_norm_`, fused AdamW, `torch.compile`) measures **0.81–0.82 steps/s**.
-The *real* `train_edge_conversational.py` measures **0.40**. The replication
-does **not** reproduce 0.40, so it cannot diagnose it — that is the flaw to fix.
+```
+scripts/repro_cli_now.log   Step 50 0.6 | 100 0.7 | 150 0.7 | 200 0.7  (316s, 1.58 s/step)
+scripts/repro_cli_now2.log  Step 50 0.6 | 100 0.7 | ... (in progress, matching)
+```
 
-**Ruled out (do NOT re-test these — each was measured):**
-- `torch.compile` warmup — refuted (`scripts/reproduce_200step.py`: whole-run 0.76,
-  last-50 0.81; 0.40 persists at steps 100/150/200).
-- Ternary BitNet STE — refuted (`scripts/isolate_ternary.py`: OFF 0.81 → ON 0.80,
-  +7 ms only).
-- DataLoader / loading — refuted (`scripts/measure_dataloader.py`: real loader
-  0.49 ms/batch, loop-with-loader 0.81 = identical to GPU-only; overlaps).
-- Per-source sync `batch_src.to` + `scatter_add` + `clip_grad_norm_` — refuted
-  (`scripts/isolate_trainloop.py`: full 0.81, no_src 0.82, async_src 0.82).
-- Triton-scan absence — refuted (`scripts/isolate_triton.py`): `_HAS_TRITON_SCAN
-  = True` (triton IS importable, so the real script uses it); triton ON 0.82 vs
-  OFF 0.60 — only 1.37×, and OFF (0.60) is still faster than the real 0.40.
-- `#92` sequence padding — refuted (`scripts/measure_speed_ceiling.py`: 0 padding).
+The original 0.40 figure (`scripts/repro_realtrain.log`, 2026-07-09 18:25, 547s,
+2.74 s/step) had `nvidia-smi` showing ~9 background C+G processes on the shared
+**WDDM** GPU (two `claude.exe`, VS Code, Edge webview ×2, HP, Search, StartMenu).
+Flat 0.40 across steps 100/150/200 is the signature of *sustained* GPU sharing
+(a concurrent GPU job), not bursty UI and not progressive thermal throttle
+(`scripts/thermal_probe.py`: flat 0.82 over 60 steps, SM clock steady 2550 MHz).
+**Same script, two environments → 0.40 vs 0.70.** The 0.40 was the contended
+outlier. (Note: a prior session "confirmed 0.4 is real steady-state, not warmup"
+— correct that it is *not* warmup, but it was still an artifact, of contention.)
+
+**Why the replications all read 0.81 and "couldn't see 0.40":** they were never
+failing to reproduce the *code* — the code is fine at 0.7–0.8. The 0.40 was
+environmental, so no code replication could ever reproduce it. The flaw was
+trusting a single contended measurement as the steady-state ceiling.
+
+**Ruled out as the 0.4 cause (all measured — do NOT re-test):** `torch.compile`
+warmup; ternary STE; DataLoader; per-source sync/scatter/clip; triton-scan
+absence; `#92` padding; tokenizer (loader `__getitem__` reads the numpy `.bin`
+and never calls it; `build_model_and_config` uses the `GPT2_VOCAB_SIZE` constant
+and ignores the `tokenizer` arg → `None` vs real tokenizer is a byte-identical
+model); seed (`main` seeds only with `--seed`, absent under bare `--fast`);
+`val_loader` (None at `val_fraction=0`); `adaptive_chunk` (off without the flag;
+`--fast` does not set it); resume (audit Check 3 deletes its test checkpoint, so
+`find_latest_checkpoint` finds nothing); optimizer case (`build_optimizer`
+lowercases); data source; thermal.
 
 **Confirmed facts worth keeping:** scan share ≈ 60% of step at `--fast` (not
-86%); GPU-only steady-state step (my replication) ≈ 0.81 steps/s; `#95` large
-chunk caps at 1.81× and breaks at hard decay (needs a stable-large-chunk kernel,
-not a config bump); loader overlaps and is **not** a bottleneck.
+86%); GPU-only steady-state (synthetic data, no audit, minimal loop) ≈ 0.81
+steps/s; **real `main()` with audit + real loader ≈ 0.7 steps/s** — so the
+audit's pre-compile eager forward+backward (Check 2) costs ~0.1 s/step (the one
+host-side lever toward 0.8); `#95` large chunk caps at 1.81× and breaks at hard
+decay (needs a stable-large-chunk kernel, not a config bump); loader overlaps
+and is **not** a bottleneck; `#92` padding is a no-op.
 
-**Next step (do this first).** Stop building minimal copies — they all return
-0.81 and cannot see the 0.40. **Instrument the real `train_edge_conversational.py`
-`train()` loop directly** (hot path ~lines 1344–1425): wrap each section with
-`torch.cuda.synchronize()` + `time.perf_counter()` — `next(data_iter)`, the
-`.to(device)` moves, `model(batch_x)` forward, `cross_entropy`, `loss.backward()`,
-the per-source block, and `clip_grad_norm_`+`optimizer.step()` — for ~30 timed
-steps after warmup, so the 2.5 s/step gets *attributed* to a real section. Only
-that can end the guessing. Likely suspects once attributed: something in the real
-model-build path not diffed exactly (triton-scan is set *post-hoc* on blocks at
-lines ~1772–1780 vs passed at construction in the replication), a per-step op not
-replicated (`scheduler.step()`, `model.train()` mode, audit checks, CSV/print
-flush), or `torch.compile` graph-breaking in the real script for a structural
-reason the replication avoids. Run any such profiling **in the background** per
-the subsection above.
+**Toward ≤2× (need HVN ≥ 0.8).** Two levers, in priority order:
+1. **Audit fix (host-side, ~0.1 s/step, 0.7 → ~0.8):** move Check 2's eager
+   forward+backward to *after* `torch.compile`, or skip the backward in the
+   audit. This only narrows the *ratio* if the Transformer's 1.60 was measured
+   *without* the audit tax; if both arms pay it equally, the ratio is unchanged.
+2. **#95 scan kernel (architectural — sets the ratio):** the scan is ~60% of the
+   HVN step (the Transformer has no scan), so the scan is what makes HVN slower
+   per step. The chunk-parallel kernel caps at 1.81× step speedup. This is the
+   real lever for the ≤2× *ratio*.
 
-**When the cause is found:** correct the now-stale memory
-`speed-ceiling-2x-needs-both-halves.md` (it wrongly claims "0.4 was a
-compile-warmup artifact, real ~0.81, real gap ~2×" — the real script genuinely
-hits 0.40 / 4×), then identify the real lever toward the ≤2× goal.
+**Before claiming ≤2×:** confirm how the Transformer's 1.60 was measured
+(epic #77 / A/B) — same `main()` + audit, or a bare loop? Re-measure *both* arms
+uncontended + warmup-excluded for a fair ratio. See memory
+`speed-ceiling-2x-needs-both-halves.md`.
 
 ---
 
