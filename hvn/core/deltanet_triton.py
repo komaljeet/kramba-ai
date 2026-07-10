@@ -667,3 +667,188 @@ def megakernel_forward(q, k, v, alpha, beta, chunk: int = 32, bv: int = 16, bd: 
     _mk_fwd_kernel[grid](q, k, v, alpha, beta2, o, s_t, n_t,
                          D=D, CHUNK=chunk, BV=bv, BD=bd, num_warps=4)
     return o
+
+
+# ============================================================================
+# Design B (#96): fused blockwise-recompute BACKWARD.
+#
+# Design A (chunk-parallel fwd megakernel) was killed by the speed gate — its
+# Neumann triangular solve is L-1 serial tl.dot MMAs, heavier than the
+# sequential kernel's pipelined elementwise steps. Design B attacks a DIFFERENT
+# bottleneck: the backward's HBM traffic. The current backward is 2 kernels:
+#   _gd_fwd_states_kernel : forward recompute, writes [N,S,D,D] entering states
+#                          (268 MB at N32 S512 d64) to HBM;
+#   _gd_bwd_kernel        : reverse adjoint, reads those 268 MB back.
+# Measured (scripts/probe_bwd_hbm.py) the backward runs at ~80% of peak HBM
+# bandwidth — it is memory-bound, dominated by the states roundtrip.
+#
+# Design B replaces that with blockwise recompute (flash-attention style):
+#   _mk_ckpt_kernel : forward recompute, writes only block-BOUNDARY entering
+#                    states [N, S/B, D, D] (67 MB at B=4 — 4x less);
+#   _mk_bwd_kernel  : reverse adjoint; per block, load the block's checkpoint
+#                    state and RECOMPUTE the B entering states in SRAM, then
+#                    run the (unchanged) per-step adjoint. Same compute as the
+#                    2-kernel path, ~4x less states HBM.
+#
+# The adjoint body is VERBATIM from _gd_bwd_kernel (validated vs autograd at
+# 1e-16 in fp64) — only the Sprev source changes (SRAM recompute, not the full
+# HBM states array). The forward is the unchanged optimal _gated_delta_fwd_kernel.
+# ============================================================================
+
+if _HAS_TRITON:
+
+    @triton.jit
+    def _mk_ckpt_kernel(
+        k_ptr, v_ptr, alpha_ptr, beta_ptr, ckpt_ptr, nblk_ptr,
+        S: tl.constexpr, D: tl.constexpr, B: tl.constexpr,
+    ):
+        """Forward recompute that checkpoints only block-BOUNDARY entering
+        states. One program per sequence; full [D,D] state. ckpt layout:
+        [N, nblocks, D(d_v), D(d_k)] where ckpt[b] = state before step b*B
+        (the entering state of block b). nblocks is a runtime tensor (rolled
+        block loop); B is constexpr (unrolled inner step loop)."""
+        n = tl.program_id(0)
+        nblk = tl.load(nblk_ptr)
+        base = n * S * D
+        bbase = n * S
+        cbase = n * nblk * D * D
+        rk = tl.arange(0, D)
+        ov = tl.arange(0, D)[:, None]
+        ok = tl.arange(0, D)[None, :]
+        state = tl.zeros((D, D), dtype=tl.float32)
+        b = tl.zeros((), tl.int32)
+        while b < nblk:
+            # checkpoint the entering state of this block (before its 1st step)
+            tl.store(ckpt_ptr + cbase + b * D * D + ov * D + ok, state)
+            for j in range(B):  # unrolled (B constexpr)
+                t = b * B + j
+                row = base + t * D
+                k_t = tl.load(k_ptr + row + rk).to(tl.float32)
+                a_t = tl.load(alpha_ptr + row + rk).to(tl.float32)
+                v_t = tl.load(v_ptr + row + rk).to(tl.float32)
+                b_t = tl.load(beta_ptr + bbase + t).to(tl.float32)
+                state = state * a_t[None, :]
+                Sk = tl.sum(state * k_t[None, :], axis=1)
+                u = v_t - Sk
+                state = state + b_t * (u[:, None] * k_t[None, :])
+            b = b + 1
+
+    @triton.jit
+    def _mk_bwd_kernel(
+        q_ptr, k_ptr, v_ptr, alpha_ptr, beta_ptr, ckpt_ptr, do_ptr,
+        dq_ptr, dk_ptr, dv_ptr, dalpha_ptr, dbeta_ptr, nblk_ptr,
+        S: tl.constexpr, D: tl.constexpr, B: tl.constexpr,
+    ):
+        """Reverse-time adjoint with blockwise SRAM recompute. One program per
+        sequence; full [D,D] state grad carried backward. For each block (in
+        reverse): load the block's checkpoint entering state, recompute each
+        step's entering state in SRAM (O(B^2) on-the-fly recompute — no [B,D,D]
+        buffer, since Triton cannot index a tile by a runtime step index), then
+        run the validated per-step adjoint. The adjoint body is identical to
+        _gd_bwd_kernel; only Sprev comes from recompute instead of HBM."""
+        n = tl.program_id(0)
+        nblk = tl.load(nblk_ptr)
+        base = n * S * D
+        bbase = n * S
+        cbase = n * nblk * D * D
+        rk = tl.arange(0, D)
+        rv = tl.arange(0, D)
+        ov = tl.arange(0, D)[:, None]
+        ok = tl.arange(0, D)[None, :]
+        dS = tl.zeros((D, D), dtype=tl.float32)
+        b = nblk - 1
+        while b >= 0:
+            s = b * B
+            S_start = tl.load(ckpt_ptr + cbase + b * D * D + ov * D + ok)  # [D,D]
+            for j in range(B - 1, -1, -1):  # unrolled (B constexpr), j = B-1..0
+                t = s + j
+                row = base + t * D
+                # recompute Sprev = entering state of step t = S_start advanced
+                # j steps. (j constexpr from the unrolled outer loop, so range(j)
+                # unrolls too; empty when j == 0.)
+                Sprev = S_start
+                for jj in range(j):
+                    tt = s + jj
+                    rrow = base + tt * D
+                    k_tt = tl.load(k_ptr + rrow + rk).to(tl.float32)
+                    a_tt = tl.load(alpha_ptr + rrow + rk).to(tl.float32)
+                    v_tt = tl.load(v_ptr + rrow + rk).to(tl.float32)
+                    b_tt = tl.load(beta_ptr + bbase + tt).to(tl.float32)
+                    Sprev = Sprev * a_tt[None, :]
+                    Skk = tl.sum(Sprev * k_tt[None, :], axis=1)
+                    uu = v_tt - Skk
+                    Sprev = Sprev + b_tt * (uu[:, None] * k_tt[None, :])
+                # --- validated adjoint body (verbatim from _gd_bwd_kernel) ---
+                k_t = tl.load(k_ptr + row + rk).to(tl.float32)
+                q_t = tl.load(q_ptr + row + rk).to(tl.float32)
+                a_t = tl.load(alpha_ptr + row + rk).to(tl.float32)
+                v_t = tl.load(v_ptr + row + rv).to(tl.float32)
+                b_t = tl.load(beta_ptr + bbase + t).to(tl.float32)
+                do_t = tl.load(do_ptr + row + rv).to(tl.float32)
+                Sd = Sprev * a_t[None, :]
+                Sk = tl.sum(Sd * k_t[None, :], axis=1)
+                u = v_t - Sk
+                S_t = Sd + b_t * (u[:, None] * k_t[None, :])
+                dS_t = dS + do_t[:, None] * q_t[None, :]
+                dq_t = tl.sum(S_t * do_t[:, None], axis=0)
+                tl.store(dq_ptr + row + rk, dq_t)
+                dSd = dS_t
+                dSk_via = tl.sum(dS_t * k_t[None, :], axis=1)
+                dbeta_t = tl.sum(u * dSk_via)
+                tl.store(dbeta_ptr + bbase + t, dbeta_t)
+                du = b_t * dSk_via
+                dk_t = b_t * tl.sum(dS_t * u[:, None], axis=0)
+                tl.store(dv_ptr + row + rv, du)
+                dSd = dSd - du[:, None] * k_t[None, :]
+                dk_t = dk_t - tl.sum(Sd * du[:, None], axis=0)
+                tl.store(dk_ptr + row + rk, dk_t)
+                dalpha_t = tl.sum(Sprev * dSd, axis=0)
+                tl.store(dalpha_ptr + row + rk, dalpha_t)
+                dS = dSd * a_t[None, :]
+                # --- end adjoint body ---
+            b = b - 1
+
+
+class _MegaScan(torch.autograd.Function):
+    """Design B autograd wrapper: optimal sequential forward (unchanged
+    `_gated_delta_fwd_kernel`) + fused blockwise-recompute backward."""
+
+    @staticmethod
+    def forward(ctx, q, k, v, alpha, beta, block=4):
+        N, S, D = q.shape
+        q, k, v, alpha = (t.contiguous().float() for t in (q, k, v, alpha))
+        beta2 = beta.reshape(N, S).contiguous().float()
+        o = torch.empty_like(q)
+        BV = 16 if D % 16 == 0 else 1
+        _gated_delta_fwd_kernel[(N, D // BV)](q, k, v, alpha, beta2, o, S=S, D=D, BV=BV)
+        ctx.save_for_backward(q, k, v, alpha, beta2)
+        ctx.beta_shape = beta.shape
+        ctx.block = block
+        return o
+
+    @staticmethod
+    def backward(ctx, do):
+        q, k, v, alpha, beta2 = ctx.saved_tensors
+        N, S, D = q.shape
+        B = ctx.block
+        assert S % B == 0, f"S={S} must be divisible by block B={B}"
+        nblocks = S // B
+        do = do.contiguous().float()
+        nblk_t = torch.tensor([nblocks], dtype=torch.int32, device=q.device)
+        ckpt = torch.empty(N, nblocks, D, D, device=q.device, dtype=torch.float32)
+        _mk_ckpt_kernel[(N,)](k, v, alpha, beta2, ckpt, nblk_t, S=S, D=D, B=B)
+        dq = torch.empty_like(q); dk = torch.empty_like(q)
+        dv = torch.empty_like(q); dalpha = torch.empty_like(q)
+        dbeta2 = torch.empty_like(beta2)
+        _mk_bwd_kernel[(N,)](q, k, v, alpha, beta2, ckpt, do,
+                            dq, dk, dv, dalpha, dbeta2, nblk_t, S=S, D=D, B=B)
+        return dq, dk, dv, dalpha, dbeta2.reshape(ctx.beta_shape), None
+
+
+def megakernel_scan(q, k, v, alpha, beta, block: int = 4):
+    """Design B: optimal sequential forward + fused blockwise-recompute
+    backward. Drop-in for `gated_delta_scan` (autograd-enabled). `block` is the
+    blockwise-recompute block size B (smaller = less recompute compute, more
+    states HBM; larger = the reverse). Not wired into training until it beats
+    the sequential bwd on the benchmark gate."""
+    return _MegaScan.apply(q, k, v, alpha, beta, block)
