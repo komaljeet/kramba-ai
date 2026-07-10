@@ -1,0 +1,88 @@
+GPU: NVIDIA GeForce RTX 4050 Laptop GPU
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 144,853,865  |  windows/source: [252205, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 144853865
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      True
+  precision:         bf16
+  batch_size:        4
+  grad_accum:        8 (effective batch = 32)
+  seq_len:           512
+  d_model:           512
+  num_layers:        12
+  n_heads:           8
+  optimizer:         AdamW (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\verify_audit_fwdonly/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\verify_audit_fwdonly/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn)...
+  Architecture: hvn  |  total params: 83,094,705
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 84 nn.Linear layers with TernaryLinear (STE)
+  Excluded 25 gate/decoder layers
+
+  Weight storage (dense fp32):  316.98 MB
+  Weight storage (ternary):     214.33 MB
+  Compression ratio:            1.48x
+
+✓ Step 3 complete.
+
+  [probe] FORWARD-ONLY audit (eval forward + train forward, NO backward)...
+  [probe] forward-only done (no backward, no loss)
+  [probe] post-hoc triton-scan set on 12 blocks
+  [probe] compiling (audit was forward-only, BEFORE compile)...
+
+======================================================================
+FORWARD-ONLY-AUDIT — log_every=50, max_steps=200
+======================================================================
+
+======================================================================
+STEP 5 — START TRAINING
+======================================================================
+
+  Model parameter count:     83,094,705
+  Ternary compression ratio: 1.48x
+  Dense fp32 weight size:     316.98 MB
+  Ternary weight size:        214.33 MB
+  Optimizer: AdamW (lr=0.0003, wd=0.01, fused=True)
+  Mixed-precision: BF16 (Issue #80)
+
+  Training for up to 200 steps (effective batch = 32)
+  Logging every 50 steps | Checkpoint every 100000 steps
+----------------------------------------------------------------------
+  Step     50 (epoch 0)  |  Loss: 10.4791  |  PPL: 35565.89  |  LR: 0.000029  |  0.3 steps/s
+    Per-source: SlimPajama: 10.8141 (n=920)  |  OpenAssistant: 10.8276 (n=680)
+  ⏱ Estimated 3.45s/step | ~344934s per checkpoint interval
+  Step    100 (epoch 0)  |  Loss: 9.0340  |  PPL: 8383.62  |  LR: 0.000059  |  0.3 steps/s
+    Per-source: SlimPajama: 9.6491 (n=934)  |  OpenAssistant: 9.6930 (n=666)

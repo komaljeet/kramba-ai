@@ -522,19 +522,53 @@ decay (needs a stable-large-chunk kernel, not a config bump); loader overlaps
 and is **not** a bottleneck; `#92` padding is a no-op.
 
 **Toward ≤2× (need HVN ≥ 0.8).** Two levers, in priority order:
-1. **Audit fix (host-side, ~0.1 s/step, 0.7 → ~0.8):** move Check 2's eager
-   forward+backward to *after* `torch.compile`, or skip the backward in the
-   audit. This only narrows the *ratio* if the Transformer's 1.60 was measured
-   *without* the audit tax; if both arms pay it equally, the ratio is unchanged.
+1. **Audit fix (host-side, ~0.1 s/step, 0.7 → ~0.8) — SPEED BENEFIT CONFIRMED.**
+   `scripts/verify_audit_fix.py` compiles *before* the audit (no eager
+   forward+backward perturbs the trace) and measures **0.8 steps/s** vs the
+   audit-before-compile 0.7 — so the audit's pre-compile eager forward+backward
+   (Check 2) is the ~0.1 s/step tax. **Blocker: a Windows inductor bug** —
+   compiling during the audit's *eval-mode* forward raises
+   `UnicodeEncodeError: 'charmap' codec can't encode character 'α'`
+   (inductor writes generated source containing the model's `α`/alpha decay to
+   its cache using cp1252, which can't encode Greek letters). The real `main()`
+   compiles during *training* (train-mode) and works fine, so this only fires
+   when compile is triggered by the audit. **Viable workarounds** (pick one, all
+   untested end-to-end): (a) run `python` with `PYTHONUTF8=1` so inductor's
+   cache writes use UTF-8; (b) run Check 2 on a throwaway model *copy* so the
+   real model is never eagerly exercised before compile (keeps audit-before-
+   compile, avoids the charmap bug — costs ~1 GB extra VRAM for the copy); (c)
+   skip Check 2's backward (forward-only) — *not yet validated*; the
+   `verify_audit_fwdonly.py` probe was confounded by live GPU contention (see
+   below) and is inconclusive. **On the ratio:** the Transformer's 1.60 was
+   measured by a *bare loop with no audit* (`scripts/measure_steadystate_ab.py`,
+   both arms, warmup-excluded → HVN 0.81 / Transformer 1.60 = **2.0×, already at
+   the goal**). The audit is an *extra* tax on real-`main()` HVN only if the A/B
+   compares audited-HVN-main vs bare-transformer; if both run `main()` (both
+   audited), the audit hits both and the ratio stays ~2.0×. Confirm the A/B
+   protocol in epic #77 before claiming the audit fix narrows the *ratio*.
 2. **#95 scan kernel (architectural — sets the ratio):** the scan is ~60% of the
    HVN step (the Transformer has no scan), so the scan is what makes HVN slower
    per step. The chunk-parallel kernel caps at 1.81× step speedup. This is the
-   real lever for the ≤2× *ratio*.
+   real lever for the ≤2× *ratio* if the audit fix doesn't get there.
 
-**Before claiming ≤2×:** confirm how the Transformer's 1.60 was measured
-(epic #77 / A/B) — same `main()` + audit, or a bare loop? Re-measure *both* arms
-uncontended + warmup-excluded for a fair ratio. See memory
+**Before claiming ≤2×:** confirm the A/B protocol (epic #77) — both arms via
+`main()` (audited) or bare loops? Re-measure *both* arms uncontended +
+warmup-excluded for a fair ratio. See memory
 `speed-ceiling-2x-needs-both-halves.md`.
+
+**⚠ Measurement methodology on this WDDM shared GPU (critical for future
+probes).** The RTX 4050 is a WDDM *display* GPU shared with the OS UI. Observed
+live during this investigation: with only one compute process running, the GPU
+showed **100% util at just 45 W** because VS Code + Edge webview (C+G
+processes) were actively rendering and stealing GPU time — the probe dropped to
+**0.3 steps/s**. This is the *same* mechanism as the original contended 0.4
+repro. **Throughput on this machine swings 0.3–0.8 depending on UI activity.**
+Any single steps/s number is unreliable: measure in a quiet window, run twice,
+and treat a slow number as a contention signal (check
+`nvidia-smi --query-compute-apps` + GPU power — 100% util at low W with C+G
+processes present = shared, not a code regression). This is why the original
+"4× gap" was trusted wrongly: one contended run was mistaken for the steady-state
+ceiling.
 
 ---
 
