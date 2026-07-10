@@ -1,0 +1,188 @@
+GPU: NVIDIA GeForce RTX 4050 Laptop GPU
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 144,853,865  |  windows/source: [252205, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 144853865
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      True
+  precision:         bf16
+  batch_size:        4
+  grad_accum:        8 (effective batch = 32)
+  seq_len:           512
+  d_model:           512
+  num_layers:        12
+  n_heads:           8
+  optimizer:         AdamW (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\verify_audit_fix/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\verify_audit_fix/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn)...
+  Architecture: hvn  |  total params: 83,094,705
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 84 nn.Linear layers with TernaryLinear (STE)
+  Excluded 25 gate/decoder layers
+
+  Weight storage (dense fp32):  316.98 MB
+  Weight storage (ternary):     214.33 MB
+  Compression ratio:            1.48x
+
+✓ Step 3 complete.
+
+  [probe] post-hoc triton-scan set on 12 blocks
+  [probe] compiling BEFORE audit (the proposed fix)...
+
+======================================================================
+STEP 4 — PRE-TRAINING AUDIT
+======================================================================
+
+  [Check 1] DataLoader token shapes...
+    batch_src (source IDs): tensor([0, 1, 0, 1])
+    batch_x shape: torch.Size([4, 512]) (expected (4, 512))
+    batch_y shape: torch.Size([4, 512]) (expected (4, 512))
+    batch_x dtype: torch.int64 (expected torch.long)
+    batch_x range: [0, 50188]
+    ✓ Shapes correct
+
+  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...
+W0710 10:21:50.268000 20792 Lib\site-packages\torch\_inductor\utils.py:1717] [0/0] Not enough SMs to use max_autotune_gemm mode
+    ❌ Forward/backward check failed: UnicodeEncodeError: 'charmap' codec can't encode character '\u03b1' in position 68930: character maps to <undefined>
+
+Set TORCHDYNAMO_VERBOSE=1 for the internal stack trace (please do this especially if you're reporting a bug to PyTorch). For even more developer context, set TORCH_LOGS="+dynamo"
+
+Traceback (most recent call last):
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\train_edge_conversational.py", line 997, in pre_training_audit
+    logits = model(x)
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_dynamo\eval_frame.py", line 473, in __call__
+    return super().__call__(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1778, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1789, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_dynamo\eval_frame.py", line 1062, in compile_wrapper
+    raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 1069, in _compile_fx_inner
+    raise InductorError(e, currentframe()).with_traceback(
+        e.__traceback__
+    ) from None
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 1049, in _compile_fx_inner
+    mb_compiled_graph = fx_codegen_and_compile(
+        gm,
+    ...<3 lines>...
+        **graph_kwargs,
+    )
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 1836, in fx_codegen_and_compile
+    return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 1597, in codegen_and_compile
+    compiled_module = graph.compile_to_module()
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_inductor\graph.py", line 2613, in compile_to_module
+    return self._compile_to_module()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_inductor\graph.py", line 2623, in _compile_to_module
+    mod = self._compile_to_module_lines(wrapper_code)
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_inductor\graph.py", line 2676, in _compile_to_module_lines
+    key, path = PyCodeCache.write(wrapper_code.value)
+                ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 3953, in write
+    return write(source_code, "py", extra=extra)
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 423, in write
+    write_atomic(path, content, make_dirs=True)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 451, in write_atomic
+    f.write(content)
+    ~~~~~~~^^^^^^^^^
+  File "C:\Users\komal\Documents\PythonVersions\314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch._inductor.exc.InductorError: UnicodeEncodeError: 'charmap' codec can't encode character '\u03b1' in position 68930: character maps to <undefined>
+
+Set TORCHDYNAMO_VERBOSE=1 for the internal stack trace (please do this especially if you're reporting a bug to PyTorch). For even more developer context, set TORCH_LOGS="+dynamo"
+
+
+  [Check 3] Checkpoint save/load cycle...
+    ✓ Save: C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\verify_audit_fix\audit_test_checkpoint.pt
+    ✓ Load: keys = ['model_state_dict', 'vocab_size', 'd_model', 'num_layers', 'n_heads', 'n_threads', 'chunk_size', 'use_deltanet', 'deltanet_conv_kernel', 'block_type', 'ternary', 'weightless', 'weightless_seed', 'is_edge', 'shared_weights', 'global_step']
+    ✓ n_heads in checkpoint: 8
+    ✓ State dict loads into rebuilt model
+    ✓ Cleaned up test checkpoint
+
+  ❌ Some audit checks failed!
+✓ Step 4 complete.
+  [probe] audit failed; continuing anyway for the timing test
+
+======================================================================
+COMPILE-BEFORE-AUDIT — log_every=50, max_steps=200 (matches real)
+======================================================================
+
+======================================================================
+STEP 5 — START TRAINING
+======================================================================
+
+  Model parameter count:     83,094,705
+  Ternary compression ratio: 1.48x
+  Dense fp32 weight size:     316.98 MB
+  Ternary weight size:        214.33 MB
+  Optimizer: AdamW (lr=0.0003, wd=0.01, fused=True)
+  Mixed-precision: BF16 (Issue #80)
+
+  Training for up to 200 steps (effective batch = 32)
+  Logging every 50 steps | Checkpoint every 100000 steps
+----------------------------------------------------------------------
+  Step     50 (epoch 0)  |  Loss: 10.5216  |  PPL: 37108.90  |  LR: 0.000029  |  0.6 steps/s
+    Per-source: SlimPajama: 10.7805 (n=958)  |  OpenAssistant: 10.7931 (n=642)
+  ⏱ Estimated 1.54s/step | ~153870s per checkpoint interval
+  Step    100 (epoch 0)  |  Loss: 8.8380  |  PPL: 6891.36  |  LR: 0.000059  |  0.8 steps/s
+    Per-source: SlimPajama: 9.5899 (n=951)  |  OpenAssistant: 9.6458 (n=649)
+  Step    150 (epoch 0)  |  Loss: 7.3816  |  PPL: 1606.23  |  LR: 0.000089  |  0.8 steps/s
+    Per-source: SlimPajama: 8.2366 (n=938)  |  OpenAssistant: 8.1208 (n=662)
+  Step    200 (epoch 0)  |  Loss: 6.9112  |  PPL: 1003.42  |  LR: 0.000119  |  0.8 steps/s
+    Per-source: SlimPajama: 7.6743 (n=920)  |  OpenAssistant: 6.9927 (n=680)
+
+======================================================================
+TRAINING COMPLETE
+======================================================================
+  Total steps:     200
+  Total time:       267.5s (4.5 min)
+  Avg time/step:    1.338s
+  Final checkpoint: C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\verify_audit_fix\edge_conversational.pt
+  Training log:     C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\verify_audit_fix\training_log.csv
+✓ Step 5 complete.
+
+======================================================================
+Compare steps 100/150/200 to audit-before-compile (0.7) and no-audit (0.8):
+  ~0.8 -> fix CONFIRMED (compile-before-audit removes the audit tax)
+  ~0.7 -> audit ordering is NOT the cause; keep digging
+======================================================================

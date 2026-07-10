@@ -1,0 +1,29 @@
+GPU: NVIDIA GeForce RTX 4050 Laptop GPU
+config: d=512 L=12 H=8 B=4 S=512 grad_accum=8  (effective batch 32)
+
+========================================================================
+STEADY-STATE — arch=hvn  (--fast: bf16+TF32+compile+triton-scan)
+========================================================================
+  params: 83,094,705
+  warming up 10 steps (compile + settle)...
+  per-step ms over 30 timed steps: min=1235  median=1237  max=1244
+  steady-state flatness (late/early median): 1.002  (settled)
+  -> 1237 ms/step   =   0.81 steps/s   (steady-state)
+
+========================================================================
+STEADY-STATE — arch=transformer  (--fast: bf16+TF32+compile)
+========================================================================
+  params: 83,002,449
+  warming up 10 steps (compile + settle)...
+  per-step ms over 30 timed steps: min=622  median=624  max=626
+  steady-state flatness (late/early median): 1.004  (settled)
+  -> 624 ms/step   =   1.60 steps/s   (steady-state)
+
+========================================================================
+RESULT — fair steady-state HVN vs Transformer (warmup excluded)
+========================================================================
+  HVN         : 0.81 steps/s  (1237 ms/step)  flat=1.002
+  Transformer : 1.60 steps/s  (624 ms/step)  flat=1.004
+  HVN / Transformer = 0.50x
+  (the 200-step run reported ~0.25x; this is the real steady-state ratio.)
+========================================================================

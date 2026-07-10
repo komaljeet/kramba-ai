@@ -1,0 +1,110 @@
+GPU: NVIDIA GeForce RTX 4050 Laptop GPU
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 144,853,865  |  windows/source: [252205, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 144853865
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      True
+  precision:         bf16
+  batch_size:        4
+  grad_accum:        8 (effective batch = 32)
+  seq_len:           512
+  d_model:           512
+  num_layers:        12
+  n_heads:           8
+  optimizer:         AdamW (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\train_verbatim_probe/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\train_verbatim_probe/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn)...
+  Architecture: hvn  |  total params: 83,094,705
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 84 nn.Linear layers with TernaryLinear (STE)
+  Excluded 25 gate/decoder layers
+
+  Weight storage (dense fp32):  316.98 MB
+  Weight storage (ternary):     214.33 MB
+  Compression ratio:            1.48x
+
+✓ Step 3 complete.
+
+  [probe] post-hoc triton-scan set on 12 blocks
+  [probe] compiling...
+
+======================================================================
+VERBATIM T.train() — the REAL loop, log_every=10, max_steps=60
+======================================================================
+
+======================================================================
+STEP 5 — START TRAINING
+======================================================================
+
+  Model parameter count:     83,094,705
+  Ternary compression ratio: 1.48x
+  Dense fp32 weight size:     316.98 MB
+  Ternary weight size:        214.33 MB
+  Optimizer: AdamW (lr=0.0003, wd=0.01, fused=True)
+  Mixed-precision: BF16 (Issue #80)
+
+  Training for up to 60 steps (effective batch = 32)
+  Logging every 10 steps | Checkpoint every 100000 steps
+----------------------------------------------------------------------
+  Step     10 (epoch 0)  |  Loss: 11.0001  |  PPL: 59878.94  |  LR: 0.000005  |  0.3 steps/s
+    Per-source: SlimPajama: 11.0055 (n=193)  |  OpenAssistant: 10.9993 (n=127)
+  ⏱ Estimated 3.16s/step | ~316317s per checkpoint interval
+  Step     20 (epoch 0)  |  Loss: 10.8765  |  PPL: 52918.22  |  LR: 0.000011  |  0.8 steps/s
+    Per-source: SlimPajama: 10.9604 (n=201)  |  OpenAssistant: 10.9491 (n=119)
+  Step     30 (epoch 0)  |  Loss: 10.7790  |  PPL: 48004.45  |  LR: 0.000017  |  0.8 steps/s
+    Per-source: SlimPajama: 10.8621 (n=195)  |  OpenAssistant: 10.8640 (n=125)
+  Step     40 (epoch 0)  |  Loss: 10.7212  |  PPL: 45306.54  |  LR: 0.000023  |  0.8 steps/s
+    Per-source: SlimPajama: 10.6471 (n=176)  |  OpenAssistant: 10.7876 (n=144)
+  Step     50 (epoch 0)  |  Loss: 10.4598  |  PPL: 34886.16  |  LR: 0.000029  |  0.8 steps/s
+    Per-source: SlimPajama: 10.5634 (n=200)  |  OpenAssistant: 10.4426 (n=120)
+  Step     60 (epoch 0)  |  Loss: 10.2347  |  PPL: 27853.46  |  LR: 0.000035  |  0.8 steps/s
+    Per-source: SlimPajama: 10.2649 (n=192)  |  OpenAssistant: 10.3159 (n=128)
+
+======================================================================
+TRAINING COMPLETE
+======================================================================
+  Total steps:     60
+  Total time:       95.6s (1.6 min)
+  Avg time/step:    1.593s
+  Final checkpoint: C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\train_verbatim_probe\edge_conversational.pt
+  Training log:     C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\train_verbatim_probe\training_log.csv
+✓ Step 5 complete.
+
+======================================================================
+Read the per-10-step steps/s above:
+  steps 1-10   : includes compile warmup (slow, ignore)
+  steps 20-60  : STEADY-STATE. ~0.4 -> loop code is the cause; ~0.8 -> main()'s audit is the cause
+======================================================================

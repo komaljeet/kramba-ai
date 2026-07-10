@@ -1,0 +1,21 @@
+W0709 18:48:23.027000 11064 Lib\site-packages\torch\_inductor\utils.py:1717] [0/1] Not enough SMs to use max_autotune_gemm mode
+_HAS_TRITON_SCAN = True
+triton scan fn = <function gated_delta_scan at 0x000002C08FFD66C0>
+
+========================================================================
+ISOLATE — triton-scan ON  (compiled, bf16, grad_accum=8)
+========================================================================
+  -> 1223 ms/step  =  0.82 steps/s
+
+========================================================================
+ISOLATE — triton-scan OFF (eager chunk-32)  (compiled, bf16, grad_accum=8)
+========================================================================
+  -> 1679 ms/step  =  0.60 steps/s
+
+========================================================================
+RESULT — triton-scan isolation (compiled, same loop)
+========================================================================
+  triton-scan ON  : 0.82 steps/s  (1223 ms/step)
+  triton-scan OFF : 0.60 steps/s  (1679 ms/step)
+  triton speedup  : 0.73x  (OFF should match the real script's ~0.4 if triton is the cause)
+========================================================================

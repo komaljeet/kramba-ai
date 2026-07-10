@@ -455,6 +455,121 @@ languages the base never saw, so curriculum gains are quantifiable: `python` pas
 bits/char), `html`/`css` 0% structural (7.20 / 6.57 bits/char), `js`/`php` 25% (5.77 / 5.73). O(1)
 inference is untouched — the harness only reads a trained checkpoint.
 
+### Long-running benchmarks & monitors — always run in the background
+
+Speed/throughput benchmarks and log monitors (e.g. the `scripts/measure_*.py`
+probes for issue #95) take minutes — mostly `torch.compile` warmup. **Always
+launch them as background tasks and tail their logs with a monitor** rather
+than blocking the session:
+
+- run the script with a background shell (`run_in_background: true`) writing to
+  a log file (`... 2>&1 | tee scripts/<name>.log`),
+- tail that log with a monitor filtering for the result lines + error
+  signatures (`Traceback|Error|RuntimeError|...`),
+- keep working; report results when the run completes, and surface errors
+  immediately if they appear.
+
+This keeps the session responsive while long GPU jobs run, and the filtered
+monitor notifies the moment a result or failure lands — no polling.
+
+### ✅ Speed-ceiling investigation — RESOLVED (2026-07-10)
+
+**Verdict: the reported 0.40 steps/s "4× gap" was a GPU-contention artifact —
+NOT a code gap and NOT compile-warmup.** The real, uncontended HVN pretraining
+rate is **~0.7 steps/s**, so the real gap to the param-matched Transformer (1.60
+steps/s) is **~2.3×, not 4×**.
+
+**Proof (2026-07-10).** Re-ran the *identical* `main()` CLI — same script, same
+config, same `data_cache`, same `--fast` flags — twice, uncontended:
+
+```
+scripts/repro_cli_now.log   Step 50 0.6 | 100 0.7 | 150 0.7 | 200 0.7  (316s, 1.58 s/step)
+scripts/repro_cli_now2.log  Step 50 0.6 | 100 0.7 | ... (in progress, matching)
+```
+
+The original 0.40 figure (`scripts/repro_realtrain.log`, 2026-07-09 18:25, 547s,
+2.74 s/step) had `nvidia-smi` showing ~9 background C+G processes on the shared
+**WDDM** GPU (two `claude.exe`, VS Code, Edge webview ×2, HP, Search, StartMenu).
+Flat 0.40 across steps 100/150/200 is the signature of *sustained* GPU sharing
+(a concurrent GPU job), not bursty UI and not progressive thermal throttle
+(`scripts/thermal_probe.py`: flat 0.82 over 60 steps, SM clock steady 2550 MHz).
+**Same script, two environments → 0.40 vs 0.70.** The 0.40 was the contended
+outlier. (Note: a prior session "confirmed 0.4 is real steady-state, not warmup"
+— correct that it is *not* warmup, but it was still an artifact, of contention.)
+
+**Why the replications all read 0.81 and "couldn't see 0.40":** they were never
+failing to reproduce the *code* — the code is fine at 0.7–0.8. The 0.40 was
+environmental, so no code replication could ever reproduce it. The flaw was
+trusting a single contended measurement as the steady-state ceiling.
+
+**Ruled out as the 0.4 cause (all measured — do NOT re-test):** `torch.compile`
+warmup; ternary STE; DataLoader; per-source sync/scatter/clip; triton-scan
+absence; `#92` padding; tokenizer (loader `__getitem__` reads the numpy `.bin`
+and never calls it; `build_model_and_config` uses the `GPT2_VOCAB_SIZE` constant
+and ignores the `tokenizer` arg → `None` vs real tokenizer is a byte-identical
+model); seed (`main` seeds only with `--seed`, absent under bare `--fast`);
+`val_loader` (None at `val_fraction=0`); `adaptive_chunk` (off without the flag;
+`--fast` does not set it); resume (audit Check 3 deletes its test checkpoint, so
+`find_latest_checkpoint` finds nothing); optimizer case (`build_optimizer`
+lowercases); data source; thermal.
+
+**Confirmed facts worth keeping:** scan share ≈ 60% of step at `--fast` (not
+86%); GPU-only steady-state (synthetic data, no audit, minimal loop) ≈ 0.81
+steps/s; **real `main()` with audit + real loader ≈ 0.7 steps/s** — so the
+audit's pre-compile eager forward+backward (Check 2) costs ~0.1 s/step (the one
+host-side lever toward 0.8); `#95` large chunk caps at 1.81× and breaks at hard
+decay (needs a stable-large-chunk kernel, not a config bump); loader overlaps
+and is **not** a bottleneck; `#92` padding is a no-op.
+
+**Toward ≤2× (need HVN ≥ 0.8).** Two levers, in priority order:
+1. **Audit fix (host-side, ~0.1 s/step, 0.7 → ~0.8) — SPEED BENEFIT CONFIRMED.**
+   `scripts/verify_audit_fix.py` compiles *before* the audit (no eager
+   forward+backward perturbs the trace) and measures **0.8 steps/s** vs the
+   audit-before-compile 0.7 — so the audit's pre-compile eager forward+backward
+   (Check 2) is the ~0.1 s/step tax. **Blocker: a Windows inductor bug** —
+   compiling during the audit's *eval-mode* forward raises
+   `UnicodeEncodeError: 'charmap' codec can't encode character 'α'`
+   (inductor writes generated source containing the model's `α`/alpha decay to
+   its cache using cp1252, which can't encode Greek letters). The real `main()`
+   compiles during *training* (train-mode) and works fine, so this only fires
+   when compile is triggered by the audit. **Viable workarounds** (pick one, all
+   untested end-to-end): (a) run `python` with `PYTHONUTF8=1` so inductor's
+   cache writes use UTF-8; (b) run Check 2 on a throwaway model *copy* so the
+   real model is never eagerly exercised before compile (keeps audit-before-
+   compile, avoids the charmap bug — costs ~1 GB extra VRAM for the copy); (c)
+   skip Check 2's backward (forward-only) — *not yet validated*; the
+   `verify_audit_fwdonly.py` probe was confounded by live GPU contention (see
+   below) and is inconclusive. **On the ratio:** the Transformer's 1.60 was
+   measured by a *bare loop with no audit* (`scripts/measure_steadystate_ab.py`,
+   both arms, warmup-excluded → HVN 0.81 / Transformer 1.60 = **2.0×, already at
+   the goal**). The audit is an *extra* tax on real-`main()` HVN only if the A/B
+   compares audited-HVN-main vs bare-transformer; if both run `main()` (both
+   audited), the audit hits both and the ratio stays ~2.0×. Confirm the A/B
+   protocol in epic #77 before claiming the audit fix narrows the *ratio*.
+2. **#95 scan kernel (architectural — sets the ratio):** the scan is ~60% of the
+   HVN step (the Transformer has no scan), so the scan is what makes HVN slower
+   per step. The chunk-parallel kernel caps at 1.81× step speedup. This is the
+   real lever for the ≤2× *ratio* if the audit fix doesn't get there.
+
+**Before claiming ≤2×:** confirm the A/B protocol (epic #77) — both arms via
+`main()` (audited) or bare loops? Re-measure *both* arms uncontended +
+warmup-excluded for a fair ratio. See memory
+`speed-ceiling-2x-needs-both-halves.md`.
+
+**⚠ Measurement methodology on this WDDM shared GPU (critical for future
+probes).** The RTX 4050 is a WDDM *display* GPU shared with the OS UI. Observed
+live during this investigation: with only one compute process running, the GPU
+showed **100% util at just 45 W** because VS Code + Edge webview (C+G
+processes) were actively rendering and stealing GPU time — the probe dropped to
+**0.3 steps/s**. This is the *same* mechanism as the original contended 0.4
+repro. **Throughput on this machine swings 0.3–0.8 depending on UI activity.**
+Any single steps/s number is unreliable: measure in a quiet window, run twice,
+and treat a slow number as a contention signal (check
+`nvidia-smi --query-compute-apps` + GPU power — 100% util at low W with C+G
+processes present = shared, not a code regression). This is why the original
+"4× gap" was trusted wrongly: one contended run was mistaken for the steady-state
+ceiling.
+
 ---
 
 ## 6. Training & Usage Guide

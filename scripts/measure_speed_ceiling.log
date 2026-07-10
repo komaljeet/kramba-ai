@@ -1,0 +1,47 @@
+W0709 16:21:27.399000 15256 Lib\site-packages\torch\_inductor\utils.py:1717] [0/1] Not enough SMs to use max_autotune_gemm mode
+GPU: NVIDIA GeForce RTX 4050 Laptop GPU  VRAM: 6.4 GB
+
+========================================================================
+MEASUREMENT 3 — padding ratio in the real pretraining data (seq=512)
+========================================================================
+  [slimpajama] MISSING (C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\data_cache\tokenized\slimpajama.bin) — skip
+  [oasst] MISSING (C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\data_cache\tokenized\oasst.bin) — skip
+  [wikitext] MISSING (C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\data_cache\tokenized\wikitext.bin) — skip
+
+  total train windows across sources: 0
+  By construction every train window is exactly seq_len+1 (no padding).
+  -> #92 sequence packing is a NO-OP for this data path (no padding to kill).
+
+========================================================================
+MEASUREMENT 1 — scan share of the step (--fast config)
+========================================================================
+  config: d=512 L=12 H=8 B=4 S=512 bf16+TF32, grad_accum=8
+
+  [eager + triton-scan]
+    real micro-batch fwd+bwd :   168.6 ms
+    passthrough (no scan)    :    79.9 ms
+    -> scan share of step    :  52.6%  (scan alone ~88.7 ms)
+
+  [compile + triton-scan (--fast)]
+    real micro-batch fwd+bwd :   143.5 ms
+    passthrough (no scan)    :    58.1 ms
+    -> scan share of step    :  59.5%  (scan alone ~85.4 ms)
+
+  Implied STEP speedup from a scan kernel that speeds the scan by Kx
+  (step_speedup = 1 / (1 - share + share/K)):
+    eager + triton-scan              share=52.6%    K=2x->1.36x  K=3x->1.54x  K=4x->1.65x
+    compile + triton-scan (--fast)   share=59.5%    K=2x->1.42x  K=3x->1.66x  K=4x->1.81x
+
+========================================================================
+MEASUREMENT 2 — real training-step throughput (anchor to ~0.4 steps/s)
+========================================================================
+
+  --fast (compile+triton-scan), step = 8 fwd+bwd + opt:
+     1236.3 ms/step   ->   0.81 steps/s   (GPU compute only, no data loader)
+    reported 200-step steady-state: ~0.4 steps/s (2.5 s/step, WITH data loader)
+
+  verdict: GPU compute (~0.8 steps/s) >> reported 0.4 -> DATA LOADING/overhead is a large share of the real step; #95 scan kernel alone may NOT reach 2x. Investigate data pipeline (workers/prefetch) alongside #95.
+
+========================================================================
+DONE — measurements above re-rank #92/#93/#95 for the 2x wall-clock goal.
+========================================================================

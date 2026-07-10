@@ -1,0 +1,85 @@
+C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\profiler\profiler.py:272: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+USDT:2026-07-10 09:36:52 9156:21516 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-07-10 09:37:02 9156:21516 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+GPU: NVIDIA GeForce RTX 4050 Laptop GPU
+
+========================================================================
+REAL-BUILD ISOLATE — real build_model_and_config (ternary) + post-hoc triton + compile
+========================================================================
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      True
+  precision:         bf16
+  batch_size:        4
+  grad_accum:        8 (effective batch = 32)
+  seq_len:           512
+  d_model:           512
+  num_layers:        12
+  n_heads:           8
+  optimizer:         AdamW (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\profile_real_build/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\profile_real_build/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn)...
+  Architecture: hvn  |  total params: 83,094,705
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 84 nn.Linear layers with TernaryLinear (STE)
+  Excluded 25 gate/decoder layers
+
+  Weight storage (dense fp32):  316.98 MB
+  Weight storage (ternary):     214.33 MB
+  Compression ratio:            1.48x
+
+✓ Step 3 complete.
+
+  [probe] post-hoc triton-scan set on 12 blocks
+  warming 8 steps (compile)...
+  -> 1222 ms/step  =  0.82 steps/s
+
+  [probe] profiling 8 steps under torch.profiler for kernel diff...
+
+==============================================================================
+[probe] REAL-BUILD kernel breakdown (self GPU time, top 25)
+==============================================================================
+   self GPU us   %GPU       cpu us    count  key
+--------------------------------------------------------------------------------
+       9688516  16.0%            0        8  ProfilerStep*
+       5548210   9.2%        11734       64  autograd::engine::evaluate_function: CompiledFunctionBackward
+       5548210   9.2%        14688       64  CompiledFunctionBackward
+       5548210   9.2%       519127       64  ## Call CompiledFxGraph f7n3ieetpma5do4xcunulw2cozw52om2fpjeaywz65lj6iedjd2y ##
+       3107718   5.1%      1834927        8  ProfilerStep*
+       2571902   4.2%        24347       64  Torch-Compiled Region: 0/0
+       2571902   4.2%        23363       64  CompiledFunction
+       2571902   4.2%       495204       64  ## Call CompiledFxGraph fekmah67lb5rh3j5qdrxayda6l2oy244ii7ki2oht5hbdctbyzzv ##
+       1726099   2.8%            0      776  _gd_bwd_kernel
+       1708283   2.8%         7689      768  _gd_bwd_kernel_1
+       1689009   2.8%       305654    19328  aten::mm
+       1608310   2.7%            0      775  _gd_fwd_states_kernel
+       1593783   2.6%         9290      768  _gd_fwd_states_kernel_0
+       1258514   2.1%        11831      768  _gated_delta_fwd_kernel_0
+       1258514   2.1%            0      768  _gated_delta_fwd_kernel
+        579675   1.0%        28035     1600  aten::addmm
+        471126   0.8%         7967      896  aten::copy_
+        450722   0.7%          637     1976  aten::to
+        450722   0.7%         1011      128  aten::_to_copy
+        426751   0.7%            0       64  _ZN7cutlass7Kernel2I57cutlass_75_tensorop_bf16_s1688gemm_bf16_128x256_tn_align1EEvNT_6ParamsE
+        417210   0.7%            0     6207  ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nn
+        415661   0.7%            0     6240  ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nt
+        369906   0.6%          535       64  aten::cross_entropy_loss
+        327587   0.5%            0    12597  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIfEESt5arrayIPcLy3EEEEviT0_T1_
+        321839   0.5%        45393    14144  autograd::engine::evaluate_function: torch::autograd::AccumulateGrad
+
+========================================================================
+VERDICT — real-build + minimal loop
+========================================================================
+  this run    : 0.82 steps/s  (1222 ms/step)
+  real script : 0.40 steps/s  (2480 ms/step)
+  my isolates : 0.81 steps/s  (1223 ms/step)
+  -> reproduces 0.4? NO (cause is in the real loop/main flow)
+========================================================================

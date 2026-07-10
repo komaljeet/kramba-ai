@@ -1,0 +1,135 @@
+GPU: NVIDIA GeForce RTX 4050 Laptop GPU
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 144,853,865  |  windows/source: [252205, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 144853865
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      True
+  precision:         bf16
+  batch_size:        4
+  grad_accum:        8 (effective batch = 32)
+  seq_len:           512
+  d_model:           512
+  num_layers:        12
+  n_heads:           8
+  optimizer:         AdamW (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\verify_audit_cause/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\verify_audit_cause/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn)...
+  Architecture: hvn  |  total params: 83,094,705
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 84 nn.Linear layers with TernaryLinear (STE)
+  Excluded 25 gate/decoder layers
+
+  Weight storage (dense fp32):  316.98 MB
+  Weight storage (ternary):     214.33 MB
+  Compression ratio:            1.48x
+
+✓ Step 3 complete.
+
+======================================================================
+STEP 4 — PRE-TRAINING AUDIT
+======================================================================
+
+  [Check 1] DataLoader token shapes...
+    batch_src (source IDs): tensor([0, 1, 1, 0])
+    batch_x shape: torch.Size([4, 512]) (expected (4, 512))
+    batch_y shape: torch.Size([4, 512]) (expected (4, 512))
+    batch_x dtype: torch.int64 (expected torch.long)
+    batch_x range: [0, 47859]
+    ✓ Shapes correct
+
+  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...
+    Input shape:  torch.Size([4, 512])
+    Output shape: torch.Size([4, 512, 50257]) (expected [4, 512, 50257])
+    ✓ Forward pass correct
+    ✓ Backward pass correct (loss = 10.9865)
+    ✓ Ternary weight gradients present (STE working)
+
+  [Check 3] Checkpoint save/load cycle...
+    ✓ Save: C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\verify_audit_cause\audit_test_checkpoint.pt
+    ✓ Load: keys = ['model_state_dict', 'vocab_size', 'd_model', 'num_layers', 'n_heads', 'n_threads', 'chunk_size', 'use_deltanet', 'deltanet_conv_kernel', 'block_type', 'ternary', 'weightless', 'weightless_seed', 'is_edge', 'shared_weights', 'global_step']
+    ✓ n_heads in checkpoint: 8
+    ✓ State dict loads into rebuilt model
+    ✓ Cleaned up test checkpoint
+
+  ✓ All audit checks passed!
+✓ Step 4 complete.
+
+  [probe] post-hoc triton-scan set on 12 blocks
+  [probe] compiling...
+
+======================================================================
+WITH-AUDIT T.train() — audit BEFORE compile, log_every=50, max_steps=200 (matches real)
+======================================================================
+
+======================================================================
+STEP 5 — START TRAINING
+======================================================================
+
+  Model parameter count:     83,094,705
+  Ternary compression ratio: 1.48x
+  Dense fp32 weight size:     316.98 MB
+  Ternary weight size:        214.33 MB
+  Optimizer: AdamW (lr=0.0003, wd=0.01, fused=True)
+  Mixed-precision: BF16 (Issue #80)
+
+  Training for up to 200 steps (effective batch = 32)
+  Logging every 50 steps | Checkpoint every 100000 steps
+----------------------------------------------------------------------
+  Step     50 (epoch 0)  |  Loss: 10.4905  |  PPL: 35973.73  |  LR: 0.000029  |  0.6 steps/s
+    Per-source: SlimPajama: 10.7970 (n=941)  |  OpenAssistant: 10.8113 (n=659)
+  ⏱ Estimated 1.75s/step | ~175345s per checkpoint interval
+  Step    100 (epoch 0)  |  Loss: 8.8755  |  PPL: 7154.62  |  LR: 0.000059  |  0.7 steps/s
+    Per-source: SlimPajama: 9.6366 (n=926)  |  OpenAssistant: 9.7138 (n=674)
+  Step    150 (epoch 0)  |  Loss: 7.8844  |  PPL: 2655.54  |  LR: 0.000089  |  0.7 steps/s
+    Per-source: SlimPajama: 8.2734 (n=990)  |  OpenAssistant: 8.0880 (n=610)
+  Step    200 (epoch 0)  |  Loss: 6.9400  |  PPL: 1032.78  |  LR: 0.000119  |  0.7 steps/s
+    Per-source: SlimPajama: 7.6552 (n=974)  |  OpenAssistant: 6.9778 (n=626)
+
+======================================================================
+TRAINING COMPLETE
+======================================================================
+  Total steps:     200
+  Total time:       312.5s (5.2 min)
+  Avg time/step:    1.562s
+  Final checkpoint: C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\verify_audit_cause\edge_conversational.pt
+  Training log:     C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\verify_audit_cause\training_log.csv
+✓ Step 5 complete.
+
+======================================================================
+Compare steps 100/150/200 to the real script (0.4 steps/s):
+  ~0.4 -> reproduced; probe == real script (audit + long run is the cause)
+  ~0.7 -> a remaining difference in main() still to find
+======================================================================

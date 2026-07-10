@@ -1,0 +1,105 @@
+GPU: NVIDIA GeForce RTX 4050 Laptop GPU
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      True
+  precision:         bf16
+  batch_size:        4
+  grad_accum:        8 (effective batch = 32)
+  seq_len:           512
+  d_model:           512
+  num_layers:        12
+  n_heads:           8
+  optimizer:         AdamW (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\thermal_probe/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\measure-speed-ceiling\checkpoints\thermal_probe/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn)...
+  Architecture: hvn  |  total params: 83,094,705
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 84 nn.Linear layers with TernaryLinear (STE)
+  Excluded 25 gate/decoder layers
+
+  Weight storage (dense fp32):  316.98 MB
+  Weight storage (ternary):     214.33 MB
+  Compression ratio:            1.48x
+
+✓ Step 3 complete.
+
+Warming 8 steps (compile)...
+
+Timed run — 60 continuous steps, per-step ms + GPU state every 5 steps
+ step  ms/step  steps/s    tempC  SMclk  SMmax   pwrW
+------------------------------------------------------------
+    1     1226     0.82       60   2550   3105   63.6
+    2     1226     0.82       61   2550   3105   64.2
+    3     1226     0.82       61   2550   3105   61.7
+    4     1225     0.82
+    5     1223     0.82       62   2550   3105   64.2
+    6     1224     0.82
+    7     1226     0.82
+    8     1224     0.82
+    9     1224     0.82
+   10     1223     0.82       64   2550   3105   64.7
+   11     1225     0.82
+   12     1225     0.82
+   13     1224     0.82
+   14     1226     0.82
+   15     1225     0.82       65   2550   3105   65.0
+   16     1226     0.82
+   17     1225     0.82
+   18     1225     0.82
+   19     1227     0.82
+   20     1225     0.82       68   2550   3105   65.5
+   21     1226     0.82
+   22     1224     0.82
+   23     1225     0.82
+   24     1223     0.82
+   25     1226     0.82       68   2550   3105   66.3
+   26     1225     0.82
+   27     1225     0.82
+   28     1225     0.82
+   29     1225     0.82
+   30     1225     0.82       69   2550   3105   66.3
+   31     1225     0.82
+   32     1223     0.82
+   33     1225     0.82
+   34     1227     0.81
+   35     1226     0.82       70   2535   3105   67.1
+   36     1226     0.82
+   37     1228     0.81
+   38     1226     0.82
+   39     1226     0.82
+   40     1227     0.81       71   2535   3105   67.2
+   41     1227     0.81
+   42     1225     0.82
+   43     1227     0.82
+   44     1225     0.82
+   45     1226     0.82       72   2535   3105   67.3
+   46     1228     0.81
+   47     1225     0.82
+   48     1225     0.82
+   49     1230     0.81
+   50     1227     0.82       73   2535   3105   68.2
+   51     1226     0.82
+   52     1228     0.81
+   53     1225     0.82
+   54     1225     0.82
+   55     1226     0.82       74   2535   3105   68.3
+   56     1226     0.82
+   57     1225     0.82
+   58     1227     0.82
+   59     1228     0.81
+   60     1226     0.82       75   2535   3105   68.6
+------------------------------------------------------------
+Overall: 60 steps in 74.3s = 0.81 steps/s avg
+First 10 avg: 0  Last 10 vs first 10 shows the throttling trend.
+============================================================
+VERDICT:
+  if last-10 ms/step >> first-10 ms/step  -> THERMAL/POWER throttling confirmed
+  if flat                              -> throttling NOT it; cause is elsewhere
+============================================================

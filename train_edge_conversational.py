@@ -24,6 +24,7 @@ is exactly what EdgeHVN produces (no KV cache, fixed-size Hamiltonian).
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import math
@@ -261,6 +262,44 @@ def hardware_scan() -> dict:
 
 # GPT-2 vocab size (50257) — used as the tokenizer baseline
 GPT2_VOCAB_SIZE = 50257
+
+# Module-level torch.profiler handle; set by main() when --profile is passed so
+# the training loop can call ._PROF.step() once per optimizer step (see train()).
+_PROF = None
+
+
+def _fmt_profile_table(prof, row_limit: int = 25) -> str:
+    """Render torch.profiler key_averages as a self-device-time-sorted table.
+
+    Robust across torch versions: EventList.table()'s kwargs change between
+    releases (torch 2.12 rejects ``sort=``), so we read the Event attributes
+    directly and sort by self device (GPU) time — the metric that attributes the
+    bottleneck to the op whose own kernels actually burn the GPU.
+    """
+    ka = prof.key_averages()
+
+    def _self_dev(e):
+        for a in ("self_device_time_total", "self_cuda_time_total",
+                  "device_time_total", "cuda_time_total"):
+            v = getattr(e, a, None)
+            if v:
+                return float(v)
+        return 0.0
+
+    def _cpu(e):
+        return float(getattr(e, "self_cpu_time_total", 0.0) or getattr(e, "cpu_time_total", 0.0) or 0.0)
+
+    def _cnt(e):
+        return int(getattr(e, "count", 0) or 0)
+
+    rows = sorted(ka, key=_self_dev, reverse=True)[:row_limit]
+    tot = sum(_self_dev(e) for e in ka) or 1.0
+    out = [f"{'self GPU us':>14} {'%GPU':>6} {'cpu us':>12} {'count':>8}  key",
+           "-" * 80]
+    for e in rows:
+        d = _self_dev(e)
+        out.append(f"{d:>14.0f} {100 * d / tot:>5.1f}% {_cpu(e):>12.0f} {_cnt(e):>8d}  {e.key}")
+    return "\n".join(out)
 
 
 def _download_language_foundation(max_bytes: int, cache_dir: str, slimpajama_dir: str | None = None) -> str:
@@ -948,15 +987,25 @@ def pre_training_audit(
         all_passed = False
 
     # --- Check 2: Forward pass runs without error ---
+    # Runs on a THROWAWAY deepcopy of the model. The real `model` is about to be
+    # torch.compile'd by the caller; an eager forward+backward on it BEFORE
+    # compile perturbs the compiled graph (autograd/allocator state) and makes
+    # training ~0.1 s/step slower (measured: 0.7 vs 0.81 steps/s, #95). Running
+    # the audit on an identical copy leaves the real model pristine for compile
+    # while still validating that the architecture + ternary STE forward/backward
+    # works. The copy is freed immediately after.
     print("\n  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...")
+    audit_model = None
     try:
-        model.eval()
+        audit_model = copy.deepcopy(model)
         x = batch_x.to(device)
         precision = config.get("precision", "bf16")
         use_amp = precision in ("fp16", "bf16")
         amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
+
+        audit_model.eval()
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
-            logits = model(x)
+            logits = audit_model(x)
         print(f"    Input shape:  {x.shape}")
         print(f"    Output shape: {logits.shape} (expected [{x.shape[0]}, {x.shape[1]}, {GPT2_VOCAB_SIZE}])")
         if logits.shape[0] != x.shape[0] or logits.shape[1] != x.shape[1]:
@@ -969,10 +1018,10 @@ def pre_training_audit(
             print(f"    ✓ Forward pass correct")
 
         # Also test backward pass
-        model.train()
+        audit_model.train()
         y = batch_y.to(device)
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
-            logits = model(x)
+            logits = audit_model(x)
             loss = nn.CrossEntropyLoss()(
                 logits.reshape(-1, GPT2_VOCAB_SIZE),
                 y.reshape(-1),
@@ -982,7 +1031,7 @@ def pre_training_audit(
 
         # Check gradients exist on ternary weights
         has_grad = False
-        for name, mod in model.named_modules():
+        for name, mod in audit_model.named_modules():
             if isinstance(mod, TernaryLinear) and mod.weight.grad is not None:
                 has_grad = True
                 break
@@ -991,13 +1040,17 @@ def pre_training_audit(
         else:
             print(f"    ⚠ No ternary weight gradients found (may be normal if all grads are None)")
 
-        # Zero gradients for training
-        model.zero_grad()
+        # Zero gradients (on the throwaway copy; the real model was never touched).
+        audit_model.zero_grad()
     except Exception as e:
         print(f"    ❌ Forward/backward check failed: {e}")
         import traceback
         traceback.print_exc()
         all_passed = False
+    finally:
+        # Free the throwaway copy's VRAM before training allocates activations.
+        del audit_model
+        torch.cuda.empty_cache()
 
     # --- Check 3: Checkpoint save and load cycle ---
     print("\n  [Check 3] Checkpoint save/load cycle...")
@@ -1425,6 +1478,10 @@ def train(
             micro_step = 0
             global_step += 1
 
+            # torch.profiler step boundary (only active under --profile)
+            if _PROF is not None:
+                _PROF.step()
+
             # After warmup, advance the cosine scheduler every step
             if warmup_done:
                 scheduler.step()
@@ -1596,6 +1653,11 @@ def main():
                              "α<0.31). Beats --compile alone (196 vs 232 ms/microbatch); "
                              "does NOT combine with --compile (data-dependent chunk). "
                              "HVN arch only; mutually exclusive with --triton-scan.")
+    parser.add_argument("--profile", action="store_true",
+                        help="Profile steady-state training with torch.profiler (skips the "
+                             "first ~12 compile-warmup steps, records the next ~30, then "
+                             "prints a kernel-level breakdown and exits). Diagnostic only; "
+                             "default behavior is unchanged when this flag is absent.")
     parser.add_argument("--tf32", action="store_true",
                         help="Enable TF32 for fp32 matmuls (Issue #81). TF32 uses 19-bit "
                              "precision (10 mantissa bits) for the internal matmul accumulate, "
@@ -1799,16 +1861,51 @@ def main():
         print("\n  Compiling model with torch.compile (first steps will be slow)...")
         model = torch.compile(model)
 
-    train(
-        model=model,
-        dataloader=dataloader,
-        config=config,
-        device=device,
-        checkpoint_dir=args.checkpoint_dir,
-        max_steps=args.max_steps,
-        resume_step=resume_step,
-        val_loader=val_loader,
-    )
+    if args.profile:
+        # Steady-state profiling: skip the first ~12 compile-warmup optimizer steps,
+        # warm up 2, record the next 30, then stop. _PROF.step() (called once per
+        # optimizer step in train()) marks the step boundaries the schedule counts.
+        import torch.profiler as _tp
+        _prof = _tp.profile(
+            activities=[_tp.ProfilerActivity.CPU, _tp.ProfilerActivity.CUDA],
+            schedule=_tp.schedule(wait=12, warmup=2, active=30, repeat=1),
+        )
+        _prof.__enter__()
+        globals()["_PROF"] = _prof
+        print("\n  [profile] torch.profiler armed — skipping first ~12 compile-warmup steps.")
+        try:
+            train(
+                model=model,
+                dataloader=dataloader,
+                config=config,
+                device=device,
+                checkpoint_dir=args.checkpoint_dir,
+                max_steps=args.max_steps,
+                resume_step=resume_step,
+                val_loader=val_loader,
+            )
+        finally:
+            # Render BEFORE __exit__: the schedule clears events at cycle end, so
+            # key_averages() is most reliable while the profiler context is live.
+            print("\n" + "=" * 78)
+            print("[profile] steady-state kernel breakdown (self GPU time, top 25)")
+            print("=" * 78)
+            try:
+                print(_fmt_profile_table(_prof, row_limit=25))
+            except Exception as _e:
+                print(f"[profile] could not render table: {_e!r}")
+            _prof.__exit__(None, None, None)
+    else:
+        train(
+            model=model,
+            dataloader=dataloader,
+            config=config,
+            device=device,
+            checkpoint_dir=args.checkpoint_dir,
+            max_steps=args.max_steps,
+            resume_step=resume_step,
+            val_loader=val_loader,
+        )
 
     # HuggingFace `datasets` streaming leaves background download threads that
     # cause "Fatal Python error: PyInterpreterState_Delete: remaining threads"
