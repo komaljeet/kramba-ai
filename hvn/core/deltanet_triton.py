@@ -232,3 +232,156 @@ def gated_delta_scan(q, k, v, alpha, beta):
     """
     assert _HAS_TRITON and q.is_cuda, "CUDA + triton required"
     return _GatedDeltaScan.apply(q, k, v, alpha, beta)
+
+
+# ===========================================================================
+# Chunk-parallel scan (#95) — stable at all decay, fast at all decay.
+# ===========================================================================
+# The sequential kernel above is exact and alpha-independent but does S token
+# steps in series (~60% of the HVN training step at --fast). This chunk-parallel
+# path replaces those S tiny sequential state updates with S/C chunk carries +
+# O(C^2 d) parallel matmuls / a fused triangular solve per chunk.
+#
+# The one numerically-novel op is the *per-channel causal Gram matrix*
+#
+#     G[i,j] = sum_d a[i,d] b[j,d] * exp(logP[i,d] - logP[j,d])     (j <= i)
+#
+# where logP = cumsum(log alpha) is the inclusive log cumprod of the per-channel
+# decay. Forming the ratio as exp(logP_i - logP_j) (masked to the causal lower
+# triangle *before* the exp) keeps every factor in (0, 1] -- it never
+# materializes 1/P, the term that overflows fp32 to Inf once cumprod-alpha
+# underflows and makes the eager _scan_chunked silently wrong at hard decay.
+# That ratio is per-channel (a [L,L,d] tensor), so the fused Triton kernel
+# computes it tile-by-tile in SRAM (a [BI,BJ,BD] register tile) and writes only
+# the [N,L,L] result G to HBM. See DeltaNetBlock._scan_chunked_stable for the
+# eager reference (validated to ~1e-7 fwd / ~1e-5 bwd at all decay).
+#
+# The triangular solve, the S_in reads, the QK@U read, and the cross-chunk state
+# carry are all stock PyTorch ops (cuBLAS solve + matmul), so autograd composes
+# the whole scan's backward from the single hand-written log-Gram adjoint.
+
+if _HAS_TRITON:
+
+    @triton.jit
+    def _loggram_fwd_kernel(a_ptr, b_ptr, logP_ptr, out_ptr,
+                            N, L,
+                            D: tl.constexpr,
+                            STRICT: tl.constexpr,
+                            BLOCK_I: tl.constexpr,
+                            BLOCK_J: tl.constexpr,
+                            BLOCK_D: tl.constexpr):
+        """Per-channel causal log-space Gram: G[i,j] = sum_d a[i,d] b[j,d]
+        exp(logP[i,d]-logP[j,d]), masked to j<i (STRICT=1) or j<=i (STRICT=0).
+
+        Grid (N, L//BI, L//BJ). Inputs [N, L, d] contiguous; out [N, L, L].
+        """
+        pid_n = tl.program_id(0)
+        pid_i = tl.program_id(1)
+        pid_j = tl.program_id(2)
+        ri = pid_i * BLOCK_I + tl.arange(0, BLOCK_I)      # [BI]
+        rj = pid_j * BLOCK_J + tl.arange(0, BLOCK_J)      # [BJ]
+        li = ri < L
+        lj = rj < L
+        # causal validity over (i, j)
+        if STRICT:
+            ij = rj[None, :] < ri[:, None]
+        else:
+            ij = rj[None, :] <= ri[:, None]
+        valid = ij & li[:, None] & lj[None, :]            # [BI, BJ]
+
+        acc = tl.zeros((BLOCK_I, BLOCK_J), dtype=tl.float32)
+        base = pid_n * L * D
+        for d0 in range(0, D, BLOCK_D):
+            rd = d0 + tl.arange(0, BLOCK_D)               # [BD]
+            ld = rd < D
+            a_ptrs = a_ptr + base + ri[:, None] * D + rd[None, :]
+            b_ptrs = b_ptr + base + rj[:, None] * D + rd[None, :]
+            p_i_ptrs = logP_ptr + base + ri[:, None] * D + rd[None, :]
+            p_j_ptrs = logP_ptr + base + rj[:, None] * D + rd[None, :]
+            a_id = tl.load(a_ptrs, mask=li[:, None] & ld[None, :], other=0.0)
+            b_jd = tl.load(b_ptrs, mask=lj[:, None] & ld[None, :], other=0.0)
+            lp_i = tl.load(p_i_ptrs, mask=li[:, None] & ld[None, :], other=0.0)
+            lp_j = tl.load(p_j_ptrs, mask=lj[:, None] & ld[None, :], other=0.0)
+            logr = lp_i[:, None, :] - lp_j[None, :, :]     # [BI, BJ, BD]
+            logr = tl.where(valid[:, :, None], logr, float('-inf'))
+            ratio = tl.exp(logr)                            # (0,1] u {0}
+            prod = a_id[:, None, :] * b_jd[None, :, :] * ratio
+            acc += tl.sum(prod, axis=2)
+        out_ptrs = out_ptr + pid_n * L * L + ri[:, None] * L + rj[None, :]
+        tl.store(out_ptrs, acc, mask=li[:, None] & lj[None, :])
+
+
+def _log_gram_ref(a, b, logP, strict):
+    """Eager fp32 reference for the log-Gram (the oracle's A/QK core)."""
+    N, L, d = a.shape
+    idx = torch.arange(L, device=a.device)
+    mask = (idx[None, :] < idx[:, None]) if strict else (idx[None, :] <= idx[:, None])
+    logR = logP[:, :, None] - logP[:, None, :]               # [N,L,L,d]
+    ratio = torch.exp(logR.masked_fill(~mask[:, :, None], float('-inf')))
+    return torch.einsum('nid,njd,nijd->nij', a, b, ratio)     # [N,L,L]
+
+
+def log_gram(a, b, logP, strict: bool):
+    """Fused per-channel causal log-space Gram (forward only — the autograd
+    Function is added once its backward is validated). a, b, logP : [N, L, d]
+    contiguous fp32 on CUDA. Returns G : [N, L, L]."""
+    assert _HAS_TRITON and a.is_cuda, "CUDA + triton required"
+    N, L, D = a.shape
+    a = a.contiguous().float()
+    b = b.contiguous().float()
+    logP = logP.contiguous().float()
+    G = torch.empty(N, L, L, device=a.device, dtype=torch.float32)
+    BLOCK_I, BLOCK_J, BLOCK_D = 16, 16, 16
+    grid = (N, triton.cdiv(L, BLOCK_I), triton.cdiv(L, BLOCK_J))
+    _loggram_fwd_kernel[grid](a, b, logP, G, N, L,
+                              D=D, STRICT=int(strict),
+                              BLOCK_I=BLOCK_I, BLOCK_J=BLOCK_J, BLOCK_D=BLOCK_D)
+    return G
+
+
+def chunked_scan_forward(q, k, v, alpha, beta, chunk: int = 128):
+    """Chunk-parallel gated delta-rule scan — FORWARD only (#95). Same math as
+    DeltaNetBlock._scan_chunked_stable, but the per-channel causal Gram (A, QK)
+    is the fused Triton log-Gram and the solve / S_in matmuls / carry are stock
+    cuBLAS ops. Exact at all decay; the [N,L,L,d] ratio never hits HBM.
+
+    q, k, v, alpha : [N, S, d]  ;  beta : [N, S, 1]  ->  o : [N, S, d] (fp32).
+    """
+    assert _HAS_TRITON and q.is_cuda, "CUDA + triton required"
+    N, S, d = q.shape
+    dev = q.device
+    with torch.autocast(device_type=dev.type, enabled=False):
+        q, k, v = q.float(), k.float(), v.float()
+        beta = beta.float()
+        if alpha is not None:
+            alpha = alpha.float()
+        S_in = torch.zeros(N, d, d, device=dev, dtype=torch.float32)
+        outs = []
+        for s in range(0, S, chunk):
+            e = min(s + chunk, S)
+            L = e - s
+            qc, kc, vc = q[:, s:e], k[:, s:e], v[:, s:e]      # [N, L, d]
+            bc = beta[:, s:e]                                  # [N, L, 1]
+            if alpha is not None:
+                logP = torch.cumsum(torch.log(alpha[:, s:e].clamp_min(1e-30)), dim=1)
+            else:
+                logP = torch.zeros(N, L, d, device=dev, dtype=torch.float32)
+            P = torch.exp(logP)
+            P_last = P[:, -1, :]                                # [N, d]
+            logP_last = logP[:, -1, :]                          # [N, d]
+            kbar = kc * P
+            qbar = qc * P
+            Sk = torch.einsum('nvk,nlk->nlv', S_in, kbar)       # [N, L, d]
+            R = bc * (vc - Sk)                                  # [N, L, d]
+            A = bc * log_gram(kc, kc, logP, strict=True)        # [N, L, L] strictly lower
+            M = torch.eye(L, device=dev, dtype=torch.float32) + A
+            U = torch.linalg.solve_triangular(M, R, upper=False, unitriangular=True)
+            QK = log_gram(qc, kc, logP, strict=False)           # [N, L, L] lower incl diag
+            O = (torch.einsum('nvk,nlk->nlv', S_in, qbar)
+                 + torch.einsum('nij,njv->niv', QK, U))         # [N, L, d]
+            outs.append(O)
+            k_scaled = kc * torch.exp(logP_last[:, None, :] - logP)
+            S_in = (S_in * P_last[:, None, :]
+                    + torch.einsum('niv,nik->nvk', U, k_scaled))
+        oN = torch.cat(outs, dim=1)                            # [N, S, d]
+    return oN
