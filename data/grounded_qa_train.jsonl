@@ -1,0 +1,40 @@
+{"passage": "Japan is an island country in East Asia. Its capital and largest city is Tokyo, located on the island of Honshu.", "question": "What is the capital of Japan?", "answer": "Tokyo"}
+{"passage": "The Nile is a major river in northeastern Africa. It is generally regarded as the longest river in the world, flowing about 6,650 kilometers.", "question": "What is the longest river in the world?", "answer": "Nile"}
+{"passage": "The Sahara is a desert on the African continent. It is the largest hot desert in the world, covering much of North Africa.", "question": "What is the largest hot desert in the world?", "answer": "Sahara"}
+{"passage": "Australia is a country and continent in the Southern Hemisphere. Its capital city is Canberra, not Sydney or Melbourne as many people assume.", "question": "What is the capital of Australia?", "answer": "Canberra"}
+{"passage": "Mount Everest is the highest mountain on Earth. It is located in the Himalayas on the border between Nepal and China, with a peak at 8,849 meters.", "question": "Where is Mount Everest located?", "answer": "Himalayas"}
+{"passage": "Light travels in a vacuum at approximately 299,792 kilometers per second, a value known as the speed of light and denoted by the letter c.", "question": "What is the speed of light?", "answer": "299,792 kilometers per second"}
+{"passage": "The chemical formula for water is H2O, meaning each molecule contains two hydrogen atoms and one oxygen atom.", "question": "What is the chemical formula for water?", "answer": "H2O"}
+{"passage": "The structure of DNA was discovered in 1953 by James Watson and Francis Crick, who proposed the double helix model based on X-ray data.", "question": "Who discovered the structure of DNA?", "answer": "James Watson and Francis Crick"}
+{"passage": "The Sun is the star at the center of the Solar System. It is the closest star to Earth and provides the energy that sustains life on our planet.", "question": "What is the closest star to Earth?", "answer": "Sun"}
+{"passage": "Jupiter is the largest planet in the Solar System. It is a gas giant with a famous feature called the Great Red Spot, a huge storm.", "question": "What is the largest planet in the Solar System?", "answer": "Jupiter"}
+{"passage": "Saturn is a gas giant famous for its prominent ring system, which is made mostly of ice and rock particles.", "question": "Which planet is famous for its rings?", "answer": "Saturn"}
+{"passage": "Mars is the fourth planet from the Sun. It is often called the Red Planet because of its reddish appearance from iron oxide on its surface.", "question": "Which planet is called the Red Planet?", "answer": "Mars"}
+{"passage": "The human genome is organized into 23 pairs of chromosomes, for a total of 46 chromosomes in each normal cell.", "question": "How many pairs of chromosomes do humans have?", "answer": "23"}
+{"passage": "The heart is a muscular organ that pumps blood through the circulatory system of the body.", "question": "What does the heart pump through the body?", "answer": "blood"}
+{"passage": "Plants produce their own food through a process called photosynthesis, which uses sunlight to convert carbon dioxide and water into glucose.", "question": "What process do plants use to make food?", "answer": "photosynthesis"}
+{"passage": "George Washington was the first president of the United States, serving from 1789 to 1797.", "question": "Who was the first president of the United States?", "answer": "George Washington"}
+{"passage": "World War II ended in 1945 with the surrender of Japan, following the surrender of Germany earlier that year in May.", "question": "In what year did World War II end?", "answer": "1945"}
+{"passage": "The novel 1984 was written by George Orwell and published in 1949 as a warning about totalitarianism.", "question": "Who wrote the novel 1984?", "answer": "George Orwell"}
+{"passage": "Pride and Prejudice is a classic novel by Jane Austen, first published in 1813.", "question": "Who wrote Pride and Prejudice?", "answer": "Jane Austen"}
+{"passage": "The chemical symbol for gold is Au, which comes from the Latin word aurum.", "question": "What is the chemical symbol for gold?", "answer": "Au"}
+{"passage": "The chemical symbol for sodium is Na, derived from the Latin word natrium.", "question": "What is the chemical symbol for sodium?", "answer": "Na"}
+{"passage": "Oxygen has the atomic number 8, meaning each oxygen atom has 8 protons in its nucleus.", "question": "What is the atomic number of oxygen?", "answer": "8"}
+{"passage": "The Pythagorean theorem states that in a right triangle, the square of the hypotenuse equals the sum of the squares of the other two sides, often written as a squared plus b squared equals c squared.", "question": "In the Pythagorean theorem, what equals a squared plus b squared?", "answer": "c squared"}
+{"passage": "The mathematical constant pi is approximately 3.14, representing the ratio of a circle's circumference to its diameter.", "question": "What is the approximate value of pi?", "answer": "3.14"}
+{"passage": "The telephone was invented by Alexander Graham Bell in 1876.", "question": "Who invented the telephone?", "answer": "Alexander Graham Bell"}
+{"passage": "The World Wide Web was invented by Tim Berners-Lee in 1989 at CERN.", "question": "Who invented the World Wide Web?", "answer": "Tim Berners-Lee"}
+{"passage": "The Mona Lisa is a famous portrait painted by Leonardo da Vinci during the Italian Renaissance.", "question": "Who painted the Mona Lisa?", "answer": "Leonardo da Vinci"}
+{"passage": "Ludwig van Beethoven was a German composer who wrote nine symphonies, despite becoming deaf later in life.", "question": "How many symphonies did Beethoven write?", "answer": "nine"}
+{"passage": "The currency of the United Kingdom is the pound sterling, often symbolized with the pound sign.", "question": "What is the currency of the United Kingdom?", "answer": "pound sterling"}
+{"passage": "Mandarin Chinese is the most spoken native language in the world by number of speakers.", "question": "What is the most spoken native language in the world?", "answer": "Mandarin Chinese"}
+{"passage": "The Olympic flag features five interlocking rings, representing the five continents of the world.", "question": "How many rings are on the Olympic flag?", "answer": "five"}
+{"passage": "The Great Wall of China was built over many centuries to protect against invasions from the north.", "question": "What was the Great Wall of China built to protect against?", "answer": "invasions"}
+{"passage": "The Colosseum is a large amphitheater in Rome, Italy, built in the Roman Empire for public spectacles.", "question": "In which city is the Colosseum located?", "answer": "Rome"}
+{"passage": "The Statue of Liberty was a gift from France to the United States, located in New York Harbor.", "question": "What country gifted the Statue of Liberty?", "answer": "France"}
+{"passage": "The Pacific Ocean is the largest and deepest ocean on Earth, covering more area than all the landmasses combined.", "question": "What is the largest ocean on Earth?", "answer": "Pacific"}
+{"passage": "Mercury is the closest planet to the Sun and has no atmosphere to retain heat, causing extreme temperature swings.", "question": "Which planet is closest to the Sun?", "answer": "Mercury"}
+{"passage": "A caterpillar transforms into a butterfly through a process called metamorphosis.", "question": "What does a caterpillar transform into?", "answer": "butterfly"}
+{"passage": "The currency used in Japan is the yen, which is issued by the Bank of Japan.", "question": "What is the currency of Japan?", "answer": "yen"}
+{"passage": "Albert Einstein developed the theory of relativity, which includes the famous equation energy equals mass times the speed of light squared.", "question": "Who developed the theory of relativity?", "answer": "Albert Einstein"}
+{"passage": "The novel The Hobbit was written by J.R.R. Tolkien and published in 1937 as a prelude to The Lord of the Rings.", "question": "Who wrote The Hobbit?", "answer": "J.R.R. Tolkien"}

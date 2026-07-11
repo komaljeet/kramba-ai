@@ -694,6 +694,86 @@ via #84 GaLore *with this same hybrid recipe* (count fills in by depth, W stays
 task-fixed). See `C:\Users\komal\.claude\plans\bubbly-waddling-sundae.md` for the
 full plan.
 
+### 🧪 Hybrid A4 — grounded continue-FT pipeline (2026-07-11, code landed + CPU-tested)
+
+**Status — for the next LLM taking over.** The Chinchilla pretrain was **stopped
+at ~step 51K** (2026-07-11) after the 50K probe gave a *partial-grounding* result
+(closed 0/5, open 1/5, +1 lift — leans **undertrained**, see the verdict above).
+A stronger 100K trunk was judged unnecessary for the binary recall gate, so the GPU
+is free and **A4 is unblocked**. The A4 *code* below is landed, CPU-tested (7/7),
+and integration-smoke-tested end-to-end (data → train → gate, no crash). **A4 has
+NOT been run on the GPU yet — the next step is to launch it.**
+
+**The three files (branch `feat/hybrid-a4-grounded-ft`):**
+- `scripts/build_grounded_qa_data.py` — builds the grounded-QA *training* corpus
+  (`data/grounded_qa_train.jsonl`, 40 multi-domain `(passage, question, answer)`
+  triples where `answer` is a verbatim span of `passage`, **disjoint from the 5
+  eval items** — no train/test leakage; `--validate` asserts both invariants). It
+  is a *seed* — extend `CORE` or add a Wiki/SlimPajama cloze augmenter for scale.
+- `continue_ft_hybrid.py` — the A4 entrypoint. Builds the hybrid EdgeHVN
+  (`--arch hvn-hybrid --attn-layers "3,10" --attn-window 4096`), applies ternary,
+  warm-starts the 10 DeltaNet layers from a pure-HVN trunk via
+  `load_hybrid_trunk_into_model` (2 attn layers stay fresh-init), sets triton-scan
+  + megakernel-scan, `torch.compile` (all under `--fast`), then fine-tunes on the
+  grounded-QA data rendered in the **gate's exact open-book chat format** with loss
+  only on the answer turn. Optional `--chat-mix 0.3` blends OpenAssistant
+  (cached) so the pure-base trunk also learns chat format (the gate emits HTML
+  garbage otherwise). AdamW + cosine, bf16, grad-accum, deferred loss accumulator,
+  saves model-only checkpoints with `block_plan` metadata. Reuses the train
+  script's proven hybrid→ternary→trunk-init→scan→compile ordering.
+- `tests/test_continue_ft_hybrid.py` — 7 CPU tests: builder invariants + no
+  leakage, `GroundedQADataset` loss masking (only answer+EOS learned; truncation
+  keeps the answer), `build_hybrid_model`+trunk-init (block_plan correct, 41 trunk
+  keys copied / 18 attn fresh / 36 orphaned skipped, forward shape), checkpoint
+  round-trip preserves `block_plan`. Run: `python tests/test_continue_ft_hybrid.py`.
+
+**Commands (the canonical A4 run, ~5-10K steps on GPU):**
+```bash
+# 1. (re)build the seed data — already committed at data/grounded_qa_train.jsonl
+python scripts/build_grounded_qa_data.py --validate
+# 2. A4 continue-FT (background + tail the CSV; stdout is block-buffered)
+python continue_ft_hybrid.py --fast --max-steps 8000 \
+    --hybrid-trunk-init checkpoints/edge_chinchilla83m/edge_conversational_step51000.pt \
+    --checkpoint-dir checkpoints/hybrid_a4
+# 3. the A5 gate (pass = retrieval lift > 0; pure HVN = 0/5; 50K trunk = 1/5)
+python -m eval.grounded_qa --checkpoint checkpoints/hybrid_a4/hybrid_a4_step8000.pt
+```
+
+**A5 gate decision tree (what the next LLM does with the result):**
+- **Lift > 0 (ideally 3-5/5 open vs 0-1/5 closed)** → the hybrid *recalls*; the
+  architecture works. Proceed to **Phase B** (serving: KV cache + `forward_step`
+  + `generate` + `chat_edgehvn.py` entrypoint) → B4 agentic-gate (mock-repo tool
+  loop) → the P0 (agentic coding).
+- **Lift 0 (still 0/5)** → either A4 was too short (re-run `--max-steps 20000`,
+  or raise `--chat-mix` for fluency) **or** 83M is capacity-limited. If a longer
+  A4 still fails → pivot to **scale-up via #84 GaLore ~1B with this same hybrid
+  recipe** (scale-invariant: count fills in by depth, W stays task-fixed).
+- **Marginal (1-2/5)** → re-run longer + check the closed-book isn't HTML garbage
+  (if it is, raise `--chat-mix`; chat format isn't holding).
+
+**Gotchas (Windows / this env):**
+- `--fast` = bf16 + TF32 + `torch.compile` + triton-scan + megakernel-scan.
+  `--megakernel-scan` requires `--triton-scan` (it swaps the scan *backward*); the
+  script warns + ignores if `--triton-scan` is off. A4 is short → the safe place to
+  prove `--megakernel-scan`'s long-run reliability (only benchmarked on short runs
+  so far, see [[speed-ceiling-2x-needs-both-halves]]) and bank the ~1.05× step.
+- The trunk is `checkpoints/edge_chinchilla83m/edge_conversational_step51000.pt`
+  (model-only, ~317 MB; `step50000.pt` is the exact probe trunk). Both are
+  gitignored (local disk) — they exist on the dev machine; if missing, re-pretrain
+  or restore from backup.
+- CPU testing: force `CUDA_VISIBLE_DEVICES=-1` (Windows ignores `=""`; see
+  [[windows-distributed-gpu-quirks]]). `torch.amp.autocast("cuda")` on CPU is a
+  tolerated no-op (emits a UserWarning).
+- Long GPU runs: launch in the background + tail the CSV
+  (`checkpoints/hybrid_a4/a4_ft_log.csv`); stdout is block-buffered when redirected.
+- One feature branch per issue off **updated `origin/main`**; push the feature
+  branch only; the user merges manually. Never push to `main`.
+
+**Handoff pointers:** GitLab issue for this track (A4/A5 + Phase B/C) — see the MR
+that lands this branch. Plan: `C:\Users\komal\.claude\plans\bubbly-waddling-sundae.md`.
+Memory: `hybrid-token-recall-track`, `edgehvn-83m-rag-finding`,
+`speed-ceiling-2x-needs-both-halves`.
+
 ---
 
 ## 6. Training & Usage Guide
