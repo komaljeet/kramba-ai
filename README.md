@@ -769,8 +769,8 @@ python -m eval.grounded_qa --checkpoint checkpoints/hybrid_a4/hybrid_a4_step8000
 - One feature branch per issue off **updated `origin/main`**; push the feature
   branch only; the user merges manually. Never push to `main`.
 
-**Handoff pointers:** GitLab issue for this track (A4/A5 + Phase B/C) — see the MR
-that lands this branch. Plan: `C:\Users\komal\.claude\plans\bubbly-waddling-sundae.md`.
+**Handoff pointers:** GitLab issue **#97** (this track: A4/A5 + Phase B/C); this
+branch's MR **!78**. Plan: `C:\Users\komal\.claude\plans\bubbly-waddling-sundae.md`.
 Memory: `hybrid-token-recall-track`, `edgehvn-83m-rag-finding`,
 `speed-ceiling-2x-needs-both-halves`.
 
