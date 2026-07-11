@@ -14,5 +14,4 @@ docker-entrypoint.sh text eol=lf
 Dockerfile text eol=lf
 *.dockerfile text eol=lf
 docker-entrypoint* text eol=lf
-checkpoints/edge_conversational/edge_conversational_step10000.pt filter=lfs diff=lfs merge=lfs -text
 hvn_edge_chat.pt filter=lfs diff=lfs merge=lfs -text
