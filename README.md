@@ -694,15 +694,18 @@ via #84 GaLore *with this same hybrid recipe* (count fills in by depth, W stays
 task-fixed). See `C:\Users\komal\.claude\plans\bubbly-waddling-sundae.md` for the
 full plan.
 
-### 🧪 Hybrid A4 — grounded continue-FT pipeline (2026-07-11, code landed + CPU-tested)
+### 🧪 Hybrid A4 — grounded continue-FT pipeline (2026-07-11: MR !78 merged; 8K run LAUNCHED + healthy; loss-log fix !79)
 
 **Status — for the next LLM taking over.** The Chinchilla pretrain was **stopped
 at ~step 51K** (2026-07-11) after the 50K probe gave a *partial-grounding* result
 (closed 0/5, open 1/5, +1 lift — leans **undertrained**, see the verdict above).
 A stronger 100K trunk was judged unnecessary for the binary recall gate, so the GPU
-is free and **A4 is unblocked**. The A4 *code* below is landed, CPU-tested (7/7),
-and integration-smoke-tested end-to-end (data → train → gate, no crash). **A4 has
-NOT been run on the GPU yet — the next step is to launch it.**
+was free and **A4 was unblocked**. The A4 *code* below landed, was CPU-tested
+(7/7) + integration-smoke-tested (data → train → gate, no crash), and was **merged
+to main via MR !78** (normal merge `1a355c2`). **The 8K run is now LAUNCHED
+(2026-07-11 13:56) and healthy** — see "Monitoring the live run" below. The next
+LLM's job is to **run the A5 gate when the run finishes (~16:30 ≈ 4:30 PM, ~2.5 h
+total)**, not to re-launch it.
 
 **The three files (branch `feat/hybrid-a4-grounded-ft`):**
 - `scripts/build_grounded_qa_data.py` — builds the grounded-QA *training* corpus
@@ -739,6 +742,28 @@ python continue_ft_hybrid.py --fast --max-steps 8000 \
 python -m eval.grounded_qa --checkpoint checkpoints/hybrid_a4/hybrid_a4_step8000.pt
 ```
 
+**Monitoring the live run (2026-07-11 13:56 → ~16:30, bg id `bjblkgc53`):**
+- Log: `logs/hybrid_a4_ft.log`; CSV (flushes every 20 opt-steps):
+  `checkpoints/hybrid_a4/a4_ft_log.csv`. Run from the `hybrid-a4-grounded-ft`
+  worktree; the trunk is loaded from the MAIN checkout
+  `checkpoints/edge_chinchilla83m/edge_conversational_step51000.pt` by absolute
+  path (the worktree has no `checkpoints/`).
+- Healthy start: `loss ~6.0` (true mean), `ppl ~400`, descending; `~1.13 s/step`;
+  GPU 3.7/6 GB; warmup 240 then cosine over 8000. Checkpoints at
+  `checkpoints/hybrid_a4/hybrid_a4_step{1000,2000,…,8000}.pt` (save every 1000).
+- ⚠️ The loss reads as the **true mean** (see the logging fix below). Do NOT be
+  alarmed by a single-digit loss — that is correct. If loss reads ~100+ again, the
+  logging regressed (or you are on pre-`!79` code).
+
+**Loss-logging fix (MR !79, commit `a023625`).** The original `continue_ft`
+accumulated `loss/grad_accum` per micro-batch but only zeroed the accumulator
+every 20 *optimizer* steps → the logged "loss" was the **sum of ~20 per-step
+means ≈ 20× the true mean**, and `ppl = exp(min(loss,20))` capped at `4.85e8`
+(meaningless). A GPU diagnostic proved the *model* was healthy all along (fp32 ==
+bf16 == scan+mega, `|logit|max=30`, no NaN; init loss ~10.4, training ~6) — the
+logging was the only bug. Fixed by tracking `n_steps_accum` and dividing → true
+mean. The 8K run uses the fixed code.
+
 **A5 gate decision tree (what the next LLM does with the result):**
 - **Lift > 0 (ideally 3-5/5 open vs 0-1/5 closed)** → the hybrid *recalls*; the
   architecture works. Proceed to **Phase B** (serving: KV cache + `forward_step`
@@ -769,9 +794,14 @@ python -m eval.grounded_qa --checkpoint checkpoints/hybrid_a4/hybrid_a4_step8000
 - One feature branch per issue off **updated `origin/main`**; push the feature
   branch only; the user merges manually. Never push to `main`.
 
-**Handoff pointers:** GitLab issue **#97** (this track: A4/A5 + Phase B/C); this
-branch's MR **!78**. Plan: `C:\Users\komal\.claude\plans\bubbly-waddling-sundae.md`.
-Memory: `hybrid-token-recall-track`, `edgehvn-83m-rag-finding`,
+**Handoff pointers:** GitLab issue **#97** (this track: A4/A5 + Phase B/C); MR
+**!78** (A4 pipeline — **merged** to main `1a355c2`); MR **!79** (loss-logging
+fix, branch `fix/a4-loss-logging` — merge when convenient; the 8K run already
+has it). A stray remote branch `feat/hybrid-a4-grounded-ft` was re-pushed (reused
+a merged-branch name) — redundant, deletable via
+`git push origin --delete feat/hybrid-a4-grounded-ft`. Plan:
+`C:\Users\komal\.claude\plans\bubbly-waddling-sundae.md`. Memory:
+`hybrid-token-recall-track`, `edgehvn-83m-rag-finding`,
 `speed-ceiling-2x-needs-both-halves`.
 
 ---
