@@ -1,0 +1,160 @@
+# Training & Usage Guide
+
+> **Moved from README:** §6 Training & Usage Guide — HVN-vs-Transformer differences,
+> what fits in 6 GB, key training flags, `--full` meta-flag, precision, generation, tips.
+> VRAM-envelope issues #69/#70 live here; the closed-issue ledger is [features.md](features.md).
+
+## HVN vs Transformer — Fundamental Differences
+
+| Aspect | Transformer (MHA) | HVN |
+|--------|----------------------|---------|
+| Core mechanism | Self-Attention (Q·K^T over all tokens) | Vortex particles interacting with a fixed-size Hamiltonian |
+| Memory of past | KV Cache (grows with N) | Hamiltonian matrix H (constant d×d) |
+| Per-token inference | O(N·d) | O(d²·r) — constant in N |
+| Inference memory | O(N·d) | O(d²) — fixed |
+| Positional encoding | RoPE / learned / sinusoidal | RoPE in vortex injection |
+| Parallelism | Fully parallel | Sequential H update (chunked/parallel-scan mitigation) |
+
+## What Fits in 6 GB VRAM (RTX 4050)
+
+| Config | d_model | Layers | Params | VRAM | Fits? |
+|--------|---------|--------|--------|------|-------|
+| Small (default) | 128 | 2 | ~265K | ~14 MB | ✅ Easily |
+| Medium | 256 | 4 | ~1M | ~50–100 MB | ✅ Easily |
+| Large | 512 | 8 | ~5–10M | ~200–500 MB | ✅ Yes |
+| Very Large | 512 | 12 | ~15M | ~1–2 GB | ✅ Yes |
+
+**Recommended balanced command:**
+```bash
+python train.py --text my_corpus.txt \
+    --d_model 256 --num_layers 4 --bond_dim 64 \
+    --batch_size 16 --seq_len 128 --precision bf16 --compile \
+    --epochs 100 --generate --prompt "Chapter 1 "
+```
+
+**On OOM, reduce in order:** `--batch_size 8|4` → `--seq_len 64` → `--d_model 128`, then
+add `--grad_accum 4` to recover effective batch.
+
+### Measured RTX 4050 training envelope (Issue #69)
+
+Measured with `python -m eval.vram_envelope` (DeltaNet block, vocab 8000, B=8, S=128, bf16,
+fused AdamW; full grid in `results/vram_envelope_rtx4050.json`):
+
+| Config | Params | Peak VRAM | s/step | Trains in 6 GB? |
+|---|---:|---:|---:|---|
+| d=512, 8L | 29M | 1.0 GiB | 0.39 | ✅ |
+| d=768, 12L | 83M | 2.5 GiB | 0.49 | ✅ |
+| d=1024, 12L | 143M | 3.6 GiB | 0.52 | ✅ **max without `--grad_checkpoint`** |
+| d=1024, 24L | 268M | 6.9 GiB | 2.28 | ❌ (spills → 4.4× slower) |
+| d=1024, 24L `+ckpt` | 268M | **4.3 GiB** | 1.13 | ✅ **recommended ceiling config** |
+| d=1024, 24L, B=16, S=256 `+ckpt` | 268M | 4.7 GiB | 2.28 | ✅ (ckpt crushes activations) |
+| d=1280, 24L `+ckpt` | 414M | 7.0 GiB | 1.46 | ❌ (fits 8 GB — see #70) |
+| d=1536, 24L `+ckpt` | 592M | 10.0 GiB | 1.95 | ❌ |
+| d=2048, 24L (±ckpt) | ~1B | — | — | ❌ hard OOM at allocation |
+
+**Honest ceiling: ~270M params** (d=1024, 24L, bf16 + `--grad_checkpoint`, 4.3 GiB peak) —
+measured **16.8 bytes/param** end-to-end (bf16 weights + grads + fp32 AdamW moments +
+master). **1B (~16 GB) and 10B (~160 GB) cannot train on this card — off by ~3× and ~30×** —
+and 10B can't even bf16-load (20 GB weights). Knobs ranked by measured effect: bf16
+(#19/#44) → `--grad_checkpoint` (#49; −38% peak at d=1024/24L, the difference between
+fitting and spilling) → smaller batch/seq (+`--grad_accum`) → 8-bit optimizer (not wired) →
+CPU/NVMe offload (not wired).
+
+> **Windows WDDM spill-over caveat:** past ~6 GiB the driver silently spills into system
+> RAM instead of OOM-ing — steps get 4–15× slower (see the 6.9 GiB row) and the run *looks*
+> alive. On Linux the same configs hard-OOM. Treat `peak < 6 GiB` as the envelope, not "it
+> didn't crash"; the >6 GiB rows in the JSON record true allocator demand (for #70).
+
+### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
+
+Memory **demand** is measured (card-independent; WDDM spill rows record true demand past
+6 GiB); the 8 GB **fit** column is arithmetic against 8192 MiB — a **projection, not a
+physical-4060 measurement** (step times don't transfer). Derived table:
+`results/vram_envelope_rtx4060_projection.json`; validate on real hardware with
+`python -m eval.vram_envelope`.
+
+| Config | Params | Demand | 6 GB (4050) | 8 GB (4060) |
+|---|---:|---:|---|---|
+| d=1024, 12L | 143M | 3.6 GiB | ✅ | ✅ |
+| d=1024, 24L (no ckpt) | 268M | 6.9 GiB | ❌ | ✅ **max without ckpt** |
+| d=1024, 24L `+ckpt` | 268M | 4.3 GiB | ✅ | ✅ comfortable |
+| d=1280, 20L (no ckpt) | 349M | 8.3 GiB | ❌ | ❌ just misses |
+| d=1280, 24L `+ckpt` | 414M | 7.0 GiB | ❌ | ✅ **recommended 4060 ceiling** |
+| d=1408, 24L `+ckpt` | 499M | 9.5 GiB | ❌ | ❌ |
+| ~1B / 10B | — | ~16 / ~160 GB | ❌ | ❌ (off by ~2× / ~20×) |
+
+**What the extra 2 GB buys:** the no-checkpoint ceiling roughly doubles (143M → ~270M) and
+the checkpointed ceiling rises ~54% (270M → ~415M, d=1280/24L bf16 `+ckpt` at 7.0 GiB) — a
+bigger comfortable config and more bf16 width headroom (#44), **not a categorical change**:
+1B and 10B remain infeasible on 8 GB.
+
+> **"RTX 4060" caveat:** laptop and desktop 4060 are 8 GB, but the desktop **4060 Ti** ships
+> in 8 GB *or 16 GB* variants. A 16 GB Ti roughly doubles this envelope — still far short of
+> training 1B comfortably or 10B at all.
+
+## Key Training Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--text` | (sample) | Path to training text |
+| `--epochs` | 30 | Training epochs |
+| `--lr` | 3e-4 | Learning rate (AdamW) |
+| `--batch_size` / `--seq_len` | 16 / 64 | Batch size / sequence length |
+| `--d_model` / `--num_layers` / `--bond_dim` | 128 / 2 / 32 | Model size / SVD rank |
+| `--precision` | fp32 | fp32 / fp16 / bf16 (GPU for 16-bit) |
+| `--grad_accum` | 1 | Gradient accumulation steps |
+| `--compile` | flag | torch.compile (14× per-batch) |
+| `--tokenizer` / `--bpe_vocab` | char / 1000 | char or bpe tokenizer |
+| `--rank_k` | 1 | Rank-k entanglement (Issue #21 S1); 4/8 recommended |
+| `--nonlinear_update` | flag | Nonlinear gated update (S4) |
+| `--causal_reinjection` | flag | Multi-chunk causal re-injection (S2) |
+| `--cross_head_mixing` | flag | Cross-head H mixing (S3) |
+| `--swiglu` | flag | SwiGLU FFN (S6) |
+| `--per_token_eta` | flag | Per-token entanglement rate (S5) |
+| `--n_threads` | 1 | Independent H threads per head (Issue #22); 4 recommended |
+| `--use_parallel_scan` | flag | Associative parallel scan (Issue #33 Fix 3) |
+| `--use_deltanet` | flag | Gated-DeltaNet dynamics (Issue #34) |
+| `--weightless` | flag | Freeze DeltaNet q/k/v/out as seed-regenerated random features (Issue #40; needs `--use_deltanet`) |
+| `--grad_checkpoint` | flag | Exact gradient (activation) checkpointing (Issue #49): bit-identical gradients, ~20-30% slower/step, ~64% lower peak activation memory |
+| `--full` | flag | Issue #50 meta-flag: enable the **complete recommended fast-training stack** in one switch. Explicit flags override. See below. |
+
+**The `--full` meta-flag (Issue #50).** One switch that turns on the whole recommended
+stack. Expands into two **honestly-labelled** categories:
+
+| Category | What it enables | Honesty |
+|----------|-----------------|---------|
+| **A — exact speed levers** (model bit-identical) | fused AdamW · per-epoch loss sync · pinned-memory + `non_blocking` H2D · `--compile` · `--grad_checkpoint` | Speed **only** — trained model unchanged. |
+| **B — recommended defaults** (change model/precision) | `--precision bf16` · `--use_deltanet` (the #39-recommended higher-quality block) | **Not** quality-neutral — `--full` trains the best/fastest *recommended* model. |
+
+Does **not** enable `--use_parallel_scan` (a no-op under `--use_deltanet`). First run prints
+a one-line banner listing what it turned on (`[A]`/`[B]` tags). **Measured:** steady-state
+**1.58× faster** (5.53 → 3.51 s/epoch, d=256/3L/seq128/B32); Category-A primitives proven
+exact (`tests/test_issue50.py`). Explicit flags always win.
+
+## Precision Guide
+
+| Precision | Speed | Memory | Stability | Notes |
+|-----------|-------|--------|-----------|-------|
+| fp32 | 1× | 1× | Best | Default |
+| fp16 | 2–3× | 0.5× | Good | GradScaler; may overflow |
+| bf16 | 2–3× | 0.5× | Best | No scaler (RTX 40-series+) |
+
+## Generation
+
+```bash
+python generate.py --prompt "Hamiltonian " --tokens 300 --temp 0.5 --top_k 5
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--checkpoint` | hvn_checkpoint.pt | Trained model path |
+| `--prompt` | "The " | Seed text |
+| `--tokens` | 200 | Max new tokens |
+| `--temp` | 0.8 | Temperature (0.1–0.3 deterministic, 0.5–0.7 focused, 0.8–1.0 balanced, 1.0+ wild) |
+| `--top_k` | 10 | Top-k sampling (0 = off) |
+
+## Tips
+
+More/real data (bundled sample is only ~34K chars), 50–100+ epochs on small data, larger
+model (`--d_model 256 --num_layers 4 --bond_dim 64`), longer sequences (`--seq_len 128+`),
+BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 40-series.
