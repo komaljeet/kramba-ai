@@ -3,8 +3,11 @@ EdgeHVN Conversational Fine-Tuning (Issue #72 — fine-tune phase)
 ================================================================
 
 Instruction / chat fine-tuning of a pre-trained EdgeHVN checkpoint on
-OpenAssistant (oasst1), continuing from the Run 2 base
-(``checkpoints/edge_conversational/edge_conversational_step10000.pt``).
+OpenAssistant (oasst1). Pass ``--base-checkpoint`` to point at a pre-trained
+checkpoint — the old Run 2 default
+(``checkpoints/edge_conversational/edge_conversational_step10000.pt``) was
+undertrained and has been removed from LFS; use a Chinchilla-floor
+checkpoint under ``checkpoints/edge_chinchilla83m/`` instead.
 
 Key differences from pre-training (``train_edge_conversational.py``):
 
@@ -341,8 +344,13 @@ def sample_reply(model, tokenizer, device, user_msg, max_new=60):
 
 def main():
     parser = argparse.ArgumentParser(description="EdgeHVN conversational fine-tuning")
-    parser.add_argument("--base-checkpoint", type=str,
-                        default="checkpoints/edge_conversational/edge_conversational_step10000.pt")
+    parser.add_argument("--base-checkpoint", type=str, default=None,
+                        help="Path to a pre-trained EdgeHVN checkpoint to fine-tune "
+                             "from (required). The old default "
+                             "checkpoints/edge_conversational/edge_conversational_step10000.pt "
+                             "was the undertrained Run 2 base and has been removed from "
+                             "LFS; use a Chinchilla-floor checkpoint under "
+                             "checkpoints/edge_chinchilla83m/ instead.")
     parser.add_argument("--out", type=str, default="hvn_edge_chat.pt")
     parser.add_argument("--seq-len", type=int, default=512)
     parser.add_argument("--batch-size", type=int, default=2)
@@ -379,6 +387,13 @@ def main():
     print("\n" + "=" * 70)
     print("MODEL — loading base checkpoint")
     print("=" * 70)
+    if args.base_checkpoint is None:
+        print("❌ --base-checkpoint is required. The old default "
+              "(checkpoints/edge_conversational/edge_conversational_step10000.pt) "
+              "was the undertrained Run 2 base and has been removed from LFS; "
+              "use a Chinchilla-floor checkpoint under "
+              "checkpoints/edge_chinchilla83m/ instead.")
+        sys.exit(1)
     if not os.path.exists(args.base_checkpoint):
         print(f"❌ Base checkpoint not found: {args.base_checkpoint}")
         sys.exit(1)
