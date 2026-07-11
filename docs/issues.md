@@ -90,26 +90,11 @@ O(1) scaling (2.57 ms/tok flat N=256→4096), 1500-token stability with no clamp
 
 ## The Quality Gap Summary
 
-| Model | PPL (Shakespeare, d=128, 20ep) | Scaling exponent |
-|-------|-------------------------------|------------------|
-| SSM | ~1.16 | N/A |
-| Transformer | ~2.0 | -0.090 |
-| **HVN + Gated-DeltaNet (#34)** | **~3.4** (61% better than 8.8) | **−0.507** real-scale, −21–38% PPL vs HVN, beats Transformer at d≥512 (#39/#44; bf16-stable at all widths) |
-| HVN (#22 n_threads=4 + all strategies) | ~8.13 | -0.0123 |
-| HVN (#21 strategies) | ~8.37 | -0.0126 |
-| HVN (original) | ~8.37 | -0.007 |
-
-> **Exponent caveat (#35):** every "Scaling exponent" above was fit on **char-level
-> Tiny-Shakespeare**, which is small enough that all model sizes saturate — so these numbers
-> measure saturation noise, **not** architectural scaling. On real WikiText-103 (BPE,
-> compute-matched, unsaturated) HVN scales at **−0.42** ≈ Transformer −0.41 (see
-> [benchmarks_scaling.md](benchmarks_scaling.md)). Read the flat char-Shakespeare exponents as a
-> small-data artifact, not a property of HVN.
-
-**Root cause (superseded → confirmed):** previously attributed to a "fundamental compression
-bottleneck" of the d×d matrix. Now known **wrong** — the SSM reaches PPL ~1.1 with a *smaller*
-fixed state. The real culprit is the readout/update dynamics (velocity L2-norm + Frobenius
-clamp discarding magnitude; non-standard symmetric HPH update), validated by #34.
+The per-model PPL / scaling-exponent comparison table, the #35 char-Shakespeare exponent
+caveat, and the "root cause = dynamics not capacity" note are the canonical quality record —
+see **[benchmarks_quality.md § The Quality Gap Summary](benchmarks_quality.md)** (moved there
+to keep the quality numbers in one place; #34 above validated the dynamics-not-capacity
+diagnosis).
 
 ## Closed Issues (Quality Journey, condensed)
 
