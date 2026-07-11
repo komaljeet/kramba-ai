@@ -257,6 +257,7 @@ def continue_ft(model, dataloader, sampler, device, *, lr, max_steps, grad_accum
     start = time.time()
     optimizer.zero_grad()
     accum_loss_t = torch.zeros((), device=device)
+    n_steps_accum = 0  # optimizer steps since last log (to average the loss)
     data_iter = iter(dataloader)
 
     while global_step < max_steps:
@@ -290,16 +291,22 @@ def continue_ft(model, dataloader, sampler, device, *, lr, max_steps, grad_accum
             optimizer.zero_grad()
             global_step += 1
             micro = 0
+            n_steps_accum += 1
 
             if global_step % 20 == 0:
-                accum_loss = float(accum_loss_t.item())
+                # accum_loss_t holds the SUM of per-step mean losses since the
+                # last log (loss/grad_accum added per micro-batch). Divide by the
+                # optimizer-step count to get the true mean loss — otherwise the
+                # displayed value is ~20x inflated and ppl=exp(loss) is nonsense.
+                mean_loss = float(accum_loss_t.item()) / max(1, n_steps_accum)
                 accum_loss_t.zero_()
+                n_steps_accum = 0
                 cur_lr = optimizer.param_groups[0]["lr"]
-                ppl = math.exp(min(accum_loss, 20))
-                print(f"  Step {global_step:5d}/{max_steps} | loss {accum_loss:.4f} | "
+                ppl = math.exp(min(mean_loss, 20))
+                print(f"  Step {global_step:5d}/{max_steps} | loss {mean_loss:.4f} | "
                       f"ppl {ppl:.2f} | lr {cur_lr:.2e} | "
                       f"{(time.time()-start)/max(1,global_step):.2f}s/step", flush=True)
-                writer.writerow([global_step, f"{accum_loss:.6f}", f"{ppl:.4f}",
+                writer.writerow([global_step, f"{mean_loss:.6f}", f"{ppl:.4f}",
                                  f"{cur_lr:.8f}", time.strftime("%Y-%m-%d %H:%M:%S")])
                 csv_file.flush()
 
