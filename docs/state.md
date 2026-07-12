@@ -80,18 +80,49 @@ asymptotic-tail (the big jump 110→63 already happened), **won't fix the no-cha
 closed-book confound**, and costs ~30 h of the one scarce GPU that the P0 (hybrid A4) needs
 now. **Next: A4** short grounded continue-FT from this trunk → A5 gate.
 
-> **TODO (2026-07-11) — A4 run STOPPED early; run the A5 gate on the step-5000 checkpoint.**
-> The A4 8K run (bg `bjblkgc53`) was **killed at ~step 5920** (loss ~1.94 true mean, ppl
-> ~7.0 — descending healthily, well past the earlier ~step-1700 loss ~2.3). Checkpoints save
-> every 1000 steps, so the **latest surviving checkpoint is `hybrid_a4_step5000.pt`** (steps
-> 1000–5000 all on disk; there is **no** step8000). The outputs live in the *launch worktree*,
-> not the main checkout:
-> `.claude/worktrees/hybrid-a4-grounded-ft/checkpoints/hybrid_a4/hybrid_a4_step5000.pt` (CSV
-> `a4_ft_log.csv`, log `logs/hybrid_a4_ft.log`). Trunk was
-> `checkpoints/edge_chinchilla83m/edge_conversational_step51000.pt`.
+## A5 gate result — hybrid A4 step5000 FAILED; re-FT on a bigger corpus (2026-07-12)
+
+The A4 8K run (bg `bjblkgc53`) was killed at ~step 5920; latest surviving checkpoint
+`hybrid_a4_step5000.pt`. Ran the A5 gate on it, plus a new **beyond-window probe**
+(`eval/grounded_qa.py --far-probe`, MR !83) that shrinks the attention window and pushes
+the passage past it, so only the DeltaNet recurrence — not the *windowed* attention — can
+carry the answer. Both checkpoints, same gate:
+
+| Checkpoint | standard: closed / open (lift) | far-probe W=128: closed / near / far |
+|---|---|---|
+| **pure trunk** `edge_conversational_step51000.pt` | 0/5 / 1/5 (**+1**) | 0/5 / **2/5** / **0/5** |
+| **hybrid A4** `hybrid_a4_step5000.pt` | 1/5 / 0/5 (**−1**) | 2/5 / **0/5** / **0/5** |
+
+**Verdict: the A4 FT made things WORSE, not better.** The hybrid at step5000 reads *less*
+than the bare trunk (near-open 0/5 vs 2/5; open-book lift −1 vs +1). Cause = **data, not
+steps or capacity**: the FT trained the 2 fresh attention layers on only **40** grounded
+triples, so it memorised 40 pairs and degraded the trunk's weak reading instead of learning
+the general skill. (Loss was still falling at kill, but on 40 examples more steps only
+overfit harder.)
+
+**Architectural finding from the far-probe (important — reframes the goal).** For BOTH
+checkpoints, **far-open = 0/5, far-lift = 0**: the DeltaNet recurrence carries *zero exact
+recall beyond the window*. And the 2 attention layers are *windowed*, so they cannot help
+beyond the window either. Therefore the hybrid's achievable win is **exact recall WITHIN
+the window** (the trunk's recurrence already got near-open 2/5 there; attention should push
+that higher) — **not** beyond-window recall, which is architecturally capped at ~0 for both
+the recurrence and windowed attention. Beyond the window, hybrid ≈ a plain sliding-window
+transformer on exact recall; HVN's only beyond-window edge is a *lossy semantic gist* the
+keyword gate can't credit. See [architecture.md](architecture.md).
+
+> **TODO (2026-07-12) — re-FT RUNNING; re-run the A5 gate when it finishes.**
+> Root-cause fix landed: `scripts/expand_grounded_qa.py` scales the corpus from 40 → **5,240**
+> grounded triples (5,000 WikiText-103 copy-cloze + 240 up-weighted semantic seed →
+> `data/grounded_qa_expanded.jsonl`). Re-FT from the **clean trunk** (not the degraded
+> step5000) is running on `feat/grounded-qa-beyond-window-probe`, bg `bpkeh9gzf` /
+> nohup PID 1919, 8000 steps, ~1.2 s/step (~2.7 h):
+> `continue_ft_hybrid.py --fast --max-steps 8000 --hybrid-trunk-init <trunk> --grounded-data
+> data/grounded_qa_expanded.jsonl --checkpoint-dir checkpoints/hybrid_a4_v2 --chat-mix 0.3`.
+> Follow CSV `checkpoints/hybrid_a4_v2/a4_ft_log.csv`; ckpts `hybrid_a4_step{1000..8000}.pt`.
 >
-> **Run the A5 gate (from that worktree):**
-> `python -m eval.grounded_qa --checkpoint checkpoints/hybrid_a4/hybrid_a4_step5000.pt`.
-> lift>0 → recalls → Phase B; lift=0 → resume/re-run to 8K (loss was still falling at kill)
-> or scale via #84 GaLore. Whoever runs it: record the result back into this file and
-> [architecture.md](architecture.md), then clear this TODO.
+> **When done, re-gate:** `python -m eval.grounded_qa --checkpoint
+> checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt` **and** `--far-probe`. Success = open-book
+> lift > 0 **and** near-open > trunk's 2/5 (attention beats the recurrence inside the window).
+> If near-open still ≤ 2/5 after a full corpus, the attention layers aren't learning to read
+> → try more steps / higher grounded fraction, then the capacity/scale-up (#84) question.
+> Record the numbers back here + in [architecture.md](architecture.md), then clear this TODO.
