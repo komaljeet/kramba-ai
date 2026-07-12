@@ -88,6 +88,11 @@ class EdgeHVN(nn.Module):
         # Composes with #99 block-coordinate-descent (that shrinks optimizer-
         # state memory; this shrinks activation memory -- independent axes).
         self.grad_checkpoint = grad_checkpoint
+        # Issue #101: CPU weight offload for BCD-inactive blocks (extends
+        # #99). Set externally by BlockCoordinateScheduler -- None disables
+        # offload entirely (the default / back-compat path, unchanged).
+        self._offload_active_name: str | None = None
+        self._offload_device: torch.device | None = None
         # Optional explicit block override (A/B baseline). None → existing
         # use_deltanet/HVNBlock behaviour, unchanged.
         self.block_type = block_type
@@ -153,21 +158,157 @@ class EdgeHVN(nn.Module):
 
         self._compression_metadata: dict = {}
 
+    def _offload_wrap_plain(self, name: str, modules: list[nn.Module], fn, input_tensor=None):
+        """Offload wrapper for a NON-checkpointed call (`token_embedding`,
+        `final_norm`+`decoder` -- neither is ever wrapped in
+        `torch.utils.checkpoint`). Issue #101, extends #99.
+
+        A plain (non-checkpointed) forward retains whatever standard
+        autograd needs for backward -- it does NOT discard anything the way
+        checkpoint's initial pass does. So eviction timing here really does
+        depend on whether backward will ever revisit this call:
+
+        - `input_tensor` (this block's input) does NOT require grad (this
+          block sits upstream of the active BCD block, or has no meaningful
+          input at all, e.g. token_embedding): nothing downstream of the
+          active block needs to backprop through this segment -- PyTorch's
+          autograd never builds a graph node for an all-requires_grad=False
+          computation, so there is provably no backward reference to worry
+          about. Safe to evict immediately after forward.
+        - It DOES require grad (this block sits downstream of active): the
+          gradient must flow through it via the chain rule using its real
+          weight values (even though the weight's own `.grad` is never
+          computed, being frozen). Defer eviction to a hook on
+          `input_tensor` -- it fires when THIS segment's local backward has
+          finished (the last thing that local backward computes is the
+          gradient of ITS OWN input), not when it starts. Hooking the
+          *output* instead fires too early, before the weights are even
+          used, and previously produced
+          `native_layer_norm_backward: weight is on cpu` -- caught by
+          tests/test_block_coordinate_offload.py's gradient-parity test.
+        """
+        if name == self._offload_active_name:
+            return fn()
+
+        params = [p for m in modules for p in m.parameters()]
+        self._offload_pool.load(params)
+        out = fn()
+
+        if input_tensor is not None and input_tensor.requires_grad:
+            def _evict(grad, ps=params):
+                self._offload_pool.evict(ps)
+                return None  # hooks must return None or a replacement Tensor
+            input_tensor.register_hook(_evict)
+        else:
+            self._offload_pool.evict(params)
+        return out
+
+    def _offload_wrap_checkpointed(self, name: str, block: nn.Module, x_in, position_ids):
+        """Offload wrapper for a checkpointed LAYER block (Issue #101).
+
+        Unlike `_offload_wrap_plain`, a checkpointed segment gets invoked
+        TWICE per training step: once synchronously here, during
+        `forward()` (call #1 -- its initial pass, whose activations/saved
+        state checkpoint discards immediately, by design), and once later,
+        invisibly to this method, during `backward()` (call #2 -- the
+        recompute, immediately followed by this segment's own local
+        backward). This asymmetry means the correct eviction policy is
+        NARROWER than `_offload_wrap_plain`'s:
+
+        - Call #1 is ALWAYS safe to evict immediately after, regardless of
+          whether this block sits before or after the active BCD block --
+          checkpoint's own discard-everything behavior on its initial pass
+          means nothing retains a reference to these weights past this
+          call, for THIS call. (An earlier version deferred eviction for
+          every block downstream of active, for its ENTIRE call, not just
+          call #2 -- correct but wasteful: it left every downstream block
+          GPU-resident for the whole forward pass, defeating much of the
+          memory saving. Measured: a config that should have fit given the
+          "~1 block resident at a time" design instead peaked well past
+          this card's 6141 MiB -- caught by
+          scripts/bench_offload_vram.py, not a unit test, since it is a
+          peak-memory regression, not a correctness one.)
+        - Call #2 (the recompute) will only ever happen if `x_in` requires
+          grad (i.e. this block is downstream of active) -- otherwise
+          checkpoint's own machinery never revisits it, matching
+          `_offload_wrap_plain`'s reasoning. When it does happen, it needs
+          the same deferred, input-tensor-hook eviction as the plain case,
+          timed against ITS local backward completing.
+
+        Loading is handled INSIDE the checkpointed closure itself (not just
+        here), so call #2 -- invoked later by checkpoint's own machinery,
+        entirely outside this method's synchronous scope -- also gets fresh
+        weights; see the `_self_loading_forward` closure below.
+        """
+        if name == self._offload_active_name:
+            return checkpoint(block, x_in, position_ids, use_reentrant=False)
+
+        pool = self._offload_pool
+        params = list(block.parameters())
+
+        def _self_loading_forward(x_arg, pos_arg):
+            # Runs on EVERY invocation checkpoint makes (call #1 here, call
+            # #2 later during backward) -- pool.load() on an already-loaded
+            # signature just re-copies into the SAME reused buffer (cheap,
+            # no allocation), so this is safe to call unconditionally.
+            pool.load(params)
+            return block(x_arg, position_ids=pos_arg)
+
+        pool.load(params)  # ensure call #1 itself has weights present
+        out = checkpoint(_self_loading_forward, x_in, position_ids, use_reentrant=False)
+        pool.evict(params)  # call #1 always safe to evict immediately -- see docstring
+
+        if x_in.requires_grad:
+            def _evict(grad, ps=params):
+                pool.evict(ps)
+                return None
+            x_in.register_hook(_evict)
+        return out
+
     def forward(self, input_ids: torch.Tensor, position_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
         B, S = input_ids.shape
         if position_ids is None:
             position_ids = torch.arange(S, device=input_ids.device).unsqueeze(0).expand(B, -1)
 
-        x = self.token_embedding(input_ids)
+        offload = (getattr(self, "_offload_active_name", None) is not None
+                   and self.training and torch.is_grad_enabled())
+        if offload and not self.grad_checkpoint:
+            raise RuntimeError(
+                "weight offload (Issue #101) requires grad_checkpoint=True -- "
+                "eviction timing is tied to each block's checkpoint recompute "
+                "window, which does not exist without checkpointing."
+            )
+
+        if offload:
+            x = self._offload_wrap_plain(
+                "token_embedding", [self.token_embedding],
+                lambda: self.token_embedding(input_ids),
+            )
+        else:
+            x = self.token_embedding(input_ids)
+
         if self.shared_block is not None:
             x = self.shared_block(x, position_ids=position_ids)
         else:
             use_ckpt = self.grad_checkpoint and self.training and torch.is_grad_enabled()
-            for block in self.blocks:
-                if use_ckpt:
-                    x = checkpoint(block, x, position_ids, use_reentrant=False)
+            for i, block in enumerate(self.blocks):
+                name = f"blocks.{i}"
+                x_in = x
+                if offload:
+                    # offload requires grad_checkpoint=True (enforced above),
+                    # so use_ckpt is guaranteed True here.
+                    x = self._offload_wrap_checkpointed(name, block, x_in, position_ids)
+                elif use_ckpt:
+                    x = checkpoint(block, x_in, position_ids, use_reentrant=False)
                 else:
-                    x = block(x, position_ids=position_ids)
+                    x = block(x_in, position_ids=position_ids)
+
+        if offload:
+            return self._offload_wrap_plain(
+                "final_norm+decoder", [self.final_norm, self.decoder],
+                lambda: self.decoder(self.final_norm(x)),
+                input_tensor=x,
+            )
 
         x = self.final_norm(x)
         return self.decoder(x)

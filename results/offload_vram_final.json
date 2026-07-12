@@ -1,0 +1,4 @@
+[
+  {"label": "1.04B_offload_final", "d_model": 2048, "num_layers": 24, "batch_size": 4, "seq_len": 128, "params": 1040396288, "verdict": "ok", "peak_alloc_mb": 1106, "peak_reserved_mb": 4210, "sec_per_step": 1.726},
+  {"label": "1.54B_offload_final", "d_model": 2048, "num_layers": 36, "batch_size": 4, "seq_len": 128, "params": 1544204384, "verdict": "ok", "peak_alloc_mb": 1154, "peak_reserved_mb": 6130, "sec_per_step": 4.544, "note": "peak_reserved (6130 MiB) is right at this card's 6141 MiB physical limit -- no real margin. peak_alloc (1154 MiB) matches the design's intent; the gap is NOT activation memory (tested: cutting batch*seq 16x only dropped reserved 2.6%) -- appears to be a largely fixed CUDA/cuBLAS/allocator overhead for this GPU+driver, independent of both offloading correctness and workload size. Not resolved this session; a separate platform-level question, not an offload-mechanism bug."}
+]
