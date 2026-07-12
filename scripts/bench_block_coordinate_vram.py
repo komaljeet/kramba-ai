@@ -47,6 +47,7 @@ def run_probe(cfg: dict) -> dict:
         model = EdgeHVN(
             vocab_size=VOCAB, d_model=cfg["d_model"], num_layers=cfg["num_layers"],
             n_heads=cfg.get("n_heads", 8), dropout=0.0, use_deltanet=True,
+            grad_checkpoint=cfg.get("grad_checkpoint", False),
         )
         result["params"] = sum(p.numel() for p in model.parameters())
         model.to(device)
@@ -107,11 +108,19 @@ def main() -> int:
          "block_coordinate": False, "label": "ceiling_baseline"},
         {"d_model": 1024, "num_layers": 24, "batch_size": 8, "seq_len": 128,
          "block_coordinate": True, "steps_per_block": 2, "label": "ceiling_bcd"},
-        # 2. Larger -- expected to OOM without BCD; does BCD unlock it?
+        # 2. Larger -- expected to OOM under vanilla full-AdamW; does BCD
+        #    unlock it, and does stacking grad_checkpoint (Issue #100) get it
+        #    to a CLEAN fit under this card's true 6141 MiB envelope?
         {"d_model": 2048, "num_layers": 24, "batch_size": 4, "seq_len": 128,
          "block_coordinate": False, "label": "large_baseline"},
         {"d_model": 2048, "num_layers": 24, "batch_size": 4, "seq_len": 128,
          "block_coordinate": True, "steps_per_block": 2, "label": "large_bcd"},
+        {"d_model": 2048, "num_layers": 24, "batch_size": 4, "seq_len": 128,
+         "block_coordinate": True, "steps_per_block": 2, "grad_checkpoint": True,
+         "label": "large_bcd_ckpt"},
+        {"d_model": 2048, "num_layers": 24, "batch_size": 2, "seq_len": 64,
+         "block_coordinate": True, "steps_per_block": 2, "grad_checkpoint": True,
+         "label": "large_bcd_ckpt_tuned"},
     ]
 
     results = []

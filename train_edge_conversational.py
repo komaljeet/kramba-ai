@@ -887,6 +887,7 @@ def build_model_and_config(
     apply_ternary: bool = True,
     attn_layers: list[int] | None = None,
     attn_window: int | None = None,
+    grad_checkpoint: bool = False,
 ) -> tuple[EdgeHVN, dict]:
     """Build the EdgeHVN model with DeltaNet (or transformer baseline) + config.
 
@@ -977,6 +978,7 @@ def build_model_and_config(
         block_type=("transformer" if arch == "transformer" else None),
         block_plan=block_plan,
         attn_window=attn_window,
+        grad_checkpoint=grad_checkpoint,
     )
     param_count = sum(p.numel() for p in model.parameters())
     config["param_count"] = param_count
@@ -1945,6 +1947,14 @@ def main():
     parser.add_argument("--bcd-steps-per-block", type=int, default=100,
                         help="Optimizer steps per active block before switching to the "
                              "next (only used with --block-coordinate). Default: 100.")
+    parser.add_argument("--grad-checkpoint", action="store_true",
+                        help="Exact activation checkpointing (Issue #100, mirrors the "
+                             "core model's #49): recompute each block's activations in "
+                             "the backward pass instead of storing them. Bit-identical "
+                             "result, ~20-30%% more compute, large activation-VRAM cut. "
+                             "Composes with --block-coordinate (that shrinks optimizer-"
+                             "state memory; this shrinks activation memory -- "
+                             "independent axes). Default: off.")
     parser.add_argument("--fast", action="store_true",
                         help="Meta-flag: enable the full recommended fast-training "
                              "stack in one switch — bf16 + TF32 + torch.compile + "
@@ -2076,6 +2086,7 @@ def main():
         apply_ternary=not args.no_ternary,
         attn_layers=attn_layers,
         attn_window=args.attn_window,
+        grad_checkpoint=args.grad_checkpoint,
     )
     config["lr"] = args.lr
     config["precision"] = args.precision

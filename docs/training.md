@@ -83,19 +83,27 @@ properly trained over a full cycle, but only ONE block's Adam moments are ever V
 | d=2048, 24L | ~1.04B | ❌ hard OOM (12.6 GiB demand) | 9.0 GiB (still spills on 6 GiB) | OOM → *runs* |
 | d=2048, 24L, B=2/S=64 | ~1.04B | — | 7.1 GiB (still ~1 GiB over) | closer, not clean yet |
 
-**Honest read:** the 268M comparison is clean and stacks with nothing else tested — a ~39%
-reduction from optimizer-state alone, comparable to `--grad_checkpoint`'s own −38% but from an
-*entirely different, composable* mechanism (optimizer state vs. activations — untested
-together here, the obvious next step). The 1B-scale result is real but not yet a clean win:
-it turns a **hard OOM into something that at least runs**, but at the tested configs it's
-still ~1 GiB over this card's true 6 GiB envelope (i.e. still WDDM-spilling, not cleanly
-fitting) — getting 1B to *fit* likely needs `--block-coordinate` stacked with
-`--grad_checkpoint` and/or a coarser block granularity, not yet measured. **The "1B/10B
-cannot train on this card" framing above is no longer the full picture** — 1B is now
-plausibly reachable locally with more tuning, where it was a flat ~3× impossibility before.
-Composes with #84 (GaLore, further shrinks the *active* block's state) and #85 (8-bit Adam,
-quantizes whatever state remains) — neither implemented yet, but the composition is additive
-in principle.
+**UPDATE (Issue #100) — stacked with `--grad_checkpoint`, 1B now CLEANLY fits on this 6 GB
+card.** `EdgeHVN` never had gradient checkpointing wired (#49/#88 closed it only for the core
+`HamiltonianVortexNetwork`, a different class with its own `forward()`) — fixed, mirroring
+the exact core-model pattern, bit-identical parity verified (`tests/test_edgehvn_grad_checkpoint.py`,
+5/5, incl. the hybrid `block_plan`). BCD shrinks *optimizer-state* memory; checkpointing
+shrinks *activation* memory — independent axes, and they compose almost exactly as predicted:
+
+| Config | Params | Vanilla | `--block-coordinate` | `--block-coordinate --grad-checkpoint` |
+|---|---:|---:|---:|---:|
+| d=1024, 24L | 268M | 6.9 GiB | 4.2 GiB (−39%) | — |
+| d=2048, 24L | ~1.04B | ❌ hard OOM (12.6 GiB demand) | 9.0 GiB (spills) | **✅ 4.6 GiB — clean fit** |
+| d=2048, 24L, B=2/S=64 | ~1.04B | — | 7.1 GiB (spills) | **✅ 4.4 GiB — clean fit, more headroom** |
+
+(`results/bcd_ckpt_vram.json`.) **The "1B/10B cannot train on this card" framing above is
+now corrected, not just softened: 1B trains locally today**, measured, no cloud/tuning
+gamble required — a flat ~3× impossibility this morning, a working `--block-coordinate
+--grad-checkpoint` combo by this afternoon. 10B (~336 GiB naive) is not re-evaluated here —
+worth a follow-up probe now that both levers are proven, but likely still needs #84/#85 on
+top, or genuinely different hardware. Composes further with #84 (GaLore, shrinks the *active*
+block's state) and #85 (8-bit Adam, quantizes whatever state remains) — neither implemented
+yet.
 
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 
