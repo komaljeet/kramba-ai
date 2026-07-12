@@ -91,6 +91,24 @@ is **scale-invariant** — if 83M is capacity-limited, scale up via #84 GaLore *
 hybrid recipe*. Full plan:
 `C:\Users\komal\.claude\plans\bubbly-waddling-sundae.md`.
 
-> **TODO:** The README's A4 section reads "Phase A training is now unblocked — NEXT: launch
-> A4." As of 2026-07-11 the A4 8K run has in fact been **launched and is running** (see
-> [state.md](state.md) for live status). Reconcile this section after the A5 gate completes.
+### A5 gate finding — what the hybrid can and cannot buy (2026-07-12)
+
+The `--far-probe` A/B (shrink the attention window, push the passage beyond it — see
+[state.md](state.md) for the numbers) pins down the design's real envelope:
+
+- **Beyond the window, exact-token recall is ~0 — and windowed attention cannot fix it.**
+  The DeltaNet recurrence scored `far-open 0/5` (far-lift 0) on both the trunk and the
+  hybrid: the O(1) state does not preserve exact tokens. Because the 2 attention layers are
+  *sliding-window*, they are masked out beyond `W` and add nothing there. So for **exact**
+  recall past `W`, hybrid ≈ a plain sliding-window transformer ≈ 0.
+- **The hybrid's achievable win is exact recall *within* the window.** The trunk's recurrence
+  already reads adjacent context weakly (`near-open 2/5`); the attention layers' job is to
+  push that toward 5/5 with clean, exact copies. That — plus O(1) cost on 10/12 layers and a
+  *lossy semantic gist* of older context (which the keyword gate can't measure) — is the
+  honest value proposition over a windowed transformer. If the workload needs **exact**
+  long-range recall, the answer is a bigger window or tool-refetch, not the recurrence.
+- **First A4 FT (step5000) FAILED** — it *degraded* the trunk (open-book lift +1 → −1) by
+  overfitting a 40-example corpus. Root cause was data volume, not architecture or capacity.
+  Fix: `scripts/expand_grounded_qa.py` (40 → 5,240 triples via WikiText-103 copy-cloze);
+  re-FT from the clean trunk is running (see [state.md](state.md)). Reconcile with the
+  re-gate result when it lands.
