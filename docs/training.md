@@ -65,6 +65,38 @@ CPU/NVMe offload (not wired).
 > alive. On Linux the same configs hard-OOM. Treat `peak < 6 GiB` as the envelope, not "it
 > didn't crash"; the >6 GiB rows in the JSON record true allocator demand (for #70).
 
+### Block-coordinate-descent (Issue #99) — the ~270M ceiling above is no longer the whole story
+
+The **~48% of the 16.8 bytes/param budget that is AdamW's fp32 momentum+variance state**
+doesn't have to be resident for the whole model at once. [BAdam](https://arxiv.org/abs/2404.02827)
+(Luo et al., NeurIPS 2024) trains one parameter block at a time (round-robin over layers),
+explicitly clearing the outgoing block's optimizer state on every switch — every block gets
+properly trained over a full cycle, but only ONE block's Adam moments are ever VRAM-resident.
+`--block-coordinate --bcd-steps-per-block N` (`hvn/core/block_coordinate.py`).
+
+**Measured on this card** (`scripts/bench_block_coordinate_vram.py`, isolated subprocesses,
+`results/bcd_vram.json`):
+
+| Config | Params | Peak VRAM (vanilla) | Peak VRAM (`--block-coordinate`) | Reduction |
+|---|---:|---:|---:|---|
+| d=1024, 24L (no ckpt) | 268M | 6.9 GiB | **4.2 GiB** | **−39%** |
+| d=2048, 24L | ~1.04B | ❌ hard OOM (12.6 GiB demand) | 9.0 GiB (still spills on 6 GiB) | OOM → *runs* |
+| d=2048, 24L, B=2/S=64 | ~1.04B | — | 7.1 GiB (still ~1 GiB over) | closer, not clean yet |
+
+**Honest read:** the 268M comparison is clean and stacks with nothing else tested — a ~39%
+reduction from optimizer-state alone, comparable to `--grad_checkpoint`'s own −38% but from an
+*entirely different, composable* mechanism (optimizer state vs. activations — untested
+together here, the obvious next step). The 1B-scale result is real but not yet a clean win:
+it turns a **hard OOM into something that at least runs**, but at the tested configs it's
+still ~1 GiB over this card's true 6 GiB envelope (i.e. still WDDM-spilling, not cleanly
+fitting) — getting 1B to *fit* likely needs `--block-coordinate` stacked with
+`--grad_checkpoint` and/or a coarser block granularity, not yet measured. **The "1B/10B
+cannot train on this card" framing above is no longer the full picture** — 1B is now
+plausibly reachable locally with more tuning, where it was a flat ~3× impossibility before.
+Composes with #84 (GaLore, further shrinks the *active* block's state) and #85 (8-bit Adam,
+quantizes whatever state remains) — neither implemented yet, but the composition is additive
+in principle.
+
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 
 Memory **demand** is measured (card-independent; WDDM spill rows record true demand past

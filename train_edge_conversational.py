@@ -1477,6 +1477,23 @@ def train(
     # through warmup. For single-group AdamW this is exactly the old behaviour.
     base_lrs = [pg["lr"] for pg in optimizer.param_groups]
 
+    # Issue #99: BAdam-style block-coordinate-descent. Training-time only --
+    # freezes every layer-block except one, cycling round-robin, so only the
+    # active block's Adam moments are ever VRAM-resident. The HVN forward pass
+    # is untouched; every block gets trained over a full cycle, just not
+    # simultaneously. Composes with --optimizer (validated with adamw; other
+    # optimizers should work via the same requires_grad/optimizer.state
+    # mechanism but are unverified here).
+    bcd_scheduler = None
+    if config.get("block_coordinate", False):
+        from hvn.core.block_coordinate import BlockCoordinateScheduler
+        bcd_scheduler = BlockCoordinateScheduler(
+            model, optimizer, steps_per_block=config.get("bcd_steps_per_block", 100),
+        )
+        print(f"  Block-coordinate-descent: {bcd_scheduler.num_blocks} blocks, "
+              f"{bcd_scheduler.steps_per_block} steps/block, "
+              f"active={bcd_scheduler.active_block_name!r}")
+
     # --- Cosine LR schedule with warmup ---
     total_steps = max_steps if max_steps is not None else 10_000
     # When resuming, the cosine schedule is reset — T_max should be the
@@ -1664,6 +1681,11 @@ def train(
             optimizer.zero_grad()
             micro_step = 0
             global_step += 1
+
+            # Issue #99: advance the block-coordinate cycle (may switch the
+            # active block + clear the outgoing block's optimizer state).
+            if bcd_scheduler is not None:
+                bcd_scheduler.step()
 
             # torch.profiler step boundary (only active under --profile)
             if _PROF is not None:
@@ -1911,6 +1933,18 @@ def main():
     parser.add_argument("--muon-lr", type=float, default=0.02,
                         help="Muon LR for 2-D hidden matrices (default 0.02; "
                              "only used with --optimizer muon).")
+    parser.add_argument("--block-coordinate", action="store_true",
+                        help="BAdam-style block-coordinate-descent (Issue #99): train "
+                             "one layer-block at a time (round-robin), explicitly "
+                             "clearing the outgoing block's optimizer state on every "
+                             "switch, so only one block's Adam moments are ever VRAM-"
+                             "resident regardless of total model size. Training-time "
+                             "only -- the HVN forward pass is untouched, every block "
+                             "gets trained over a full cycle, just not simultaneously. "
+                             "Default: off (vanilla full-model training).")
+    parser.add_argument("--bcd-steps-per-block", type=int, default=100,
+                        help="Optimizer steps per active block before switching to the "
+                             "next (only used with --block-coordinate). Default: 100.")
     parser.add_argument("--fast", action="store_true",
                         help="Meta-flag: enable the full recommended fast-training "
                              "stack in one switch — bf16 + TF32 + torch.compile + "
@@ -2047,6 +2081,8 @@ def main():
     config["precision"] = args.precision
     config["optimizer"] = args.optimizer
     config["muon_lr"] = args.muon_lr
+    config["block_coordinate"] = args.block_coordinate
+    config["bcd_steps_per_block"] = args.bcd_steps_per_block
     if args.val_every is not None:
         config["val_every_steps"] = args.val_every
 
