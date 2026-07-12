@@ -1,0 +1,69 @@
+[
+  {
+    "d_model": 1024,
+    "num_layers": 24,
+    "batch_size": 8,
+    "seq_len": 128,
+    "block_coordinate": false,
+    "label": "ceiling_baseline",
+    "params": 268544000,
+    "verdict": "ok",
+    "peak_alloc_mb": 6780,
+    "peak_reserved_mb": 6902,
+    "sec_per_step": 2.59
+  },
+  {
+    "d_model": 1024,
+    "num_layers": 24,
+    "batch_size": 8,
+    "seq_len": 128,
+    "block_coordinate": true,
+    "steps_per_block": 2,
+    "label": "ceiling_bcd",
+    "params": 268544000,
+    "verdict": "ok",
+    "peak_alloc_mb": 4157,
+    "peak_reserved_mb": 4286,
+    "sec_per_step": 0.45
+  },
+  {
+    "d_model": 2048,
+    "num_layers": 24,
+    "batch_size": 4,
+    "seq_len": 128,
+    "block_coordinate": false,
+    "label": "large_baseline",
+    "params": 1040396288,
+    "verdict": "oom",
+    "peak_reserved_mb": 12648
+  },
+  {
+    "d_model": 2048,
+    "num_layers": 24,
+    "batch_size": 4,
+    "seq_len": 128,
+    "block_coordinate": true,
+    "steps_per_block": 2,
+    "label": "large_bcd",
+    "params": 1040396288,
+    "verdict": "ok",
+    "peak_alloc_mb": 9103,
+    "peak_reserved_mb": 9202,
+    "sec_per_step": 7.1
+  },
+  {
+    "d_model": 2048,
+    "num_layers": 24,
+    "batch_size": 2,
+    "seq_len": 64,
+    "block_coordinate": true,
+    "steps_per_block": 2,
+    "label": "large_bcd_tuned",
+    "params": 1040396288,
+    "verdict": "ok",
+    "peak_alloc_mb": 6958,
+    "peak_reserved_mb": 7148,
+    "sec_per_step": 1.18,
+    "note": "smaller batch/seq than large_bcd; still ~1 GB over this card's 6141 MiB physical VRAM (WDDM spill, not a clean fit) -- getting a true clean-fit 1B config needs BCD stacked with --grad_checkpoint (untested here) or a coarser block granularity."
+  }
+]

@@ -183,16 +183,23 @@ secondary real-world-transfer sanity check, not the decision instrument, going f
 Not the ~20B jump yet — a nearer, locally-fundable step first. Decided after checking real
 constraints (no code committed for this milestone yet, this is the plan):
 
-- **1B (and certainly 20B) cannot train locally today.** Measured RTX 4050 training-VRAM
-  ratio is **16.8 bytes/param** (bf16 weights+grads+fp32 AdamW moments+master, Issue #69,
-  [training.md](training.md)) → 1B needs ~16.8 GiB (off by ~3× on 6 GB), 20B needs ~336 GiB
-  (off by ~14× even on a 24 GB RTX 3090 — not a time/budget question, a single card physically
-  cannot hold a 20B model's training state; needs real multi-GPU sharding). The proposed local
-  unlock, **GaLore (#84), is unimplemented** — open issue, zero code, unproven.
-  Cloud-rental math (RunPod RTX 3090, sourced pricing $0.22/hr Community / $0.46/hr Secure):
-  a full Chinchilla-optimal 1B pretrain needs an assumption-flagged **~1,341 GPU-hours**
-  (~$295 total, ~56 days continuous, or ~15 months at a $20/mo cap) — real, but a deliberate
-  multi-month commitment, not this milestone.
+- **1B (and certainly 20B) cannot train locally under vanilla full AdamW.** Measured RTX 4050
+  training-VRAM ratio is **16.8 bytes/param** (bf16 weights+grads+fp32 AdamW moments+master,
+  Issue #69, [training.md](training.md)) → 1B needs ~16.8 GiB (off by ~3× on 6 GB), 20B needs
+  ~336 GiB (off by ~14× even on a 24 GB RTX 3090 — a single card physically cannot hold a 20B
+  model's training state; needs real multi-GPU sharding). Cloud-rental math (RunPod RTX 3090,
+  sourced pricing $0.22/hr Community / $0.46/hr Secure): a full Chinchilla-optimal 1B pretrain
+  needs an assumption-flagged **~1,341 GPU-hours** (~$295 total, ~56 days continuous, or ~15
+  months at a $20/mo cap) — real, but a deliberate multi-month commitment.
+  > **UPDATE (2026-07-12, later same day) — this picture changed.** Issue #99
+  > (BAdam-style block-coordinate-descent, `--block-coordinate`) landed and is **measured**,
+  > not just proposed: 268M config −39% peak VRAM (6.9→4.2 GiB), and the 1.04B config went
+  > from **hard OOM to actually running** (still ~1 GiB over this card's clean 6 GiB envelope
+  > at the tested settings — not yet a clean fit, needs stacking with `--grad_checkpoint` or a
+  > coarser block granularity). See [training.md](training.md)'s new BCD section for the full
+  > numbers. **1B-locally is now a tuning problem, not a flat ~3× impossibility** — the
+  > cloud-rental math above is no longer the only path. GaLore (#84) remains unimplemented but
+  > is a further composable lever on top of BCD, not the only one.
 - **The measured local RTX 4050 ceiling today is ~270M params** (d=1024, 24L, bf16 +
   `--grad_checkpoint`, 4.3 GiB peak — Issue #69 table above). Free, immediate, no new
   engineering.
