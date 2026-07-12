@@ -191,16 +191,16 @@ class EdgeHVN(nn.Module):
             return fn()
 
         params = [p for m in modules for p in m.parameters()]
-        self._offload_pool.load(params)
+        self._offload_pool.load(name, params)
         out = fn()
 
         if input_tensor is not None and input_tensor.requires_grad:
-            def _evict(grad, ps=params):
-                self._offload_pool.evict(ps)
+            def _evict(grad, k=name):
+                self._offload_pool.evict(k)
                 return None  # hooks must return None or a replacement Tensor
             input_tensor.register_hook(_evict)
         else:
-            self._offload_pool.evict(params)
+            self._offload_pool.evict(name)
         return out
 
     def _offload_wrap_checkpointed(self, name: str, block: nn.Module, x_in, position_ids):
@@ -231,14 +231,26 @@ class EdgeHVN(nn.Module):
         - Call #2 (the recompute) will only ever happen if `x_in` requires
           grad (i.e. this block is downstream of active) -- otherwise
           checkpoint's own machinery never revisits it, matching
-          `_offload_wrap_plain`'s reasoning. When it does happen, it needs
-          the same deferred, input-tensor-hook eviction as the plain case,
-          timed against ITS local backward completing.
+          `_offload_wrap_plain`'s reasoning.
+
+        Issue #103: when a call #2 IS coming (`x_in.requires_grad`), call
+        #1's "always safe to evict immediately" no longer means "should" --
+        the pool's LRU cache (`offload_cache_blocks > 1`) can instead keep
+        this block warm, so call #2's `pool.load(name, ...)` inside
+        `_self_loading_forward` is a cache HIT (no PCIe re-fetch) instead of
+        a guaranteed miss. Actual eviction is deferred to a hook on `x_in`,
+        timed against call #2's own local backward finishing -- same
+        reasoning as `_offload_wrap_plain`'s hook (hooking the input, not
+        the output, because the last thing a segment's local backward
+        computes is the gradient of its OWN input). If no call #2 is
+        coming, evict right away instead -- holding the slot would only
+        deny it to a block that CAN actually reuse it.
 
         Loading is handled INSIDE the checkpointed closure itself (not just
         here), so call #2 -- invoked later by checkpoint's own machinery,
         entirely outside this method's synchronous scope -- also gets fresh
-        weights; see the `_self_loading_forward` closure below.
+        (or cache-hit) weights; see the `_self_loading_forward` closure
+        below.
         """
         if name == self._offload_active_name:
             return checkpoint(block, x_in, position_ids, use_reentrant=False)
@@ -248,21 +260,22 @@ class EdgeHVN(nn.Module):
 
         def _self_loading_forward(x_arg, pos_arg):
             # Runs on EVERY invocation checkpoint makes (call #1 here, call
-            # #2 later during backward) -- pool.load() on an already-loaded
-            # signature just re-copies into the SAME reused buffer (cheap,
-            # no allocation), so this is safe to call unconditionally.
-            pool.load(params)
+            # #2 later during backward) -- a cache hit on the second call
+            # is a cheap no-op (Issue #103), a miss re-copies into a reused
+            # buffer (Issue #101). Either way, safe to call unconditionally.
+            pool.load(name, params)
             return block(x_arg, position_ids=pos_arg)
 
-        pool.load(params)  # ensure call #1 itself has weights present
+        pool.load(name, params)  # ensure call #1 itself has weights present
         out = checkpoint(_self_loading_forward, x_in, position_ids, use_reentrant=False)
-        pool.evict(params)  # call #1 always safe to evict immediately -- see docstring
 
         if x_in.requires_grad:
-            def _evict(grad, ps=params):
-                pool.evict(ps)
+            def _evict(grad, k=name):
+                pool.evict(k)
                 return None
             x_in.register_hook(_evict)
+        else:
+            pool.evict(name)  # no call #2 coming -- free the slot now
         return out
 
     def forward(self, input_ids: torch.Tensor, position_ids: Optional[torch.Tensor] = None) -> torch.Tensor:

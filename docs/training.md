@@ -233,6 +233,51 @@ that *fits* is not necessarily one that trains at a *useful pace*. Treat ~1.5–
 practical sweet spot (comfortable VRAM margin, still reasonable step time); 3.3B is the
 documented outer edge of what fits at all, not a recommended target.
 
+**Extended finding — the 3.39B "hard boundary" above was NOT a per-block or layer-count
+limit; it was the caller's own construction-time `model.to(device)` call, which is a
+separate, further-fixable bottleneck.** Traced precisely: the OOM's traceback pointed
+inside `EdgeHVN(...).to(device)` itself, not forward/backward — `nn.Module.to()` copies
+parameters one at a time and needs the *whole model* transiently resident to do so.
+EdgeHVN's default parameter dtype is fp32 (confirmed: 3.35B params × 4 bytes = 13.4 GiB),
+which exceeds this card regardless of anything the offload scheduler does afterward, since
+it hasn't been constructed yet at that point. Ruled out "it's about the number of
+layers/blocks specifically" with a controlled comparison: a **wide-shallow** config (d=2896,
+39 layers, ~3.32B params) fit fine (2.4 GiB) at a param count where the **narrow-deep**
+79-layer config OOM'd — proving it's the fp32 `.to(device)` copy size, not block count.
+
+**Fix: skip the caller's blanket `model.to(device)` entirely when offloading — construct
+the model CPU-resident and let `BlockCoordinateScheduler` handle *all* placement from the
+start**, including the very first block. No scheduler code changes were needed:
+`_activate()`'s existing eviction logic already handles a CPU-resident starting model
+correctly (`.to("cpu")` on an already-CPU tensor is a no-op). Wired as an opt-in
+`skip_initial_to_device` flag in `scripts/bench_offload_vram.py`'s probe config (not yet
+wired into `train_edge_conversational.py`'s main training path — that file has an internal
+audit/checkpoint-verification step whose GPU-residency assumptions weren't traced under
+time pressure; a deliberate, smaller scope than rewiring the main script today).
+
+**Measured**: the 3.35B config (79 layers) that previously hard-OOM'd at construction
+(12.7 GiB demand) now peaks at **~1 GiB** for a full forward+backward. Pushed further:
+a **4.02B** config also completed forward+backward at ~1 GiB peak reserved — VRAM-wise,
+the ceiling is now far higher than 3.3B and was not fully re-bracketed (diminishing value:
+see the next paragraph). **The remaining constraint past ~3.3B is no longer VRAM at all —
+it's wall-clock training speed and CPU-side model construction time** (the 4.02B
+construction alone took ~21s on CPU, plus this machine's 15.29 GiB total RAM becomes the
+next real ceiling for fp32 CPU-resident storage: a 4.65B config, needing ~18.6 GiB fp32,
+timed out during construction from heavy page-file swapping — a soft, slow degradation,
+not a hard OOM).
+
+**Practical implication**: with this extended fix, model size is no longer VRAM-bounded on
+this card at all in any range worth targeting — it is bounded by (a) CPU RAM for fp32
+storage and (b) per-step training time, which degrades steeply with depth under the
+current "evict immediately after every use" offload policy (every block is refetched from
+CPU on every touch, with no caching). The natural next lever, not yet built: an **LRU-style
+VRAM-budget cache** for offloaded blocks (keep recently-used blocks resident, sized to use
+most of the available VRAM, instead of always evicting immediately) — this would eliminate
+the *redundant* refetch of a block for its checkpoint recompute right after its initial
+forward use (currently fetched twice per step for every block downstream of the active
+one), directly attacking the speed-vs-depth degradation without touching VRAM ceiling at
+all. Real engineering, not yet started.
+
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 
 Memory **demand** is measured (card-independent; WDDM spill rows record true demand past
