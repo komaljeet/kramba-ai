@@ -100,10 +100,47 @@ shrinks *activation* memory — independent axes, and they compose almost exactl
 now corrected, not just softened: 1B trains locally today**, measured, no cloud/tuning
 gamble required — a flat ~3× impossibility this morning, a working `--block-coordinate
 --grad-checkpoint` combo by this afternoon. 10B (~336 GiB naive) is not re-evaluated here —
-worth a follow-up probe now that both levers are proven, but likely still needs #84/#85 on
-top, or genuinely different hardware. Composes further with #84 (GaLore, shrinks the *active*
-block's state) and #85 (8-bit Adam, quantizes whatever state remains) — neither implemented
-yet.
+worth a follow-up probe now that both levers are proven, but likely still needs genuinely
+different hardware (see the `2M` floor analysis below — none of the levers on this page
+touch total weight storage).
+
+### GaLore (Issue #84) — a real standalone win, but does NOT compound with #99
+
+[GaLore](https://arxiv.org/abs/2403.03507) (Zhao et al., 2024) projects each 2-D weight
+matrix's gradient into a rank-`r` subspace (via a periodically-refreshed SVD-derived
+projection) *before* Adam tracks its moments — so Adam's state is `O(r)` instead of
+`O(m·n)`. Unlike LoRA the **weights stay full-rank** the whole time; only the optimizer's
+view of the gradient is compressed — still genuine full-parameter training.
+`--optimizer galore --galore-rank N --galore-update-gap N` (`hvn/optimizers.py`).
+
+**Measured on this card** (`scripts/bench_galore_vram.py`, `results/galore_vram.json`):
+
+| Config | Params | Peak VRAM |
+|---|---:|---:|
+| d=1024, 24L, AdamW | 268M | 6.9 GiB |
+| d=1024, 24L, **GaLore alone** | 268M | **5.2 GiB (−24%)** |
+| d=2048, 24L, BCD+ckpt, AdamW | 1.04B | 4.65 GiB |
+| d=2048, 24L, BCD+ckpt, **+ GaLore** | 1.04B | 4.43 GiB alloc / 4.69 GiB reserved — **flat, not additive** |
+| d=3072, 32L, BCD+ckpt+GaLore | 3.07B | ❌ 12.5 GiB — hits the `2M` floor (see below) |
+
+**Two honest findings, not oversold:**
+- **GaLore alone gives a real 24% reduction** — well short of the paper's headline 65.5%,
+  because that figure is *optimizer-state-only* on a 7B model where optimizer state
+  dominates total memory. Here activation memory (untouched by GaLore) dilutes the
+  total-peak number; 24% is what's actually measured, not a smaller version of 65.5%.
+- **Stacked with #99 (block-coordinate-descent), the marginal gain is flat, not
+  compounding.** BCD already limits optimizer state to *one block* at a time; GaLore then
+  only compresses that single already-small block's state further — a small absolute
+  saving on top of a big one, not a multiplicative win. Unlike #99+#100 (genuinely
+  independent axes: optimizer state vs. activations), #84 and #99 **overlap** — both
+  target optimizer state, so their benefits mostly don't add.
+- **3.07B confirms the `2M` floor prediction below**: no optimizer-side lever (BCD, GaLore,
+  checkpointing) touches weight storage, so pushing past the local ceiling hits a hard wall
+  regardless of which of these three is used or how they're combined. **Directly tested and
+  bracketed** (not just extrapolated): 1.38B fits at 5.96 GiB (~180 MB margin), 1.54B needs
+  6.62 GiB and spills. **Real ceiling: ~1.3–1.4B params** (treat ~1.2B as the safe practical
+  target with real headroom) — corrects an earlier, too-optimistic "~2–2.5B" extrapolation
+  that a direct 2.05B test (8.4–8.6 GiB, spills badly) disproved.
 
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 

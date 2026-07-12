@@ -1471,6 +1471,9 @@ def train(
         weight_decay=weight_decay,
         fused=use_fused,
         muon_lr=config.get("muon_lr"),
+        galore_rank=config.get("galore_rank", 128),
+        galore_update_gap=config.get("galore_update_gap", 200),
+        galore_scale=config.get("galore_scale", 0.25),
     )
     print(f"  Optimizer: {opt_desc}")
 
@@ -1927,11 +1930,27 @@ def main():
                              "with GPU compute. Identity-preserving (same data, same order "
                              "with fixed seed).")
     parser.add_argument("--optimizer", type=str, default="adamw",
-                        choices=["adamw", "muon", "lion"],
+                        choices=["adamw", "muon", "lion", "galore"],
                         help="Optimizer (Issue #86). 'muon' orthogonalises 2-D "
                              "weight-matrix updates (faster convergence); 'lion' "
-                             "is sign-momentum. Training-time only — HVN forward "
+                             "is sign-momentum; 'galore' (Issue #84) projects "
+                             "gradients into a low-rank subspace so Adam's "
+                             "optimizer state is O(rank) instead of O(m*n) for "
+                             "large weight matrices -- weights stay full-rank, "
+                             "only the optimizer's view of the gradient is "
+                             "compressed. Training-time only -- HVN forward "
                              "is untouched. Default: adamw.")
+    parser.add_argument("--galore-rank", type=int, default=128,
+                        help="GaLore projection rank (only used with "
+                             "--optimizer galore). Default: 128.")
+    parser.add_argument("--galore-update-gap", type=int, default=200,
+                        help="Steps between GaLore projection-matrix SVD "
+                             "refreshes (only used with --optimizer galore). "
+                             "Default: 200 (paper's default).")
+    parser.add_argument("--galore-scale", type=float, default=0.25,
+                        help="GaLore update scale factor alpha (only used "
+                             "with --optimizer galore). Default: 0.25 (paper's "
+                             "default, does not depend on rank).")
     parser.add_argument("--muon-lr", type=float, default=0.02,
                         help="Muon LR for 2-D hidden matrices (default 0.02; "
                              "only used with --optimizer muon).")
@@ -2092,6 +2111,9 @@ def main():
     config["precision"] = args.precision
     config["optimizer"] = args.optimizer
     config["muon_lr"] = args.muon_lr
+    config["galore_rank"] = args.galore_rank
+    config["galore_update_gap"] = args.galore_update_gap
+    config["galore_scale"] = args.galore_scale
     config["block_coordinate"] = args.block_coordinate
     config["bcd_steps_per_block"] = args.bcd_steps_per_block
     if args.val_every is not None:

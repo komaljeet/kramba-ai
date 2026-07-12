@@ -23,8 +23,21 @@ Optimizers
     update; ~half the optimizer memory of Adam (one state tensor) and often
     competitive convergence at a much smaller LR.
 
+``GaLore``
+    Gradient Low-Rank Projection (Zhao et al., 2024, arXiv:2403.03507). For
+    each 2-D weight matrix, projects the gradient into a rank-``r`` subspace
+    (via a periodically-refreshed SVD-derived projection matrix) *before*
+    Adam tracks its moments — so Adam's ``exp_avg``/``exp_avg_sq`` state is
+    ``O(r)`` instead of ``O(m*n)``. Unlike LoRA, the *weights* stay full-rank
+    the whole time (only the optimizer's view of the gradient is
+    compressed) -- no capacity loss, this is still full-parameter training.
+    Vocabulary-sized matrices, norms and biases fall back to standard AdamW,
+    same pattern as Muon above. Composes with #99 (block-coordinate-descent,
+    shrinks *which* params need any optimizer state at all) and #100
+    (activation checkpointing) — three independent, stackable memory axes.
+
 Use :func:`build_optimizer` to construct any of ``adamw`` / ``muon`` / ``lion``
-with the model's parameters correctly partitioned.
+/ ``galore`` with the model's parameters correctly partitioned.
 """
 
 from __future__ import annotations
@@ -150,6 +163,131 @@ class Muon(torch.optim.Optimizer):
 
 
 # ---------------------------------------------------------------------------
+# GaLore (Issue #84)
+# ---------------------------------------------------------------------------
+class GaLore(torch.optim.Optimizer):
+    """GaLore for 2-D weight matrices, with an AdamW fallback for everything else.
+
+    Each GaLore-managed parameter's gradient is projected into a rank-``r``
+    subspace via a projection matrix ``proj`` (top-``r`` left singular
+    vectors of the gradient if the matrix is tall, top-``r`` right singular
+    vectors if wide — whichever gives the smaller compact shape). Adam's
+    moments (``exp_avg``/``exp_avg_sq``) track that *compact* representation,
+    not the full matrix — this is the entire memory win: ``O(r * min(m,n))``
+    state instead of ``O(m * n)``. The normalized update is projected back to
+    full rank and applied with a fixed scale factor (paper's ``alpha``,
+    default 0.25) before the usual decoupled weight decay + LR.
+
+    ``proj`` is refreshed every ``update_proj_gap`` steps via
+    ``torch.svd_lowrank`` (a randomized approximate SVD — far cheaper than a
+    full/economy SVD for the matrix sizes this project trains, and all that's
+    needed since only the top-r directions are used). Refreshing changes the
+    subspace the compact moments live in, so they are reset to zero on
+    refresh — same rationale as BAdam (#99) resetting state on a block
+    switch: stale moments in a now-irrelevant subspace would misdirect the
+    next update.
+    """
+
+    def __init__(self, param_groups, *, betas=(0.9, 0.999), eps: float = 1e-8,
+                 weight_decay: float = 0.0):
+        defaults = dict(betas=betas, eps=eps, weight_decay=weight_decay,
+                        rank=128, update_proj_gap=200, scale=0.25)
+        super().__init__(param_groups, defaults)
+
+    @staticmethod
+    def _compute_projection(g: Tensor, rank: int) -> tuple[Tensor, str]:
+        """Top-r singular-vector projection matrix + which side to project on.
+
+        Returns (proj, side): side="left" -> proj is [m, r], project via
+        proj.T @ g -> [r, n]. side="right" -> proj is [n, r], project via
+        g @ proj -> [m, r]. Always picks the side giving the smaller compact
+        shape (tall matrix -> project left, wide matrix -> project right).
+        """
+        m, n = g.shape
+        r = min(rank, m, n)
+        U, _S, V = torch.svd_lowrank(g.float(), q=r)
+        if m >= n:
+            return U[:, :r].to(g.dtype), "left"
+        return V[:, :r].to(g.dtype), "right"
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            beta1, beta2 = group["betas"]
+            eps = group["eps"]
+            wd = group["weight_decay"]
+            lr = group["lr"]
+            if group.get("use_galore", False):
+                rank = group["rank"]
+                gap = group["update_proj_gap"]
+                scale = group["scale"]
+                for p in group["params"]:
+                    if p.grad is None:
+                        continue
+                    g = p.grad
+                    state = self.state[p]
+                    if "step" not in state:
+                        state["step"] = 0
+                        state["proj"] = None
+                    state["step"] += 1
+
+                    if state["proj"] is None or (state["step"] - 1) % gap == 0:
+                        proj, side = self._compute_projection(g, rank)
+                        state["proj"] = proj
+                        state["side"] = side
+                        r_shape = (proj.shape[1], g.shape[1]) if side == "left" \
+                            else (g.shape[0], proj.shape[1])
+                        state["exp_avg"] = torch.zeros(r_shape, device=g.device, dtype=g.dtype)
+                        state["exp_avg_sq"] = torch.zeros(r_shape, device=g.device, dtype=g.dtype)
+                        state["moment_step"] = 0
+
+                    proj, side = state["proj"], state["side"]
+                    R = (proj.T @ g) if side == "left" else (g @ proj)
+
+                    state["moment_step"] += 1
+                    exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
+                    exp_avg.mul_(beta1).add_(R, alpha=1 - beta1)
+                    exp_avg_sq.mul_(beta2).addcmul_(R, R, value=1 - beta2)
+                    bias1 = 1 - beta1 ** state["moment_step"]
+                    bias2 = 1 - beta2 ** state["moment_step"]
+                    denom = (exp_avg_sq.sqrt() / (bias2 ** 0.5)).add_(eps)
+                    update_compact = exp_avg / denom  # still needs /bias1, folded into alpha below
+
+                    full_update = (proj @ update_compact) if side == "left" \
+                        else (update_compact @ proj.T)
+
+                    if wd != 0:
+                        p.mul_(1 - lr * wd)
+                    p.add_(full_update.to(p.dtype), alpha=-lr * scale / bias1)
+            else:
+                for p in group["params"]:
+                    if p.grad is None:
+                        continue
+                    g = p.grad
+                    state = self.state[p]
+                    if "step" not in state:
+                        state["step"] = 0
+                        state["exp_avg"] = torch.zeros_like(p)
+                        state["exp_avg_sq"] = torch.zeros_like(p)
+                    state["step"] += 1
+                    exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
+                    exp_avg.mul_(beta1).add_(g, alpha=1 - beta1)
+                    exp_avg_sq.mul_(beta2).addcmul_(g, g, value=1 - beta2)
+                    bias1 = 1 - beta1 ** state["step"]
+                    bias2 = 1 - beta2 ** state["step"]
+                    denom = (exp_avg_sq.sqrt() / (bias2 ** 0.5)).add_(eps)
+                    if wd != 0:
+                        p.mul_(1 - lr * wd)
+                    p.addcdiv_(exp_avg, denom, value=-lr / bias1)
+        return loss
+
+
+# ---------------------------------------------------------------------------
 # Lion
 # ---------------------------------------------------------------------------
 class Lion(torch.optim.Optimizer):
@@ -211,16 +349,41 @@ def _is_muon_param(name: str, param: Tensor) -> bool:
     return True
 
 
+def _is_galore_param(name: str, param: Tensor, rank: int) -> bool:
+    """A 2-D hidden weight matrix large enough that rank-``rank`` projection
+    actually compresses its optimizer state (min(m,n) > rank -- otherwise
+    GaLore's compact representation would be no smaller than the full one).
+
+    Same exclusions as Muon: vocabulary-sized matrices (embedding / decoder
+    head) and norm weights fall back to standard AdamW -- GaLore's projected
+    updates are a worse fit for those (embeddings in particular are already
+    naturally sparse-gradient; the paper itself scopes GaLore to attention/
+    feedforward weight matrices).
+    """
+    if param.ndim != 2:
+        return False
+    lname = name.lower()
+    if "embedding" in lname or "decoder" in lname or "lm_head" in lname:
+        return False
+    if "norm" in lname:
+        return False
+    return min(param.shape) > rank
+
+
 def build_optimizer(model, name: str, *, lr: float, weight_decay: float,
                     betas=(0.9, 0.95), eps: float = 1e-8, fused: bool = False,
                     muon_lr: float | None = None, muon_momentum: float = 0.95,
-                    adamw_aux_lr: float | None = None):
-    """Build an optimizer by name: ``adamw`` | ``muon`` | ``lion``.
+                    adamw_aux_lr: float | None = None,
+                    galore_rank: int = 128, galore_update_gap: int = 200,
+                    galore_scale: float = 0.25):
+    """Build an optimizer by name: ``adamw`` | ``muon`` | ``lion`` | ``galore``.
 
     Returns ``(optimizer, description)``.  For ``muon`` the model's parameters
     are split into a Muon group (hidden 2-D matrices, LR ``muon_lr``) and an
     AdamW fallback group (embedding/head/norms/biases, LR ``adamw_aux_lr``); the
     shared cosine schedule scales both groups proportionally from their base LR.
+    ``galore`` follows the same split pattern (GaLore group + AdamW fallback
+    group), both driven by the single shared ``lr``.
     """
     name = name.lower()
     decay, no_decay = [], []
@@ -277,4 +440,32 @@ def build_optimizer(model, name: str, *, lr: float, weight_decay: float,
                 f"{n_muon:,} params; AdamW aux lr={adamw_aux_lr:g} / {n_aux:,} params)")
         return opt, desc
 
-    raise ValueError(f"Unknown optimizer '{name}' (expected adamw|muon|lion)")
+    if name == "galore":
+        galore_params, aux_decay, aux_no_decay = [], [], []
+        for n, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            if _is_galore_param(n, p, galore_rank):
+                galore_params.append(p)
+            elif p.ndim <= 1 or "norm" in n.lower() or n.lower().endswith(".bias"):
+                aux_no_decay.append(p)
+            else:
+                aux_decay.append(p)
+        groups = [
+            {"params": galore_params, "use_galore": True, "lr": lr,
+             "weight_decay": weight_decay, "rank": galore_rank,
+             "update_proj_gap": galore_update_gap, "scale": galore_scale},
+            {"params": aux_decay, "use_galore": False, "lr": lr,
+             "weight_decay": weight_decay},
+            {"params": aux_no_decay, "use_galore": False, "lr": lr,
+             "weight_decay": 0.0},
+        ]
+        opt = GaLore(groups, betas=betas, eps=eps, weight_decay=weight_decay)
+        n_galore = sum(p.numel() for p in galore_params)
+        n_aux = sum(p.numel() for p in aux_decay + aux_no_decay)
+        desc = (f"GaLore (rank={galore_rank}, update_gap={galore_update_gap}, "
+                f"scale={galore_scale:g} on {len(galore_params)} matrices / "
+                f"{n_galore:,} params; AdamW aux / {n_aux:,} params)")
+        return opt, desc
+
+    raise ValueError(f"Unknown optimizer '{name}' (expected adamw|muon|lion|galore)")
