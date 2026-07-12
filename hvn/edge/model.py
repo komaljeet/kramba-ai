@@ -27,6 +27,7 @@ from typing import Callable, Optional
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from ..core.decoder import HVNDecoder
 from ..core.hvn_block import HVNBlock
@@ -71,6 +72,7 @@ class EdgeHVN(nn.Module):
         use_triton_scan: bool = False,
         block_plan: Optional[list[str]] = None,
         attn_window: Optional[int] = None,
+        grad_checkpoint: bool = False,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -78,6 +80,14 @@ class EdgeHVN(nn.Module):
         self.num_layers = num_layers
         self.shared_weights = shared_weights
         self.use_deltanet = use_deltanet
+        # Issue #100: exact activation checkpointing (mirrors the core
+        # HamiltonianVortexNetwork's #49 implementation, which EdgeHVN never
+        # inherited since it has its own forward()). Recomputes each block's
+        # activations in the backward pass instead of storing them -- bit-
+        # identical result, ~20-30% more compute, large activation-VRAM cut.
+        # Composes with #99 block-coordinate-descent (that shrinks optimizer-
+        # state memory; this shrinks activation memory -- independent axes).
+        self.grad_checkpoint = grad_checkpoint
         # Optional explicit block override (A/B baseline). None → existing
         # use_deltanet/HVNBlock behaviour, unchanged.
         self.block_type = block_type
@@ -152,8 +162,12 @@ class EdgeHVN(nn.Module):
         if self.shared_block is not None:
             x = self.shared_block(x, position_ids=position_ids)
         else:
+            use_ckpt = self.grad_checkpoint and self.training and torch.is_grad_enabled()
             for block in self.blocks:
-                x = block(x, position_ids=position_ids)
+                if use_ckpt:
+                    x = checkpoint(block, x, position_ids, use_reentrant=False)
+                else:
+                    x = block(x, position_ids=position_ids)
 
         x = self.final_norm(x)
         return self.decoder(x)

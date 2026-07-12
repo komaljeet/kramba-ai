@@ -191,15 +191,16 @@ constraints (no code committed for this milestone yet, this is the plan):
   sourced pricing $0.22/hr Community / $0.46/hr Secure): a full Chinchilla-optimal 1B pretrain
   needs an assumption-flagged **~1,341 GPU-hours** (~$295 total, ~56 days continuous, or ~15
   months at a $20/mo cap) — real, but a deliberate multi-month commitment.
-  > **UPDATE (2026-07-12, later same day) — this picture changed.** Issue #99
-  > (BAdam-style block-coordinate-descent, `--block-coordinate`) landed and is **measured**,
-  > not just proposed: 268M config −39% peak VRAM (6.9→4.2 GiB), and the 1.04B config went
-  > from **hard OOM to actually running** (still ~1 GiB over this card's clean 6 GiB envelope
-  > at the tested settings — not yet a clean fit, needs stacking with `--grad_checkpoint` or a
-  > coarser block granularity). See [training.md](training.md)'s new BCD section for the full
-  > numbers. **1B-locally is now a tuning problem, not a flat ~3× impossibility** — the
-  > cloud-rental math above is no longer the only path. GaLore (#84) remains unimplemented but
-  > is a further composable lever on top of BCD, not the only one.
+  > **UPDATE (2026-07-12, later same day) — 1B now trains locally, cleanly, measured.**
+  > Issue #99 (BAdam block-coordinate-descent, `--block-coordinate`) landed: 268M config
+  > −39% peak VRAM (6.9→4.2 GiB), 1.04B config hard OOM → runs (still spilling past 6 GiB
+  > alone). Issue #100 (EdgeHVN never had `--grad_checkpoint` wired, despite #49/#88 closing
+  > it for the core model class only — fixed, bit-identical parity verified) stacked on top:
+  > **1.04B config → 4.6 GiB peak, a clean fit with headroom, no spill.** See
+  > [training.md](training.md)'s BCD section for the full numbers
+  > (`results/bcd_ckpt_vram.json`). **The cloud-rental math above is no longer the path for
+  > 1B at all** — it trains on this laptop today. GaLore (#84) and 8-bit Adam (#85) remain
+  > unimplemented, further composable levers for 10B-class work, not needed to reach 1B.
 - **The measured local RTX 4050 ceiling today is ~270M params** (d=1024, 24L, bf16 +
   `--grad_checkpoint`, 4.3 GiB peak — Issue #69 table above). Free, immediate, no new
   engineering.
