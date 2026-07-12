@@ -180,17 +180,58 @@ the CUDA allocator churn from constant fresh alloc/free on every block swap (mea
 before the pool: 317 reserved memory segments, ~290 GB of cumulative allocate/free traffic
 over just 6 steps).
 
-**What did NOT resolve: peak *reserved* memory stays ~6 GiB at 1.54B — right at this
-card's 6141 MiB limit, no real margin.** This is NOT an offload-mechanism bug: tested and
-ruled out that it's activation memory (cutting batch×seq 16× only dropped reserved 2.6%,
-while peak alloc dropped as expected) or per-swap fragmentation (the buffer pool already
-eliminates that, evidenced by the 2.4× speedup). What remains looks like a largely fixed
-CUDA/cuBLAS/allocator overhead for this GPU+driver, independent of both offloading
-correctness and workload size — a platform-level question, not something more offload code
-resolves. **Practical result: offloading is correct and faster, but does not unlock training
-meaningfully past where #99+#100 alone already reached (~1.3–1.5B)** — the `2M` weight floor
-is fixed, but a different, currently-unexplained floor takes its place. See #102 for the
-open investigation.
+**Peak *reserved* memory stayed ~6 GiB at 1.54B when this section was first written —
+resolved by Issue #102 below. Do not read the 1.04B/1.54B table above as the final
+ceiling; see #102's numbers instead.**
+
+### CUDA reserved-memory floor (Issue #102) — root cause found and fixed, real ceiling ~3.3B
+
+The `~6 GiB stuck reserved` gap above was investigated and its root cause found: it is
+**not** offload-swap fragmentation (the #101 buffer pool already fixed that, evidenced by
+its own 2.4× speedup) and **not** activation memory (cutting batch×seq 16× only moved
+reserved 2.6%). A fine-grained trace of `torch.cuda.memory_reserved()` at every
+construction phase found the actual cause: the **caller's own `model.to(device)`** (which
+must happen before `BlockCoordinateScheduler` is even constructed) allocates ONE large
+reserved CUDA segment sized for the *whole* model in a single shot. `_activate()`'s
+construction-time eviction correctly frees almost everything (`memory_allocated()` drops
+from ~5.9 GiB to ~62 MiB) — but PyTorch's caching allocator does not proactively return
+freed segments to the driver, so `memory_reserved()` stays pinned at that original
+~full-model size for the rest of the process.
+
+**Fix: a single `torch.cuda.empty_cache()` call, once, immediately after
+`BlockCoordinateScheduler`'s construction-time eviction** (`hvn/core/
+block_coordinate.py`, `__init__`) — while the freed memory is still one clean, fully-empty
+block from the original allocation, this call successfully releases nearly all of it.
+Calling `empty_cache()` *later* (e.g. mid-training-loop, once the buffer pool's own
+differently-sized allocations have mixed into the same segments, which is what earlier
+attempts in this doc tried) barely helps — partial occupancy blocks segment release.
+Timing is everything; the mechanism itself (`empty_cache()`) was correct all along.
+
+**Measured effect at 1.54B**: peak reserved memory **6130 MiB → 1182 MiB** (an 81%
+reduction), and training got **faster too** (4.54s/step → 2.53s/step) — less fragmented
+reserved space makes the buffer pool's own allocations cheaper to satisfy.
+
+**The real local ceiling, directly tested and bracketed** (`scripts/bench_offload_vram.py`,
+`results/offload_ceiling_final.json`):
+
+| Params | Peak reserved | sec/step |
+|---:|---:|---:|
+| 1.54B | 1.18 GiB | 2.53s |
+| 2.05B | 1.23 GiB | 3.58s |
+| 2.55B | 1.28 GiB | 5.33s |
+| 3.05B | 1.33 GiB | 9.92s |
+| 3.18B | 1.33 GiB | 18.97s |
+| **3.30B** | **1.35 GiB** | **30.6s** |
+| 3.39B | ❌ OOM (12.7 GiB demand) | — |
+
+**Real ceiling: ~3.3B params** — a hard boundary (3.39B jumps straight to a 12.7 GiB
+demand, not a gradual approach) — up from the earlier ~1.3–1.4B ceiling, itself up from a
+flat "1B is impossible" this morning. **Important caveat: VRAM fitting and training speed
+are separate claims here.** Step time climbs steeply with depth (2.5s at 1.5B → 30.6s at
+3.3B) — the offload mechanism's per-step PCIe traffic scales with block count, so a config
+that *fits* is not necessarily one that trains at a *useful pace*. Treat ~1.5–2B as the
+practical sweet spot (comfortable VRAM margin, still reasonable step time); 3.3B is the
+documented outer edge of what fits at all, not a recommended target.
 
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 

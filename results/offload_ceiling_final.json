@@ -1,0 +1,9 @@
+[
+  {"label": "1.54B_fixed", "params": 1544204384, "verdict": "ok", "peak_reserved_mb": 1182, "sec_per_step": 2.53, "note": "with the one-time empty_cache() fix (Issue #102), vs 6130 MiB / 4.54s before it"},
+  {"label": "2.05B_fixed", "params": 2048012480, "verdict": "ok", "peak_reserved_mb": 1234, "sec_per_step": 3.577},
+  {"label": "2.55B_fixed", "params": 2551820576, "verdict": "ok", "peak_reserved_mb": 1282, "sec_per_step": 5.33},
+  {"label": "3.05B_fixed", "params": 3055628672, "verdict": "ok", "peak_reserved_mb": 1334, "sec_per_step": 9.916},
+  {"label": "3.18B_fixed", "params": 3181580696, "verdict": "ok", "peak_reserved_mb": 1330, "sec_per_step": 18.971},
+  {"label": "3.30B_fixed", "params": 3307532720, "verdict": "ok", "peak_reserved_mb": 1354, "sec_per_step": 30.615, "note": "VRAM comfortably fits, but speed has degraded steeply with depth -- 'fits' and 'trains at a reasonable pace' are different claims here"},
+  {"label": "3.39B_fixed", "params": 3391500736, "verdict": "oom", "peak_reserved_mb": 12686, "note": "hard boundary, not gradual -- jumps straight from 1354 MiB (3.30B) to a 12.7 GiB demand"}
+]
