@@ -91,24 +91,35 @@ is **scale-invariant** — if 83M is capacity-limited, scale up via #84 GaLore *
 hybrid recipe*. Full plan:
 `C:\Users\komal\.claude\plans\bubbly-waddling-sundae.md`.
 
-### A5 gate finding — what the hybrid can and cannot buy (2026-07-12)
+### A5 gate finding — the mechanism PASSES; what the hybrid can and cannot buy (2026-07-12)
 
-The `--far-probe` A/B (shrink the attention window, push the passage beyond it — see
-[state.md](state.md) for the numbers) pins down the design's real envelope:
+**Superseded note:** an earlier pass through this finding used `grounded_qa.py`'s 5-item
+keyword gate and concluded (a) the first A4 FT *degraded* the trunk and (b) beyond-window
+recall was flatly ~0 for everything. Both conclusions were **wrong — 5-item-gate noise, not
+architecture facts.** Replaced with `eval/synthetic_recall_probe.py` (200 trials/point,
+invented-entity QA in the model's trained template — see [state.md](state.md) for the full
+numbers and the retraction). The corrected picture:
 
-- **Beyond the window, exact-token recall is ~0 — and windowed attention cannot fix it.**
-  The DeltaNet recurrence scored `far-open 0/5` (far-lift 0) on both the trunk and the
-  hybrid: the O(1) state does not preserve exact tokens. Because the 2 attention layers are
-  *sliding-window*, they are masked out beyond `W` and add nothing there. So for **exact**
-  recall past `W`, hybrid ≈ a plain sliding-window transformer ≈ 0.
-- **The hybrid's achievable win is exact recall *within* the window.** The trunk's recurrence
-  already reads adjacent context weakly (`near-open 2/5`); the attention layers' job is to
-  push that toward 5/5 with clean, exact copies. That — plus O(1) cost on 10/12 layers and a
-  *lossy semantic gist* of older context (which the keyword gate can't measure) — is the
-  honest value proposition over a windowed transformer. If the workload needs **exact**
-  long-range recall, the answer is a bigger window or tool-refetch, not the recurrence.
-- **First A4 FT (step5000) FAILED** — it *degraded* the trunk (open-book lift +1 → −1) by
-  overfitting a 40-example corpus. Root cause was data volume, not architecture or capacity.
-  Fix: `scripts/expand_grounded_qa.py` (40 → 5,240 triples via WikiText-103 copy-cloze);
-  re-FT from the clean trunk is running (see [state.md](state.md)). Reconcile with the
-  re-gate result when it lands.
+- **Windowed attention delivers real, large exact recall within the window** — ~9× the pure
+  recurrence's floor (4% → 35.5% at 200-trial N). This is the hybrid's core claim, proven with
+  a real statistic, not "not broken." It **plateaus** with more training on a fixed corpus —
+  the lever to push it further is corpus size/diversity, not step count.
+- **Beyond the window, the recurrence carries some genuine exact-token signal — small, but
+  real and growing with training** (0.5% trunk floor → 5.5% → **8.5%** at 8,000 FT steps,
+  monotonic, ~17× the floor). This *contradicts* the earlier "architecturally capped at ~0"
+  claim: the O(1) state is not purely a semantic gist with zero exact-token content — it's
+  weak exact recall that improves with training, currently far below near-window quality.
+  Whether it keeps climbing with more data/scale or saturates near here is **open** — the
+  honest position is "real but not yet reliable," not "impossible" and not "solved." If a
+  workload needs **reliable** long-range exact recall today, a bigger window or tool-refetch
+  is still the safer answer than trusting the recurrence's gist.
+- **First A4 FT (step5000, 40-example corpus) did NOT degrade the trunk** — it was already
+  ~3–4× better at near-window recall (16% vs the trunk's 4–5%); the earlier "made it worse"
+  reading was 5-item noise. Root cause of it being *insufficient* (not regressive) was data
+  volume: `scripts/expand_grounded_qa.py` scaled 40 → 5,240 triples (WikiText-103 copy-cloze),
+  and the corpus-expanded re-FT (`hybrid_a4_v2/step8000.pt`) is the checkpoint the numbers
+  above are measured on.
+
+**Decision:** the 83M R&D probe **passes** — go-signal for the next staged milestone (README's
+"The Dream": ~20B-class native ternary-hybrid), not a reason to invoke the capacity/scale-up
+fallback (#84 GaLore was the fallback for a *failed* gate; the gate passed).

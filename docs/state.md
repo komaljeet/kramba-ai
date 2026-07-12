@@ -110,19 +110,106 @@ the recurrence and windowed attention. Beyond the window, hybrid ≈ a plain sli
 transformer on exact recall; HVN's only beyond-window edge is a *lossy semantic gist* the
 keyword gate can't credit. See [architecture.md](architecture.md).
 
-> **TODO (2026-07-12) — re-FT RUNNING; re-run the A5 gate when it finishes.**
-> Root-cause fix landed: `scripts/expand_grounded_qa.py` scales the corpus from 40 → **5,240**
-> grounded triples (5,000 WikiText-103 copy-cloze + 240 up-weighted semantic seed →
-> `data/grounded_qa_expanded.jsonl`). Re-FT from the **clean trunk** (not the degraded
-> step5000) is running on `feat/grounded-qa-beyond-window-probe`, bg `bpkeh9gzf` /
-> nohup PID 1919, 8000 steps, ~1.2 s/step (~2.7 h):
-> `continue_ft_hybrid.py --fast --max-steps 8000 --hybrid-trunk-init <trunk> --grounded-data
-> data/grounded_qa_expanded.jsonl --checkpoint-dir checkpoints/hybrid_a4_v2 --chat-mix 0.3`.
-> Follow CSV `checkpoints/hybrid_a4_v2/a4_ft_log.csv`; ckpts `hybrid_a4_step{1000..8000}.pt`.
->
-> **When done, re-gate:** `python -m eval.grounded_qa --checkpoint
-> checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt` **and** `--far-probe`. Success = open-book
-> lift > 0 **and** near-open > trunk's 2/5 (attention beats the recurrence inside the window).
-> If near-open still ≤ 2/5 after a full corpus, the attention layers aren't learning to read
-> → try more steps / higher grounded fraction, then the capacity/scale-up (#84) question.
-> Record the numbers back here + in [architecture.md](architecture.md), then clear this TODO.
+## CORRECTION (2026-07-12, later) — the "made things WORSE" verdict above is RETRACTED
+
+`grounded_qa`'s 5-item keyword gate is too noisy to trust for this decision — it gates a
+1B-parameter scale-up call, and a 5-item test is dominated by luck (one keyword flips the
+verdict) plus a real-world-knowledge/fluency confound unrelated to recall. Replaced it with
+`eval/synthetic_recall_probe.py` (MR !83): hundreds of trials per checkpoint, INVENTED
+entity/value pseudo-words (e.g. *"The Zorvex is called Blenthar."*) rendered in the model's
+own trained chat/QA template — unambiguous exact-match scoring, zero real-world-knowledge
+confound, in-distribution phrasing (an earlier raw-random-token-id version produced a flat
+0% everywhere including inside the hybrid's own window — that was a format artifact, not a
+recall measurement; retracted and fixed, see the script's docstring).
+
+**Near-window exact-recall accuracy, 200 trials each:**
+
+| Checkpoint | accuracy |
+|---|---|
+| pure trunk (`step51000`) | **4–5%** |
+| old A4, 40-example corpus, "failed" (`hybrid_a4/step5000`) | **16–16.5%** |
+| new A4, 5,240-example corpus (`hybrid_a4_v2/step5000`, only 63% through its run) | **35.5%** |
+
+**The old 40-example FT was never a regression — it was already ~3-4x better than the trunk.**
+The 5-item gate's −1 lift was noise, not signal. The corrected, high-N picture is a clean,
+monotonic trend: bigger grounded-QA corpus → better recall, exactly as hypothesized, and the
+new run isn't even finished. **Beyond-window** (target pushed >W=128 via 16 distractor facts):
+trunk 0.5%, old A4 0.5% (both = noise floor), **new A4 5.5%** — the first checkpoint to show
+signal clearly above floor, though still far below the near-window number; worth watching at
+step8000, not yet a strong claim.
+
+**`eval/synthetic_recall_probe.py` is now the primary R&D gate; `grounded_qa.py` (standard +
+`--far-probe`) is secondary — useful for real-world-transfer sanity, not for this go/no-go.**
+
+## FINAL VERDICT — A4 8K complete, mechanism PASSES the R&D gate (2026-07-12)
+
+`checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt` (8,000 steps, 161.6 min, `feat/grounded-qa-
+beyond-window-probe`; final train loss ~2.35). Full synthetic-recall trajectory, 200 trials
+per point:
+
+| Checkpoint | near (unbounded) | near (W=128) | far (W=128, beyond) |
+|---|---|---|---|
+| pure trunk | 4.0% | 5.0% | 0.5% |
+| old A4, 40-ex | 16.0% | 16.5% | 0.5% |
+| new A4 **step5000** | 35.5% | 35.5% | 5.5% |
+| new A4 **step8000** | 35.0% | **35.5%** | **8.5%** |
+
+**PASS.** Two clean, high-N, monotonic findings:
+- **Near-window recall works and is large:** ~9× the trunk's floor (4% → 35.5%). This is the
+  core hybrid claim (windowed attention adds exact recall the recurrence alone lacks) —
+  proven, not just "not broken."
+- **Near-window has PLATEAUED** (35.5% at both 5000 and 8000) — more steps on *this* corpus
+  won't push it further; the next lever for near-window is a bigger/more-diverse corpus, not
+  more training time.
+- **Far-window kept climbing and is now real signal, not noise:** 0.5% → 5.5% → 8.5% (~17× the
+  trunk's floor), monotonic with training. This is the first evidence in the project that the
+  recurrence carries *some* genuine exact-token signal beyond the attention window — the
+  capability the architecture wasn't designed to structurally guarantee. Still modest in
+  absolute terms (8.5%, not "reliable"); whether it keeps climbing with more data/steps or
+  saturates here is open.
+
+**Decision: the 83M R&D probe clears the bar.** This is the go-signal for the next staged
+milestone in [README's "The Dream"](../README.md) — scaling the recipe toward a ~20B-class
+native ternary-hybrid, not a reason to scale-up-via-capacity-question (#84 GaLore is no longer
+the next step; it was the fallback for a failed gate, and the gate passed).
+
+`grounded_qa.py`'s 8k re-run remained noisy as expected (standard: closed 2/5 open 0/5;
+far-probe: closed 2/5 near 1/5 far 1/5, with the lone far "hit" being a garbled multi-country
+list that happened to contain "Portuguese" — not real recall) — confirms it should stay a
+secondary real-world-transfer sanity check, not the decision instrument, going forward.
+
+## NEXT PLANNED MILESTONE — ~270M local, conversational fluency + tool-calling (2026-07-12)
+
+Not the ~20B jump yet — a nearer, locally-fundable step first. Decided after checking real
+constraints (no code committed for this milestone yet, this is the plan):
+
+- **1B (and certainly 20B) cannot train locally today.** Measured RTX 4050 training-VRAM
+  ratio is **16.8 bytes/param** (bf16 weights+grads+fp32 AdamW moments+master, Issue #69,
+  [training.md](training.md)) → 1B needs ~16.8 GiB (off by ~3× on 6 GB), 20B needs ~336 GiB
+  (off by ~14× even on a 24 GB RTX 3090 — not a time/budget question, a single card physically
+  cannot hold a 20B model's training state; needs real multi-GPU sharding). The proposed local
+  unlock, **GaLore (#84), is unimplemented** — open issue, zero code, unproven.
+  Cloud-rental math (RunPod RTX 3090, sourced pricing $0.22/hr Community / $0.46/hr Secure):
+  a full Chinchilla-optimal 1B pretrain needs an assumption-flagged **~1,341 GPU-hours**
+  (~$295 total, ~56 days continuous, or ~15 months at a $20/mo cap) — real, but a deliberate
+  multi-month commitment, not this milestone.
+- **The measured local RTX 4050 ceiling today is ~270M params** (d=1024, 24L, bf16 +
+  `--grad_checkpoint`, 4.3 GiB peak — Issue #69 table above). Free, immediate, no new
+  engineering.
+- **Calibrated goal for 270M — NOT "agentic coding" capability.** Real competent code
+  generation needs far more scale + data than a from-scratch local run can provide (even
+  purpose-built 0.5–1.5B code models trained on trillions of tokens are considered weak for
+  reliable agentic use). What 270M *can* plausibly prove: **(1) conversational fluency**
+  (coherent chat, achievable at this scale with real chat-FT) and **(2) correct tool-call
+  format-following** (emitting well-formed `[TOOL_CALL]{...}[/TOOL_CALL]` — a learnable format
+  skill, not a reasoning skill).
+- **Blocker independent of param count:** EdgeHVN has no serving/decode path yet (Phase B —
+  KV cache + `forward_step` + `generate`, see [architecture.md](architecture.md)'s hybrid
+  design) and no real tool-use FT corpus (Phase C — `hvn/tools.py`'s
+  `generate_tool_training_data` is only ~50 synthetic templates, a seed). Testing *any*
+  tool-calling behavior needs these built first, regardless of whether the model is 83M, 270M,
+  or 20B. Scoping this build is part of the 270M milestone, not a separate later step.
+
+**TODO:** scope the 270M run (config, chat-FT data mix, Phase B serving stub sufficient for
+format-only tool-call testing) and open a GitLab issue before starting code, per
+[ai_rules.md](ai_rules.md).
