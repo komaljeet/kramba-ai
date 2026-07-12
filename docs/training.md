@@ -135,9 +135,12 @@ view of the gradient is compressed — still genuine full-parameter training.
   independent axes: optimizer state vs. activations), #84 and #99 **overlap** — both
   target optimizer state, so their benefits mostly don't add.
 - **3.07B confirms the `2M` floor prediction below**: no optimizer-side lever (BCD, GaLore,
-  checkpointing) touches weight storage, so pushing past the local ceiling (~2–2.5B, see
-  below) hits a hard wall regardless of which of these three is used or how they're
-  combined.
+  checkpointing) touches weight storage, so pushing past the local ceiling hits a hard wall
+  regardless of which of these three is used or how they're combined. **Directly tested and
+  bracketed** (not just extrapolated): 1.38B fits at 5.96 GiB (~180 MB margin), 1.54B needs
+  6.62 GiB and spills. **Real ceiling: ~1.3–1.4B params** (treat ~1.2B as the safe practical
+  target with real headroom) — corrects an earlier, too-optimistic "~2–2.5B" extrapolation
+  that a direct 2.05B test (8.4–8.6 GiB, spills badly) disproved.
 
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 
