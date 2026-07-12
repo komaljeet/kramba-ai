@@ -142,6 +142,56 @@ view of the gradient is compressed — still genuine full-parameter training.
   target with real headroom) — corrects an earlier, too-optimistic "~2–2.5B" extrapolation
   that a direct 2.05B test (8.4–8.6 GiB, spills badly) disproved.
 
+### CPU weight offload (Issue #101) — the `2M` floor is fixed, but a new floor takes over
+
+Extends #99 to attack the `2M` term directly: BCD already limits *optimizer state* to one
+block at a time; this additionally streams every INACTIVE block's *weights* to CPU RAM,
+evicting them from GPU entirely (not just their optimizer state). `hvn/core/
+block_coordinate.py`'s `GPUBufferPool` (reusable, pre-allocated GPU buffers keyed by shape
+signature — every DeltaNet layer at a given `d_model` shares one, so nothing is freshly
+allocated after the first block of each shape is seen) + `BlockCoordinateScheduler
+(offload_inactive_weights=True, device=...)`.
+
+**Two real, subtle bugs found and fixed by testing before landing, not after:**
+- A naive first design deferred eviction for every block downstream of the active one for
+  its *entire* forward pass (not just its checkpoint recompute window) — technically
+  correct but wasteful, leaving most of a deep model resident simultaneously. Fixed by
+  exploiting that checkpoint's *initial* forward pass discards everything by design: safe
+  to evict immediately after call #1 regardless of position; only the later recompute
+  (call #2, only for downstream blocks) needs deferred, hook-based eviction.
+- `register_cpu_home` was called *before* moving a block to CPU in one construction-time
+  path, capturing the stale GPU tensor as the "home" to evict back to — evictions ran
+  without error but silently re-pointed params at GPU instead of CPU. Caught by a dedicated
+  device-residency test (gradient-parity alone did NOT catch this — values were untouched,
+  only placement was wrong). Fixed by reordering + a defensive device-type guard in the pool.
+
+**Measured on this card** (`scripts/bench_offload_vram.py`, `results/offload_vram_final.json`):
+
+| Config | Params | Peak alloc | Peak reserved | sec/step |
+|---|---:|---:|---:|---:|
+| d=2048, 24L | 1.04B | 1.11 GiB | 4.21 GiB | 1.73s |
+| d=2048, 36L | 1.54B | 1.15 GiB | 6.13 GiB | 4.54s |
+
+**Peak allocated memory matches the design's promise** — ~1 GiB regardless of scaling
+toward 1.5B, confirmed via an instrumented single-step trace (peaked at 716 MB before the
+buffer pool, ~1.15 GiB after — both far below vanilla's multi-GB requirement). The buffer
+pool also delivered a genuine **2.4× speedup** (10.7s → 4.5s/step at 1.54B) by eliminating
+the CUDA allocator churn from constant fresh alloc/free on every block swap (measured
+before the pool: 317 reserved memory segments, ~290 GB of cumulative allocate/free traffic
+over just 6 steps).
+
+**What did NOT resolve: peak *reserved* memory stays ~6 GiB at 1.54B — right at this
+card's 6141 MiB limit, no real margin.** This is NOT an offload-mechanism bug: tested and
+ruled out that it's activation memory (cutting batch×seq 16× only dropped reserved 2.6%,
+while peak alloc dropped as expected) or per-swap fragmentation (the buffer pool already
+eliminates that, evidenced by the 2.4× speedup). What remains looks like a largely fixed
+CUDA/cuBLAS/allocator overhead for this GPU+driver, independent of both offloading
+correctness and workload size — a platform-level question, not something more offload code
+resolves. **Practical result: offloading is correct and faster, but does not unlock training
+meaningfully past where #99+#100 alone already reached (~1.3–1.5B)** — the `2M` weight floor
+is fixed, but a different, currently-unexplained floor takes its place. See #102 for the
+open investigation.
+
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 
 Memory **demand** is measured (card-independent; WDDM spill rows record true demand past
