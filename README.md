@@ -5,17 +5,25 @@
 > **Run frontier-grade language-model capability on a 6 GB laptop GPU — eventually a phone.**
 > The bet has two halves that this repo is built around:
 > - **Fit the weights in edge VRAM** → **ternary (BitNet b1.58)** quantization shrinks a
->   10B-class model to ~2 GB.
+>   10B-class model to ~2 GB, a 20B-class model to ~4 GB.
 > - **Keep inference VRAM flat over long, agentic-length context** → a **recurrence +
 >   windowed-attention hybrid** (no KV cache that grows with the conversation).
 >
-> **The honest road to get there is *conversion, not from-scratch training*:** frontier
-> *quality* comes from scale that no single edge GPU can train. The realistic path is
-> **quantization-aware distillation of existing strong open models** into this ternary-hybrid
-> edge format. The from-scratch **EdgeHVN** work in this repo is the **sandbox** that proves
-> the recipe cheaply before it is applied to a real, capable model — not the final product.
-> Calibrated target: *the best frontier-**derived** mid-size model that runs with flat VRAM
-> and long context on a 6 GB device.*
+> **The path is native, from-scratch training of this ternary-hybrid architecture — not
+> distillation of an existing model.** That is *why* HVN exists as its own research program
+> rather than a fine-tune of something already released: BitNet b1.58 shows ternary trained
+> from scratch matches fp16 at scale, so the recipe is real, not a compromise. Distillation of
+> an existing strong model into this format remains an optional accelerator for later, not the
+> primary road.
+>
+> **Sequencing (this is a staged bet, not a next-hour target):**
+> 1. **Now — 83M sandbox.** Prove the recipe cheaply: does the recurrence+windowed-attention
+>    hybrid actually deliver exact recall a pure recurrence can't? This is R&D validation, not
+>    a product — pass/fail on the mechanism, not a quality bar.
+> 2. **Next — ~20B-class native ternary-hybrid (~4 GB).** Already good enough for real agentic
+>    coding on a single edge GPU. This is the first genuinely useful milestone.
+> 3. **Later — push toward frontier scale.** Harder, and gated on real compute — a separate,
+>    funded phase after (2) is proven, not a precondition for shipping something useful.
 
 HVN is a novel, untrained language-model architecture that achieves **long-range
 associative recall at <20% of the computational cost of standard Attention**, scaling at
