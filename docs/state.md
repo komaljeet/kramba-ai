@@ -110,7 +110,38 @@ the recurrence and windowed attention. Beyond the window, hybrid ≈ a plain sli
 transformer on exact recall; HVN's only beyond-window edge is a *lossy semantic gist* the
 keyword gate can't credit. See [architecture.md](architecture.md).
 
-> **TODO (2026-07-12) — re-FT RUNNING; re-run the A5 gate when it finishes.**
+## CORRECTION (2026-07-12, later) — the "made things WORSE" verdict above is RETRACTED
+
+`grounded_qa`'s 5-item keyword gate is too noisy to trust for this decision — it gates a
+1B-parameter scale-up call, and a 5-item test is dominated by luck (one keyword flips the
+verdict) plus a real-world-knowledge/fluency confound unrelated to recall. Replaced it with
+`eval/synthetic_recall_probe.py` (MR !83): hundreds of trials per checkpoint, INVENTED
+entity/value pseudo-words (e.g. *"The Zorvex is called Blenthar."*) rendered in the model's
+own trained chat/QA template — unambiguous exact-match scoring, zero real-world-knowledge
+confound, in-distribution phrasing (an earlier raw-random-token-id version produced a flat
+0% everywhere including inside the hybrid's own window — that was a format artifact, not a
+recall measurement; retracted and fixed, see the script's docstring).
+
+**Near-window exact-recall accuracy, 200 trials each:**
+
+| Checkpoint | accuracy |
+|---|---|
+| pure trunk (`step51000`) | **4–5%** |
+| old A4, 40-example corpus, "failed" (`hybrid_a4/step5000`) | **16–16.5%** |
+| new A4, 5,240-example corpus (`hybrid_a4_v2/step5000`, only 63% through its run) | **35.5%** |
+
+**The old 40-example FT was never a regression — it was already ~3-4x better than the trunk.**
+The 5-item gate's −1 lift was noise, not signal. The corrected, high-N picture is a clean,
+monotonic trend: bigger grounded-QA corpus → better recall, exactly as hypothesized, and the
+new run isn't even finished. **Beyond-window** (target pushed >W=128 via 16 distractor facts):
+trunk 0.5%, old A4 0.5% (both = noise floor), **new A4 5.5%** — the first checkpoint to show
+signal clearly above floor, though still far below the near-window number; worth watching at
+step8000, not yet a strong claim.
+
+**`eval/synthetic_recall_probe.py` is now the primary R&D gate; `grounded_qa.py` (standard +
+`--far-probe`) is secondary — useful for real-world-transfer sanity, not for this go/no-go.**
+
+> **TODO (2026-07-12) — re-FT at step8000; synthetic-recall battery armed to auto-run.**
 > Root-cause fix landed: `scripts/expand_grounded_qa.py` scales the corpus from 40 → **5,240**
 > grounded triples (5,000 WikiText-103 copy-cloze + 240 up-weighted semantic seed →
 > `data/grounded_qa_expanded.jsonl`). Re-FT from the **clean trunk** (not the degraded
@@ -120,9 +151,11 @@ keyword gate can't credit. See [architecture.md](architecture.md).
 > data/grounded_qa_expanded.jsonl --checkpoint-dir checkpoints/hybrid_a4_v2 --chat-mix 0.3`.
 > Follow CSV `checkpoints/hybrid_a4_v2/a4_ft_log.csv`; ckpts `hybrid_a4_step{1000..8000}.pt`.
 >
-> **When done, re-gate:** `python -m eval.grounded_qa --checkpoint
-> checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt` **and** `--far-probe`. Success = open-book
-> lift > 0 **and** near-open > trunk's 2/5 (attention beats the recurrence inside the window).
-> If near-open still ≤ 2/5 after a full corpus, the attention layers aren't learning to read
-> → try more steps / higher grounded fraction, then the capacity/scale-up (#84) question.
+> **When done, re-gate with the PRIMARY instrument:** `python -m eval.synthetic_recall_probe
+> --checkpoint checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt --n-trials 200` (near, unbounded)
+> and `--probe-window 128` (near) / `--probe-window 128 --n-distractors 16` (far). Compare
+> against step5000's 35.5% near / 5.5% far. Success = still climbing (the trend so far is
+> monotonic with corpus size and hasn't plateaued) — a flat or falling number at step8000
+> would be the first real sign to stop and reconsider capacity/scale-up (#84) rather than more
+> steps. `grounded_qa.py` remains a secondary real-world-transfer sanity check, not the gate.
 > Record the numbers back here + in [architecture.md](architecture.md), then clear this TODO.
