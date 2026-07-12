@@ -227,6 +227,113 @@ else:
         loss.backward()
         opt.step()
 
+    def test_lru_cache_hit_avoids_reload_and_preserves_parity():
+        """Issue #103: with offload_cache_blocks > 1, a downstream block's
+        call #2 (checkpoint recompute) should find its buffer still
+        resident (cache hit -- GPUBufferPool.load is a no-op re-copy) instead
+        of a guaranteed miss. Verified two ways: (a) directly, by patching
+        GPUBufferPool.load to count hits vs misses per key, since nothing
+        else observable distinguishes a hit from a redundant-but-harmless
+        re-copy; (b) gradient parity still holds against the cache_blocks=1
+        (old-behavior) config -- caching must not change any value, only
+        which buffer object a param temporarily points at.
+        """
+        from hvn.core.block_coordinate import GPUBufferPool
+
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=4, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=2,
+            offload_inactive_weights=True, device=device,
+            offload_cache_blocks=4,  # enough room for every non-active block
+        )
+
+        pool = sched.buffer_pool
+        hits = {"n": 0}
+        misses = {"n": 0}
+        orig_load = GPUBufferPool.load
+
+        def _counting_load(self, key, params):
+            was_resident = key in self._resident
+            orig_load(self, key, params)
+            (hits if was_resident else misses)["n"] += 1
+
+        pool.load = _counting_load.__get__(pool, GPUBufferPool)
+
+        torch.manual_seed(42)
+        ids = torch.randint(0, 64, (2, 16), device=device)
+        logits = model(ids)
+        loss = F.cross_entropy(logits.reshape(-1, 64), ids.reshape(-1))
+        opt.zero_grad()
+        loss.backward()
+
+        assert hits["n"] > 0, (
+            "expected at least one cache hit (a downstream block's call #2 "
+            "reusing call #1's still-resident buffer) with offload_cache_blocks=4"
+        )
+
+        # Gradient parity against the old cache_blocks=1 behavior.
+        torch.manual_seed(0)
+        model_base = _tiny_model(num_layers=4, grad_checkpoint=True).to(device)
+        opt_base = torch.optim.AdamW(model_base.parameters(), lr=1e-2)
+        sched_base = BlockCoordinateScheduler(
+            model_base, opt_base, steps_per_block=2,
+            offload_inactive_weights=True, device=device,
+        )
+        assert sched_base.active_block_name == sched.active_block_name
+        torch.manual_seed(42)
+        ids2 = torch.randint(0, 64, (2, 16), device=device)
+        logits_base = model_base(ids2)
+        loss_base = F.cross_entropy(logits_base.reshape(-1, 64), ids2.reshape(-1))
+        opt_base.zero_grad()
+        loss_base.backward()
+
+        assert torch.allclose(loss, loss_base, atol=1e-6), (
+            f"loss diverged between cache_blocks=4 and cache_blocks=1: "
+            f"{loss.item():.6f} vs {loss_base.item():.6f}"
+        )
+
+    def test_cache_reconciled_on_block_switch():
+        """Issue #103: BlockCoordinateScheduler._activate's evict_all() call
+        must flush the LRU cache before its own per-switch CPU-move loop --
+        otherwise a still-cached block's buffer gets silently orphaned (see
+        GPUBufferPool.evict_all's docstring). Checks device residency is
+        exactly right (only the newly active block on GPU) after a real
+        switch, with caching enabled."""
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=4, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=1,
+            offload_inactive_weights=True, device=device,
+            offload_cache_blocks=4,
+        )
+
+        ids = torch.randint(0, 64, (2, 16), device=device)
+        logits = model(ids)
+        loss = F.cross_entropy(logits.reshape(-1, 64), ids.reshape(-1))
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        sched.step()  # triggers a real block switch
+
+        active_name = sched.active_block_name
+        for name, blk_params in [
+            ("token_embedding", list(model.token_embedding.parameters())),
+            *[(f"blocks.{i}", list(b.parameters())) for i, b in enumerate(model.blocks)],
+            ("final_norm+decoder",
+             list(model.final_norm.parameters()) + list(model.decoder.parameters())),
+        ]:
+            for p in blk_params:
+                expected = "cuda" if name == active_name else "cpu"
+                assert p.device.type == expected, (
+                    f"block {name!r} (active={active_name!r}) on {p.device} "
+                    f"after a block switch with caching enabled, expected {expected}"
+                )
+
     def test_training_converges_with_offload():
         torch.manual_seed(0)
         device = torch.device("cuda")

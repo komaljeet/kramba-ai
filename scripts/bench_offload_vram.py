@@ -48,7 +48,25 @@ def run_probe(cfg: dict) -> dict:
             grad_checkpoint=True,  # required by offload
         )
         result["params"] = sum(p.numel() for p in model.parameters())
-        model.to(device)
+
+        # Issue #102 (extended finding): a blanket model.to(device) here
+        # requires the WHOLE model resident on GPU at once (in fp32 --
+        # EdgeHVN's default parameter dtype), transiently, during the copy
+        # -- independent of anything the offload scheduler does afterward,
+        # since it hasn't been constructed yet. For large+offloaded configs
+        # this is now the actual bottleneck (confirmed: a 3.35B model needs
+        # ~13.4 GiB just to exist on GPU once, causing a hard OOM at
+        # construction, even though steady-state offloaded training only
+        # needs ~1 GiB). skip_initial_to_device leaves the model CPU-
+        # resident; BlockCoordinateScheduler's existing eviction logic
+        # already handles a CPU-resident starting state correctly (a
+        # `.to("cpu")` on an already-CPU tensor is a no-op), so no scheduler
+        # changes were needed -- only skipping this one caller-side call.
+        # Measured: a 3.35B config that hard-OOM'd (12.7 GiB demand) at
+        # construction fits in ~1 GiB peak reserved with this flag on.
+        skip_to_device = cfg.get("offload", False) and cfg.get("skip_initial_to_device", False)
+        if not skip_to_device:
+            model.to(device)
         model.train()
         opt = torch.optim.AdamW(model.parameters(), lr=1e-4, fused=True)
 

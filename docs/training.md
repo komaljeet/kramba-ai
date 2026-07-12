@@ -180,17 +180,103 @@ the CUDA allocator churn from constant fresh alloc/free on every block swap (mea
 before the pool: 317 reserved memory segments, ~290 GB of cumulative allocate/free traffic
 over just 6 steps).
 
-**What did NOT resolve: peak *reserved* memory stays ~6 GiB at 1.54B — right at this
-card's 6141 MiB limit, no real margin.** This is NOT an offload-mechanism bug: tested and
-ruled out that it's activation memory (cutting batch×seq 16× only dropped reserved 2.6%,
-while peak alloc dropped as expected) or per-swap fragmentation (the buffer pool already
-eliminates that, evidenced by the 2.4× speedup). What remains looks like a largely fixed
-CUDA/cuBLAS/allocator overhead for this GPU+driver, independent of both offloading
-correctness and workload size — a platform-level question, not something more offload code
-resolves. **Practical result: offloading is correct and faster, but does not unlock training
-meaningfully past where #99+#100 alone already reached (~1.3–1.5B)** — the `2M` weight floor
-is fixed, but a different, currently-unexplained floor takes its place. See #102 for the
-open investigation.
+**Peak *reserved* memory stayed ~6 GiB at 1.54B when this section was first written —
+resolved by Issue #102 below. Do not read the 1.04B/1.54B table above as the final
+ceiling; see #102's numbers instead.**
+
+### CUDA reserved-memory floor (Issue #102) — root cause found and fixed, real ceiling ~3.3B
+
+The `~6 GiB stuck reserved` gap above was investigated and its root cause found: it is
+**not** offload-swap fragmentation (the #101 buffer pool already fixed that, evidenced by
+its own 2.4× speedup) and **not** activation memory (cutting batch×seq 16× only moved
+reserved 2.6%). A fine-grained trace of `torch.cuda.memory_reserved()` at every
+construction phase found the actual cause: the **caller's own `model.to(device)`** (which
+must happen before `BlockCoordinateScheduler` is even constructed) allocates ONE large
+reserved CUDA segment sized for the *whole* model in a single shot. `_activate()`'s
+construction-time eviction correctly frees almost everything (`memory_allocated()` drops
+from ~5.9 GiB to ~62 MiB) — but PyTorch's caching allocator does not proactively return
+freed segments to the driver, so `memory_reserved()` stays pinned at that original
+~full-model size for the rest of the process.
+
+**Fix: a single `torch.cuda.empty_cache()` call, once, immediately after
+`BlockCoordinateScheduler`'s construction-time eviction** (`hvn/core/
+block_coordinate.py`, `__init__`) — while the freed memory is still one clean, fully-empty
+block from the original allocation, this call successfully releases nearly all of it.
+Calling `empty_cache()` *later* (e.g. mid-training-loop, once the buffer pool's own
+differently-sized allocations have mixed into the same segments, which is what earlier
+attempts in this doc tried) barely helps — partial occupancy blocks segment release.
+Timing is everything; the mechanism itself (`empty_cache()`) was correct all along.
+
+**Measured effect at 1.54B**: peak reserved memory **6130 MiB → 1182 MiB** (an 81%
+reduction), and training got **faster too** (4.54s/step → 2.53s/step) — less fragmented
+reserved space makes the buffer pool's own allocations cheaper to satisfy.
+
+**The real local ceiling, directly tested and bracketed** (`scripts/bench_offload_vram.py`,
+`results/offload_ceiling_final.json`):
+
+| Params | Peak reserved | sec/step |
+|---:|---:|---:|
+| 1.54B | 1.18 GiB | 2.53s |
+| 2.05B | 1.23 GiB | 3.58s |
+| 2.55B | 1.28 GiB | 5.33s |
+| 3.05B | 1.33 GiB | 9.92s |
+| 3.18B | 1.33 GiB | 18.97s |
+| **3.30B** | **1.35 GiB** | **30.6s** |
+| 3.39B | ❌ OOM (12.7 GiB demand) | — |
+
+**Real ceiling: ~3.3B params** — a hard boundary (3.39B jumps straight to a 12.7 GiB
+demand, not a gradual approach) — up from the earlier ~1.3–1.4B ceiling, itself up from a
+flat "1B is impossible" this morning. **Important caveat: VRAM fitting and training speed
+are separate claims here.** Step time climbs steeply with depth (2.5s at 1.5B → 30.6s at
+3.3B) — the offload mechanism's per-step PCIe traffic scales with block count, so a config
+that *fits* is not necessarily one that trains at a *useful pace*. Treat ~1.5–2B as the
+practical sweet spot (comfortable VRAM margin, still reasonable step time); 3.3B is the
+documented outer edge of what fits at all, not a recommended target.
+
+**Extended finding — the 3.39B "hard boundary" above was NOT a per-block or layer-count
+limit; it was the caller's own construction-time `model.to(device)` call, which is a
+separate, further-fixable bottleneck.** Traced precisely: the OOM's traceback pointed
+inside `EdgeHVN(...).to(device)` itself, not forward/backward — `nn.Module.to()` copies
+parameters one at a time and needs the *whole model* transiently resident to do so.
+EdgeHVN's default parameter dtype is fp32 (confirmed: 3.35B params × 4 bytes = 13.4 GiB),
+which exceeds this card regardless of anything the offload scheduler does afterward, since
+it hasn't been constructed yet at that point. Ruled out "it's about the number of
+layers/blocks specifically" with a controlled comparison: a **wide-shallow** config (d=2896,
+39 layers, ~3.32B params) fit fine (2.4 GiB) at a param count where the **narrow-deep**
+79-layer config OOM'd — proving it's the fp32 `.to(device)` copy size, not block count.
+
+**Fix: skip the caller's blanket `model.to(device)` entirely when offloading — construct
+the model CPU-resident and let `BlockCoordinateScheduler` handle *all* placement from the
+start**, including the very first block. No scheduler code changes were needed:
+`_activate()`'s existing eviction logic already handles a CPU-resident starting model
+correctly (`.to("cpu")` on an already-CPU tensor is a no-op). Wired as an opt-in
+`skip_initial_to_device` flag in `scripts/bench_offload_vram.py`'s probe config (not yet
+wired into `train_edge_conversational.py`'s main training path — that file has an internal
+audit/checkpoint-verification step whose GPU-residency assumptions weren't traced under
+time pressure; a deliberate, smaller scope than rewiring the main script today).
+
+**Measured**: the 3.35B config (79 layers) that previously hard-OOM'd at construction
+(12.7 GiB demand) now peaks at **~1 GiB** for a full forward+backward. Pushed further:
+a **4.02B** config also completed forward+backward at ~1 GiB peak reserved — VRAM-wise,
+the ceiling is now far higher than 3.3B and was not fully re-bracketed (diminishing value:
+see the next paragraph). **The remaining constraint past ~3.3B is no longer VRAM at all —
+it's wall-clock training speed and CPU-side model construction time** (the 4.02B
+construction alone took ~21s on CPU, plus this machine's 15.29 GiB total RAM becomes the
+next real ceiling for fp32 CPU-resident storage: a 4.65B config, needing ~18.6 GiB fp32,
+timed out during construction from heavy page-file swapping — a soft, slow degradation,
+not a hard OOM).
+
+**Practical implication**: with this extended fix, model size is no longer VRAM-bounded on
+this card at all in any range worth targeting — it is bounded by (a) CPU RAM for fp32
+storage and (b) per-step training time, which degrades steeply with depth under the
+current "evict immediately after every use" offload policy (every block is refetched from
+CPU on every touch, with no caching). The natural next lever, not yet built: an **LRU-style
+VRAM-budget cache** for offloaded blocks (keep recently-used blocks resident, sized to use
+most of the available VRAM, instead of always evicting immediately) — this would eliminate
+the *redundant* refetch of a block for its checkpoint recompute right after its initial
+forward use (currently fetched twice per step for every block downstream of the active
+one), directly attacking the speed-vs-depth degradation without touching VRAM ceiling at
+all. Real engineering, not yet started.
 
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 

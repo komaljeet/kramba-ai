@@ -20,40 +20,60 @@ accumulate gradients and hold optimizer state at any given moment.
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import torch
 import torch.nn as nn
 
 
 class GPUBufferPool:
     """Pre-allocated, reusable GPU buffers for offloaded block parameters
-    (Issue #101). Every parameter swap under naive offload
-    (``p.data = p.data.to(device)``) allocates a FRESH CUDA tensor -- under
-    BCD's constant load/evict churn (dozens of swaps per training step) this
-    fragments PyTorch's CUDA caching allocator badly: measured 317 reserved
-    memory segments and ~290 GB of cumulative allocate/free traffic over
-    just 6 steps, leaving peak *reserved* memory around 6 GiB even though
-    peak *allocated* (truly live) memory was only ~1 GiB -- `empty_cache()`
-    (per-step or per-eviction) barely helped (~2.6%), and
-    ``expandable_segments`` (PyTorch's own fix for exactly this pattern) is
-    unsupported on Windows.
+    (Issue #101), with an LRU residency cache on top (Issue #103). Every
+    parameter swap under naive offload (``p.data = p.data.to(device)``)
+    allocates a FRESH CUDA tensor -- under BCD's constant load/evict churn
+    (dozens of swaps per training step) this fragments PyTorch's CUDA
+    caching allocator badly: measured 317 reserved memory segments and
+    ~290 GB of cumulative allocate/free traffic over just 6 steps, leaving
+    peak *reserved* memory around 6 GiB even though peak *allocated* (truly
+    live) memory was only ~1 GiB -- `empty_cache()` (per-step or
+    per-eviction) barely helped (~2.6%), and ``expandable_segments``
+    (PyTorch's own fix for exactly this pattern) is unsupported on Windows.
 
-    The pool sidesteps the churn instead of working around it: parameters
-    are grouped by shape signature (every DeltaNet layer at a given
-    `d_model` shares one), and each unique signature gets ONE persistent
-    GPU buffer, reused for every block that shares that shape -- loading
-    copies CPU data into the (already-allocated) buffer; nothing new is
-    ever allocated after the first block of each shape is seen.
+    The pool sidesteps the churn instead of working around it: buffers are
+    grouped by shape signature (every DeltaNet layer at a given `d_model`
+    shares one) and pooled for reuse across DIFFERENT blocks of the same
+    shape -- a buffer is only freshly allocated when no free one of that
+    shape exists yet.
 
-    Eviction needs no copy at all: offloaded blocks are always frozen (BCD
-    guarantees only the active block has `requires_grad=True`), so their
-    CPU-resident data never changes while offloaded -- eviction just points
-    `p.data` back at the untouched CPU tensor captured the first time this
-    parameter was ever offloaded.
+    LRU cache (Issue #103): a checkpointed block is invoked TWICE per
+    training step -- once during forward (call #1, whose activations
+    checkpoint discards by design) and once during backward's recompute
+    (call #2). Under pure evict-immediately-after-use, call #2 always
+    re-fetches from CPU even though nothing changed (offloaded blocks are
+    always frozen -- BCD guarantees only the active block has
+    `requires_grad=True` -- so their data provably cannot go stale between
+    call #1 and call #2). `load(key, ...)` now keeps a block's buffers
+    resident (keyed by its block name, e.g. `"blocks.5"`) until either (a)
+    a DIFFERENT block needs a buffer of the same shape and the cache is at
+    its `cache_blocks` capacity (oldest-used evicted to make room), or (b)
+    the caller explicitly calls `evict(key)` (used only when a call site
+    knows for certain there is no call #2 coming, so holding the slot
+    would only waste capacity another block could use). Default
+    `cache_blocks=1` reproduces the OLD evict-immediately behavior exactly
+    (a second block's load always evicts the first) -- pass a larger value
+    to actually get cross-call reuse, sized to whatever VRAM budget the
+    caller wants to spend on it.
+
+    Eviction needs no copy at all: it just points `p.data` back at the
+    untouched CPU tensor captured the first time this parameter was ever
+    offloaded.
     """
 
-    def __init__(self, device: torch.device):
+    def __init__(self, device: torch.device, cache_blocks: int = 1):
         self.device = device
-        self._buffers: dict[tuple, list[torch.Tensor]] = {}
+        self.cache_blocks = max(1, cache_blocks)
+        self._free_buffers: dict[tuple, list[list[torch.Tensor]]] = {}
+        self._resident: OrderedDict[str, dict] = OrderedDict()  # key -> {buffers, params, sig}
         self._cpu_home: dict[int, torch.Tensor] = {}  # id(p) -> its stable CPU tensor
 
     @staticmethod
@@ -80,28 +100,65 @@ class GPUBufferPool:
             if id(p) not in self._cpu_home and p.data.device.type == "cpu":
                 self._cpu_home[id(p)] = p.data
 
-    def load(self, params: list[nn.Parameter]) -> None:
-        """Move `params` onto `self.device` via a reused buffer for their
-        shape signature (allocating one only the first time that signature
-        is seen). Safe to call even if already resident (cheap no-op
-        re-copy)."""
+    def load(self, key: str, params: list[nn.Parameter]) -> None:
+        """Move `params` onto `self.device`, keyed by `key` (the block's
+        stable name). If `key` is already resident (a cache hit -- e.g.
+        call #2 of the same block, with nothing evicting it in between),
+        this is a cheap no-op re-touch of LRU order, not a re-copy. On a
+        miss, acquires a buffer for the shape signature (reusing a freed
+        one if available, else allocating), copies CPU data in, and evicts
+        the least-recently-used OTHER resident entry if this pushes the
+        cache past `cache_blocks`."""
         self.register_cpu_home(params)
+        if key in self._resident:
+            self._resident.move_to_end(key)
+            return
         sig = self._signature(params)
-        buffers = self._buffers.get(sig)
-        if buffers is None:
-            buffers = [torch.empty(p.shape, dtype=p.dtype, device=self.device) for p in params]
-            self._buffers[sig] = buffers
+        free = self._free_buffers.get(sig)
+        buffers = free.pop() if free else [
+            torch.empty(p.shape, dtype=p.dtype, device=self.device) for p in params
+        ]
         for p, buf in zip(params, buffers):
             buf.copy_(self._cpu_home[id(p)], non_blocking=True)
             p.data = buf
+        self._resident[key] = {"buffers": buffers, "params": params, "sig": sig}
+        while len(self._resident) > self.cache_blocks:
+            oldest_key, oldest = next(iter(self._resident.items()))
+            if oldest_key == key:
+                break
+            self._resident.popitem(last=False)
+            self._release(oldest)
 
-    def evict(self, params: list[nn.Parameter]) -> None:
-        """Point each param back at its stable CPU tensor -- no copy, since
-        offloaded params are always frozen and never change while resident."""
-        for p in params:
+    def evict(self, key: str) -> None:
+        """Force-release one resident entry now (used only when a call
+        site knows for certain this block will not be touched again this
+        step, so holding its slot would only deny a genuine reuse
+        candidate a buffer -- see class docstring). No-op if not
+        resident."""
+        entry = self._resident.pop(key, None)
+        if entry is not None:
+            self._release(entry)
+
+    def evict_all(self) -> None:
+        """Force-release every resident entry now. Called by
+        `BlockCoordinateScheduler._activate` before its own per-switch
+        CPU-move loop, which otherwise assumes every inactive block is
+        already CPU-resident -- without this, a still-cached (GPU-resident)
+        block would have its buffer silently orphaned by that loop's own
+        `.to("cpu")` call (values stay correct, since `.to()` copies
+        current data, but the pool's bookkeeping and the CPU-home dedup in
+        `register_cpu_home` would then disagree about where the real data
+        lives)."""
+        for entry in self._resident.values():
+            self._release(entry)
+        self._resident.clear()
+
+    def _release(self, entry: dict) -> None:
+        for p in entry["params"]:
             home = self._cpu_home.get(id(p))
             if home is not None:
                 p.data = home
+        self._free_buffers.setdefault(entry["sig"], []).append(entry["buffers"])
 
 
 def partition_named_blocks(model: nn.Module) -> list[tuple[str, list[nn.Parameter]]]:
@@ -185,6 +242,7 @@ class BlockCoordinateScheduler:
         order: str | list[int] = "sequential",
         offload_inactive_weights: bool = False,
         device: torch.device | str | None = None,
+        offload_cache_blocks: int = 1,
     ):
         """
         offload_inactive_weights : bool
@@ -209,6 +267,15 @@ class BlockCoordinateScheduler:
             Compute device to keep the active block (and, transiently, each
             block being used) on. Required when
             `offload_inactive_weights=True`.
+        offload_cache_blocks : int
+            Issue #103: how many distinct inactive blocks' weights the
+            offload pool keeps GPU-resident at once (LRU eviction beyond
+            that). Default 1 reproduces the original evict-immediately
+            behavior. Raising it lets a checkpointed block's backward
+            recompute (call #2) hit an already-warm buffer instead of
+            re-fetching from CPU, at the cost of `(cache_blocks - 1)` extra
+            blocks' worth of GPU memory held at once -- size against
+            whatever VRAM budget is available beyond the active block.
         """
         if steps_per_block < 1:
             raise ValueError("steps_per_block must be >= 1")
@@ -225,7 +292,10 @@ class BlockCoordinateScheduler:
         self.steps_per_block = steps_per_block
         self.offload_inactive_weights = offload_inactive_weights
         self.device = torch.device(device) if device is not None else None
-        self.buffer_pool = GPUBufferPool(self.device) if offload_inactive_weights else None
+        self.buffer_pool = (
+            GPUBufferPool(self.device, cache_blocks=offload_cache_blocks)
+            if offload_inactive_weights else None
+        )
         if self.buffer_pool is not None:
             model._offload_pool = self.buffer_pool
 
@@ -245,6 +315,31 @@ class BlockCoordinateScheduler:
         self._step_in_block = 0
         self._active_idx = self.order[0]
         self._activate(self._active_idx)
+
+        if self.offload_inactive_weights and self.device.type == "cuda":
+            # Issue #102: the caller's own `model.to(device)` (which must
+            # happen before this constructor runs) allocates ONE large
+            # reserved CUDA segment sized for the WHOLE model. The
+            # `_activate` call just above correctly evicts almost
+            # everything (`memory_allocated()` drops to a few MB), but
+            # PyTorch's caching allocator does not proactively return freed
+            # segments to the driver -- `memory_reserved()` stays pinned at
+            # that original ~full-model size for the rest of the process,
+            # since it is still cached as "free for PyTorch's own reuse".
+            # A single `empty_cache()` HERE, while that freed memory is
+            # still one clean, fully-empty block from the original
+            # allocation, releases nearly all of it (measured: 5894 MiB ->
+            # 64 MiB). Calling this LATER (e.g. mid-training-loop, once the
+            # buffer pool's own differently-sized allocations have mixed
+            # into the same segments) does not work anywhere near as well
+            # (measured: only ~2.6% recovered) -- partial occupancy blocks
+            # segment release. One-time cost, not per-step or per-block.
+            # Measured full effect on a 1.54B config: peak reserved memory
+            # 6130 MiB -> 1182 MiB (an 81% reduction), and training got
+            # FASTER too (4.54s/step -> 2.53s/step), not just smaller --
+            # less fragmented reserved space makes the buffer pool's own
+            # allocations cheaper to satisfy.
+            torch.cuda.empty_cache()
 
     @property
     def active_block_name(self) -> str:
@@ -292,6 +387,14 @@ class BlockCoordinateScheduler:
             # correctly skips that case as a no-op; the *inactive* loop
             # below registers the true CPU home once these params are
             # themselves evicted in a later cycle.)
+            # Issue #103: flush the LRU cache's bookkeeping BEFORE the loop
+            # below moves every inactive block's tensor to CPU directly --
+            # without this, a block still GPU-resident in the cache (kept
+            # warm across call #1/#2 within the outgoing active block's
+            # tenure) would have its buffer silently orphaned: `.to("cpu")`
+            # still gives correct values, but the pool would keep thinking
+            # that buffer is "resident" for a key nothing points at anymore.
+            self.buffer_pool.evict_all()
             self.buffer_pool.register_cpu_home(active_params)
             for p in active_params:
                 p.data = p.data.to(self.device)
