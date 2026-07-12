@@ -1,5 +1,22 @@
 # Hamiltonian Vortex Network (HVN)
 
+> ## 🌟 The Dream — frontier-class LLMs on edge devices
+>
+> **Run frontier-grade language-model capability on a 6 GB laptop GPU — eventually a phone.**
+> The bet has two halves that this repo is built around:
+> - **Fit the weights in edge VRAM** → **ternary (BitNet b1.58)** quantization shrinks a
+>   10B-class model to ~2 GB.
+> - **Keep inference VRAM flat over long, agentic-length context** → a **recurrence +
+>   windowed-attention hybrid** (no KV cache that grows with the conversation).
+>
+> **The honest road to get there is *conversion, not from-scratch training*:** frontier
+> *quality* comes from scale that no single edge GPU can train. The realistic path is
+> **quantization-aware distillation of existing strong open models** into this ternary-hybrid
+> edge format. The from-scratch **EdgeHVN** work in this repo is the **sandbox** that proves
+> the recipe cheaply before it is applied to a real, capable model — not the final product.
+> Calibrated target: *the best frontier-**derived** mid-size model that runs with flat VRAM
+> and long context on a 6 GB device.*
+
 HVN is a novel, untrained language-model architecture that achieves **long-range
 associative recall at <20% of the computational cost of standard Attention**, scaling at
 **O(1) constant time per token during inference** — without a traditional KV cache.
