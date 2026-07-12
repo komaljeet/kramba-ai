@@ -177,3 +177,39 @@ the next step; it was the fallback for a failed gate, and the gate passed).
 far-probe: closed 2/5 near 1/5 far 1/5, with the lone far "hit" being a garbled multi-country
 list that happened to contain "Portuguese" — not real recall) — confirms it should stay a
 secondary real-world-transfer sanity check, not the decision instrument, going forward.
+
+## NEXT PLANNED MILESTONE — ~270M local, conversational fluency + tool-calling (2026-07-12)
+
+Not the ~20B jump yet — a nearer, locally-fundable step first. Decided after checking real
+constraints (no code committed for this milestone yet, this is the plan):
+
+- **1B (and certainly 20B) cannot train locally today.** Measured RTX 4050 training-VRAM
+  ratio is **16.8 bytes/param** (bf16 weights+grads+fp32 AdamW moments+master, Issue #69,
+  [training.md](training.md)) → 1B needs ~16.8 GiB (off by ~3× on 6 GB), 20B needs ~336 GiB
+  (off by ~14× even on a 24 GB RTX 3090 — not a time/budget question, a single card physically
+  cannot hold a 20B model's training state; needs real multi-GPU sharding). The proposed local
+  unlock, **GaLore (#84), is unimplemented** — open issue, zero code, unproven.
+  Cloud-rental math (RunPod RTX 3090, sourced pricing $0.22/hr Community / $0.46/hr Secure):
+  a full Chinchilla-optimal 1B pretrain needs an assumption-flagged **~1,341 GPU-hours**
+  (~$295 total, ~56 days continuous, or ~15 months at a $20/mo cap) — real, but a deliberate
+  multi-month commitment, not this milestone.
+- **The measured local RTX 4050 ceiling today is ~270M params** (d=1024, 24L, bf16 +
+  `--grad_checkpoint`, 4.3 GiB peak — Issue #69 table above). Free, immediate, no new
+  engineering.
+- **Calibrated goal for 270M — NOT "agentic coding" capability.** Real competent code
+  generation needs far more scale + data than a from-scratch local run can provide (even
+  purpose-built 0.5–1.5B code models trained on trillions of tokens are considered weak for
+  reliable agentic use). What 270M *can* plausibly prove: **(1) conversational fluency**
+  (coherent chat, achievable at this scale with real chat-FT) and **(2) correct tool-call
+  format-following** (emitting well-formed `[TOOL_CALL]{...}[/TOOL_CALL]` — a learnable format
+  skill, not a reasoning skill).
+- **Blocker independent of param count:** EdgeHVN has no serving/decode path yet (Phase B —
+  KV cache + `forward_step` + `generate`, see [architecture.md](architecture.md)'s hybrid
+  design) and no real tool-use FT corpus (Phase C — `hvn/tools.py`'s
+  `generate_tool_training_data` is only ~50 synthetic templates, a seed). Testing *any*
+  tool-calling behavior needs these built first, regardless of whether the model is 83M, 270M,
+  or 20B. Scoping this build is part of the 270M milestone, not a separate later step.
+
+**TODO:** scope the 270M run (config, chat-FT data mix, Phase B serving stub sufficient for
+format-only tool-call testing) and open a GitLab issue before starting code, per
+[ai_rules.md](ai_rules.md).
