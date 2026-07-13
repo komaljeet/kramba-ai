@@ -73,6 +73,7 @@ class EdgeHVN(nn.Module):
         block_plan: Optional[list[str]] = None,
         attn_window: Optional[int] = None,
         grad_checkpoint: bool = False,
+        tie_embeddings: bool = False,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -155,6 +156,33 @@ class EdgeHVN(nn.Module):
 
         self.final_norm = nn.LayerNorm(d_model)
         self.decoder = HVNDecoder(d_model=d_model, vocab_size=vocab_size, dropout=dropout)
+
+        # Issue #106: tie the input embedding and output projection weights
+        # (classic GPT-2/ALBERT trick). Both are [vocab_size, d_model]
+        # (nn.Embedding and nn.Linear store weight this way), so sharing the
+        # same tensor is a direct assignment -- no transpose needed. Default
+        # False: existing checkpoints/configs are completely unaffected;
+        # opt in explicitly since this changes what's actually being trained,
+        # not just memory bookkeeping. Halves the embedding+output-projection
+        # param count and (with AdamW's fp32 exp_avg/exp_avg_sq) roughly
+        # a 3x cut in optimizer-state VRAM for that chunk. HVNDecoder's
+        # `use_mlp` default is False (EdgeHVN never sets it True), so
+        # `self.decoder.decoder` is always a plain nn.Linear here.
+        self.tie_embeddings = tie_embeddings
+        if tie_embeddings:
+            # nn.Embedding's default init (std~1.0) is ~20x larger than
+            # nn.Linear's (std~0.05 at this scale) -- tying naively (keeping
+            # whichever init happened to run last) hands the decoder a
+            # wildly oversized weight, producing huge logits and diverging
+            # loss. Caught empirically: a CPU parity run (tied vs untied,
+            # otherwise identical) showed loss climbing to 25+ instead of
+            # settling ~9. Fix: re-init the shared tensor to GPT-2's
+            # standard small std (0.02) AFTER tying, matching the
+            # convention every tied-embedding implementation actually uses
+            # (nanoGPT, GPT-2) -- this is not optional, it's part of what
+            # "tying correctly" means, not a separate tunable.
+            nn.init.normal_(self.token_embedding.weight, mean=0.0, std=0.02)
+            self.decoder.decoder.weight = self.token_embedding.weight
 
         self._compression_metadata: dict = {}
 
