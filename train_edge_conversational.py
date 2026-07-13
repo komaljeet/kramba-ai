@@ -98,6 +98,7 @@ def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
         "weightless_seed": getattr(model, 'weightless_seed', 1234),
         "is_edge": True,
         "shared_weights": getattr(model, 'shared_weights', False),
+        "tie_embeddings": getattr(model, 'tie_embeddings', False),
         "global_step": global_step,
     }
     torch.save(ckpt, save_path)
@@ -893,6 +894,7 @@ def build_model_and_config(
     attn_layers: list[int] | None = None,
     attn_window: int | None = None,
     grad_checkpoint: bool = False,
+    tie_embeddings: bool = False,
 ) -> tuple[EdgeHVN, dict]:
     """Build the EdgeHVN model with DeltaNet (or transformer baseline) + config.
 
@@ -984,6 +986,7 @@ def build_model_and_config(
         block_plan=block_plan,
         attn_window=attn_window,
         grad_checkpoint=grad_checkpoint,
+        tie_embeddings=tie_embeddings,
     )
     param_count = sum(p.numel() for p in model.parameters())
     config["param_count"] = param_count
@@ -1279,6 +1282,7 @@ def load_checkpoint_for_resume(
         block_type=ckpt.get("block_type", None),
         block_plan=block_plan,
         attn_window=attn_window,
+        tie_embeddings=ckpt.get("tie_embeddings", False),
     )
 
     # Apply ternary to match the saved model — only if it was ternary. Older
@@ -1983,6 +1987,14 @@ def main():
                              "Composes with --block-coordinate (that shrinks optimizer-"
                              "state memory; this shrinks activation memory -- "
                              "independent axes). Default: off.")
+    parser.add_argument("--tie-embeddings", action="store_true",
+                        help="Tie token_embedding and decoder output-projection weights "
+                             "(Issue #106, classic GPT-2/ALBERT trick). Halves the "
+                             "embedding+output-projection param count and cuts optimizer-"
+                             "state VRAM for that chunk ~3x. Changes what's being trained "
+                             "(not just memory bookkeeping) -- verified via CPU parity/"
+                             "convergence checks (tests/test_tied_embeddings.py), but "
+                             "still opt-in. Default: off (existing checkpoints unaffected).")
     parser.add_argument("--fast", action="store_true",
                         help="Meta-flag: enable the full recommended fast-training "
                              "stack in one switch — bf16 + TF32 + torch.compile + "
@@ -2125,6 +2137,7 @@ def main():
         attn_layers=attn_layers,
         attn_window=args.attn_window,
         grad_checkpoint=args.grad_checkpoint,
+        tie_embeddings=args.tie_embeddings,
     )
     config["lr"] = args.lr
     config["precision"] = args.precision
