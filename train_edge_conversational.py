@@ -1935,13 +1935,17 @@ def main():
                              "with GPU compute. Identity-preserving (same data, same order "
                              "with fixed seed).")
     parser.add_argument("--optimizer", type=str, default="adamw",
-                        choices=["adamw", "muon", "lion", "galore"],
+                        choices=["adamw", "muon", "lion", "galore", "adafactor"],
                         help="Optimizer (Issue #86). 'muon' orthogonalises 2-D "
                              "weight-matrix updates (faster convergence); 'lion' "
                              "is sign-momentum; 'galore' (Issue #84) projects "
                              "gradients into a low-rank subspace so Adam's "
                              "optimizer state is O(rank) instead of O(m*n) for "
                              "large weight matrices -- weights stay full-rank, "
+                             "'adafactor' (Issue #85) factors the second moment "
+                             "into O(m+n) instead of O(m*n) -- no bitsandbytes "
+                             "dependency (unreliable on native Windows), native "
+                             "torch.optim.Adafactor. "
                              "only the optimizer's view of the gradient is "
                              "compressed. Training-time only -- HVN forward "
                              "is untouched. Default: adamw.")
