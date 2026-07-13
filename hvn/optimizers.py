@@ -468,4 +468,21 @@ def build_optimizer(model, name: str, *, lr: float, weight_decay: float,
                 f"{n_galore:,} params; AdamW aux / {n_aux:,} params)")
         return opt, desc
 
-    raise ValueError(f"Unknown optimizer '{name}' (expected adamw|muon|lion|galore)")
+    if name == "adafactor":
+        # Issue #85: factored second-moment optimizer (Shazeer & Stern, 2018).
+        # Standard AdamW keeps a full m x n exp_avg_sq per 2-D weight; Adafactor
+        # factors it into a row vector + column vector (O(m+n) instead of
+        # O(m*n)), and this project's platform (Windows, no WSL) can't reliably
+        # install bitsandbytes for 8-bit Adam (no prebuilt Windows wheel path),
+        # so this uses torch's own native `torch.optim.Adafactor` -- no extra
+        # dependency, no build step. Training-time only, same HVN forward pass;
+        # acceptance is val-loss parity vs the fp32 AdamW baseline (see
+        # scripts/bench_harness.py, #79).
+        groups = [
+            {"params": decay, "weight_decay": weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ]
+        opt = torch.optim.Adafactor(groups, lr=lr)
+        return opt, f"Adafactor (lr={lr:g}, factored second moment, native torch)"
+
+    raise ValueError(f"Unknown optimizer '{name}' (expected adamw|muon|lion|galore|adafactor)")
