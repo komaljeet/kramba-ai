@@ -835,7 +835,12 @@ def build_dataset_pipeline(
     loader_kwargs = dict(
         batch_size=batch_size,
         shuffle=True,
-        drop_last=False,
+        # Issue #105: a smaller final batch would be a fresh dynamic shape
+        # torch.compile hasn't seen, forcing a recompile/guard-fail once per
+        # epoch instead of reusing the steady-state compiled graph. The val
+        # loader below isn't compiled, so it keeps drop_last=False (no data
+        # loss there).
+        drop_last=True,
         pin_memory=torch.cuda.is_available(),
     )
     if num_workers > 0:
@@ -2034,6 +2039,16 @@ def main():
     else:
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
+
+    # Issue #104: cudnn.benchmark lets cuDNN autotune and cache the fastest conv
+    # algorithm for a given input shape, instead of always using a fixed
+    # heuristic. seq_len/batch_size are fixed for the whole run (Issue #105
+    # made drop_last=True, so this holds for every step including the last),
+    # so autotuning pays for itself after a few warmup steps. Same math, no
+    # numerical or A/B-fairness concern -- unlike TF32 above, this is always
+    # safe to enable unconditionally.
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
 
     # Reproducible init for fair A/B comparisons (#86): seed all RNGs before the
     # model is built and data is shuffled, so two runs differing only in
