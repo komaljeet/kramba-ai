@@ -1,0 +1,18 @@
+{
+  "label": "268M_grad_checkpoint",
+  "model_kwargs": {
+    "d_model": 1024,
+    "num_layers": 24,
+    "n_heads": 8,
+    "use_deltanet": true,
+    "dropout": 0.0,
+    "grad_checkpoint": true
+  },
+  "optimizer": "AdamW",
+  "precision": "fp32",
+  "lr": 1e-3,
+  "batch_size": 4,
+  "seq_len": 128,
+  "steps": 8,
+  "data_seed": 0
+}
