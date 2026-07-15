@@ -72,6 +72,7 @@ def generate_response(
         user_message=user_message.content,
         model_tag=conversation.model_version.tag,
         checkpoint_path=conversation.model_version.checkpoint_path,
+        architecture=conversation.model_version.architecture,
         result=result,
         thinking=thinking,
         web_search=web_search,

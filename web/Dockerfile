@@ -30,6 +30,12 @@ RUN pip install --no-cache-dir -r /srv/web-requirements.txt
 # hvn_worker/worker.py reuses it rather than duplicating a tokenizer class.
 COPY hvn/ /srv/hvn/
 COPY train.py /srv/train.py
+# EdgeHVN serving (issue #97 Phase B): hvn_worker/worker.py's edgehvn branch
+# reuses load_checkpoint_for_resume (block_plan-aware hybrid checkpoint
+# loading) rather than duplicating that construction logic. Only this one
+# file is needed -- it has no dependency on other root-level training
+# scripts (verified: imports only hvn.*, torch, stdlib).
+COPY train_edge_conversational.py /srv/train_edge_conversational.py
 # In-app training (Issue #57): the training worker reuses auto_train.py's
 # curriculum orchestrator and the eval/ dataset+scoring package; the web role
 # also imports eval.curriculum (torch-free) for the CURRICULUM_STAGES the launch

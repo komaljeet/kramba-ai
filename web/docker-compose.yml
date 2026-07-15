@@ -93,6 +93,12 @@ services:
       # Legacy tiny char checkpoint, kept mounted for smoke/back-compat use.
       - ../hvn_checkpoint.pt:/data/checkpoints/hvn_checkpoint.pt:ro
       - ../hvn_checkpoint_tokenizer.json:/data/checkpoints/hvn_checkpoint_tokenizer.json:ro
+      # EdgeHVN hybrid chat checkpoint (issue #97 Phase B / #108). No separate
+      # tokenizer file -- EdgeHVN uses transformers.GPT2Tokenizer.from_pretrained
+      # ("gpt2") directly (see hvn_worker/worker.py's _load_edgehvn). Register
+      # as a ModelVersion with checkpoint_path=/data/checkpoints/hybrid_chat_v1.pt
+      # and architecture="edgehvn".
+      - ../checkpoints/hybrid_chat_v1.pt:/data/checkpoints/hybrid_chat_v1.pt:ro
     # GPU access for the HVN model - requires the NVIDIA Container Toolkit
     # on the Docker host. Remove this block to fall back to CPU inference.
     deploy:

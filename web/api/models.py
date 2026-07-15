@@ -15,10 +15,22 @@ class ModelVersion(models.Model):
     behavior underneath it.
     """
 
+    class Architecture(models.TextChoices):
+        # Original core model (hvn/core), BPE tokenizer, bracket-tag chat
+        # protocol -- every ModelVersion registered before issue #97 Phase B
+        # is this kind, hence the default below.
+        HVN_CORE = "hvn_core"
+        # EdgeHVN (hvn/edge/model.py), GPT-2 tokenizer, <|user|>/<|assistant|>
+        # EOS-terminated chat protocol (issue #97 Phase B).
+        EDGEHVN = "edgehvn"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tag = models.SlugField(max_length=100, unique=True)
     checkpoint_path = models.CharField(max_length=500)
     checkpoint_sha256 = models.CharField(max_length=64, blank=True)
+    architecture = models.CharField(
+        max_length=16, choices=Architecture.choices, default=Architecture.HVN_CORE,
+    )
     is_active = models.BooleanField(default=False)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="+"

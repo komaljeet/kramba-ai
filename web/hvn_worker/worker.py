@@ -4,6 +4,12 @@ ModelVersion tag, so repeated tasks against the same conversation don't pay
 the model-load cost every time. Reuses train.py's CharTokenizer (vendored
 into the image alongside hvn/ - see web/Dockerfile) rather than duplicating
 a tokenizer class here.
+
+Two architectures are supported (ModelVersion.architecture, issue #97 Phase
+B): "hvn_core" (the original HamiltonianVortexNetwork, BPE/Char tokenizer)
+and "edgehvn" (hvn/edge/model.py's EdgeHVN, GPT-2 tokenizer). `_load`
+branches on it; everything downstream (ChatSession, StateCheckpoint) is
+already architecture-agnostic (see hvn/chat.py).
 """
 import threading
 
@@ -16,8 +22,7 @@ _lock = threading.Lock()
 _cache: dict[str, tuple] = {}
 
 
-def _load(checkpoint_path: str, device: torch.device):
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+def _load_hvn_core(checkpoint_path: str, device: torch.device, ckpt: dict):
     # Rebuild with the SAME hyperparameters the checkpoint was trained with -
     # in particular use_deltanet/deltanet_conv_kernel (Issue #34) and the
     # weightless projections (Issue #40). The #51 chat checkpoint is a
@@ -53,7 +58,35 @@ def _load(checkpoint_path: str, device: torch.device):
     return model, tokenizer
 
 
-def get_model(tag: str, checkpoint_path: str):
+def _load_edgehvn(checkpoint_path: str, device: torch.device):
+    # load_checkpoint_for_resume is block_plan-aware -- rebuilds the hybrid
+    # architecture (DeltaNet + sliding-window attention layers) exactly as
+    # trained and loads weights strict=False with a matched/missing/
+    # unexpected key report, the same path finetune_edge_conversational.py
+    # uses to resume a hybrid checkpoint for further training.
+    from train_edge_conversational import load_checkpoint_for_resume
+
+    model, _step, _meta = load_checkpoint_for_resume(checkpoint_path, device)
+    model.eval()
+
+    # GPT-2 tokenizer, not BPE/CharTokenizer -- what EdgeHVN was actually
+    # trained/evaluated with throughout (continue_ft_hybrid.py,
+    # finetune_edge_conversational.py, eval/synthetic_recall_probe.py).
+    from transformers import GPT2Tokenizer
+
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
+    return model, tokenizer
+
+
+def _load(checkpoint_path: str, device: torch.device, architecture: str = "hvn_core"):
+    if architecture == "edgehvn":
+        return _load_edgehvn(checkpoint_path, device)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    return _load_hvn_core(checkpoint_path, device, ckpt)
+
+
+def get_model(tag: str, checkpoint_path: str, architecture: str = "hvn_core"):
     """Returns (model, tokenizer, device) for the given ModelVersion tag,
     loading and caching it on first use in this worker process."""
     if tag in _cache:
@@ -61,7 +94,7 @@ def get_model(tag: str, checkpoint_path: str):
     with _lock:
         if tag not in _cache:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            _cache[tag] = (*_load(checkpoint_path, device), device)
+            _cache[tag] = (*_load(checkpoint_path, device, architecture), device)
     return _cache[tag]
 
 
