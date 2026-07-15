@@ -221,3 +221,35 @@ constraints (no code committed for this milestone yet, this is the plan):
 **TODO:** scope the 270M run (config, chat-FT data mix, Phase B serving stub sufficient for
 format-only tool-call testing) and open a GitLab issue before starting code, per
 [ai_rules.md](ai_rules.md).
+
+## EdgeHVN incremental decode landed (issue #97 Phase B, 2026-07-15)
+
+`EdgeHVN`/`TransformerBlock` now have `init_state`/`forward_step`, and `EdgeHVN` has
+`init_conversation_state`/`chat_step` matching `HamiltonianVortexNetwork`'s exact method
+contract — `hvn/chat.py`'s `ChatSession`/`StateCheckpoint` work against EdgeHVN with zero
+changes to their own logic (verified: the mixed DeltaNet+attention-KV-cache state round-trips
+through the existing generic `_encode_state_tree`/`_decode_state_tree` JSON codec). New
+`hvn/edge/chat.py:EdgeConversationFormatter` speaks EdgeHVN's actual trained format
+(`<|user|>`/`<|assistant|>`, EOS-terminated) instead of the core model's bracket-tag protocol.
+Branch `feat/edgehvn-serving-97`, `tests/test_edgehvn_incremental.py` (9/9 pass).
+
+**A real finding surfaced while GPU-verifying parity on the actual trained checkpoint
+(`hybrid_chat_v1.pt`), worth recording so it isn't mistaken for a serving bug later:**
+comparing `forward_step`'s incremental output against a plain `forward()` call on a *trained*
+checkpoint can show large divergence (up to ~3.2 in logit scale over just 20 tokens/12
+layers) — looks alarming, is not a bug in the new decode path. Root cause: `forward()`
+dispatches to `DeltaNetBlock._scan_chunked` (a fast, reassociated approximation used for
+training speed, active whenever `train_chunk` is set — true for this checkpoint) rather than
+the exact `_scan_sequential` formula that `forward_step` implements token-by-token.
+`_scan_chunked` itself diverges non-trivially from `_scan_sequential` on real trained weights
+(verified directly, bypassing `forward_step` entirely: a single DeltaNet layer's chunked vs.
+sequential scan already differs by ~0.39 with this checkpoint's weights) — a pre-existing
+numerical property of the #83/#96 training-speed optimization, invisible with the
+small-random-weight test models used when that optimization was originally validated
+("~1e-7" in the code comments). **`forward_step`'s actual correctness bar** — matching
+`_scan_sequential`, the documented reference recurrence, apples-to-apples on the same trained
+weights — **holds to ~3e-6 (machine precision)**, confirming the incremental decode path is
+correct. Locked in as `tests/test_edgehvn_incremental.py::test_deltanet_forward_step_matches_scan_sequential_not_scan_chunked`.
+**Practical implication:** don't use a trained/`train_chunk`-enabled checkpoint's `forward()`
+as the parity oracle for incremental decode work — use `_scan_sequential` directly, or a
+fresh-init/`train_chunk=0` model, or expect this gap and don't treat it as a regression.

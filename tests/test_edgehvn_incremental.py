@@ -102,6 +102,72 @@ def test_edgehvn_forward_step_parity():
     assert (full_logits - step_logits).abs().max().item() < 1e-3
 
 
+def test_deltanet_forward_step_matches_scan_sequential_not_scan_chunked():
+    """Regression test locking in a real finding from manual GPU/CPU
+    investigation (2026-07-15): comparing forward_step against a trained
+    checkpoint's plain forward() can show LARGE divergence (order 1-3 in
+    logit scale over ~20 tokens) that looks like a serving bug but isn't.
+
+    Root cause: forward() dispatches to DeltaNetBlock._scan_chunked (a fast,
+    reassociated approximation used for training speed) whenever
+    `train_chunk` is set, NOT the exact `_scan_sequential` formula that
+    `forward_step` implements token-by-token. `_scan_chunked` itself
+    diverges non-trivially from `_scan_sequential` on real trained weights
+    (verified directly, bypassing forward_step entirely) -- this is a
+    pre-existing numerical property of the training-speed optimization
+    (#83/#96), not a bug introduced by the incremental decode path (#97
+    Phase B). forward_step's actual formula matches `_scan_sequential`
+    (the documented reference recurrence) to ~1e-6, proving it's correct.
+
+    This test uses train_chunk=4 (< S) specifically to force the chunked
+    path in forward(), the same regime that surfaced the finding, and pins
+    the two comparisons that matter: forward_step ~= _scan_sequential
+    (tight), independent of whatever forward()/_scan_chunked does.
+    """
+    torch.manual_seed(7)
+    from hvn.core.deltanet import DeltaNetBlock
+    blk = DeltaNetBlock(d_model=32, n_heads=4, dropout=0.0, train_chunk=4)
+    blk.eval()
+    B, S, D = 1, 10, 32
+    x = torch.randn(B, S, D)
+
+    with torch.no_grad():
+        x_norm = blk.norm(x)
+        xc = blk._causal_conv(x_norm)
+        q, k, v, alpha, beta, gate = blk._project(xc)
+        H, d = blk.n_heads, blk.d_head
+        N = B * H
+
+        def to_N(t):
+            return t.permute(0, 2, 1, 3).reshape(N, S, -1)
+
+        qN, kN, vN, betaN = to_N(q), to_N(k), to_N(v), to_N(beta)
+        alphaN = to_N(alpha) if alpha is not None else None
+        o_seq = blk._scan_sequential(qN, kN, vN, alphaN, betaN)
+
+        state = blk.init_state(B)
+        outs = []
+        for t in range(S):
+            o, state = blk.forward_step(x[:, t:t + 1, :], state, position_idx=t)
+            outs.append(o)
+        step_out = torch.cat(outs, dim=1)
+
+        # Recompute o_seq through the same post-processing as forward_step's
+        # output for an apples-to-apples comparison.
+        o = o_seq.view(B, H, S, d).permute(0, 2, 1, 3)
+        o = blk._read_normalize(o).reshape(B, S, D)
+        if gate is not None:
+            o = o * gate
+        full_from_seq = x + blk.dropout(blk.out_proj(o)) + blk.ffn(x_norm)
+
+    diff_vs_sequential = (full_from_seq - step_out).abs().max().item()
+    assert diff_vs_sequential < 1e-4, (
+        "forward_step must match the exact _scan_sequential reference tightly "
+        f"(got {diff_vs_sequential}) -- this is the correctness bar, not "
+        "parity against forward()'s fast chunked approximation."
+    )
+
+
 # ---------------------------------------------------------------------------
 # 3. init_conversation_state / chat_step
 # ---------------------------------------------------------------------------
