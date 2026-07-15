@@ -221,3 +221,55 @@ constraints (no code committed for this milestone yet, this is the plan):
 **TODO:** scope the 270M run (config, chat-FT data mix, Phase B serving stub sufficient for
 format-only tool-call testing) and open a GitLab issue before starting code, per
 [ai_rules.md](ai_rules.md).
+
+## Stage 1 — conversational FT on the 83M/2-attn hybrid (issue #108, 2026-07-15)
+
+Prior context: the 2-attn hybrid checkpoint (`checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt`)
+passed its recall gate (35.5% near-window / 8.5% far-window, `eval/synthetic_recall_probe.py`)
+but was mostly trained on grounded-QA data (only a 30% OASST chat-mix) — not yet a genuinely
+conversational model. A follow-on 3-attn scaling attempt regressed and was closed without
+merging (issue #109; not yet on `origin/main`, tracked only via the GitLab issue).
+
+**Run:** `finetune_edge_conversational.py --base-checkpoint hybrid_a4_step8000.pt
+--grounded-replay data/grounded_qa_expanded.jsonl --grounded-replay-frac 0.15 --epochs 3`
+(branch `feat/conversational-ft-108`) — full OASST corpus (3,482 conversations → 3,465
+examples) mixed 85/15 with grounded-QA replay (5,240 examples) via the same
+`ConcatDataset`+`WeightedRandomSampler` pattern already proven in `continue_ft_hybrid.py`.
+1,632 optimizer steps, 104.2 min, final loss ~2.6-2.8 (ppl ~14-16).
+
+**Bug caught pre-launch (fixed, not just observed):** a GPU smoke test surfaced the exact
+same ~20x-inflated loss-logging bug previously found and fixed in `continue_ft_hybrid.py`
+(commit `a023625`) — `finetune_edge_conversational.py`'s `finetune()` predated that fix and
+had the identical accumulator bug (summed per-opt-step means across a 20-step window without
+dividing by the step count). Fixed the same way (`n_steps_accum` divisor) before the real run;
+smoke logs went from loss~50/ppl-capped-at-4.85e8 (nonsense) to loss~2.3/ppl~10 (sane).
+
+**Qualitative (fixed prompt set, greedy decode via `sample_reply`, no repetition penalty):**
+- "hi" → *"Hello! How can I help you today?"* — coherent, on-topic (a real improvement; the
+  base checkpoint's chat behavior was noticeably weaker/format-only before this stage).
+- "What is the capital of France?" → *"The capital of France is Paris."* — correct.
+- "What's 2+2?" and the haiku prompt both degrade into repetition loops (`"2+3+3+3+3..."`,
+  `"island of the island..."`). Likely a greedy-decoding artifact (no repetition penalty /
+  sampling in the current `sample_reply` smoke-check, not necessarily a training failure) —
+  worth re-checking once Stage 2's real decode path exists and a proper sampling strategy can
+  be tested; not re-diagnosed further here.
+
+**Recall regression check (`eval/synthetic_recall_probe.py`, 300 trials):**
+
+| Checkpoint | near-window | far-window (W=128, 16 distractors) |
+|---|---|---|
+| 2-attn PASS baseline (pre-chat-FT) | 35.5% | 8.5% |
+| 2-attn + Stage 1 chat FT (`hybrid_chat_v1.pt`) | **28.3%** (85/300) | **5.3%** (16/300) |
+| pure trunk floor (reference) | 4-5% | 0.5% |
+
+**Verdict: PASSES the "no collapse" gate, but recall genuinely eroded** — near-window down
+~20% relative, far-window down ~38% relative. The 15% grounded-QA replay mix slowed but did
+not fully prevent forgetting; both numbers remain far above the trunk floor (not a collapse),
+so this is an acceptable, measured tradeoff rather than a regression to fix — but a real cost
+of chat-focused FT, not a free win. If recall matters more than chat fluency for a future use
+case, a higher replay fraction (or interleaved/alternating-stage FT instead of one blended
+pass) is the lever to revisit.
+
+**Next:** Stage 2 — the serving/incremental-decode path (issue #97 Phase B). `EdgeHVN` still
+has no `forward_step`/KV-cache; all evaluation above (including `sample_reply`) uses expensive
+full-sequence re-forward. See the full roadmap plan for Stage 2/3 design.
