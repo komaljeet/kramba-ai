@@ -502,6 +502,8 @@ class ChatSession:
         top_k: int = 10,
         max_context_tokens: int = 2048,
         formatter: Any = None,
+        eos_token_id: Optional[int] = None,
+        repetition_penalty: float = 1.0,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -510,6 +512,21 @@ class ChatSession:
         self.temperature = temperature
         self.top_k = top_k
         self.max_context_tokens = max_context_tokens
+        # Real bug found in production (issue #97 Phase B, live Docker use):
+        # user_turn_streaming's generation loop (below) never checked for a
+        # stop token at all, for ANY model -- correct for the core model
+        # (its bracket-tag format has no single stop token by design, only
+        # a closing [/ASSISTANT] tag trimmed post-hoc) but wrong for EdgeHVN,
+        # which WAS trained with a single EOS-terminated turn (chat_step
+        # already stops on it correctly -- but user_turn_streaming doesn't
+        # call chat_step, it reimplements its own loop). Left None (off) by
+        # default so the core model's behavior is exactly unchanged; the
+        # EdgeHVN call site passes EOS_ID=50256 explicitly.
+        self.eos_token_id = eos_token_id
+        # Same story: chat_step has repetition_penalty (issue #110), but
+        # user_turn_streaming's own loop never used it. 1.0 = off (no
+        # behavior change unless a caller opts in).
+        self.repetition_penalty = repetition_penalty
 
         # Conversation formatter. Defaults to the bracket-tag ConversationFormatter
         # (HamiltonianVortexNetwork's trained format, unchanged behavior). Pass an
@@ -633,6 +650,11 @@ class ChatSession:
         # chat_step feeds them through forward_step (updating Hamiltonian state)
         # and then generates the response.
         all_input_ids = user_ids + assistant_open_ids
+        # repetition_penalty is only passed if non-default: the core model's
+        # chat_step doesn't accept that kwarg (only EdgeHVN's does, issue
+        # #110), so this stays a no-op call for HVN-core unless a caller
+        # explicitly opts in (which only the EdgeHVN call site does).
+        extra = {"repetition_penalty": self.repetition_penalty} if self.repetition_penalty != 1.0 else {}
         response_ids, self.conv_state = self.model.chat_step(
             input_ids=all_input_ids,
             conv_state=self.conv_state,
@@ -640,6 +662,7 @@ class ChatSession:
             temperature=self.temperature,
             top_k=self.top_k,
             device=self.device,
+            **extra,
         )
 
         # Decode response
@@ -692,17 +715,30 @@ class ChatSession:
             next_logits = logits_step[0, -1, :] / temp
 
             response_ids: list[int] = []
+            seen_ids: set[int] = set(all_input_ids)
             prev_text = ""
             for _ in range(self.max_new_tokens):
+                logits = next_logits
+                if self.repetition_penalty != 1.0 and seen_ids:
+                    idx = torch.tensor(list(seen_ids), device=logits.device, dtype=torch.long)
+                    vals = logits[idx]
+                    logits = logits.clone()
+                    logits[idx] = torch.where(vals > 0, vals / self.repetition_penalty,
+                                              vals * self.repetition_penalty)
                 if self.top_k > 0:
-                    k = min(self.top_k, next_logits.size(-1))
-                    values, _ = torch.topk(next_logits, k)
-                    next_logits = next_logits.clone()
-                    next_logits[next_logits < values[-1]] = float("-inf")
+                    k = min(self.top_k, logits.size(-1))
+                    values, _ = torch.topk(logits, k)
+                    logits = logits.clone()
+                    logits[logits < values[-1]] = float("-inf")
 
-                probs = torch.softmax(next_logits, dim=-1)
+                probs = torch.softmax(logits, dim=-1)
                 next_id = torch.multinomial(probs, num_samples=1).item()
+
+                if self.eos_token_id is not None and next_id == self.eos_token_id:
+                    break
+
                 response_ids.append(next_id)
+                seen_ids.add(next_id)
 
                 full_text = self.tokenizer.decode(response_ids)
                 delta = full_text[len(prev_text):]

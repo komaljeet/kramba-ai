@@ -31,10 +31,24 @@ def _formatter_kwargs(architecture: str) -> dict:
     EdgeHVN needs its own formatter (hvn/edge/chat.py:EdgeConversationFormatter,
     issue #97 Phase B) since it was never trained on ConversationFormatter's
     bracket-tag protocol. Empty dict for "hvn_core" (ChatSession's own default
-    already does the right thing)."""
+    already does the right thing).
+
+    Also sets eos_token_id/repetition_penalty for EdgeHVN: a real bug found
+    via live Docker use -- ChatSession.user_turn_streaming's generation loop
+    never checked for a stop token at all (fine for the core model, whose
+    bracket-tag format has no single stop token by design; wrong for
+    EdgeHVN, which WAS trained with a single EOS-terminated turn) and never
+    applied a repetition penalty either. Without eos_token_id, a sampled
+    EOS token was decoded as the literal string "<|endoftext|>" and
+    generation just kept going past it instead of stopping.
+    """
     if architecture == "edgehvn":
-        from hvn.edge.chat import EdgeConversationFormatter
-        return {"formatter": EdgeConversationFormatter()}
+        from hvn.edge.chat import EdgeConversationFormatter, EOS_ID
+        return {
+            "formatter": EdgeConversationFormatter(),
+            "eos_token_id": EOS_ID,
+            "repetition_penalty": 1.3,
+        }
     return {}
 
 
