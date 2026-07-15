@@ -570,6 +570,13 @@ def main():
                              "(issue #108/#109 lesson).")
     parser.add_argument("--grounded-replay-frac", type=float, default=0.15,
                         help="P(grounded) when --grounded-replay is set.")
+    parser.add_argument("--tool-use-data", type=str, default=None,
+                        help="JSONL of {query,steps,answer} (see "
+                             "scripts/build_tool_use_data.py) mixed in at "
+                             "--tool-use-frac -- the agentic tool-calling FT "
+                             "stage (issue #110 / #97 Phase C).")
+    parser.add_argument("--tool-use-frac", type=float, default=0.5,
+                        help="P(tool-use) when --tool-use-data is set.")
     parser.add_argument("--hf-cache-dir", type=str, default=None)
     parser.add_argument("--smoke", action="store_true",
                         help="Tiny subset, 1 epoch — pipeline validation")
@@ -593,23 +600,46 @@ def main():
     conversations = build_oasst_conversations(max_conversations=max_conv)
     chat_ds = InstructionDataset(tokenizer, conversations, seq_len=args.seq_len)
 
+    import json
+
+    # (dataset, target_fraction, label) for every extra replay/task mix
+    # requested -- chat gets whatever fraction remains. Generalizes the
+    # original single-grounded-replay mixing (issue #108) to also support
+    # tool-use data (issue #110) mixed in alongside it, via the same
+    # ConcatDataset + WeightedRandomSampler pattern.
+    extra: list[tuple[Dataset, float, str]] = []
     if args.grounded_replay:
-        import json
         records = [json.loads(line) for line in
                    open(args.grounded_replay, encoding="utf-8")]
         grounded_ds = GroundedQADataset(tokenizer, records, seq_len=args.seq_len)
         print(f"  Grounded-QA replay: {len(grounded_ds)} records from "
               f"{args.grounded_replay} (target fraction={args.grounded_replay_frac})")
-        dataset = ConcatDataset([chat_ds, grounded_ds])
-        n_c, n_g = len(chat_ds), len(grounded_ds)
-        p_g = args.grounded_replay_frac
-        weights = ([1.0 / n_c * (1 - p_g)] * n_c) + ([1.0 / n_g * p_g] * n_g)
+        extra.append((grounded_ds, args.grounded_replay_frac, "grounded"))
+    if args.tool_use_data:
+        records = [json.loads(line) for line in
+                   open(args.tool_use_data, encoding="utf-8")]
+        tool_ds = ToolUseDataset(tokenizer, records, seq_len=args.seq_len)
+        print(f"  Tool-use data: {len(tool_ds)} records from "
+              f"{args.tool_use_data} (target fraction={args.tool_use_frac})")
+        extra.append((tool_ds, args.tool_use_frac, "tool-use"))
+
+    if extra:
+        extra_frac_total = sum(f for _, f, _ in extra)
+        if extra_frac_total >= 1.0:
+            raise SystemExit(f"--grounded-replay-frac + --tool-use-frac must sum to "
+                             f"< 1.0 (chat needs a nonzero share), got {extra_frac_total}")
+        chat_frac = 1.0 - extra_frac_total
+        all_ds = [(chat_ds, chat_frac, "chat")] + extra
+        dataset = ConcatDataset([ds for ds, _, _ in all_ds])
+        weights = []
+        for ds, frac, _ in all_ds:
+            weights.extend([frac / len(ds)] * len(ds))
         sampler = WeightedRandomSampler(weights, num_samples=len(dataset),
                                         replacement=True)
         dataloader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler,
                                 drop_last=True, pin_memory=(device.type == "cuda"))
-        print(f"  Combined dataset: {len(dataset)} examples, sampled to "
-              f"{1-p_g:.0%} chat / {p_g:.0%} grounded")
+        mix_str = " / ".join(f"{frac:.0%} {label}" for _, frac, label in all_ds)
+        print(f"  Combined dataset: {len(dataset)} examples, sampled to {mix_str}")
     else:
         dataset = chat_ds
         dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
