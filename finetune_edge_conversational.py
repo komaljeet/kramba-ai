@@ -318,6 +318,108 @@ class GroundedQADataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
+# 2c. Tool-use dataset (gate-format, loss-masked) — issue #110 / #97 Phase C
+# ---------------------------------------------------------------------------
+
+class ToolUseDataset(Dataset):
+    """Tokenized, loss-masked tool-use examples (see
+    ``scripts/build_tool_use_data.py`` for the corpus format).
+
+    Each record is rendered as::
+
+        <USER> {query}
+        <ASSISTANT> [TOOL_CALL]
+        {compact json}
+        [/TOOL_CALL]
+        [TOOL_RESULT]
+        {result}
+        [/TOOL_RESULT]
+        ... (repeated per step) ...
+        {answer}<EOS>
+
+    **Three-way masking** (the fix for a real flaw in the pre-existing
+    ``hvn.tools.generate_tool_training_data``, which trained the model to
+    *generate* the tool-result content -- i.e. to hallucinate what a tool
+    will return, rather than to call it and use a real injected result):
+      - the query (masked, input)
+      - each ``[TOOL_CALL]...[/TOOL_CALL]`` block -- **learned** (the actual
+        skill: emit a well-formed tool call)
+      - each ``[TOOL_RESULT]...[/TOOL_RESULT]`` block -- **masked**
+        (environment-injected context at real inference time, via
+        ``EdgeToolCallingSession``; never a generation target)
+      - the final answer + EOS -- **learned** (use the tool result to answer)
+    """
+
+    def __init__(self, tokenizer, records: list[dict], seq_len: int = 512):
+        from hvn.tools import TOOL_TOKENS
+        import json as _json
+
+        self.seq_len = seq_len
+        self.examples: list[tuple[np.ndarray, np.ndarray]] = []
+
+        user_pref_ids = tokenizer.encode(USER_PREFIX)
+        asst_pref_ids = tokenizer.encode(ASSISTANT_PREFIX)
+        call_start_ids = tokenizer.encode(TOOL_TOKENS["tool_call_start"] + "\n")
+        call_end_ids = tokenizer.encode("\n" + TOOL_TOKENS["tool_call_end"] + "\n")
+        result_start_ids = tokenizer.encode(TOOL_TOKENS["tool_result_start"] + "\n")
+        result_end_ids = tokenizer.encode("\n" + TOOL_TOKENS["tool_result_end"] + "\n")
+
+        n_truncated = 0
+        for r in records:
+            prompt_ids = user_pref_ids + tokenizer.encode(r["query"] + "\n") + asst_pref_ids
+            ids = list(prompt_ids)
+            labels = [-100] * len(prompt_ids)
+
+            for step in r["steps"]:
+                call_json = _json.dumps(step["tool_call"], separators=(",", ":"))
+                call_ids = tokenizer.encode(call_json)
+                # [TOOL_CALL] block: LEARNED.
+                seg = call_start_ids + call_ids + call_end_ids
+                ids.extend(seg)
+                labels.extend(seg)
+
+                result_ids = tokenizer.encode(step["tool_result"])
+                # [TOOL_RESULT] block: MASKED (environment-injected context).
+                seg = result_start_ids + result_ids + result_end_ids
+                ids.extend(seg)
+                labels.extend([-100] * len(seg))
+
+            # Final answer + EOS: LEARNED.
+            answer_ids = tokenizer.encode(r["answer"]) + [EOS_ID]
+            ids.extend(answer_ids)
+            labels.extend(answer_ids)
+
+            if len(ids) > seq_len + 1:
+                # Keep the TAIL: the answer (always last) is never cut this
+                # way. Same truncation strategy as GroundedQADataset.
+                ids = ids[-(seq_len + 1):]
+                labels = labels[-(seq_len + 1):]
+                n_truncated += 1
+
+            pad = (seq_len + 1) - len(ids)
+            if pad > 0:
+                ids.extend([EOS_ID] * pad)
+                labels.extend([-100] * pad)
+
+            self.examples.append((
+                np.asarray(ids, dtype=np.int64),
+                np.asarray(labels, dtype=np.int64),
+            ))
+
+        print(f"  Built {len(self.examples):,} tool-use examples "
+              f"(seq_len={seq_len}, {n_truncated} truncated to fit)")
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, idx):
+        ids, labels = self.examples[idx]
+        x = torch.from_numpy(ids[:-1])
+        y = torch.from_numpy(labels[1:])
+        return x, y
+
+
+# ---------------------------------------------------------------------------
 # 3. Fine-tuning loop
 # ---------------------------------------------------------------------------
 
