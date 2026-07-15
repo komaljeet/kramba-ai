@@ -253,3 +253,42 @@ correct. Locked in as `tests/test_edgehvn_incremental.py::test_deltanet_forward_
 **Practical implication:** don't use a trained/`train_chunk`-enabled checkpoint's `forward()`
 as the parity oracle for incremental decode work — use `_scan_sequential` directly, or a
 fresh-init/`train_chunk=0` model, or expect this gap and don't treat it as a regression.
+
+## EdgeHVN wired into the Docker chat app + real end-to-end verification (2026-07-15)
+
+`ModelVersion.architecture` field (migration `0003_modelversion_architecture`) + branching in
+`hvn_worker/worker.py`/`inference.py` let the Django/Celery/Channels chat app serve EdgeHVN
+checkpoints, not just the original `HamiltonianVortexNetwork`. New
+`EdgeHVNChatSmokeTests` (`web/tests/test_chat_smoke.py`) drive the real (unmocked)
+worker→inference→ChatSession path — 78/78 Django tests pass.
+
+**Beyond the unit tests: verified against the real Docker stack, not just `manage.py test`.**
+Built the image (`docker compose build`), brought up postgres/redis/app-web/app-worker/
+app-beat, registered `hybrid_chat_v1.pt` as an `architecture="edgehvn"` `ModelVersion`, and
+drove two real chat turns through the actual HTTP API (login → create conversation → POST a
+message → Celery task runs → reply persisted) — the same code path the browser UI hits, no
+mocking:
+- Turn 1 ("hi") → *"Hello! I am an AI assistant..."* — coherent opening.
+- Turn 2 ("What is the capital of France?") → *"The capital of France is Paris..."* — correct,
+  and **confirms multi-turn `StateCheckpoint` save/load round-trips correctly for real** in
+  the deployed stack (not just the CPU unit test's synthetic round-trip check).
+- Both replies degrade into repetition after the first sentence or two — the same known
+  quality limitation already documented for this checkpoint in the Stage 1 (#108) writeup
+  (arithmetic/haiku prompts looping under greedy/low-temperature decode); not a new Phase B
+  bug, just now also confirmed present via the real serving path, not only the CLI
+  `sample_reply` check.
+
+**One real bug caught and fixed during this verification** (would NOT have been caught by
+the CPU unit tests, which import `hvn`/`train_edge_conversational` directly rather than
+through the built Docker image): `docker compose build app-web` only rebuilds the `app-web`
+image — `app-worker`/`app-beat` are separately-tagged images per service and were still
+running a stale build missing the `train_edge_conversational.py` COPY, causing
+`ModuleNotFoundError: No module named 'train_edge_conversational'` on the first live attempt.
+Fixed by rebuilding all three service images explicitly. Worth remembering for any future
+Dockerfile change to this app: **rebuild `app-web app-worker app-beat` together**, not just
+whichever service you're actively iterating on.
+
+Not yet done: a real trained-quality pass (fixing the repetition-under-greedy-decode issue,
+e.g. sampling/repetition-penalty tuning) and exercising the actual browser UI (this
+verification drove the REST API directly, the same code path, but not the JS frontend/
+WebSocket client itself).
