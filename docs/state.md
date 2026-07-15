@@ -400,3 +400,47 @@ app, and follow a tool-calling format reliably — genuinely "good enough" per t
 honesty bar, not GPT-4-class autonomous coding. The clearest next lever, if better argument-
 grounding is wanted, is more/more-diverse tool-use training data (the same volume lesson as
 grounded-QA and OASST throughout this whole track) rather than further architecture work.
+
+## Live Docker chat testing: a real serving bug fixed + the scale-vs-data verdict (2026-07-15)
+
+**Real bug found via actual live use, not a unit test.** Chatting with `hybrid_tooluse_v1.pt`
+through the deployed Docker UI produced replies with the literal text `<|endoftext|>` appearing
+mid-response followed by more generated text. Root cause: `hvn.chat.ChatSession.user_turn_streaming`
+(what the web app's streaming path actually calls, not `chat_step`) had its own from-scratch
+generation loop that **never checked for a stop token at all**, for any model — correct for the
+core `HamiltonianVortexNetwork` (bracket-tag format, no single stop token by design) but wrong
+for EdgeHVN, which was trained with a single EOS-terminated turn. A sampled EOS token was
+decoded as literal text and generation just kept going instead of stopping. Same story for
+`repetition_penalty` (issue #110): it existed on `chat_step` but `user_turn_streaming` never
+used it. Fixed: `ChatSession` gained `eos_token_id`/`repetition_penalty` params (both default
+off — zero behavior change for the core model), wired for the EdgeHVN call site
+(`web/hvn_worker/inference.py`, `eos_token_id=50256, repetition_penalty=1.3`). Verified directly
+(an EOS-biased test model now stops immediately instead of running the full token budget) and
+via the live API (`hybrid_tooluse_v1.pt` now replies with a single clean, complete sentence
+instead of a run-on garbled one). Landed on `feat/edgehvn-serving-97`.
+
+**After the formatting bug was fixed, real qualitative testing surfaced the actual remaining
+gap clearly: content coherence, not decoding mechanics.** Replies are now grammatically
+well-formed and properly terminated, but frequently don't engage with what was actually asked
+— generic assistant-boilerplate text regardless of the specific question, no real recognition
+of conversational context (e.g. a frustrated "what the fuck?" gets a boilerplate "as a language
+model, I can provide you with information" instead of anything responsive to the tone/intent).
+
+**Verdict, stated directly: this is primarily a capacity (scale) problem, not a data problem.**
+More/better training data is the proven, cheap lever for *surface* quality — format-following,
+topic breadth, reduced repetition (this project has now demonstrated that pattern three times:
+grounded-QA's 40→5,240-example expansion, OASST full-corpus vs capped, and the tool-use
+corpus's programmatic generation). But genuine contextual reasoning — actually parsing intent,
+not just producing fluent-sounding text — is the kind of capability that scaling-laws research
+(and this project's own earlier "83M capacity ceiling" investigation, which concluded 83M was
+undertrained *relative to its own ceiling*, not that the ceiling itself was high) suggests is
+much more parameter-count-bound than data-bound at this scale. Pouring more data into a fixed
+83M model would likely keep improving fluency/format without closing this specific gap.
+
+**Decision: defer #107 (scale past 83M) — it is the correct next lever, not started this
+session.** The full pipeline (conversational FT → serving → agentic tool-use) is proven
+end-to-end at 83M, which was the point of building it at this scale first rather than
+committing to a multi-day pretrain up front. Scaling the *same* recipe (DeltaNet trunk +
+windowed-attention hybrid, same warm-start approach) to whatever size #107 lands on is now the
+well-justified next step when picked back up — not a guess, a conclusion from real measurement
+at the smaller scale first.
