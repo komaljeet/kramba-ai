@@ -422,6 +422,22 @@ class EdgeHVN(nn.Module):
         threshold = values[..., -1:].contiguous()
         return logits.masked_fill(logits < threshold, float("-inf"))
 
+    def _apply_repetition_penalty(self, logits: torch.Tensor, seen_ids: set[int],
+                                  penalty: float) -> torch.Tensor:
+        """Standard repetition penalty (Keskar et al., CTRL): divide the logit
+        of every already-generated token by `penalty` if positive, multiply if
+        negative -- pushes previously-used tokens down regardless of sign,
+        unlike a flat subtraction. `penalty=1.0` is an exact no-op (the
+        default -- zero behavior change unless a caller opts in).
+        """
+        if penalty == 1.0 or not seen_ids:
+            return logits
+        idx = torch.tensor(list(seen_ids), device=logits.device, dtype=torch.long)
+        vals = logits[idx]
+        logits = logits.clone()
+        logits[idx] = torch.where(vals > 0, vals / penalty, vals * penalty)
+        return logits
+
     @torch.no_grad()
     def chat_step(
         self,
@@ -431,6 +447,7 @@ class EdgeHVN(nn.Module):
         temperature: float = 0.8,
         top_k: int = 10,
         device: Optional[torch.device] = None,
+        repetition_penalty: float = 1.0,
     ) -> tuple[list[int], dict]:
         """Process a conversation turn incrementally. Same overall shape as
         HamiltonianVortexNetwork.chat_step (hvn/core/model.py:1118): feed
@@ -442,6 +459,14 @@ class EdgeHVN(nn.Module):
         (finetune_edge_conversational.py's InstructionDataset), unlike the core
         model's bracket-tag format, which has no single stop token and so
         can't early-stop this way.
+
+        `repetition_penalty` (default 1.0 = off, matching prior behavior
+        exactly): real degenerate looping was observed in this checkpoint's
+        Docker verification (issue #97 Phase B writeup, docs/state.md) --
+        pass e.g. 1.2-1.3 to discourage it. Penalizes tokens already emitted
+        THIS turn (input_ids + generated-so-far), not the full conversation
+        history -- matches the common convention (e.g. HF `generate`'s
+        default window) and keeps the cost O(turn length) not O(history).
         """
         EOS_ID = 50256
         if device is None:
@@ -450,6 +475,7 @@ class EdgeHVN(nn.Module):
         self.eval()
         states = conv_state["hamiltonian_states"]
         pos = conv_state["position"]
+        seen_ids: set[int] = set(input_ids)
 
         cur = torch.empty(1, 1, dtype=torch.long, device=device)
         if len(input_ids) > 0:
@@ -466,12 +492,14 @@ class EdgeHVN(nn.Module):
 
         resp_id_tensors: list[torch.Tensor] = []
         for _ in range(max_new_tokens):
-            logits = self._filter_top_k(next_logits, top_k)
+            logits = self._apply_repetition_penalty(next_logits, seen_ids, repetition_penalty)
+            logits = self._filter_top_k(logits, top_k)
             probs = torch.softmax(logits, dim=-1)
             next_id = torch.multinomial(probs, num_samples=1)
             if int(next_id.item()) == EOS_ID:
                 break
             resp_id_tensors.append(next_id)
+            seen_ids.add(int(next_id.item()))
 
             cur.copy_(next_id.view(1, 1))
             logits_step, states = self.forward_step(cur, states, position_idx=pos)

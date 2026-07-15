@@ -214,6 +214,38 @@ def test_chat_step_stops_at_eos():
     assert EOS_ID not in resp, "EOS itself should not appear in the returned response"
 
 
+def test_chat_step_repetition_penalty_default_is_exact_noop():
+    """repetition_penalty=1.0 (the default) must produce byte-identical
+    output to omitting it entirely -- zero behavior change for every
+    existing caller (issue #97 Phase C, #110)."""
+    model = _tiny_hybrid_model(seed=8)
+
+    torch.manual_seed(42)
+    resp_default, _ = model.chat_step([1, 2, 3], model.init_conversation_state(),
+                                      max_new_tokens=10, temperature=1.0, top_k=5)
+    torch.manual_seed(42)
+    resp_explicit, _ = model.chat_step([1, 2, 3], model.init_conversation_state(),
+                                       max_new_tokens=10, temperature=1.0, top_k=5,
+                                       repetition_penalty=1.0)
+    assert resp_default == resp_explicit
+
+
+def test_chat_step_repetition_penalty_changes_sampling():
+    """A penalty != 1.0 must actually change the sampled sequence (proves
+    _apply_repetition_penalty is wired into the sampling loop, not a dead
+    parameter)."""
+    model = _tiny_hybrid_model(seed=9)
+
+    torch.manual_seed(7)
+    resp_off, _ = model.chat_step([1, 2, 3], model.init_conversation_state(),
+                                  max_new_tokens=15, temperature=1.0, top_k=5)
+    torch.manual_seed(7)
+    resp_on, _ = model.chat_step([1, 2, 3], model.init_conversation_state(),
+                                 max_new_tokens=15, temperature=1.0, top_k=5,
+                                 repetition_penalty=1.3)
+    assert resp_off != resp_on
+
+
 # ---------------------------------------------------------------------------
 # 4. State round-trips through hvn/chat.py's generic encode/decode
 # ---------------------------------------------------------------------------
