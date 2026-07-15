@@ -344,3 +344,59 @@ Not yet done: a real trained-quality pass (fixing the repetition-under-greedy-de
 e.g. sampling/repetition-penalty tuning) and exercising the actual browser UI (this
 verification drove the REST API directly, the same code path, but not the JS frontend/
 WebSocket client itself).
+
+## Stage 3 — agentic tool-use FT + gate (issue #110 / #97 Phase C, 2026-07-15)
+
+Continued from Stage 1's `hybrid_chat_v1.pt`. Landed (branch `feat/agentic-tooluse-97c`):
+`repetition_penalty` param on `EdgeHVN.chat_step` (real repetition was observed in Stage 2's
+Docker verification); sandboxed coding tools `read_file`/`edit_file`/`run_tests` in
+`hvn/tools.py` (path-traversal guarded, `run_tests` takes no free-form args so a
+model-controlled argument can't smuggle shell content — caught a real bytecode-cache staleness
+bug here via the tests, fixed with `PYTHONDONTWRITEBYTECODE=1`); a 600-example programmatic
+tool-use corpus (`scripts/build_tool_use_data.py`, every coding example actually executed +
+verified during generation, not fabricated); `ToolUseDataset` with three-way loss masking
+(query masked, `[TOOL_CALL]` learned, `[TOOL_RESULT]` masked as environment-injected context,
+answer learned — the fix for a real flaw in the pre-existing
+`hvn.tools.generate_tool_training_data`, which trained the model to hallucinate tool results);
+and `EdgeToolCallingSession` (`hvn/edge/tool_session.py`), a from-scratch EdgeHVN-native
+agentic loop built on `forward_step` (not a port of the pre-existing `ToolCallingSession`,
+which is bound to a `generate_incremental` contract that doesn't exist on `EdgeHVN`).
+
+**FT run:** continued from `hybrid_chat_v1.pt`, mixed 50% chat / 10% grounded-QA replay / 40%
+tool-use, 1,743 optimizer steps (~2h), final loss ~1.7-1.9 (ppl ~6-7). Qualitative check via
+the old full-forward `sample_reply` (no repetition penalty) showed the model correctly
+emitting `[TOOL_CALL]\n{"name":"calculator","arguments":{"expression":"2+2"}}\n[/TOOL_CALL]`
+for "What's 2+2?" — right tool, right arguments — before degrading into a malformed repeat
+(a `sample_reply`-specific artifact; the real serving path, `EdgeToolCallingSession`, uses
+`repetition_penalty`).
+
+**Agentic coding gate (`eval/agentic_coding_gate.py`, `checkpoints/hybrid_tooluse_v1.pt`):** a
+fresh (not a literal training example, but the same learned bug-template family) one-line-bug
+mock repo, driven through the real `EdgeToolCallingSession` + sandboxed coding tools.
+
+| Bar | Result |
+|---|---|
+| **Pass (required):** well-formed `read_file → edit_file → run_tests` sequence, no parse failures | **YES** |
+| **Stretch (reported, not required):** the bug actually gets fixed | **NO** |
+
+The model emitted the exact correct *tool sequence and JSON structure* three calls in a row,
+zero parse failures — a real, non-trivial, previously-absent capability. It did **not**
+correctly ground the arguments: it called `read_file`/`edit_file` on a hallucinated path
+(`"bounds/jquery"`, likely bleed-through from the `bounds_*.py`-named training family mixed
+with unrelated web-dev vocabulary) instead of the actual file named in the query
+(`gate_calc.py`), so the edit never landed and `run_tests` correctly reported the original
+failure. **This is exactly the calibrated outcome stated going into this stage** (per the
+270M-milestone framing already in this file): tool-call **format-following** is a learnable
+format skill and it works; correctly **grounding arguments from the specific query** is a
+reasoning-adjacent skill this 83M model does not yet reliably have. Single-trial result (n=1,
+real measurement, not averaged over multiple sampled runs) — a fuller sweep (several seeds/
+prompts) would be needed to quantify the pass rate precisely, not just confirm the capability
+exists.
+
+**Roadmap status: Stages 1, 2, and 3 are all now landed** (branches `feat/conversational-ft-108`,
+`feat/edgehvn-serving-97`, `feat/agentic-tooluse-97c` respectively, all pushed, none yet merged
+by the user). The model can chat, recall within its window, be served through the real Docker
+app, and follow a tool-calling format reliably — genuinely "good enough" per the plan's own
+honesty bar, not GPT-4-class autonomous coding. The clearest next lever, if better argument-
+grounding is wanted, is more/more-diverse tool-use training data (the same volume lesson as
+grounded-QA and OASST throughout this whole track) rather than further architecture work.
