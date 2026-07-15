@@ -47,7 +47,9 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import (
+    Dataset, DataLoader, ConcatDataset, WeightedRandomSampler,
+)
 
 # Reuse the pre-training helpers so the checkpoint format stays identical.
 from train_edge_conversational import (
@@ -228,6 +230,94 @@ class InstructionDataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
+# 2b. Grounded-QA dataset (gate-format, loss-masked) — anti-forgetting replay
+# ---------------------------------------------------------------------------
+#
+# Moved here from continue_ft_hybrid.py (2026-07-15, issue #108) so this
+# module doesn't need to import from continue_ft_hybrid.py, which already
+# imports FROM this module (InstructionDataset/build_oasst_conversations) --
+# the reverse import would cycle. continue_ft_hybrid.py now imports these two
+# names back from here instead.
+
+# The gate's exact open-book prompt template (must match eval/grounded_qa.py
+# and eval/synthetic_recall_probe.py).
+OPEN_BOOK_INSTRUCTION = "Answer the question using only the context below.\n\n"
+
+
+class GroundedQADataset(Dataset):
+    """Tokenized, loss-masked grounded-QA examples in the gate's open-book format.
+
+    Each (passage, question, answer) triple is rendered as::
+
+        <USER> Answer the question using only the context below.
+
+        Context: {passage}
+
+        Question: {question}
+        <ASSISTANT> {answer}<EOS>
+
+    Labels are -100 everywhere except the answer tokens + trailing EOS, so CE
+    with ``ignore_index=-100`` trains the model only to *produce the answer from
+    the context* — the exact skill the gate measures. The prompt text matches
+    ``eval/grounded_qa.py`` verbatim (same USER/ASSISTANT markers + instruction).
+    """
+
+    def __init__(self, tokenizer, records: list[dict], seq_len: int = 512):
+        self.seq_len = seq_len
+        self.examples: list[tuple[np.ndarray, np.ndarray]] = []
+
+        user_pref_ids = tokenizer.encode(USER_PREFIX)
+        asst_pref_ids = tokenizer.encode(ASSISTANT_PREFIX)
+        instr_ids = tokenizer.encode(OPEN_BOOK_INSTRUCTION)
+
+        n_truncated = 0
+        for r in records:
+            passage_ids = tokenizer.encode("Context: " + r["passage"] + "\n\n")
+            question_ids = tokenizer.encode("Question: " + r["question"] + "\n")
+            answer_ids = tokenizer.encode(r["answer"]) + [EOS_ID]
+
+            # Prompt (masked) = USER_PREFIX + instruction + context + question + ASST_PREFIX
+            prompt_ids = (user_pref_ids + instr_ids + passage_ids + question_ids
+                          + asst_pref_ids)
+            ids = prompt_ids + answer_ids
+            labels = [-100] * len(prompt_ids) + list(answer_ids)
+
+            if len(ids) > seq_len + 1:
+                # The answer is at the END, so keep the TAIL (last seq_len+1
+                # tokens): the answer + EOS + question + assistant marker + the
+                # tail of the passage survive; the front of a long passage (and
+                # possibly the "Answer using context" instruction) is dropped.
+                # The loss is on the answer, which is never cut this way.
+                ids = ids[-(seq_len + 1):]
+                labels = labels[-(seq_len + 1):]
+                n_truncated += 1
+
+            # Pad to seq_len + 1 with EOS (label -100).
+            pad = (seq_len + 1) - len(ids)
+            if pad > 0:
+                ids.extend([EOS_ID] * pad)
+                labels.extend([-100] * pad)
+
+            self.examples.append((
+                np.asarray(ids, dtype=np.int64),
+                np.asarray(labels, dtype=np.int64),
+            ))
+
+        print(f"  Built {len(self.examples):,} grounded-QA examples "
+              f"(seq_len={seq_len}, {n_truncated} truncated to fit)")
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, idx):
+        ids, labels = self.examples[idx]
+        # Causal shift: predict token t+1 from tokens ≤ t.
+        x = torch.from_numpy(ids[:-1])
+        y = torch.from_numpy(labels[1:])
+        return x, y
+
+
+# ---------------------------------------------------------------------------
 # 3. Fine-tuning loop
 # ---------------------------------------------------------------------------
 
@@ -269,7 +359,16 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
     # (every 20 opt steps). The old `accum_loss += loss.item()` forced a
     # GPU->CPU sync every micro-batch, stalling the async compute/H2D
     # pipeline. Mirrors the pretraining loop's deferred-accumulator pattern.
+    #
+    # accum_loss_t holds the SUM of per-micro-batch (loss/grad_accum) terms,
+    # i.e. one per-optimizer-step mean loss added each opt step -- but is only
+    # zeroed every 20 opt steps. Must divide by the opt-step count since the
+    # last zero (n_steps_accum below), or the logged value is ~20x the true
+    # mean loss and ppl=exp(min(loss,20)) reads as nonsense/catastrophic (the
+    # exact bug found + fixed in continue_ft_hybrid.py, commit a023625 --
+    # this sibling script predates that fix and had the same bug).
     accum_loss_t = torch.zeros((), device=device)
+    n_steps_accum = 0
 
     for epoch in range(epochs):
         micro = 0
@@ -297,17 +396,20 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
                 optimizer.zero_grad()
                 global_step += 1
                 micro = 0
+                n_steps_accum += 1
 
                 if global_step % 20 == 0:
                     # Single host sync per log interval (was grad_accum syncs).
-                    accum_loss = float(accum_loss_t.item())
+                    # Divide by n_steps_accum -- see the accumulator comment above.
+                    mean_loss = float(accum_loss_t.item()) / max(1, n_steps_accum)
                     accum_loss_t.zero_()
+                    n_steps_accum = 0
                     cur_lr = optimizer.param_groups[0]["lr"]
-                    ppl = math.exp(min(accum_loss, 20))
+                    ppl = math.exp(min(mean_loss, 20))
                     print(f"  Step {global_step:5d}/{total_steps} (epoch {epoch}) | "
-                          f"loss {accum_loss:.4f} | ppl {ppl:.2f} | lr {cur_lr:.2e} | "
+                          f"loss {mean_loss:.4f} | ppl {ppl:.2f} | lr {cur_lr:.2e} | "
                           f"{(time.time()-start)/max(1,global_step):.2f}s/step", flush=True)
-                    writer.writerow([global_step, epoch, f"{accum_loss:.6f}",
+                    writer.writerow([global_step, epoch, f"{mean_loss:.6f}",
                                      f"{ppl:.4f}", f"{cur_lr:.8f}",
                                      time.strftime("%Y-%m-%d %H:%M:%S")])
                     csv_file.flush()
@@ -358,6 +460,14 @@ def main():
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--max-conversations", type=int, default=None)
+    parser.add_argument("--grounded-replay", type=str, default=None,
+                        help="JSONL of {passage,question,answer} (see "
+                             "scripts/build_grounded_qa_data.py / expand_grounded_qa.py) "
+                             "mixed in at --grounded-replay-frac to guard against "
+                             "catastrophically forgetting recall during a long chat FT "
+                             "(issue #108/#109 lesson).")
+    parser.add_argument("--grounded-replay-frac", type=float, default=0.15,
+                        help="P(grounded) when --grounded-replay is set.")
     parser.add_argument("--hf-cache-dir", type=str, default=None)
     parser.add_argument("--smoke", action="store_true",
                         help="Tiny subset, 1 epoch — pipeline validation")
@@ -379,9 +489,29 @@ def main():
     print("=" * 70)
     max_conv = 200 if args.smoke else args.max_conversations
     conversations = build_oasst_conversations(max_conversations=max_conv)
-    dataset = InstructionDataset(tokenizer, conversations, seq_len=args.seq_len)
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
-                            drop_last=True, pin_memory=(device.type == "cuda"))
+    chat_ds = InstructionDataset(tokenizer, conversations, seq_len=args.seq_len)
+
+    if args.grounded_replay:
+        import json
+        records = [json.loads(line) for line in
+                   open(args.grounded_replay, encoding="utf-8")]
+        grounded_ds = GroundedQADataset(tokenizer, records, seq_len=args.seq_len)
+        print(f"  Grounded-QA replay: {len(grounded_ds)} records from "
+              f"{args.grounded_replay} (target fraction={args.grounded_replay_frac})")
+        dataset = ConcatDataset([chat_ds, grounded_ds])
+        n_c, n_g = len(chat_ds), len(grounded_ds)
+        p_g = args.grounded_replay_frac
+        weights = ([1.0 / n_c * (1 - p_g)] * n_c) + ([1.0 / n_g * p_g] * n_g)
+        sampler = WeightedRandomSampler(weights, num_samples=len(dataset),
+                                        replacement=True)
+        dataloader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler,
+                                drop_last=True, pin_memory=(device.type == "cuda"))
+        print(f"  Combined dataset: {len(dataset)} examples, sampled to "
+              f"{1-p_g:.0%} chat / {p_g:.0%} grounded")
+    else:
+        dataset = chat_ds
+        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
+                                drop_last=True, pin_memory=(device.type == "cuda"))
 
     # --- Model (load pre-trained base) ---
     print("\n" + "=" * 70)
@@ -409,7 +539,8 @@ def main():
 
     # --- Smoke generation ---
     print("\n  Sample replies from the fine-tuned model:")
-    for q in ["What is the capital of France?", "Write a haiku about the sea."]:
+    for q in ["hi", "What's 2+2?", "What is the capital of France?",
+              "Write a haiku about the sea."]:
         print(f"\n  USER: {q}")
         print(f"  ASSISTANT: {sample_reply(model, tokenizer, device, q)}")
 

@@ -48,10 +48,9 @@ import os
 import sys
 import time
 
-import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader, ConcatDataset, WeightedRandomSampler
+from torch.utils.data import DataLoader, ConcatDataset, WeightedRandomSampler
 
 from train_edge_conversational import (
     GPT2_VOCAB_SIZE,
@@ -64,88 +63,17 @@ from finetune_edge_conversational import (
     USER_PREFIX,
     ASSISTANT_PREFIX,
     EOS_ID,
+    GroundedQADataset,
+    OPEN_BOOK_INSTRUCTION,
 )
 from hvn.edge.model import EdgeHVN
 from hvn.edge.ternary import apply_ternary_to_model
 
-# The gate's exact open-book prompt template (must match eval/grounded_qa.py).
-OPEN_BOOK_INSTRUCTION = "Answer the question using only the context below.\n\n"
-
-
-# ---------------------------------------------------------------------------
-# 1. Grounded-QA dataset (gate-format, loss-masked)
-# ---------------------------------------------------------------------------
-
-class GroundedQADataset(Dataset):
-    """Tokenized, loss-masked grounded-QA examples in the gate's open-book format.
-
-    Each (passage, question, answer) triple is rendered as::
-
-        <USER> Answer the question using only the context below.
-
-        Context: {passage}
-
-        Question: {question}
-        <ASSISTANT> {answer}<EOS>
-
-    Labels are -100 everywhere except the answer tokens + trailing EOS, so CE
-    with ``ignore_index=-100`` trains the model only to *produce the answer from
-    the context* — the exact skill the gate measures. The prompt text matches
-    ``eval/grounded_qa.py`` verbatim (same USER/ASSISTANT markers + instruction).
-    """
-
-    def __init__(self, tokenizer, records: list[dict], seq_len: int = 512):
-        self.seq_len = seq_len
-        self.examples: list[tuple[np.ndarray, np.ndarray]] = []
-
-        user_pref_ids = tokenizer.encode(USER_PREFIX)
-        asst_pref_ids = tokenizer.encode(ASSISTANT_PREFIX)
-        instr_ids = tokenizer.encode(OPEN_BOOK_INSTRUCTION)
-
-        n_truncated = 0
-        for r in records:
-            passage_ids = tokenizer.encode("Context: " + r["passage"] + "\n\n")
-            question_ids = tokenizer.encode("Question: " + r["question"] + "\n")
-            answer_ids = tokenizer.encode(r["answer"]) + [EOS_ID]
-
-            # Prompt (masked) = USER_PREFIX + instruction + context + question + ASST_PREFIX
-            prompt_ids = (user_pref_ids + instr_ids + passage_ids + question_ids
-                          + asst_pref_ids)
-            ids = prompt_ids + answer_ids
-            labels = [-100] * len(prompt_ids) + list(answer_ids)
-
-            if len(ids) > seq_len + 1:
-                # The answer is at the END, so keep the TAIL (last seq_len+1
-                # tokens): the answer + EOS + question + assistant marker + the
-                # tail of the passage survive; the front of a long passage (and
-                # possibly the "Answer using context" instruction) is dropped.
-                # The loss is on the answer, which is never cut this way.
-                ids = ids[-(seq_len + 1):]
-                labels = labels[-(seq_len + 1):]
-                n_truncated += 1
-
-            # Pad to seq_len + 1 with EOS (label -100).
-            pad = (seq_len + 1) - len(ids)
-            if pad > 0:
-                ids.extend([EOS_ID] * pad)
-                labels.extend([-100] * pad)
-
-            self.examples.append((
-                np.asarray(ids, dtype=np.int64),
-                np.asarray(labels, dtype=np.int64),
-            ))
-
-        print(f"  Built {len(self.examples):,} grounded-QA examples "
-              f"(seq_len={seq_len}, {n_truncated} truncated to fit)")
-
-    def __len__(self):
-        return len(self.examples)
-
-    def __getitem__(self, idx):
-        ids, labels = self.examples[idx]
-        x = torch.from_numpy(ids[:-1])
-        y = torch.from_numpy(labels[1:])
-        return x, y
+# GroundedQADataset / OPEN_BOOK_INSTRUCTION moved to finetune_edge_conversational.py
+# (2026-07-15, issue #108) so that module can reuse them too without a circular
+# import (it already imports InstructionDataset/build_oasst_conversations FROM
+# here). Re-imported above so `from continue_ft_hybrid import GroundedQADataset`
+# (e.g. tests/test_continue_ft_hybrid.py) keeps working unchanged.
 
 
 # ---------------------------------------------------------------------------
