@@ -355,6 +355,139 @@ class EdgeHVN(nn.Module):
         return self.decoder(x)
 
     # ------------------------------------------------------------------
+    # Incremental decode (issue #97 Phase B)
+    #
+    # Every block type (HVNBlock, DeltaNetBlock, TransformerBlock) now
+    # implements a uniform init_state(batch_size, device, dtype) /
+    # forward_step(x_t, state, position_idx) contract, so dispatch here is
+    # per-layer via block_plan exactly like `forward()` above -- mirroring
+    # HamiltonianVortexNetwork.forward_step's own per-block loop
+    # (hvn/core/model.py:387). init_conversation_state/chat_step match that
+    # class's method names and conv_state dict keys exactly (verified
+    # signatures) so hvn/chat.py's ChatSession/StateCheckpoint work against
+    # EdgeHVN with ZERO changes to their own logic -- only a formatter swap
+    # is needed at the call site (see hvn/chat.py's formatter param + the
+    # new hvn/edge/chat.py:EdgeConversationFormatter).
+    # ------------------------------------------------------------------
+
+    def init_state(self, batch_size: int, device=None, dtype=None) -> list:
+        """Mixed per-layer state: each block's own init_state, by block_plan."""
+        if self.shared_block is not None:
+            raise NotImplementedError(
+                "incremental decode is not implemented for shared_weights=True "
+                "models -- no hybrid checkpoint uses SharedWeightHVN."
+            )
+        device = device if device is not None else next(self.parameters()).device
+        dtype = dtype if dtype is not None else next(self.parameters()).dtype
+        return [block.init_state(batch_size, device=device, dtype=dtype)
+                for block in self.blocks]
+
+    def forward_step(self, input_ids: torch.Tensor, states: list,
+                     position_idx: Optional[int] = None) -> tuple[torch.Tensor, list]:
+        """Process one token incrementally. input_ids: [B, 1] -> (logits [B,1,V], new_states)."""
+        x = self.token_embedding(input_ids)
+        new_states = []
+        for i, block in enumerate(self.blocks):
+            x, new_state = block.forward_step(x, states[i], position_idx=position_idx)
+            new_states.append(new_state)
+        x = self.final_norm(x)
+        logits = self.decoder(x)
+        return logits, new_states
+
+    def init_conversation_state(self, device=None, dtype=None) -> dict:
+        """Conversation state for chat_step. Same dict keys as
+        HamiltonianVortexNetwork.init_conversation_state (hvn/core/model.py:1079)
+        -- "hamiltonian_states" is a naming carryover from that shared contract
+        (ChatSession/StateCheckpoint reference it by name), not a claim that
+        EdgeHVN has Hamiltonian dynamics; it holds whatever mixed per-layer
+        state init_state() above produces.
+        """
+        if device is None:
+            device = next(self.parameters()).device
+        if dtype is None:
+            dtype = next(self.parameters()).dtype
+        return {
+            "hamiltonian_states": self.init_state(1, device=device, dtype=dtype),
+            "position": 0,
+            "history_ids": [],
+        }
+
+    def _filter_top_k(self, logits: torch.Tensor, top_k: int) -> torch.Tensor:
+        """Top-k filtering on the last dim (identical logic to
+        HamiltonianVortexNetwork._filter_top_k, hvn/core/model.py:734)."""
+        if not top_k or top_k <= 0:
+            return logits
+        k = min(top_k, logits.size(-1))
+        values, _ = torch.topk(logits, k, dim=-1)
+        threshold = values[..., -1:].contiguous()
+        return logits.masked_fill(logits < threshold, float("-inf"))
+
+    @torch.no_grad()
+    def chat_step(
+        self,
+        input_ids: list[int],
+        conv_state: dict,
+        max_new_tokens: int = 200,
+        temperature: float = 0.8,
+        top_k: int = 10,
+        device: Optional[torch.device] = None,
+    ) -> tuple[list[int], dict]:
+        """Process a conversation turn incrementally. Same overall shape as
+        HamiltonianVortexNetwork.chat_step (hvn/core/model.py:1118): feed
+        input tokens through forward_step, then sample a response.
+
+        One deliberate difference: generation stops as soon as EOS_ID (GPT-2's
+        50256) is sampled, instead of always running the full max_new_tokens --
+        EdgeHVN's chat FT trains turns to end with an explicit EOS token
+        (finetune_edge_conversational.py's InstructionDataset), unlike the core
+        model's bracket-tag format, which has no single stop token and so
+        can't early-stop this way.
+        """
+        EOS_ID = 50256
+        if device is None:
+            device = next(self.parameters()).device
+
+        self.eval()
+        states = conv_state["hamiltonian_states"]
+        pos = conv_state["position"]
+
+        cur = torch.empty(1, 1, dtype=torch.long, device=device)
+        if len(input_ids) > 0:
+            input_row = torch.tensor([input_ids], dtype=torch.long, device=device)
+            for t in range(input_row.size(1)):
+                logits_step, states = self.forward_step(
+                    input_row[:, t : t + 1], states, position_idx=pos
+                )
+                pos += 1
+        else:
+            logits_step = None
+
+        next_logits = logits_step[0, -1, :] / temperature
+
+        resp_id_tensors: list[torch.Tensor] = []
+        for _ in range(max_new_tokens):
+            logits = self._filter_top_k(next_logits, top_k)
+            probs = torch.softmax(logits, dim=-1)
+            next_id = torch.multinomial(probs, num_samples=1)
+            if int(next_id.item()) == EOS_ID:
+                break
+            resp_id_tensors.append(next_id)
+
+            cur.copy_(next_id.view(1, 1))
+            logits_step, states = self.forward_step(cur, states, position_idx=pos)
+            pos += 1
+            next_logits = logits_step[0, -1, :] / temperature
+
+        response_ids = torch.cat(resp_id_tensors).tolist() if resp_id_tensors else []
+
+        conv_state["hamiltonian_states"] = states
+        conv_state["position"] = pos
+        conv_state["history_ids"].extend(input_ids)
+        conv_state["history_ids"].extend(response_ids)
+
+        return response_ids, conv_state
+
+    # ------------------------------------------------------------------
     # Compression pipeline
     # ------------------------------------------------------------------
 

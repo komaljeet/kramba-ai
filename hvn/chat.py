@@ -501,6 +501,7 @@ class ChatSession:
         temperature: float = 0.8,
         top_k: int = 10,
         max_context_tokens: int = 2048,
+        formatter: Any = None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -510,8 +511,18 @@ class ChatSession:
         self.top_k = top_k
         self.max_context_tokens = max_context_tokens
 
-        # Conversation formatter
-        self.formatter = ConversationFormatter(system_prompt=system_prompt)
+        # Conversation formatter. Defaults to the bracket-tag ConversationFormatter
+        # (HamiltonianVortexNetwork's trained format, unchanged behavior). Pass an
+        # explicit `formatter` for a model trained on a different chat protocol
+        # (e.g. EdgeHVN's hvn.edge.chat.EdgeConversationFormatter, issue #97 Phase
+        # B) -- any object duck-typed to the same interface (.system_prompt,
+        # format_system/format_user/format_assistant_open/format_turn/
+        # parse_response/format_conversation) works, since every use below goes
+        # through self.formatter, never the ConversationFormatter class directly.
+        self.formatter = (
+            formatter if formatter is not None
+            else ConversationFormatter(system_prompt=system_prompt)
+        )
 
         # Conversation state
         self.conv_state: Optional[dict] = None
