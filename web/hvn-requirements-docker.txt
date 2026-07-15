@@ -6,3 +6,8 @@
 # standalone server) aren't needed by this web app's worker role.
 numpy>=1.24.0
 tokenizers>=0.15.0
+# EdgeHVN's GPT2Tokenizer (issue #97 Phase B) -- what continue_ft_hybrid.py /
+# finetune_edge_conversational.py / eval/synthetic_recall_probe.py all train
+# and evaluate with; the lighter `tokenizers` lib above isn't a drop-in (no
+# from_pretrained("gpt2") convenience wrapper with matching encode/decode).
+transformers>=4.40.0

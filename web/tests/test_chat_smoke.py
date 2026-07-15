@@ -50,6 +50,15 @@ try:
 except Exception:  # pragma: no cover - torch not installed in this environment
     _HAVE_TORCH = False
 
+try:
+    from hvn.edge.model import EdgeHVN
+    from train_edge_conversational import _save_edge_checkpoint
+    from transformers import GPT2Tokenizer
+
+    _HAVE_EDGEHVN = True
+except Exception:  # pragma: no cover - transformers/hvn.edge not available
+    _HAVE_EDGEHVN = False
+
 User = get_user_model()
 STRONG_PASSWORD = "correct-horse-battery-staple-9"
 
@@ -202,4 +211,120 @@ class ChatSmokeTests(TransactionTestCase):
         self.assertTrue(
             _is_non_degenerate(result["content"], prompt),
             f"degenerate streamed reply: {result['content']!r}",
+        )
+
+
+# A SEPARATE tempdir from _CKPT_DIR (not shared with ChatSmokeTests): that
+# class's tearDownClass rmtree's _CKPT_DIR when it finishes, which would
+# break this class if it ran afterward and reused the same directory.
+_EDGE_CKPT_DIR = tempfile.mkdtemp(prefix="edgehvn_chat_smoke_")
+
+
+def _build_tiny_edgehvn_checkpoint(path: str) -> None:
+    """Save a tiny, freshly-init (not trained -- this test is about the
+    worker/session WIRING, not output quality) EdgeHVN hybrid checkpoint:
+    a real block_plan mix of DeltaNet + sliding-window attention layers, the
+    same architecture family as checkpoints/hybrid_chat_v1.pt (issue #97
+    Phase B / #108)."""
+    torch.manual_seed(0)
+    tok = GPT2Tokenizer.from_pretrained("gpt2")
+    tok.pad_token = tok.eos_token
+    model = EdgeHVN(
+        vocab_size=tok.vocab_size + 1, d_model=32, num_layers=4, n_heads=4,
+        dropout=0.0, block_plan=["deltanet", "transformer", "deltanet", "transformer"],
+        attn_window=16,
+    )
+    _save_edge_checkpoint(model, path)
+
+
+@unittest.skipUnless(_HAVE_TORCH and _HAVE_EDGEHVN,
+                     "torch/hvn.edge/transformers not installed in this environment")
+@override_settings(HVN_CHECKPOINT_DIR=_EDGE_CKPT_DIR)
+class EdgeHVNChatSmokeTests(TransactionTestCase):
+    """EdgeHVN counterpart of ChatSmokeTests (issue #97 Phase B): drives the
+    real serving path with ModelVersion.architecture="edgehvn" and asserts
+    worker._load dispatches to _load_edgehvn (GPT-2 tokenizer, block_plan-
+    aware load_checkpoint_for_resume) and ChatSession gets the
+    EdgeConversationFormatter -- not the hvn_core defaults, which would
+    either crash (BPE/CharTokenizer can't decode GPT-2 ids) or silently feed
+    the model out-of-distribution bracket-tag text."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.ckpt_path = os.path.join(_EDGE_CKPT_DIR, "edgehvn_chat_smoke.pt")
+        _build_tiny_edgehvn_checkpoint(cls.ckpt_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(_EDGE_CKPT_DIR, ignore_errors=True)
+        super().tearDownClass()
+
+    def setUp(self):
+        from hvn_worker.worker import clear_cache
+
+        clear_cache()
+        self.model_version = ModelVersion.objects.create(
+            tag="edgehvn-chat-smoke-v1", checkpoint_path=self.ckpt_path,
+            architecture=ModelVersion.Architecture.EDGEHVN,
+        )
+        self.user = User.objects.create_user(username="edge_smoke_user", password=STRONG_PASSWORD)
+        self.conversation = Conversation.objects.create(
+            owner=self.user, title="edge-smoke", model_version=self.model_version
+        )
+
+    def test_run_turn_loads_edgehvn_checkpoint_and_replies(self):
+        from hvn_worker.inference import run_turn
+
+        torch.manual_seed(0)
+        prompt = "hi"
+        reply = run_turn(
+            conversation_id=self.conversation.id,
+            user_message=prompt,
+            model_tag=self.model_version.tag,
+            checkpoint_path=self.model_version.checkpoint_path,
+            architecture=self.model_version.architecture,
+        )
+        self.assertTrue(
+            _is_non_degenerate(reply, prompt),
+            f"degenerate reply from EdgeHVN run_turn: {reply!r}",
+        )
+
+        # Second turn: exercises the StateCheckpoint save/load round-trip for
+        # EdgeHVN's mixed DeltaNet+attention-KV-cache state.
+        prompt2 = "how are you?"
+        reply2 = run_turn(
+            conversation_id=self.conversation.id,
+            user_message=prompt2,
+            model_tag=self.model_version.tag,
+            checkpoint_path=self.model_version.checkpoint_path,
+            architecture=self.model_version.architecture,
+        )
+        self.assertTrue(
+            _is_non_degenerate(reply2, prompt2),
+            f"degenerate reply from second EdgeHVN run_turn: {reply2!r}",
+        )
+
+    def test_stream_turn_yields_deltas_for_edgehvn(self):
+        from hvn_worker.inference import stream_turn
+
+        torch.manual_seed(0)
+        prompt = "hello"
+        result: dict = {}
+        deltas = list(
+            stream_turn(
+                conversation_id=self.conversation.id,
+                user_message=prompt,
+                model_tag=self.model_version.tag,
+                checkpoint_path=self.model_version.checkpoint_path,
+                architecture=self.model_version.architecture,
+                result=result,
+            )
+        )
+        self.assertTrue(deltas)
+        self.assertTrue(all(d for d in deltas))
+        self.assertIn("content", result)
+        self.assertTrue(
+            _is_non_degenerate(result["content"], prompt),
+            f"degenerate streamed EdgeHVN reply: {result['content']!r}",
         )

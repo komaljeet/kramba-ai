@@ -26,6 +26,18 @@ def _state_path(conversation_id) -> str:
     return path
 
 
+def _formatter_kwargs(architecture: str) -> dict:
+    """ChatSession's extra kwargs for the given ModelVersion.architecture --
+    EdgeHVN needs its own formatter (hvn/edge/chat.py:EdgeConversationFormatter,
+    issue #97 Phase B) since it was never trained on ConversationFormatter's
+    bracket-tag protocol. Empty dict for "hvn_core" (ChatSession's own default
+    already does the right thing)."""
+    if architecture == "edgehvn":
+        from hvn.edge.chat import EdgeConversationFormatter
+        return {"formatter": EdgeConversationFormatter()}
+    return {}
+
+
 def run_turn(
     conversation_id,
     user_message: str,
@@ -34,6 +46,7 @@ def run_turn(
     system_prompt: str = "You are a helpful assistant.",
     thinking: bool = True,
     web_search: bool = False,
+    architecture: str = "hvn_core",
 ) -> str:
     """Runs one user turn against the given conversation's persisted
     Hamiltonian state and returns the assistant's reply text.
@@ -41,13 +54,14 @@ def run_turn(
     ``thinking``/``web_search`` are the per-message toggles plumbed from the UI
     (Issue #56) — see ``stream_turn`` for their exact effect.
     """
-    model, tokenizer, device = get_model(model_tag, checkpoint_path)
+    model, tokenizer, device = get_model(model_tag, checkpoint_path, architecture)
     state_path = _state_path(conversation_id)
+    extra = _formatter_kwargs(architecture)
 
     if os.path.exists(state_path):
-        session = ChatSession.load(state_path, model, tokenizer, device=device)
+        session = ChatSession.load(state_path, model, tokenizer, device=device, **extra)
     else:
-        session = ChatSession(model, tokenizer, device=device, system_prompt=system_prompt)
+        session = ChatSession(model, tokenizer, device=device, system_prompt=system_prompt, **extra)
 
     _configure_toggles(session, web_search=web_search)
     response = session.user_turn(user_message)
@@ -78,6 +92,7 @@ def stream_turn(
     system_prompt: str = "You are a helpful assistant.",
     thinking: bool = True,
     web_search: bool = False,
+    architecture: str = "hvn_core",
 ):
     """Generator variant of run_turn(): yields text deltas as they're
     generated (for Phase 4's WebSocket streaming - see api/tasks.py), then
@@ -99,13 +114,14 @@ def stream_turn(
     - ``web_search`` (default False): gates the web_search tool via
       ``_configure_toggles`` (no-op until the tool loop lands — see there).
     """
-    model, tokenizer, device = get_model(model_tag, checkpoint_path)
+    model, tokenizer, device = get_model(model_tag, checkpoint_path, architecture)
     state_path = _state_path(conversation_id)
+    extra = _formatter_kwargs(architecture)
 
     if os.path.exists(state_path):
-        session = ChatSession.load(state_path, model, tokenizer, device=device)
+        session = ChatSession.load(state_path, model, tokenizer, device=device, **extra)
     else:
-        session = ChatSession(model, tokenizer, device=device, system_prompt=system_prompt)
+        session = ChatSession(model, tokenizer, device=device, system_prompt=system_prompt, **extra)
 
     _configure_toggles(session, web_search=web_search)
     yield from session.user_turn_streaming(user_message)

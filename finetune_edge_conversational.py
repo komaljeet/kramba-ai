@@ -318,6 +318,108 @@ class GroundedQADataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
+# 2c. Tool-use dataset (gate-format, loss-masked) — issue #110 / #97 Phase C
+# ---------------------------------------------------------------------------
+
+class ToolUseDataset(Dataset):
+    """Tokenized, loss-masked tool-use examples (see
+    ``scripts/build_tool_use_data.py`` for the corpus format).
+
+    Each record is rendered as::
+
+        <USER> {query}
+        <ASSISTANT> [TOOL_CALL]
+        {compact json}
+        [/TOOL_CALL]
+        [TOOL_RESULT]
+        {result}
+        [/TOOL_RESULT]
+        ... (repeated per step) ...
+        {answer}<EOS>
+
+    **Three-way masking** (the fix for a real flaw in the pre-existing
+    ``hvn.tools.generate_tool_training_data``, which trained the model to
+    *generate* the tool-result content -- i.e. to hallucinate what a tool
+    will return, rather than to call it and use a real injected result):
+      - the query (masked, input)
+      - each ``[TOOL_CALL]...[/TOOL_CALL]`` block -- **learned** (the actual
+        skill: emit a well-formed tool call)
+      - each ``[TOOL_RESULT]...[/TOOL_RESULT]`` block -- **masked**
+        (environment-injected context at real inference time, via
+        ``EdgeToolCallingSession``; never a generation target)
+      - the final answer + EOS -- **learned** (use the tool result to answer)
+    """
+
+    def __init__(self, tokenizer, records: list[dict], seq_len: int = 512):
+        from hvn.tools import TOOL_TOKENS
+        import json as _json
+
+        self.seq_len = seq_len
+        self.examples: list[tuple[np.ndarray, np.ndarray]] = []
+
+        user_pref_ids = tokenizer.encode(USER_PREFIX)
+        asst_pref_ids = tokenizer.encode(ASSISTANT_PREFIX)
+        call_start_ids = tokenizer.encode(TOOL_TOKENS["tool_call_start"] + "\n")
+        call_end_ids = tokenizer.encode("\n" + TOOL_TOKENS["tool_call_end"] + "\n")
+        result_start_ids = tokenizer.encode(TOOL_TOKENS["tool_result_start"] + "\n")
+        result_end_ids = tokenizer.encode("\n" + TOOL_TOKENS["tool_result_end"] + "\n")
+
+        n_truncated = 0
+        for r in records:
+            prompt_ids = user_pref_ids + tokenizer.encode(r["query"] + "\n") + asst_pref_ids
+            ids = list(prompt_ids)
+            labels = [-100] * len(prompt_ids)
+
+            for step in r["steps"]:
+                call_json = _json.dumps(step["tool_call"], separators=(",", ":"))
+                call_ids = tokenizer.encode(call_json)
+                # [TOOL_CALL] block: LEARNED.
+                seg = call_start_ids + call_ids + call_end_ids
+                ids.extend(seg)
+                labels.extend(seg)
+
+                result_ids = tokenizer.encode(step["tool_result"])
+                # [TOOL_RESULT] block: MASKED (environment-injected context).
+                seg = result_start_ids + result_ids + result_end_ids
+                ids.extend(seg)
+                labels.extend([-100] * len(seg))
+
+            # Final answer + EOS: LEARNED.
+            answer_ids = tokenizer.encode(r["answer"]) + [EOS_ID]
+            ids.extend(answer_ids)
+            labels.extend(answer_ids)
+
+            if len(ids) > seq_len + 1:
+                # Keep the TAIL: the answer (always last) is never cut this
+                # way. Same truncation strategy as GroundedQADataset.
+                ids = ids[-(seq_len + 1):]
+                labels = labels[-(seq_len + 1):]
+                n_truncated += 1
+
+            pad = (seq_len + 1) - len(ids)
+            if pad > 0:
+                ids.extend([EOS_ID] * pad)
+                labels.extend([-100] * pad)
+
+            self.examples.append((
+                np.asarray(ids, dtype=np.int64),
+                np.asarray(labels, dtype=np.int64),
+            ))
+
+        print(f"  Built {len(self.examples):,} tool-use examples "
+              f"(seq_len={seq_len}, {n_truncated} truncated to fit)")
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, idx):
+        ids, labels = self.examples[idx]
+        x = torch.from_numpy(ids[:-1])
+        y = torch.from_numpy(labels[1:])
+        return x, y
+
+
+# ---------------------------------------------------------------------------
 # 3. Fine-tuning loop
 # ---------------------------------------------------------------------------
 
@@ -468,6 +570,13 @@ def main():
                              "(issue #108/#109 lesson).")
     parser.add_argument("--grounded-replay-frac", type=float, default=0.15,
                         help="P(grounded) when --grounded-replay is set.")
+    parser.add_argument("--tool-use-data", type=str, default=None,
+                        help="JSONL of {query,steps,answer} (see "
+                             "scripts/build_tool_use_data.py) mixed in at "
+                             "--tool-use-frac -- the agentic tool-calling FT "
+                             "stage (issue #110 / #97 Phase C).")
+    parser.add_argument("--tool-use-frac", type=float, default=0.5,
+                        help="P(tool-use) when --tool-use-data is set.")
     parser.add_argument("--hf-cache-dir", type=str, default=None)
     parser.add_argument("--smoke", action="store_true",
                         help="Tiny subset, 1 epoch — pipeline validation")
@@ -491,23 +600,46 @@ def main():
     conversations = build_oasst_conversations(max_conversations=max_conv)
     chat_ds = InstructionDataset(tokenizer, conversations, seq_len=args.seq_len)
 
+    import json
+
+    # (dataset, target_fraction, label) for every extra replay/task mix
+    # requested -- chat gets whatever fraction remains. Generalizes the
+    # original single-grounded-replay mixing (issue #108) to also support
+    # tool-use data (issue #110) mixed in alongside it, via the same
+    # ConcatDataset + WeightedRandomSampler pattern.
+    extra: list[tuple[Dataset, float, str]] = []
     if args.grounded_replay:
-        import json
         records = [json.loads(line) for line in
                    open(args.grounded_replay, encoding="utf-8")]
         grounded_ds = GroundedQADataset(tokenizer, records, seq_len=args.seq_len)
         print(f"  Grounded-QA replay: {len(grounded_ds)} records from "
               f"{args.grounded_replay} (target fraction={args.grounded_replay_frac})")
-        dataset = ConcatDataset([chat_ds, grounded_ds])
-        n_c, n_g = len(chat_ds), len(grounded_ds)
-        p_g = args.grounded_replay_frac
-        weights = ([1.0 / n_c * (1 - p_g)] * n_c) + ([1.0 / n_g * p_g] * n_g)
+        extra.append((grounded_ds, args.grounded_replay_frac, "grounded"))
+    if args.tool_use_data:
+        records = [json.loads(line) for line in
+                   open(args.tool_use_data, encoding="utf-8")]
+        tool_ds = ToolUseDataset(tokenizer, records, seq_len=args.seq_len)
+        print(f"  Tool-use data: {len(tool_ds)} records from "
+              f"{args.tool_use_data} (target fraction={args.tool_use_frac})")
+        extra.append((tool_ds, args.tool_use_frac, "tool-use"))
+
+    if extra:
+        extra_frac_total = sum(f for _, f, _ in extra)
+        if extra_frac_total >= 1.0:
+            raise SystemExit(f"--grounded-replay-frac + --tool-use-frac must sum to "
+                             f"< 1.0 (chat needs a nonzero share), got {extra_frac_total}")
+        chat_frac = 1.0 - extra_frac_total
+        all_ds = [(chat_ds, chat_frac, "chat")] + extra
+        dataset = ConcatDataset([ds for ds, _, _ in all_ds])
+        weights = []
+        for ds, frac, _ in all_ds:
+            weights.extend([frac / len(ds)] * len(ds))
         sampler = WeightedRandomSampler(weights, num_samples=len(dataset),
                                         replacement=True)
         dataloader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler,
                                 drop_last=True, pin_memory=(device.type == "cuda"))
-        print(f"  Combined dataset: {len(dataset)} examples, sampled to "
-              f"{1-p_g:.0%} chat / {p_g:.0%} grounded")
+        mix_str = " / ".join(f"{frac:.0%} {label}" for _, frac, label in all_ds)
+        print(f"  Combined dataset: {len(dataset)} examples, sampled to {mix_str}")
     else:
         dataset = chat_ds
         dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,

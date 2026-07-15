@@ -5,8 +5,8 @@ from .models import AuditLog, Conversation, Message, ModelVersion
 
 @admin.register(ModelVersion)
 class ModelVersionAdmin(admin.ModelAdmin):
-    list_display = ("tag", "is_active", "created_by", "created_at")
-    list_filter = ("is_active",)
+    list_display = ("tag", "architecture", "is_active", "created_by", "created_at")
+    list_filter = ("architecture", "is_active")
 
 
 @admin.register(Conversation)

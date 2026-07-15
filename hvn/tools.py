@@ -35,8 +35,11 @@ Usage (standalone):
 from __future__ import annotations
 
 import json
-import re
 import math
+import os
+import re
+import subprocess
+import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
@@ -1027,6 +1030,170 @@ def create_demo_registry() -> ToolRegistry:
             },
             "required": ["text"]
         },
+    )
+
+    return registry
+
+
+# ---------------------------------------------------------------------------
+# Coding tools (Issue #110 / #97 Phase C) — read_file / edit_file / run_tests
+# ---------------------------------------------------------------------------
+#
+# Unlike calculator/web_search/string_reverse/word_count above, these tools
+# touch the real filesystem and (run_tests) spawn a real subprocess -- sandbox
+# them to a fixed root directory rather than the calling process's real cwd.
+#
+# `run_tests` deliberately takes NO parameters (not even an optional path):
+# it always runs `python -m pytest` against the fixed sandbox root baked in
+# at registry-construction time. ToolExecutor.execute calls
+# `tool_info["func"](**args)` with WHATEVER arguments dict the model
+# produced (ToolRegistry.validate_args only checks required keys are
+# present, it does not reject extras) -- so if run_tests accepted, say, a
+# `command` kwarg, a model (or an adversarial prompt) could in principle
+# smuggle arbitrary content through it. Taking zero parameters means any
+# argument at all raises TypeError, which ToolExecutor's existing
+# try/except already turns into a safe error string -- fails closed, not
+# open, with no new guarding logic needed here.
+
+def _resolve_sandboxed_path(sandbox_root: str, path: str) -> str:
+    """Resolve `path` relative to `sandbox_root`, rejecting anything that
+    escapes it (``..``, an absolute path outside the root). Not a hardened
+    multi-tenant sandbox (doesn't chase symlinks) -- sufficient for a
+    synthetic mock-repo gate where the sandbox contents are ours, not
+    untrusted user uploads.
+    """
+    root = os.path.realpath(sandbox_root)
+    candidate = os.path.realpath(os.path.join(root, path))
+    if os.path.commonpath([root, candidate]) != root:
+        raise ValueError(f"path {path!r} escapes the sandbox root")
+    return candidate
+
+
+def make_read_file(sandbox_root: str) -> Callable[[str], str]:
+    """Build a `read_file(path)` tool function sandboxed to `sandbox_root`."""
+
+    def read_file(path: str) -> str:
+        try:
+            full = _resolve_sandboxed_path(sandbox_root, path)
+        except ValueError as e:
+            return f"Error: {e}"
+        if not os.path.isfile(full):
+            return f"Error: file not found: {path}"
+        try:
+            with open(full, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            return f"Error: {type(e).__name__}: {e}"
+
+    return read_file
+
+
+def make_edit_file(sandbox_root: str) -> Callable[[str, str, str], str]:
+    """Build an `edit_file(path, old_text, new_text)` tool function sandboxed
+    to `sandbox_root` -- replaces the first occurrence of `old_text` with
+    `new_text`, matching the precision of a real code edit rather than a
+    whole-file overwrite."""
+
+    def edit_file(path: str, old_text: str, new_text: str) -> str:
+        try:
+            full = _resolve_sandboxed_path(sandbox_root, path)
+        except ValueError as e:
+            return f"Error: {e}"
+        if not os.path.isfile(full):
+            return f"Error: file not found: {path}"
+        try:
+            with open(full, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            return f"Error: {type(e).__name__}: {e}"
+        if old_text not in content:
+            return f"Error: old_text not found in {path}"
+        content = content.replace(old_text, new_text, 1)
+        try:
+            with open(full, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            return f"Error: {type(e).__name__}: {e}"
+        return f"OK: {path} updated"
+
+    return edit_file
+
+
+def make_run_tests(sandbox_root: str) -> Callable[[], str]:
+    """Build a zero-argument `run_tests()` tool function that always runs
+    `python -m pytest` against `sandbox_root` -- see the module-level note
+    above for why this takes no parameters."""
+
+    def run_tests() -> str:
+        # PYTHONDONTWRITEBYTECODE=1: without this, Python's bytecode cache
+        # (keyed by source mtime+size)
+        # can serve a STALE compiled module after edit_file rewrites a file
+        # -- e.g. "return a - b" -> "return a + b" is the same length, and if
+        # both edits land within the same filesystem mtime tick (easily
+        # happens for a fast edit->run_tests->edit->run_tests agentic loop,
+        # caught by this exact scenario in tests/test_coding_tools.py), the
+        # cache key doesn't change and pytest imports the old bytecode.
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q", sandbox_root],
+                capture_output=True, text=True, timeout=30, env=env,
+            )
+        except Exception as e:
+            return f"Error: {type(e).__name__}: {e}"
+        output = (proc.stdout + proc.stderr).strip()
+        if len(output) > 2000:
+            output = output[:2000] + "\n...[truncated]"
+        status = "PASSED" if proc.returncode == 0 else "FAILED"
+        return f"{status} (exit {proc.returncode})\n{output}"
+
+    return run_tests
+
+
+def create_coding_registry(sandbox_root: str) -> ToolRegistry:
+    """Create a ToolRegistry with read_file/edit_file/run_tests, all
+    sandboxed to `sandbox_root` (issue #110's agentic coding gate).
+
+    Parameters
+    ----------
+    sandbox_root : str
+        Directory the tools are confined to. Must already exist.
+    """
+    registry = ToolRegistry()
+
+    registry.register(
+        name="read_file",
+        func=make_read_file(sandbox_root),
+        description="Read the contents of a file in the repository.",
+        schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Relative path to the file"}
+            },
+            "required": ["path"],
+        },
+    )
+
+    registry.register(
+        name="edit_file",
+        func=make_edit_file(sandbox_root),
+        description="Replace the first occurrence of old_text with new_text in a file.",
+        schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Relative path to the file"},
+                "old_text": {"type": "string", "description": "Exact text to replace"},
+                "new_text": {"type": "string", "description": "Replacement text"},
+            },
+            "required": ["path", "old_text", "new_text"],
+        },
+    )
+
+    registry.register(
+        name="run_tests",
+        func=make_run_tests(sandbox_root),
+        description="Run the test suite and report pass/fail.",
+        schema={"type": "object", "properties": {}, "required": []},
     )
 
     return registry

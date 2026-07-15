@@ -49,6 +49,23 @@ def _apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.
     return x * cos + rot * sin
 
 
+def _rope_cos_sin_at(position_idx: int, d_head: int, device, dtype,
+                      base: float = 10000.0):
+    """RoPE cos/sin for a single absolute position (incremental decode).
+
+    Same formula as :func:`_rope_cos_sin` but for one explicit position
+    rather than a 0..S-1 range — used by ``forward_step`` where the token
+    being processed sits at an arbitrary offset into an ongoing conversation,
+    not at the start of a fresh sequence. Returns (cos, sin), each [1, d_head].
+    """
+    half = d_head // 2
+    inv_freq = 1.0 / (base ** (torch.arange(0, half, device=device).float() / half))
+    t = torch.tensor([float(position_idx)], device=device)
+    freqs = torch.outer(t, inv_freq)          # [1, half]
+    emb = torch.cat([freqs, freqs], dim=-1)   # [1, d_head]
+    return emb.cos().to(dtype), emb.sin().to(dtype)
+
+
 class TransformerBlock(nn.Module):
     """Causal MHA + RoPE block with DeltaNetBlock's scaffold (A/B baseline).
 
@@ -147,3 +164,56 @@ class TransformerBlock(nn.Module):
         if return_state:
             return out, None  # transformer baseline keeps no recurrent state
         return out
+
+    # ------------------------------------------------------------------
+    # Incremental decode (issue #97 Phase B) — bounded KV cache
+    # ------------------------------------------------------------------
+
+    def init_state(self, batch_size: int, device=None, dtype=None) -> dict:
+        """Empty KV cache for incremental decode. Matches DeltaNetBlock.init_state's
+        signature so EdgeHVN can dispatch either block type identically."""
+        device = device if device is not None else next(self.parameters()).device
+        dtype = dtype if dtype is not None else next(self.parameters()).dtype
+        empty = torch.zeros(batch_size, self.n_heads, 0, self.d_head,
+                            device=device, dtype=dtype)
+        return {"k_cache": empty, "v_cache": empty.clone()}
+
+    def forward_step(self, x_t: torch.Tensor, state: dict,
+                     position_idx: int = 0) -> tuple[torch.Tensor, dict]:
+        """Process one token incrementally. x_t: [B, 1, D] -> ([B, 1, D], new_state).
+
+        Appends this token's K/V to the cache (truncating to the last
+        ``window`` entries — the bounded, VRAM-flat KV cache the hybrid design
+        promises), then attends over the cache. No mask is needed: the cache
+        only ever holds this token and earlier ones, so it's causal by
+        construction. State is a plain {str: Tensor} dict (no custom classes)
+        so it round-trips through hvn/chat.py's generic state-tree
+        encode/decode unmodified.
+        """
+        B, S, D = x_t.shape
+        assert S == 1, f"forward_step expects one token at a time, got S={S}"
+        H, d = self.n_heads, self.d_head
+
+        x_norm = self.norm(x_t)
+        q = self.q_proj(x_norm).view(B, 1, H, d).transpose(1, 2)  # [B,H,1,d]
+        k = self.k_proj(x_norm).view(B, 1, H, d).transpose(1, 2)
+        v = self.v_proj(x_norm).view(B, 1, H, d).transpose(1, 2)
+
+        cos, sin = _rope_cos_sin_at(position_idx, d, x_norm.device, q.dtype,
+                                    self.rope_base)
+        q = _apply_rope(q, cos, sin)
+        k = _apply_rope(k, cos, sin)
+
+        k_cache = torch.cat([state["k_cache"], k], dim=2)  # [B,H,L+1,d]
+        v_cache = torch.cat([state["v_cache"], v], dim=2)
+        if self.window is not None and k_cache.shape[2] > self.window:
+            k_cache = k_cache[:, :, -self.window:, :]
+            v_cache = v_cache[:, :, -self.window:, :]
+
+        o = F.scaled_dot_product_attention(q, k_cache, v_cache, is_causal=False)
+        o = o.transpose(1, 2).reshape(B, 1, D)
+        attn_out = self.out_proj(o)
+
+        ffn_out = self.ffn(x_norm)
+        out = x_t + self.dropout(attn_out) + ffn_out
+        return out, {"k_cache": k_cache, "v_cache": v_cache}
