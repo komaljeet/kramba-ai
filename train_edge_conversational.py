@@ -99,6 +99,7 @@ def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
         "is_edge": True,
         "shared_weights": getattr(model, 'shared_weights', False),
         "tie_embeddings": getattr(model, 'tie_embeddings', False),
+        "grad_checkpoint": getattr(model, 'grad_checkpoint', False),
         "global_step": global_step,
     }
     torch.save(ckpt, save_path)
@@ -1106,115 +1107,131 @@ def pre_training_audit(
     # while still validating that the architecture + ternary STE forward/backward
     # works. The copy is freed immediately after.
     print("\n  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...")
-    audit_model = None
-    try:
-        audit_model = copy.deepcopy(model)
-        x = batch_x.to(device)
-        precision = config.get("precision", "bf16")
-        use_amp = precision in ("fp16", "bf16")
-        amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
+    if config.get("block_coordinate", False):
+        print("    ⚠ Skipped under --block-coordinate: this check deepcopies the whole")
+        print("      model onto GPU and runs an UN-FROZEN backward pass across every")
+        print("      param, before BlockCoordinateScheduler exists to bound memory --")
+        print("      at large model sizes that alone can OOM a 6 GB card (Issue #112).")
+        print("      BCD's own per-block freeze already bounds real-training risk; any")
+        print("      real forward/backward issue will surface immediately on step 1.")
+    else:
+        audit_model = None
+        try:
+            audit_model = copy.deepcopy(model)
+            x = batch_x.to(device)
+            precision = config.get("precision", "bf16")
+            use_amp = precision in ("fp16", "bf16")
+            amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
 
-        audit_model.eval()
-        with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
-            logits = audit_model(x)
-        print(f"    Input shape:  {x.shape}")
-        print(f"    Output shape: {logits.shape} (expected [{x.shape[0]}, {x.shape[1]}, {GPT2_VOCAB_SIZE}])")
-        if logits.shape[0] != x.shape[0] or logits.shape[1] != x.shape[1]:
-            print(f"    ❌ Output shape mismatch!")
+            audit_model.eval()
+            with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
+                logits = audit_model(x)
+            print(f"    Input shape:  {x.shape}")
+            print(f"    Output shape: {logits.shape} (expected [{x.shape[0]}, {x.shape[1]}, {GPT2_VOCAB_SIZE}])")
+            if logits.shape[0] != x.shape[0] or logits.shape[1] != x.shape[1]:
+                print(f"    ❌ Output shape mismatch!")
+                all_passed = False
+            elif logits.shape[2] != GPT2_VOCAB_SIZE:
+                print(f"    ❌ Vocab dimension mismatch: got {logits.shape[2]}, expected {GPT2_VOCAB_SIZE}")
+                all_passed = False
+            else:
+                print(f"    ✓ Forward pass correct")
+
+            # Also test backward pass
+            audit_model.train()
+            y = batch_y.to(device)
+            with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
+                logits = audit_model(x)
+                loss = nn.CrossEntropyLoss()(
+                    logits.reshape(-1, GPT2_VOCAB_SIZE),
+                    y.reshape(-1),
+                )
+            loss.backward()
+            print(f"    ✓ Backward pass correct (loss = {loss.item():.4f})")
+
+            # Check gradients exist on ternary weights
+            has_grad = False
+            for name, mod in audit_model.named_modules():
+                if isinstance(mod, TernaryLinear) and mod.weight.grad is not None:
+                    has_grad = True
+                    break
+            if has_grad:
+                print(f"    ✓ Ternary weight gradients present (STE working)")
+            else:
+                print(f"    ⚠ No ternary weight gradients found (may be normal if all grads are None)")
+
+            # Zero gradients (on the throwaway copy; the real model was never touched).
+            audit_model.zero_grad()
+        except Exception as e:
+            print(f"    ❌ Forward/backward check failed: {e}")
+            import traceback
+            traceback.print_exc()
             all_passed = False
-        elif logits.shape[2] != GPT2_VOCAB_SIZE:
-            print(f"    ❌ Vocab dimension mismatch: got {logits.shape[2]}, expected {GPT2_VOCAB_SIZE}")
-            all_passed = False
-        else:
-            print(f"    ✓ Forward pass correct")
-
-        # Also test backward pass
-        audit_model.train()
-        y = batch_y.to(device)
-        with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
-            logits = audit_model(x)
-            loss = nn.CrossEntropyLoss()(
-                logits.reshape(-1, GPT2_VOCAB_SIZE),
-                y.reshape(-1),
-            )
-        loss.backward()
-        print(f"    ✓ Backward pass correct (loss = {loss.item():.4f})")
-
-        # Check gradients exist on ternary weights
-        has_grad = False
-        for name, mod in audit_model.named_modules():
-            if isinstance(mod, TernaryLinear) and mod.weight.grad is not None:
-                has_grad = True
-                break
-        if has_grad:
-            print(f"    ✓ Ternary weight gradients present (STE working)")
-        else:
-            print(f"    ⚠ No ternary weight gradients found (may be normal if all grads are None)")
-
-        # Zero gradients (on the throwaway copy; the real model was never touched).
-        audit_model.zero_grad()
-    except Exception as e:
-        print(f"    ❌ Forward/backward check failed: {e}")
-        import traceback
-        traceback.print_exc()
-        all_passed = False
-    finally:
-        # Free the throwaway copy's VRAM before training allocates activations.
-        del audit_model
-        torch.cuda.empty_cache()
+        finally:
+            # Free the throwaway copy's VRAM before training allocates activations.
+            del audit_model
+            torch.cuda.empty_cache()
 
     # --- Check 3: Checkpoint save and load cycle ---
     print("\n  [Check 3] Checkpoint save/load cycle...")
-    test_ckpt_path = os.path.join(checkpoint_dir, "audit_test_checkpoint.pt")
-    try:
-        os.makedirs(checkpoint_dir, exist_ok=True)
+    if config.get("block_coordinate", False):
+        print("    ⚠ Skipped under --block-coordinate: this check rebuilds a SECOND full")
+        print("      EdgeHVN and moves it onto GPU alongside the real model (no BCD/freeze")
+        print("      applies here either) -- two full-precision weight copies resident at")
+        print("      once can OOM a 6 GB card at large sizes, same class of issue as Check 2")
+        print("      (Issue #112). The real training loop's own checkpoint saves/resumes")
+        print("      exercise this same code path, so a real problem still surfaces there.")
+    else:
+        test_ckpt_path = os.path.join(checkpoint_dir, "audit_test_checkpoint.pt")
+        try:
+            os.makedirs(checkpoint_dir, exist_ok=True)
 
-        # Save using our EdgeHVN-aware checkpoint function
-        _save_edge_checkpoint(model, test_ckpt_path, global_step=0)
-        print(f"    ✓ Save: {test_ckpt_path}")
+            # Save using our EdgeHVN-aware checkpoint function
+            _save_edge_checkpoint(model, test_ckpt_path, global_step=0)
+            print(f"    ✓ Save: {test_ckpt_path}")
 
-        # Load and verify
-        ckpt = torch.load(test_ckpt_path, map_location=device, weights_only=False)
-        print(f"    ✓ Load: keys = {list(ckpt.keys())}")
-        print(f"    ✓ n_heads in checkpoint: {ckpt.get('n_heads', 'MISSING')}")
+            # Load and verify
+            ckpt = torch.load(test_ckpt_path, map_location=device, weights_only=False)
+            print(f"    ✓ Load: keys = {list(ckpt.keys())}")
+            print(f"    ✓ n_heads in checkpoint: {ckpt.get('n_heads', 'MISSING')}")
 
-        # Rebuild model from checkpoint metadata and verify state_dict loads
-        rebuilt = EdgeHVN(
-            vocab_size=ckpt["vocab_size"],
-            d_model=ckpt["d_model"],
-            num_layers=ckpt["num_layers"],
-            n_heads=ckpt.get("n_heads", 4),
-            use_deltanet=ckpt.get("use_deltanet", False),
-            deltanet_conv_kernel=ckpt.get("deltanet_conv_kernel", 4),
-            block_type=ckpt.get("block_type", None),
-        )
-        # Apply ternary to rebuilt model (same layers as original) — only if the
-        # checkpoint was ternary (fp32 A/B runs skip it).
-        if ckpt.get("ternary", True):
-            all_linears = {name: mod for name, mod in rebuilt.named_modules()
-                           if isinstance(mod, nn.Linear)}
-            exclude_patterns = ("beta_proj", "alpha_proj", "decoder")
-            target_names = [name for name in all_linears
-                            if not any(p in name for p in exclude_patterns)]
-            apply_ternary_to_model(rebuilt, target_names=target_names)
-        rebuilt = rebuilt.to(device)
-        rebuilt.load_state_dict(ckpt["model_state_dict"])
-        print(f"    ✓ State dict loads into rebuilt model")
+            # Rebuild model from checkpoint metadata and verify state_dict loads
+            rebuilt = EdgeHVN(
+                vocab_size=ckpt["vocab_size"],
+                d_model=ckpt["d_model"],
+                num_layers=ckpt["num_layers"],
+                n_heads=ckpt.get("n_heads", 4),
+                use_deltanet=ckpt.get("use_deltanet", False),
+                deltanet_conv_kernel=ckpt.get("deltanet_conv_kernel", 4),
+                block_type=ckpt.get("block_type", None),
+            )
+            # Apply ternary to rebuilt model (same layers as original) — only if the
+            # checkpoint was ternary (fp32 A/B runs skip it).
+            if ckpt.get("ternary", True):
+                all_linears = {name: mod for name, mod in rebuilt.named_modules()
+                               if isinstance(mod, nn.Linear)}
+                exclude_patterns = ("beta_proj", "alpha_proj", "decoder")
+                target_names = [name for name in all_linears
+                                if not any(p in name for p in exclude_patterns)]
+                apply_ternary_to_model(rebuilt, target_names=target_names)
+            rebuilt = rebuilt.to(device)
+            rebuilt.load_state_dict(ckpt["model_state_dict"])
+            print(f"    ✓ State dict loads into rebuilt model")
 
-        # Clean up test checkpoint
-        os.remove(test_ckpt_path)
-        print(f"    ✓ Cleaned up test checkpoint")
-    except Exception as e:
-        print(f"    ❌ Checkpoint cycle failed: {e}")
-        import traceback
-        traceback.print_exc()
-        all_passed = False
-        # Clean up
-        if os.path.exists(test_ckpt_path):
-            try:
-                os.remove(test_ckpt_path)
-            except Exception:
-                pass
+            # Clean up test checkpoint
+            os.remove(test_ckpt_path)
+            print(f"    ✓ Cleaned up test checkpoint")
+        except Exception as e:
+            print(f"    ❌ Checkpoint cycle failed: {e}")
+            import traceback
+            traceback.print_exc()
+            all_passed = False
+            # Clean up
+            if os.path.exists(test_ckpt_path):
+                try:
+                    os.remove(test_ckpt_path)
+                except Exception:
+                    pass
 
     # --- Summary ---
     print(f"\n  {'✓ All audit checks passed!' if all_passed else '❌ Some audit checks failed!'}")
@@ -1283,6 +1300,7 @@ def load_checkpoint_for_resume(
         block_plan=block_plan,
         attn_window=attn_window,
         tie_embeddings=ckpt.get("tie_embeddings", False),
+        grad_checkpoint=ckpt.get("grad_checkpoint", False),
     )
 
     # Apply ternary to match the saved model — only if it was ternary. Older
