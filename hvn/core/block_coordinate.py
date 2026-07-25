@@ -26,6 +26,13 @@ import torch
 import torch.nn as nn
 
 
+def _dtype_itemsize(dtype: torch.dtype) -> int:
+    """Bytes per element for `dtype` (Issue #113: used to decide whether
+    parking at `park_dtype` actually shrinks a given parameter, rather than
+    hardcoding an assumption that native dtype is always fp32)."""
+    return torch.empty((), dtype=dtype).element_size()
+
+
 class GPUBufferPool:
     """Pre-allocated, reusable GPU buffers for offloaded block parameters
     (Issue #101), with an LRU residency cache on top (Issue #103). Every
@@ -69,12 +76,62 @@ class GPUBufferPool:
     offloaded.
     """
 
-    def __init__(self, device: torch.device, cache_blocks: int = 1):
+    def __init__(
+        self,
+        device: torch.device,
+        cache_blocks: int = 1,
+        park_dtype: torch.dtype | None = None,
+    ):
+        """
+        park_dtype : torch.dtype | None
+            Issue #113: dtype to store INACTIVE blocks' weights in on CPU
+            (e.g. `torch.bfloat16`). `None` (default) preserves the
+            original behavior exactly -- park at whatever dtype the
+            parameter already is. When set, a parameter is only downcast
+            if its native dtype (captured via `capture_native_dtype`,
+            called once per param before any parking ever happens) is
+            LOWER precision than `park_dtype`... no -- HIGHER precision,
+            i.e. only actually shrinks storage (e.g. fp32 -> bf16); a
+            param whose native dtype is already <= park_dtype in size is
+            left alone (nothing to save, and downcasting further isn't
+            this lever's job -- see Issue #114 for the fp8 spike).
+            `BlockCoordinateScheduler._activate()`'s active-branch always
+            restores a param to its NATIVE dtype before training resumes
+            on it -- the optimizer's tiny per-step updates need the
+            parameter's original (typically fp32) precision to be
+            representable at all; only the PARKED/inactive copy is
+            allowed to be coarser, matching the reasoning in Issue #113's
+            writeup (bf16 is already this project's native working
+            precision elsewhere, so parking already-frozen weights in it
+            adds no precision loss beyond what training already tolerates).
+        """
         self.device = device
         self.cache_blocks = max(1, cache_blocks)
+        self.park_dtype = park_dtype
         self._free_buffers: dict[tuple, list[list[torch.Tensor]]] = {}
         self._resident: OrderedDict[str, dict] = OrderedDict()  # key -> {buffers, params, sig}
         self._cpu_home: dict[int, torch.Tensor] = {}  # id(p) -> its stable CPU tensor
+        self._native_dtype: dict[int, torch.dtype] = {}  # id(p) -> its true training dtype
+
+    def capture_native_dtype(self, params: list[nn.Parameter]) -> None:
+        """Record each param's true (training-time) dtype, once, before any
+        parking ever happens. Idempotent -- a param already captured is
+        left alone, so calling this repeatedly (e.g. every `_activate()`)
+        is safe and never overwrites with a since-downcast parked dtype."""
+        for p in params:
+            self._native_dtype.setdefault(id(p), p.dtype)
+
+    def native_dtype_for(self, p: nn.Parameter) -> torch.dtype:
+        """The dtype `p` was originally constructed/trained at -- what it
+        must be restored to before becoming the BCD-active block again."""
+        return self._native_dtype.get(id(p), p.dtype)
+
+    def park_dtype_for(self, p: nn.Parameter) -> torch.dtype:
+        """The dtype `p` should be stored at while parked (inactive)."""
+        native = self.native_dtype_for(p)
+        if self.park_dtype is not None and _dtype_itemsize(self.park_dtype) < _dtype_itemsize(native):
+            return self.park_dtype
+        return native
 
     @staticmethod
     def _signature(params: list[nn.Parameter]) -> tuple:
@@ -267,6 +324,7 @@ class BlockCoordinateScheduler:
         offload_inactive_weights: bool = False,
         device: torch.device | str | None = None,
         offload_cache_blocks: int = 1,
+        offload_park_dtype: torch.dtype | None = None,
     ):
         """
         offload_inactive_weights : bool
@@ -300,6 +358,18 @@ class BlockCoordinateScheduler:
             re-fetching from CPU, at the cost of `(cache_blocks - 1)` extra
             blocks' worth of GPU memory held at once -- size against
             whatever VRAM budget is available beyond the active block.
+        offload_park_dtype : torch.dtype | None
+            Issue #113: dtype to store INACTIVE blocks' weights in on CPU
+            while parked (e.g. `torch.bfloat16`), instead of their native
+            training dtype (typically fp32 -- see docs/training.md's
+            Issue #102 section, "EdgeHVN's default parameter dtype is
+            fp32"). Halves CPU RAM and per-swap PCIe transfer for parked
+            blocks; the ACTIVE block is always restored to its native
+            dtype before training resumes on it, so optimizer precision
+            is unaffected -- only frozen, already-not-being-updated
+            weights get stored coarser. `None` (default) preserves
+            existing behavior exactly (park at native dtype, no
+            conversion).
         """
         if steps_per_block < 1:
             raise ValueError("steps_per_block must be >= 1")
@@ -317,11 +387,22 @@ class BlockCoordinateScheduler:
         self.offload_inactive_weights = offload_inactive_weights
         self.device = torch.device(device) if device is not None else None
         self.buffer_pool = (
-            GPUBufferPool(self.device, cache_blocks=offload_cache_blocks)
+            GPUBufferPool(
+                self.device,
+                cache_blocks=offload_cache_blocks,
+                park_dtype=offload_park_dtype,
+            )
             if offload_inactive_weights else None
         )
         if self.buffer_pool is not None:
             model._offload_pool = self.buffer_pool
+            # Issue #113: capture every param's true training dtype BEFORE
+            # any parking/activation happens below, so park_dtype_for() can
+            # later tell "should this be downcast while parked" from "is
+            # this already at (or below) park_dtype natively" -- must run
+            # before the very first _activate() call just below.
+            for _, params in self.blocks:
+                self.buffer_pool.capture_native_dtype(params)
 
         n = len(self.blocks)
         if order == "sequential":
@@ -421,7 +502,14 @@ class BlockCoordinateScheduler:
             self.buffer_pool.evict_all()
             self.buffer_pool.register_cpu_home(active_params)
             for p in active_params:
-                p.data = p.data.to(self.device)
+                # Issue #113: restore to this param's NATIVE dtype (e.g.
+                # fp32), not whatever it currently is -- if it was parked
+                # in bf16 during its previous inactive tenure, the
+                # optimizer's tiny per-step updates need full native
+                # precision to be representable at all once training
+                # resumes on this block. A no-op cast if it was never
+                # downcast (offload_park_dtype=None, the default).
+                p.data = p.data.to(device=self.device, dtype=self.buffer_pool.native_dtype_for(p))
             # Explicitly evict every OTHER block right now too. Without
             # this, a block only ever gets evicted the next time forward()
             # actually runs and touches it -- fine in steady state, but the
@@ -443,7 +531,12 @@ class BlockCoordinateScheduler:
                 # fixes: registering before the move captured the stale
                 # GPU tensor instead).
                 for p in params:
-                    p.data = p.data.to("cpu")
+                    # Issue #113: park at this param's park_dtype (bf16 if
+                    # offload_park_dtype=torch.bfloat16 and native dtype is
+                    # coarser; otherwise a no-op, identical to pre-#113
+                    # behavior). Combined device+dtype .to() so this is a
+                    # single copy, not two.
+                    p.data = p.data.to(device="cpu", dtype=self.buffer_pool.park_dtype_for(p))
                 # force=True (Issue #117): this block just finished its
                 # active tenure (or was already inactive, in which case
                 # `.to("cpu")` above was a no-op and this harmlessly

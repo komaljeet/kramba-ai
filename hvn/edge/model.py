@@ -319,6 +319,24 @@ class EdgeHVN(nn.Module):
                 "eviction timing is tied to each block's checkpoint recompute "
                 "window, which does not exist without checkpointing."
             )
+        if offload:
+            park_dtype = getattr(getattr(self, "_offload_pool", None), "park_dtype", None)
+            if park_dtype is not None and not torch.is_autocast_enabled():
+                raise RuntimeError(
+                    "offload_park_dtype (Issue #113) parks inactive blocks at a "
+                    "coarser dtype (e.g. bf16) than the active block's native "
+                    "dtype (typically fp32) -- forwarding through a frozen "
+                    "parked block now mixes dtypes with the active block's "
+                    "activations, which PyTorch ops like Conv1d reject outside "
+                    "autocast ('Input type and bias type should be the same'). "
+                    "Wrap the forward+loss computation in "
+                    "`torch.amp.autocast('cuda', dtype=torch.bfloat16)` (already "
+                    "this project's standard training pattern, e.g. "
+                    "scripts/bench_offload_vram.py) -- autocast reconciles the "
+                    "mixed dtypes automatically. Confirmed via a direct repro: "
+                    "without autocast this raises deep inside conv1d; with it, "
+                    "training runs and converges normally."
+                )
 
         if offload:
             x = self._offload_wrap_plain(
