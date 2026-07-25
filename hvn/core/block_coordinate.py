@@ -80,24 +80,48 @@ class GPUBufferPool:
     def _signature(params: list[nn.Parameter]) -> tuple:
         return tuple((tuple(p.shape), p.dtype) for p in params)
 
-    def register_cpu_home(self, params: list[nn.Parameter]) -> None:
-        """Capture each param's current tensor as its stable CPU home, if
-        not already captured. Defensively requires `p.data` to actually BE
-        on CPU at call time -- calling this on a param that is currently
-        GPU-resident (e.g. right after the caller's own `model.to(device)`,
-        before anything has been evicted yet) is a safe no-op, not a
-        silent corruption. This matters: an earlier version of this
-        function had no such guard, and a caller (`BlockCoordinateScheduler
-        ._activate`'s construction-time eviction loop) called it BEFORE
-        moving `p.data` to CPU rather than after -- capturing the ORIGINAL
-        GPU tensor as the "home", so every later `evict()` correctly ran
-        but re-pointed `p.data` at a stale GPU reference instead of CPU.
-        Caught by tests/test_block_coordinate_offload.py's device-residency
-        assertions (gradient-parity still passed, since values were
-        untouched -- this was a memory-placement bug, not a numerical one).
+    def register_cpu_home(self, params: list[nn.Parameter], force: bool = False) -> None:
+        """Capture each param's current tensor as its stable CPU home.
+        Defensively requires `p.data` to actually BE on CPU at call time --
+        calling this on a param that is currently GPU-resident (e.g. right
+        after the caller's own `model.to(device)`, before anything has been
+        evicted yet) is a safe no-op, not a silent corruption. This matters:
+        an earlier version of this function had no such guard, and a caller
+        (`BlockCoordinateScheduler._activate`'s construction-time eviction
+        loop) called it BEFORE moving `p.data` to CPU rather than after --
+        capturing the ORIGINAL GPU tensor as the "home", so every later
+        `evict()` correctly ran but re-pointed `p.data` at a stale GPU
+        reference instead of CPU. Caught by
+        tests/test_block_coordinate_offload.py's device-residency assertions
+        (gradient-parity still passed, since values were untouched -- this
+        was a memory-placement bug, not a numerical one).
+
+        `force` (Issue #117): default `False` is register-if-absent -- correct
+        for a block's first-ever CPU residency (its untrained initial value)
+        and for `load()`'s own internal call below (an inactive/frozen block's
+        value provably cannot have changed since it was last registered, so
+        there is nothing to refresh). `BlockCoordinateScheduler._activate()`'s
+        per-switch deactivation loop calls this with `force=True` instead:
+        a block that just finished its active tenure needs its freshly
+        retrained CPU tensor (from `p.data.to("cpu")`, called immediately
+        before this) to become the new authoritative home. Without `force`,
+        `_cpu_home` kept pointing at whatever tensor was captured the FIRST
+        time this parameter was ever found on CPU (its untrained init value)
+        forever after -- silently discarding every cycle's training the next
+        time `load()` fetched this block for a forward pass. A block would
+        reset to its pristine initial value on every deactivation and retrain
+        the identical trajectory every cycle, with zero cross-cycle learning
+        retained. Found via a targeted multi-cycle repro (the existing
+        parity/convergence tests only check aggregate early-vs-late loss over
+        a run, which still trends down under this bug since the *currently*
+        active block always shows real local descent within its own window --
+        see tests/test_block_coordinate_offload.py::
+        test_deactivated_block_retains_training_across_cycles.
         """
         for p in params:
-            if id(p) not in self._cpu_home and p.data.device.type == "cpu":
+            if p.data.device.type != "cpu":
+                continue
+            if force or id(p) not in self._cpu_home:
                 self._cpu_home[id(p)] = p.data
 
     def load(self, key: str, params: list[nn.Parameter]) -> None:
@@ -420,7 +444,14 @@ class BlockCoordinateScheduler:
                 # GPU tensor instead).
                 for p in params:
                     p.data = p.data.to("cpu")
-                self.buffer_pool.register_cpu_home(params)
+                # force=True (Issue #117): this block just finished its
+                # active tenure (or was already inactive, in which case
+                # `.to("cpu")` above was a no-op and this harmlessly
+                # re-registers the same tensor) -- its current CPU tensor
+                # must become the new authoritative home so future load()
+                # calls see any training it just received, not the value
+                # captured the first time this parameter was ever offloaded.
+                self.buffer_pool.register_cpu_home(params, force=True)
 
     def step(self) -> bool:
         """Call once per optimizer step. Returns True iff a block switch happened."""
