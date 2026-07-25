@@ -112,6 +112,12 @@ class GPUBufferPool:
         self._resident: OrderedDict[str, dict] = OrderedDict()  # key -> {buffers, params, sig}
         self._cpu_home: dict[int, torch.Tensor] = {}  # id(p) -> its stable CPU tensor
         self._native_dtype: dict[int, torch.dtype] = {}  # id(p) -> its true training dtype
+        # Issue #115: a side CUDA stream for prefetching the NEXT block's
+        # CPU->GPU copy while compute for the CURRENT block runs on the
+        # main/default stream. None on non-CUDA devices (prefetch() then
+        # silently falls back to a plain synchronous load -- see there).
+        self._prefetch_stream = torch.cuda.Stream(device=device) if device.type == "cuda" else None
+        self._pending_events: dict[str, torch.cuda.Event] = {}  # key -> H2D-copy-done event
 
     def capture_native_dtype(self, params: list[nn.Parameter]) -> None:
         """Record each param's true (training-time) dtype, once, before any
@@ -181,34 +187,106 @@ class GPUBufferPool:
             if force or id(p) not in self._cpu_home:
                 self._cpu_home[id(p)] = p.data
 
-    def load(self, key: str, params: list[nn.Parameter]) -> None:
-        """Move `params` onto `self.device`, keyed by `key` (the block's
-        stable name). If `key` is already resident (a cache hit -- e.g.
-        call #2 of the same block, with nothing evicting it in between),
-        this is a cheap no-op re-touch of LRU order, not a re-copy. On a
-        miss, acquires a buffer for the shape signature (reusing a freed
-        one if available, else allocating), copies CPU data in, and evicts
-        the least-recently-used OTHER resident entry if this pushes the
-        cache past `cache_blocks`."""
-        self.register_cpu_home(params)
-        if key in self._resident:
-            self._resident.move_to_end(key)
-            return
+    def _acquire_buffers(self, key: str, params: list[nn.Parameter]) -> list[torch.Tensor]:
+        """Get (reusing a freed one if available, else allocating) a set of
+        GPU buffers for `params`' shape signature, and register `key` as
+        resident -- evicting the least-recently-used OTHER entry if this
+        pushes the cache past `cache_blocks`. Does NOT copy data or touch
+        `p.data` -- shared by both `load()` and `prefetch()`, which differ
+        only in how/when the actual H2D copy happens."""
         sig = self._signature(params)
         free = self._free_buffers.get(sig)
         buffers = free.pop() if free else [
             torch.empty(p.shape, dtype=p.dtype, device=self.device) for p in params
         ]
-        for p, buf in zip(params, buffers):
-            buf.copy_(self._cpu_home[id(p)], non_blocking=True)
-            p.data = buf
         self._resident[key] = {"buffers": buffers, "params": params, "sig": sig}
         while len(self._resident) > self.cache_blocks:
             oldest_key, oldest = next(iter(self._resident.items()))
             if oldest_key == key:
                 break
             self._resident.popitem(last=False)
+            # Issue #115: an evicted-for-capacity entry could have an
+            # in-flight prefetch nobody ever consumed via load() -- must
+            # synchronize before its buffer goes back to _free_buffers,
+            # same reasoning as evict()/evict_all().
+            self._wait_and_clear_pending(oldest_key)
             self._release(oldest)
+        return buffers
+
+    def load(self, key: str, params: list[nn.Parameter]) -> None:
+        """Move `params` onto `self.device`, keyed by `key` (the block's
+        stable name). If `key` is already resident (a cache hit -- e.g.
+        call #2 of the same block, with nothing evicting it in between, OR
+        a block `prefetch()`-ed ahead of when it's actually needed -- Issue
+        #115), this is a cheap re-touch of LRU order, not a re-copy --
+        except if a prefetch's H2D copy is still in flight, in which case
+        the CURRENT stream is made to wait on its completion event first
+        (a GPU-side dependency, not a host-blocking sync: compute already
+        queued on this stream simply won't start until the copy is done).
+        On a miss, acquires a buffer for the shape signature and copies CPU
+        data in synchronously on the current stream (the pre-#115 behavior,
+        unchanged for any block that was never prefetched)."""
+        self.register_cpu_home(params)
+        if key in self._resident:
+            self._resident.move_to_end(key)
+            event = self._pending_events.pop(key, None)
+            if event is not None:
+                torch.cuda.current_stream(self.device).wait_event(event)
+            return
+        buffers = self._acquire_buffers(key, params)
+        for p, buf in zip(params, buffers):
+            buf.copy_(self._cpu_home[id(p)], non_blocking=True)
+            p.data = buf
+
+    def prefetch(self, key: str, params: list[nn.Parameter]) -> None:
+        """Issue #115: kick off `key`'s CPU->GPU copy on a dedicated side
+        stream, so it can run CONCURRENTLY with compute already queued on
+        the main/default stream for a DIFFERENT (e.g. currently-active or
+        currently-computing) block -- instead of `load()`'s synchronous
+        copy, which the calling stream must wait through before any
+        compute using this data can proceed.
+
+        No-op (falls back to nothing -- caller's later `load()` call will
+        do the synchronous copy as normal) if this device has no CUDA
+        stream (non-CUDA device) or if `key` is already resident (nothing
+        to prefetch -- either a genuine cache hit, or a previous prefetch
+        for this key hasn't been consumed yet).
+
+        Requires the CPU home tensor to be pinned (page-locked) memory for
+        the H2D copy to actually run asynchronously -- PyTorch silently
+        falls back to a synchronous copy for `non_blocking=True` on
+        regular (pageable) CPU memory, which would defeat the entire point
+        of this method. Pins lazily, on first prefetch of a given
+        resting tensor (each time a block deactivates it gets a FRESH,
+        unpinned CPU tensor -- see `BlockCoordinateScheduler._activate`'s
+        deactivation loop -- so this check-and-pin happens again then).
+        """
+        self.register_cpu_home(params)
+        if self._prefetch_stream is None or key in self._resident:
+            return
+        buffers = self._acquire_buffers(key, params)
+        with torch.cuda.stream(self._prefetch_stream):
+            for p, buf in zip(params, buffers):
+                home = self._cpu_home[id(p)]
+                if not home.is_pinned():
+                    home = home.pin_memory()
+                    self._cpu_home[id(p)] = home
+                buf.copy_(home, non_blocking=True)
+                p.data = buf
+        event = torch.cuda.Event()
+        event.record(self._prefetch_stream)
+        self._pending_events[key] = event
+
+    def _wait_and_clear_pending(self, key: str) -> None:
+        """Issue #115: if `key` has a prefetch H2D copy still in flight
+        (never consumed by a `load()` call), synchronize on it before its
+        buffer gets handed back to `_free_buffers` for reuse elsewhere --
+        without this, a NEW copy could start writing into the same buffer
+        memory while the OLD (still in-flight) prefetch copy is still
+        writing to it, a real data race, not just a staleness concern."""
+        event = self._pending_events.pop(key, None)
+        if event is not None:
+            event.synchronize()
 
     def evict(self, key: str) -> None:
         """Force-release one resident entry now (used only when a call
@@ -216,6 +294,7 @@ class GPUBufferPool:
         step, so holding its slot would only deny a genuine reuse
         candidate a buffer -- see class docstring). No-op if not
         resident."""
+        self._wait_and_clear_pending(key)
         entry = self._resident.pop(key, None)
         if entry is not None:
             self._release(entry)
@@ -230,6 +309,8 @@ class GPUBufferPool:
         current data, but the pool's bookkeeping and the CPU-home dedup in
         `register_cpu_home` would then disagree about where the real data
         lives)."""
+        for key in list(self._resident.keys()):
+            self._wait_and_clear_pending(key)
         for entry in self._resident.values():
             self._release(entry)
         self._resident.clear()
@@ -325,6 +406,7 @@ class BlockCoordinateScheduler:
         device: torch.device | str | None = None,
         offload_cache_blocks: int = 1,
         offload_park_dtype: torch.dtype | None = None,
+        offload_prefetch: bool = True,
     ):
         """
         offload_inactive_weights : bool
@@ -370,6 +452,17 @@ class BlockCoordinateScheduler:
             weights get stored coarser. `None` (default) preserves
             existing behavior exactly (park at native dtype, no
             conversion).
+        offload_prefetch : bool
+            Issue #115: overlap the NEXT offloadable segment's CPU->GPU
+            transfer (on a side CUDA stream) with the CURRENT segment's
+            compute, instead of paying the transfer serially when the next
+            segment's own turn comes. Pure scheduling/timing change --
+            gradients are unaffected (the existing gradient-parity test
+            exercises this path, since it's on by default, and still
+            passes). Default `True`; set `False` to fall back to fully
+            serial (pre-#115) transfers, e.g. for A/B measurement or if
+            something about a given environment makes the extra CUDA
+            stream undesirable.
         """
         if steps_per_block < 1:
             raise ValueError("steps_per_block must be >= 1")
@@ -396,6 +489,7 @@ class BlockCoordinateScheduler:
         )
         if self.buffer_pool is not None:
             model._offload_pool = self.buffer_pool
+            model._offload_prefetch = offload_prefetch
             # Issue #113: capture every param's true training dtype BEFORE
             # any parking/activation happens below, so park_dtype_for() can
             # later tell "should this be downcast while parked" from "is

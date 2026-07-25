@@ -1,0 +1,80 @@
+[
+  {
+    "d_model": 1024,
+    "num_layers": 24,
+    "batch_size": 4,
+    "seq_len": 128,
+    "steps_per_block": 2,
+    "prefetch": false,
+    "label": "268M_serial",
+    "params": 268544000,
+    "verdict": "ok",
+    "peak_reserved_mb": 488,
+    "sec_per_step": 0.825
+  },
+  {
+    "d_model": 1024,
+    "num_layers": 24,
+    "batch_size": 4,
+    "seq_len": 128,
+    "steps_per_block": 2,
+    "prefetch": true,
+    "label": "268M_prefetch",
+    "params": 268544000,
+    "verdict": "ok",
+    "peak_reserved_mb": 488,
+    "sec_per_step": 0.625
+  },
+  {
+    "d_model": 2048,
+    "num_layers": 24,
+    "batch_size": 4,
+    "seq_len": 128,
+    "steps_per_block": 2,
+    "prefetch": false,
+    "label": "1.04B_serial",
+    "params": 1040396288,
+    "verdict": "ok",
+    "peak_reserved_mb": 1290,
+    "sec_per_step": 1.4203
+  },
+  {
+    "d_model": 2048,
+    "num_layers": 24,
+    "batch_size": 4,
+    "seq_len": 128,
+    "steps_per_block": 2,
+    "prefetch": true,
+    "label": "1.04B_prefetch",
+    "params": 1040396288,
+    "verdict": "ok",
+    "peak_reserved_mb": 1290,
+    "sec_per_step": 1.0468
+  },
+  {
+    "d_model": 2048,
+    "num_layers": 36,
+    "batch_size": 4,
+    "seq_len": 128,
+    "steps_per_block": 2,
+    "prefetch": false,
+    "label": "1.54B_serial",
+    "params": 1544204384,
+    "verdict": "ok",
+    "peak_reserved_mb": 1338,
+    "sec_per_step": 2.1982
+  },
+  {
+    "d_model": 2048,
+    "num_layers": 36,
+    "batch_size": 4,
+    "seq_len": 128,
+    "steps_per_block": 2,
+    "prefetch": true,
+    "label": "1.54B_prefetch",
+    "params": 1544204384,
+    "verdict": "ok",
+    "peak_reserved_mb": 1338,
+    "sec_per_step": 1.6035
+  }
+]

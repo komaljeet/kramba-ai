@@ -339,6 +339,47 @@ forward+loss in `torch.amp.autocast("cuda", dtype=torch.bfloat16)` (e.g.
 `offload_park_dtype` is opt-in (default `None`, byte-identical to pre-#113 behavior). 12/12
 `tests/test_block_coordinate_offload.py` + 7/7 `tests/test_block_coordinate.py` pass.
 
+### Prefetch/double-buffer transfer overlap (Issue #115) — landed, on by default, real ~25% win
+
+Overlaps the NEXT offloadable segment's CPU→GPU transfer (on a dedicated side CUDA stream,
+with pinned CPU home memory + event-based sync) with the CURRENT segment's compute, instead
+of paying each block's transfer serially when its own turn comes. `GPUBufferPool.prefetch()`
+mirrors `load()`'s buffer-acquisition path but issues the copy on `_prefetch_stream` and
+records a completion event; `load()` waits on that event (a GPU-side stream dependency, not
+a host-blocking sync) if the block was prefetched but not yet consumed. Wired into
+`EdgeHVN.forward()`'s layer loop: right after processing block `i`, prefetches `i+1` (or the
+tail, `final_norm+decoder`, on the last layer) — issued *after*, not before, block `i`'s own
+`load()` call, since GPU-level concurrency across streams doesn't depend on Python-side
+call order, and issuing it before would let a `cache_blocks=1` pool evict block `i`'s
+just-loaded buffer out from under its own in-flight compute.
+
+**Measured** (`scripts/bench_offload_prefetch.py`, `results/offload_prefetch.json`, A/B
+against `offload_prefetch=False`):
+
+| Config | serial → prefetch (sec/step) | Δ | Peak reserved VRAM |
+|---|---:|---:|---:|
+| 268M | 0.825 → **0.625** | −24% | 488 MiB (unchanged) |
+| 1.04B | 1.420 → **1.047** | −26% | 1290 MiB (unchanged) |
+| 1.54B | 2.198 → **1.604** | −27% | 1338 MiB (unchanged) |
+
+A consistent ~25% step-time win at every depth tested, at **zero VRAM cost** — confirms this
+is a pure speed lever (hiding transfer latency behind already-happening compute), not a
+memory/speed tradeoff. `offload_prefetch` defaults to `True` (unlike #113/#114, no precision
+risk to opt into — it's a scheduling change only, and the existing gradient-parity test
+already exercises this path since it's on by default). Set `offload_prefetch=False` to fall
+back to the fully serial pre-#115 behavior.
+
+**One real correctness hazard found and fixed while building this, not just anticipated**:
+`GPUBufferPool`'s existing capacity-overflow eviction path (inside `_acquire_buffers`, used
+by both `load()` and the new `prefetch()`) could evict a block whose prefetch copy was
+*still in flight* on the side stream, handing its buffer to `_free_buffers` for reuse by a
+different block while the old async copy was still writing into it — a genuine data race,
+not just staleness. Fixed by synchronizing on any pending event before releasing a buffer,
+in `evict()`, `evict_all()`, and `_acquire_buffers`'s own overflow-eviction loop (the last of
+which the first two callers alone didn't cover).
+
+14/14 `tests/test_block_coordinate_offload.py` + 7/7 `tests/test_block_coordinate.py` pass.
+
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 
 Memory **demand** is measured (card-independent; WDDM spill rows record true demand past

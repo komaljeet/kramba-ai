@@ -357,6 +357,34 @@ class EdgeHVN(nn.Module):
                     # offload requires grad_checkpoint=True (enforced above),
                     # so use_ckpt is guaranteed True here.
                     x = self._offload_wrap_checkpointed(name, block, x_in, position_ids)
+                    # Issue #115: kick off the NEXT offloadable segment's
+                    # H2D transfer now, on a side stream -- issued AFTER
+                    # this block's own load()/compute above (not before),
+                    # so the LRU cache has already registered block i as
+                    # just-used before block i+1 potentially competes for
+                    # the same slot (cache_blocks=1 by default -- prefetching
+                    # i+1 BEFORE touching block i's own residency would
+                    # evict block i's buffer out from under its own
+                    # in-flight compute). GPU-level overlap doesn't depend
+                    # on this Python-side ordering -- both this block's
+                    # compute (already enqueued on the main stream above)
+                    # and the next block's copy (enqueued on the side
+                    # stream below) run concurrently regardless of which
+                    # line issues first, since neither call blocks the
+                    # host thread. Covers both the next layer block and,
+                    # on the last layer, the tail (final_norm+decoder) --
+                    # both go through the same pool.load()/_offload_wrap_*
+                    # path, so a prefetch here is transparently consumed
+                    # there either way.
+                    if getattr(self, "_offload_prefetch", True):
+                        if i + 1 < len(self.blocks):
+                            next_name = f"blocks.{i + 1}"
+                            next_params = list(self.blocks[i + 1].parameters())
+                        else:
+                            next_name = "final_norm+decoder"
+                            next_params = list(self.final_norm.parameters()) + list(self.decoder.parameters())
+                        if next_name != self._offload_active_name:
+                            self._offload_pool.prefetch(next_name, next_params)
                 elif use_ckpt:
                     x = checkpoint(block, x_in, position_ids, use_reentrant=False)
                 else:

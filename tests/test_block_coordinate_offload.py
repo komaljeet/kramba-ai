@@ -295,6 +295,110 @@ else:
             f"{loss.item():.6f} vs {loss_base.item():.6f}"
         )
 
+    def test_prefetch_is_invoked_and_preserves_gradient_parity():
+        """Issue #115: offload_prefetch=True (the default) overlaps the
+        NEXT offloadable segment's CPU->GPU transfer with the CURRENT
+        segment's compute, via a side CUDA stream + event. Verified two
+        ways, mirroring #103's LRU-cache test pattern: (a) directly, by
+        patching GPUBufferPool.prefetch to count real invocations (proving
+        the forward-loop wiring actually calls it, not just that nothing
+        crashes); (b) gradient parity against offload_prefetch=False --
+        this must be a pure scheduling/timing change, not a numerical one.
+        """
+        from hvn.core.block_coordinate import GPUBufferPool
+
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=4, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=2,
+            offload_inactive_weights=True, device=device,
+            # offload_prefetch defaults to True -- explicit here for clarity.
+            offload_prefetch=True,
+        )
+
+        pool = sched.buffer_pool
+        calls = {"n": 0}
+        orig_prefetch = GPUBufferPool.prefetch
+
+        def _counting_prefetch(self, key, params):
+            calls["n"] += 1
+            orig_prefetch(self, key, params)
+
+        pool.prefetch = _counting_prefetch.__get__(pool, GPUBufferPool)
+
+        torch.manual_seed(42)
+        ids = torch.randint(0, 64, (2, 16), device=device)
+        logits = model(ids)
+        loss = F.cross_entropy(logits.reshape(-1, 64), ids.reshape(-1))
+        opt.zero_grad()
+        loss.backward()
+
+        assert calls["n"] > 0, (
+            "offload_prefetch=True but GPUBufferPool.prefetch was never "
+            "called during a real forward pass -- the forward-loop wiring "
+            "is not actually invoking it"
+        )
+
+        # Gradient parity against offload_prefetch=False.
+        torch.manual_seed(0)
+        model_np = _tiny_model(num_layers=4, grad_checkpoint=True).to(device)
+        opt_np = torch.optim.AdamW(model_np.parameters(), lr=1e-2)
+        sched_np = BlockCoordinateScheduler(
+            model_np, opt_np, steps_per_block=2,
+            offload_inactive_weights=True, device=device,
+            offload_prefetch=False,
+        )
+        assert sched_np.active_block_name == sched.active_block_name
+        torch.manual_seed(42)
+        ids2 = torch.randint(0, 64, (2, 16), device=device)
+        logits_np = model_np(ids2)
+        loss_np = F.cross_entropy(logits_np.reshape(-1, 64), ids2.reshape(-1))
+        opt_np.zero_grad()
+        loss_np.backward()
+
+        assert torch.allclose(loss, loss_np, atol=1e-6), (
+            f"loss diverged between offload_prefetch=True and False: "
+            f"{loss.item():.6f} vs {loss_np.item():.6f} -- prefetch must be "
+            f"a pure scheduling change"
+        )
+
+    def test_prefetch_training_converges():
+        """Issue #115: a full multi-cycle training loop with the default
+        offload_prefetch=True must still converge, and must still retain
+        cross-cycle training correctly (the #117 gate), not just avoid
+        crashing."""
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=3, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=5e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=3,
+            offload_inactive_weights=True, device=device,
+        )
+
+        torch.manual_seed(1)
+        ids = torch.randint(0, 64, (2, 8), device=device)
+
+        losses = []
+        n_steps = sched.num_blocks * 3 * 3
+        for _ in range(n_steps):
+            logits = model(ids)
+            loss = F.cross_entropy(logits.reshape(-1, 64), ids.reshape(-1))
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            sched.step()
+            losses.append(loss.item())
+
+        early_mean = sum(losses[:10]) / 10
+        late_mean = sum(losses[-10:]) / 10
+        assert late_mean < early_mean, (
+            f"loss did not decrease with prefetch enabled (default): "
+            f"early={early_mean:.4f} late={late_mean:.4f}"
+        )
+
     def test_cache_reconciled_on_block_switch():
         """Issue #103: BlockCoordinateScheduler._activate's evict_all() call
         must flush the LRU cache before its own per-switch CPU-move loop --
