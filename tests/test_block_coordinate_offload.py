@@ -334,6 +334,74 @@ else:
                     f"after a block switch with caching enabled, expected {expected}"
                 )
 
+    def test_deactivated_block_retains_training_across_cycles():
+        """Issue #117 (P0): a block's trained values must survive a
+        deactivate -> reactivate round trip, not reset to their pristine
+        pre-training value. `test_training_converges_with_offload` (below)
+        only checks aggregate early-vs-late loss over a run, which still
+        trends down even under the bug this test targets (the *currently*
+        active block always shows real local descent within its own window,
+        every cycle, restarting from the same discarded point) -- so this
+        test checks a SPECIFIC block's parameter value directly across two
+        full cycles instead of relying on the aggregate loss trend.
+
+        Root cause this guards against: `GPUBufferPool.register_cpu_home`'s
+        register-if-absent dedup meant a block's `_cpu_home` entry was
+        captured once ever (its untrained init value) and never refreshed
+        on later deactivations, so every subsequent `load()` (used to fetch
+        an inactive block for a forward pass) fetched stale, untrained
+        weights -- silently discarding all training. Fixed via
+        `register_cpu_home(params, force=True)` in the deactivation loop.
+        """
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=3, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=5e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=3,
+            offload_inactive_weights=True, device=device,
+        )
+
+        torch.manual_seed(1)
+        ids = torch.randint(0, 64, (2, 8), device=device)
+
+        target_name, target_params = sched.blocks[1]  # "blocks.0"
+        assert target_name == "blocks.0"
+        p0 = target_params[4]  # a real (d, d) weight matrix, not a norm gain
+        init_value = p0.data.detach().clone().cpu()
+
+        def value_diff() -> float:
+            return (p0.data.detach().cpu() - init_value).abs().max().item()
+
+        diffs_after_each_cycle = []
+        n_steps = sched.num_blocks * 3 * 2  # 2 full cycles
+        for step in range(n_steps):
+            logits = model(ids)
+            loss = F.cross_entropy(logits.reshape(-1, 64), ids.reshape(-1))
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            sched.step()
+            # Sample right after blocks.0's own active window ends each cycle
+            # (steps 5 and 5 + num_blocks*3, i.e. the step right after its
+            # 3rd active step, once it has gone back to being inactive).
+            if step in (5, 5 + sched.num_blocks * 3):
+                diffs_after_each_cycle.append(value_diff())
+
+        assert len(diffs_after_each_cycle) == 2
+        cycle1_diff, cycle2_diff = diffs_after_each_cycle
+        assert cycle1_diff > 1e-6, (
+            "blocks.0 shows no change from its initial value after its own "
+            "active window -- training isn't happening at all, a different "
+            "bug than #117."
+        )
+        assert cycle2_diff > cycle1_diff - 1e-9, (
+            f"blocks.0's value did not accumulate further training in cycle "
+            f"2 (cycle1_diff={cycle1_diff:.6f}, cycle2_diff={cycle2_diff:.6f}) "
+            f"-- this is the #117 bug: the block reset to its pre-training "
+            f"value on deactivation instead of retaining cycle 1's training."
+        )
+
     def test_training_converges_with_offload():
         torch.manual_seed(0)
         device = torch.device("cuda")
