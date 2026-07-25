@@ -268,15 +268,23 @@ not a hard OOM).
 
 **Practical implication**: with this extended fix, model size is no longer VRAM-bounded on
 this card at all in any range worth targeting — it is bounded by (a) CPU RAM for fp32
-storage and (b) per-step training time, which degrades steeply with depth under the
-current "evict immediately after every use" offload policy (every block is refetched from
-CPU on every touch, with no caching). The natural next lever, not yet built: an **LRU-style
-VRAM-budget cache** for offloaded blocks (keep recently-used blocks resident, sized to use
-most of the available VRAM, instead of always evicting immediately) — this would eliminate
-the *redundant* refetch of a block for its checkpoint recompute right after its initial
-forward use (currently fetched twice per step for every block downstream of the active
-one), directly attacking the speed-vs-depth degradation without touching VRAM ceiling at
-all. Real engineering, not yet started.
+storage and (b) per-step training time.
+
+### LRU residency cache (Issue #103) — landed, closes the "not yet built" lever above
+
+`GPUBufferPool` now keeps a checkpointed block's buffers resident across its two per-step
+invocations (call #1 forward, call #2 backward recompute) instead of evicting immediately,
+sized via `offload_cache_blocks` (LRU eviction beyond that capacity). Verified correct
+(gradient parity, cache-hit + no-pileup regression tests, 174/174 suite) and effective at
+the practical ~1.5–2B sweet spot. **Honest limit found, not a bug**: on a 95-layer, ~4B
+stress config, raising `cache_blocks` 8→32 did *not* help — backward recomputes in reverse
+order, so a block must stay resident through nearly the whole stack to get reused, which no
+affordable cache size reaches at that depth; bigger cache there only added VRAM pressure
+(2.4→6.25 GiB) without a proportional hit-rate gain. Landed with #101/#102 in MR !90.
+
+CPU-side fp32 storage for parked blocks and per-step transfer overlap remain open — see
+issues #113 (bf16 parking), #114 (fp8 spike, gated on a real convergence check), and #115
+(prefetch/double-buffer the next block's transfer against current compute).
 
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 
