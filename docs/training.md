@@ -286,6 +286,59 @@ CPU-side fp32 storage for parked blocks and per-step transfer overlap remain ope
 issues #113 (bf16 parking), #114 (fp8 spike, gated on a real convergence check), and #115
 (prefetch/double-buffer the next block's transfer against current compute).
 
+### P0 correctness bug found and fixed (Issue #117) — read before trusting any prior multi-cycle BCD+offload run
+
+`GPUBufferPool.register_cpu_home()`'s register-if-absent dedup meant a block's CPU-resident
+"home" tensor was captured once ever (its untrained init value) and never refreshed on later
+deactivations — every block silently reset to its pristine pre-training value the instant it
+went inactive, and retrained the identical trajectory every cycle. **Zero cross-cycle
+learning was actually happening under `offload_inactive_weights=True`** before this fix,
+confirmed via a direct repro (a tracked weight's diff-from-init reset to exactly 0.000000 on
+every deactivation, bit-identical trajectory every subsequent cycle). The VRAM/step-time
+numbers measured for #101/#102/#103 above are unaffected (single/few-step memory
+benchmarks, not multi-cycle convergence runs) — but this means no real training run using
+offload across multiple BCD cycles, before this fix, actually accumulated learning beyond
+whichever block was in its first active cycle. Fixed via a `force` param on
+`register_cpu_home`; new regression test
+`test_deactivated_block_retains_training_across_cycles` checks a specific block's value
+survives a deactivate→reactivate round trip directly (the gap the existing
+`test_training_converges_with_offload` had — it only checks aggregate early-vs-late loss,
+which still trended down under this bug). Landed in MR !99.
+
+### bf16 parking for inactive blocks (Issue #113) — landed, real measured win on both axes
+
+Parks INACTIVE (BCD-frozen) blocks' weights in bf16 on CPU instead of their native dtype
+(fp32 by default), via `offload_park_dtype=torch.bfloat16` on `BlockCoordinateScheduler`. The
+ACTIVE block is always restored to its native dtype the instant it's reactivated (`
+GPUBufferPool.native_dtype_for`) — the optimizer's tiny per-step updates need full native
+precision to be representable; only already-frozen weights get stored coarser.
+
+**Measured** (`scripts/bench_offload_bf16_park.py`, `results/offload_bf16_park.json`):
+
+| Config | Parked CPU MB (fp32 → bf16) | Peak reserved VRAM | sec/step |
+|---|---:|---:|---:|
+| 268M | 984.3 → **492.2** (exactly halved) | 488 → 380 MiB | 0.938 → **0.823** (−12%) |
+| 1.04B | 3808.6 → **1904.3** (exactly halved) | 1290 → 1058 MiB | 1.552 → **1.158** (−25%) |
+
+Both predictions from the issue confirmed directly, not just reasoned: CPU RAM exactly
+halves (as expected — bf16 is literally half the bytes of fp32), and step time drops
+meaningfully too (the offload mechanism is bandwidth-bound, so moving half the bytes per
+block-swap over PCIe genuinely speeds up training, not just shrinks memory) — the win
+compounds with depth (−12% at 268M vs −25% at 1.04B).
+
+**One real caveat found and fixed, not just anticipated**: forwarding through a bf16-parked
+(frozen) block alongside an fp32-active block mixes dtypes, which PyTorch ops like `Conv1d`
+reject outside autocast with a cryptic low-level error ("Input type and bias type should be
+the same"). Confirmed directly (crashes several frames deep inside
+`torch.nn.modules.conv` without autocast). Fixed with a fail-fast guard in `EdgeHVN.forward()`
+that raises a clear, actionable `RuntimeError` if `offload_park_dtype` is set without an
+active `torch.is_autocast_enabled()` context — this project's training scripts already wrap
+forward+loss in `torch.amp.autocast("cuda", dtype=torch.bfloat16)` (e.g.
+`scripts/bench_offload_vram.py`), so this is a documented requirement, not a blocker.
+
+`offload_park_dtype` is opt-in (default `None`, byte-identical to pre-#113 behavior). 12/12
+`tests/test_block_coordinate_offload.py` + 7/7 `tests/test_block_coordinate.py` pass.
+
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 
 Memory **demand** is measured (card-independent; WDDM spill rows record true demand past

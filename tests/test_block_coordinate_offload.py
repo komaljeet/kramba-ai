@@ -402,6 +402,118 @@ else:
             f"value on deactivation instead of retaining cycle 1's training."
         )
 
+    def test_bf16_parking_shrinks_inactive_blocks_and_restores_native_dtype_when_active():
+        """Issue #113: offload_park_dtype=torch.bfloat16 stores INACTIVE
+        blocks' weights in bf16 on CPU (halving CPU RAM / PCIe transfer vs
+        fp32), while the ACTIVE block is always restored to its native
+        dtype (fp32 here) before training resumes on it -- the optimizer's
+        precision must be unaffected, only frozen weights get coarser."""
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=3, grad_checkpoint=True).to(device)
+        assert all(p.dtype == torch.float32 for p in model.parameters()), (
+            "test assumes fp32-native params (matches docs/training.md's "
+            "measured EdgeHVN default) -- if this ever changes, this test's "
+            "premise (bf16 parking actually shrinks storage) needs revisiting"
+        )
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=2,
+            offload_inactive_weights=True, device=device,
+            offload_park_dtype=torch.bfloat16,
+        )
+
+        for name, params in sched.blocks:
+            expected = torch.float32 if name == sched.active_block_name else torch.bfloat16
+            for p in params:
+                assert p.dtype == expected, (
+                    f"block {name!r} (active={sched.active_block_name!r}) is "
+                    f"{p.dtype}, expected {expected}"
+                )
+
+        # Cycle through every block once; each must come back to fp32 the
+        # instant it's active, and go back to bf16 the instant it parks.
+        for _ in range(sched.num_blocks):
+            sched.step()
+            for name, params in sched.blocks:
+                expected = torch.float32 if name == sched.active_block_name else torch.bfloat16
+                for p in params:
+                    assert p.dtype == expected, (
+                        f"after a switch, block {name!r} "
+                        f"(active={sched.active_block_name!r}) is {p.dtype}, "
+                        f"expected {expected}"
+                    )
+
+    def test_bf16_parking_requires_autocast():
+        """Issue #113: forwarding through a bf16-parked block alongside an
+        fp32-active block mixes dtypes -- PyTorch ops like Conv1d reject
+        this outside autocast with a cryptic low-level error ('Input type
+        and bias type should be the same'). Confirmed directly: the same
+        forward call that raises this RuntimeError's fail-fast message
+        below, with the guard removed, instead crashes several frames deep
+        inside torch.nn.modules.conv. Must fail fast with a clear message
+        instead, before backward, not mid-conv."""
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=3, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        BlockCoordinateScheduler(
+            model, opt, steps_per_block=2,
+            offload_inactive_weights=True, device=device,
+            offload_park_dtype=torch.bfloat16,
+        )
+        ids = torch.randint(0, 64, (2, 16), device=device)
+        try:
+            model(ids)
+            raise AssertionError("expected RuntimeError: missing autocast")
+        except RuntimeError as e:
+            assert "Issue #113" in str(e), f"wrong/unclear error raised: {e}"
+
+        # With autocast, the same call must succeed.
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            logits = model(ids)
+        assert logits.shape == (2, 16, 64)
+
+    def test_training_converges_with_bf16_parking():
+        """Issue #113: a full multi-cycle training loop with bf16 parking
+        enabled (under autocast, as required) must still converge -- not
+        just avoid crashing. Companion to
+        test_deactivated_block_retains_training_across_cycles (which
+        proves cross-cycle retention at the default park_dtype=None) --
+        this confirms retention ALSO holds when parked weights are
+        actually downcast, not just device-moved."""
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=3, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=5e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=3,
+            offload_inactive_weights=True, device=device,
+            offload_park_dtype=torch.bfloat16,
+        )
+
+        torch.manual_seed(1)
+        ids = torch.randint(0, 64, (2, 8), device=device)
+
+        losses = []
+        n_steps = sched.num_blocks * 3 * 3
+        for _ in range(n_steps):
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                logits = model(ids)
+                loss = F.cross_entropy(logits.reshape(-1, 64), ids.reshape(-1))
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            sched.step()
+            losses.append(loss.item())
+
+        early_mean = sum(losses[:10]) / 10
+        late_mean = sum(losses[-10:]) / 10
+        assert late_mean < early_mean, (
+            f"loss did not decrease with bf16 parking enabled: "
+            f"early={early_mean:.4f} late={late_mean:.4f}"
+        )
+
     def test_training_converges_with_offload():
         torch.manual_seed(0)
         device = torch.device("cuda")
