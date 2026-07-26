@@ -493,6 +493,99 @@ bigger comfortable config and more bf16 width headroom (#44), **not a categorica
 > in 8 GB *or 16 GB* variants. A 16 GB Ti roughly doubles this envelope — still far short of
 > training 1B comfortably or 10B at all.
 
+## Pretrain data readiness (Issues #119/#120) — memory/speed alone does not solve capability
+
+A data-readiness audit (2026-07-26, prompted by the 4-6B ceiling above becoming trainable)
+found the pretrain data pipeline had its own, separate bottleneck — solving VRAM/RAM/speed
+doesn't solve data volume; this project's own `docs/roadmap.md` epic #78 closing note already
+said as much in writing before this was investigated further.
+
+**Chinchilla-optimal token targets** (20 tokens/param, this project's convention, per issue
+#112): 4B params → 80B tokens; 6B params → 120B tokens.
+
+### #119 — the mix silently caps total token budget, same mechanism as the old OASST bug
+
+`MixedLocalDataset`'s `max_repeat` bind on whichever mix source is smallest relative to its
+target share caps the *entire* dataset's token budget, not just that source's own
+contribution — this is exactly what capped the 83M pretrain at ~135M tokens via OASST
+(§ "EdgeHVN 83M" above). The same mechanism recurs with WikiText-103 (a fixed ~119M-token
+corpus, nothing more to download) at its usual 15% pretrain share: confirmed directly, this
+caps total achievable tokens around **~2.4B** with `max_repeat=3` — ~2-3% of the 80-120B
+floor for 4-6B params.
+
+**Fix**: rather than force a single "right" default (WikiText is fine at small scale, e.g.
+the 83M/300M runs — the problem only bites once a run targets real Chinchilla volume),
+`MixedLocalDataset` now prints a loud, correct warning every time, naming which of two
+genuinely different cases applies:
+- **MIX-RATIO bind** (`total_cap < sum(avail)`): a source's `max_repeat` is the active
+  constraint — names the binding source, fixable by changing the mix.
+- **DATA-VOLUME limit** (`sum(avail) <= total_cap`): every available window is already used,
+  no source's repeat cap is binding — fixable only by downloading more data.
+
+Caught a real bug in the first draft of this fix: it always blamed whichever source's
+repeat-cap term was numerically smallest, even when that term wasn't the ACTIVE constraint.
+Verified against this project's real cached `data_cache` (not synthetic): with only ~1.32B
+SlimPajama tokens currently cached, the default 0.85/0.0/0.15 mix is presently
+DATA-VOLUME-limited, not MIX-RATIO-limited by WikiText — though WikiText IS confirmed (via a
+`max_repeat=1` test against the same real data) to become the binding mix-ratio constraint
+once more data is downloaded, matching the original audit finding. `tests/test_issue119_mix_cap_warning.py`, 3/3 pass.
+
+### #120 — switched pretrain data acquisition to FineWeb-Edu
+
+SlimPajama's reupload mirror (`gmongaras/SlimPajama-627B_Reupload`) is impractical at
+Chinchilla-optimal volume on this machine: ~6 GB/shard parquet, would need >1 TB disk
+(exceeds the ~642 GB free) and ~13-18 hours at this connection's ~22.7 MB/s. **FineWeb-Edu**
+(`HuggingFaceFW/fineweb-edu`) — already this project's own intended source per
+`docs/FRONTIER_TRAINING_PLAN.md`, never executed until now — is strictly better on every
+axis measured:
+
+| | SlimPajama reupload | FineWeb-Edu |
+|---|---|---|
+| Quality | dedup-only cleaning | LLM-classifier-filtered for educational value |
+| File granularity | ~6 GB/shard, 250 total | ~2.15 GB/file, pre-sized `sample-10BT`/`100BT`/`350BT` configs |
+| Tokens per GB | ~0.44B tok / 1.72GB text-extracted | ~1.84 GB per 1B tokens (measured, `sample-350BT`: 300 files) |
+| Auth | hit an unrelated expired-token issue (see below) | none needed, confirmed |
+| 120B-token (6B-param) cost | doesn't fit in free disk | ~103 files, ~221 GB, ~2.7 hours (measured bandwidth) |
+
+**Two real environment blockers found and fixed to get this far, unrelated to the data
+question itself:**
+- **SSL**: all HTTPS on this machine failed (`CERTIFICATE_VERIFY_FAILED: Basic Constraints of
+  CA cert not marked critical`) — traced to Avast Antivirus's HTTPS-scanning root cert,
+  malformed per strict X.509 rules (in the Windows trust store, which browsers use, but not
+  Python's `certifi` bundle — and adding it to certifi wasn't sufficient, since the cert
+  itself is structurally non-compliant, not just untrusted). Worked around with SSL
+  verification disabled scoped specifically to `huggingface_hub`'s own HTTP client
+  (`set_client_factory`), not system-wide.
+- **Auth**: the cached HF token (825 bytes — far too large for a normal ~40-char token) is
+  malformed/expired, causing `401 OAuth token signature verification failed`. Both
+  SlimPajama's reupload and FineWeb-Edu work fine anonymously (`token=False`) for public
+  files — no token needed at all.
+
+**Integration**: `MixedLocalDataset`'s mix generalized from a 3-tuple (SlimPajama, OASST,
+WikiText) to a 4-tuple (+ FineWeb-Edu). New `_load_fineweb_edu()` extracts text from locally
+downloaded parquet files (`scripts/download_fineweb_edu.py` handles acquisition separately —
+a 100+ file pull can take hours and shouldn't block a training script's startup) into its
+OWN `.bin` cache, not merged into SlimPajama's — `_tokenize_text_to_bin`'s cache is keyed
+only on the output `.bin` existing, so silently appending more text to SlimPajama's existing
+1.32B-token cache would never get picked up without invalidating already-tokenized work.
+
+**Real bug found and fixed while integrating this**: unlike the other 3 sources (all under
+~5 GB, so preparing them unconditionally regardless of mix share is cheap, the existing
+pattern), FineWeb-Edu can be hundreds of GB — an early version loaded/tokenized it
+unconditionally, which caused genuinely slow test runs and, worse, a real file collision
+(`PermissionError` on `fineweb_edu.bin.tmp`) between a stale unconditional-load test process
+and a concurrent real download, that also silently wrote a runaway 66 GB extraction from a
+still-in-progress download. Fixed: FineWeb-Edu is only loaded/tokenized when its mix share is
+actually > 0. A nonzero share with nothing downloaded yet fails with a clear
+`FileNotFoundError` pointing at `scripts/download_fineweb_edu.py`, rather than silently
+renormalizing the other sources to quietly cover the gap.
+
+`tests/test_issue120_fineweb_edu.py`, 5/5 pass (real parquet extraction, real end-to-end
+`MixedLocalDataset` construction with FineWeb-Edu as the sole source — not mocked).
+
+Recommended mix for 4B+ pretrain runs: `--pretrain-mix 0.0,0.0,0.0,1.0` (FineWeb-Edu only) —
+sidesteps WikiText's #119 mix-ratio cap by construction rather than needing to tune shares.
+
 ## Key Training Flags
 
 | Flag | Default | Description |

@@ -66,7 +66,7 @@ def test_current_cached_volume_is_data_limited_not_mix_limited():
     if not _HAS_CACHED_DATA:
         print("  [skip] tokenized data_cache not present locally")
         return
-    ds, out = _build(mix=(0.85, 0.0, 0.15))
+    ds, out = _build(mix=(0.85, 0.0, 0.15, 0.0))
     assert "[data mix] total pretrain budget capped at" in out
     assert "by DATA VOLUME, not the mix ratio" in out, (
         "expected a data-volume-limited message at current cached data; got:\n"
@@ -84,7 +84,7 @@ def test_lower_max_repeat_exposes_wikitext_as_the_real_mix_ratio_bind():
     if not _HAS_CACHED_DATA:
         print("  [skip] tokenized data_cache not present locally")
         return
-    ds, out = _build(mix=(0.85, 0.0, 0.15), max_repeat=1)
+    ds, out = _build(mix=(0.85, 0.0, 0.15, 0.0), max_repeat=1)
     assert "by a MIX-RATIO bind" in out, (
         "expected max_repeat=1 to expose a mix-ratio bind against real cached data; got:\n"
         + [l for l in out.splitlines() if "[data mix]" in l][0]
@@ -99,7 +99,7 @@ def test_dropping_wikitext_removes_it_from_the_mix_entirely():
     if not _HAS_CACHED_DATA:
         print("  [skip] tokenized data_cache not present locally")
         return
-    ds, out = _build(mix=(1.0, 0.0, 0.0))
+    ds, out = _build(mix=(1.0, 0.0, 0.0, 0.0))
     mix_line = [l for l in out.splitlines() if "[data mix]" in l][0]
     assert "WikiText-103" not in mix_line, (
         "WikiText excluded (share=0) should not appear in the mix-cap warning "
