@@ -380,6 +380,50 @@ which the first two callers alone didn't cover).
 
 14/14 `tests/test_block_coordinate_offload.py` + 7/7 `tests/test_block_coordinate.py` pass.
 
+### P1 bug found and fixed at real depth (Issue #118) — pinned host memory grew unbounded with layer count
+
+#115's `prefetch()`, as originally landed, pinned each block's ACTUAL CPU home tensor
+directly and left it pinned indefinitely — only replaced (and un-pinned) the next time that
+specific block completed a full BCD activate/deactivate cycle. Undetected by #115's own
+tests (3-4 layer toy models) and benchmarks (24-36 layers, never enough cumulative pinning to
+hit a ceiling). **Confirmed via a real 4.02B run (d=2048, 95 layers)**: crashed partway
+through the very first forward pass, from inside `pin_memory()` itself, with a CUDA
+out-of-memory error — traced and confirmed this was neither GPU VRAM (peak reserved was 64
+MiB at the point of failure) nor regular CPU RAM (the model's bf16 CPU footprint is ~8 GiB,
+well under this machine's ~15.3 GiB), but specifically the OS/driver's **pinned (page-locked)
+memory ceiling**, far tighter than either — a single forward pass prefetches every layer in
+sequence, not just the BCD-active one, so nothing released a block's pinning within one
+forward pass; by ~95 layers, cumulative pinning approached ~8 GiB.
+
+**Fix**: `GPUBufferPool` no longer pins home tensors directly. `_PinnedStagingPool` maintains
+a small, bounded pool of reusable pinned staging buffers keyed by shape signature (this
+project's blocks are shape-homogeneous per layer type, so the number of distinct shapes is
+small and depth-independent). `prefetch()` copies a block's home data into a staging buffer
+(a fast plain host memcpy, not PCIe-bound) before issuing the actual async H2D copy from it;
+the staging buffer returns to the pool once its copy is confirmed complete via a **host-side**
+`event.synchronize()` (not just the stream-level `wait_event()` used to make the GPU buffer
+itself safe for compute — a plain host memcpy reusing the staging buffer needs a true host
+block, not just a GPU-side dependency, or it could overwrite memory an in-flight async copy
+was still reading from).
+
+**Re-measured after the fix**: the same 4.02B config that crashed now completes cleanly —
+**938 MiB peak allocated, 1102 MiB peak reserved, 4.25 sec/step**
+(`scripts/bench_offload_4b_8b.py`, `results/offload_4b_8b.json`). An **8.01B** config
+(d=2048, 190 layers) was also attempted at the same time — it fails, but at a different,
+already-known, unrelated stage: real (non-meta) fp32 CPU construction of an 8B-param model
+needs ~32 GiB, exceeding this machine's ~15.3 GiB RAM (the same pre-existing construction-time
+ceiling documented in #102's extended finding for the 4.65 GiB config, just further out) —
+confirmed directly, not assumed (`torch.device("meta")` gives an accurate param count without
+allocating; the real, non-meta construction segfaults on its own, before the offload/GPU
+machinery is ever reached). Not a regression from #118 or anything this session touched — a
+separate, pre-existing hardware ceiling.
+
+New regression test `test_prefetch_pinned_memory_bounded_at_depth`: exercises the actual root
+cause (pinned-allocation count scaling with layer count) cheaply, via 30 tiny layers rather
+than a slow multi-GB real-depth run — asserts the number of distinct pinned buffers ever
+allocated stays bounded by (num shapes × max_per_shape), not by the 30-layer count. 15/15
+`tests/test_block_coordinate_offload.py` + 7/7 `tests/test_block_coordinate.py` pass.
+
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 
 Memory **demand** is measured (card-independent; WDDM spill rows record true demand past

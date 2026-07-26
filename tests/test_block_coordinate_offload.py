@@ -364,6 +364,72 @@ else:
             f"a pure scheduling change"
         )
 
+    def test_prefetch_pinned_memory_bounded_at_depth():
+        """Issue #118: GPUBufferPool.prefetch() used to pin each block's
+        ACTUAL CPU home tensor directly and leave it pinned until that
+        block's next BCD activate/deactivate cycle -- since one forward
+        pass prefetches EVERY block (not just the BCD-active one), pinned
+        allocations grew with total LAYER COUNT, OOMing the OS/driver's
+        pinned-memory ceiling at real depth (confirmed: ~8 GiB pinned
+        partway through one forward pass at 95 layers / ~4B params -- see
+        the issue for the full repro). This test targets the actual root
+        cause directly and fast: many (30) TINY layers, so the bug (pinned
+        allocation count scaling with layer count) is exercised without
+        needing gigabytes -- a real depth stress test would be too slow
+        for routine test runs, this isolates the same mechanism cheaply.
+
+        Asserts the number of DISTINCT pinned buffers ever allocated stays
+        bounded by (num_distinct_shapes x max_per_shape), not by layer
+        count -- the old bug would have shown one pinned allocation per
+        layer (30), scaling linearly with depth.
+        """
+        from hvn.core.block_coordinate import _PinnedStagingPool
+
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=30, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=2,
+            offload_inactive_weights=True, device=device,
+        )
+
+        pool = sched.buffer_pool
+        real_allocs = {"n": 0}
+        orig_pin_acquire = _PinnedStagingPool.acquire
+
+        def _counting_acquire(self, shape, dtype):
+            sig = (tuple(shape), dtype)
+            free = self._free.get(sig)
+            if not free:
+                in_use = self._in_use.get(sig, [])
+                if len(in_use) < self.max_per_shape:
+                    real_allocs["n"] += 1  # about to hit the torch.empty(...).pin_memory() branch
+            return orig_pin_acquire(self, shape, dtype)
+
+        pool._pinned_pool.acquire = _counting_acquire.__get__(pool._pinned_pool, _PinnedStagingPool)
+
+        ids = torch.randint(0, 64, (2, 16), device=device)
+        logits = model(ids)
+        loss = F.cross_entropy(logits.reshape(-1, 64), ids.reshape(-1))
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+
+        num_shapes = len({sig for _, params in sched.blocks for sig in [pool._signature(params)]})
+        # A block partitions into several params of a FEW distinct shapes
+        # shared across all 30 layers -- bound is small and flat, not 30x.
+        max_expected = num_shapes * pool._pinned_pool.max_per_shape * 4  # generous slack, still << 30
+        assert real_allocs["n"] > 0, "no pinned buffers were ever allocated -- prefetch may not be firing"
+        assert real_allocs["n"] < 30, (
+            f"pinned allocation count ({real_allocs['n']}) scales with layer count (30) -- "
+            f"this is the #118 bug: pinning isn't bounded, it's growing with depth"
+        )
+        assert real_allocs["n"] <= max_expected, (
+            f"pinned allocation count ({real_allocs['n']}) exceeds the expected bounded "
+            f"ceiling ({max_expected}) for {num_shapes} distinct shapes"
+        )
+
     def test_prefetch_training_converges():
         """Issue #115: a full multi-cycle training loop with the default
         offload_prefetch=True must still converge, and must still retain

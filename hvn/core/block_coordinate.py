@@ -33,6 +33,81 @@ def _dtype_itemsize(dtype: torch.dtype) -> int:
     return torch.empty((), dtype=dtype).element_size()
 
 
+class _PinnedStagingPool:
+    """Bounded pool of pinned (page-locked) CPU staging buffers, keyed by
+    shape+dtype signature (Issue #118).
+
+    `GPUBufferPool.prefetch()` originally pinned each block's ACTUAL CPU
+    home tensor directly, and left it pinned indefinitely -- only replaced
+    (and thus un-pinned) the next time that specific block completed a
+    full BCD activate/deactivate cycle. But a single forward pass
+    prefetches EVERY block in sequence (not just the BCD-active one), so
+    nothing released a block's pinning between "prefetched" and
+    "consumed" within one forward pass -- pinned memory grew with total
+    LAYER COUNT, not with anything bounded. Measured: ~8 GiB pinned
+    partway through a single forward pass at 95 layers (~4B params),
+    crashing with a CUDA out-of-memory error from inside `pin_memory()`
+    itself -- not GPU VRAM (peak reserved was 64 MiB at the point of
+    failure) and not regular CPU RAM (the model's bf16 CPU footprint was
+    ~8 GiB total, well under this machine's ~15.3 GiB RAM) -- specifically
+    the OS/driver's pinned-memory ceiling, which is far tighter than
+    either. Smaller test/benchmark configs (3-4 layers in unit tests,
+    24-36 layers in earlier benchmarks) never pinned enough cumulative
+    memory to hit this, so it went undetected until real depth.
+
+    Fix: pin a small, bounded number of reusable STAGING buffers instead
+    of the home tensors themselves. `prefetch()` copies a block's
+    (unpinned) CPU home data into a staging buffer (a fast plain host
+    memcpy -- not PCIe-bound, so this doesn't reintroduce a transfer-time
+    cost) just before issuing the actual async H2D copy FROM that pinned
+    staging buffer. Since this project's blocks are shape-homogeneous per
+    layer type (all `blocks.i` at a given d_model share identical
+    per-parameter shapes), the number of distinct shape signatures is
+    small and independent of total layer count -- so pinned memory is
+    bounded by `max_per_shape` buffers per shape, not by depth.
+    """
+
+    def __init__(self, max_per_shape: int = 2):
+        self.max_per_shape = max(1, max_per_shape)
+        self._free: dict[tuple, list[torch.Tensor]] = {}
+        self._in_use: dict[tuple, list[torch.Tensor]] = {}
+
+    def acquire(self, shape: torch.Size, dtype: torch.dtype) -> torch.Tensor:
+        sig = (tuple(shape), dtype)
+        free = self._free.get(sig)
+        buf = free.pop() if free else None
+        if buf is None:
+            in_use = self._in_use.setdefault(sig, [])
+            if len(in_use) >= self.max_per_shape:
+                # Rare fallback (shouldn't happen in the normal sequential
+                # prefetch-then-consume-next-iteration pattern this pool is
+                # sized for): every buffer of this shape is still in use.
+                # A full device sync is a blunt but always-correct way to
+                # guarantee it's safe to reclaim one -- acceptable here
+                # since this branch is not the common hot path.
+                torch.cuda.synchronize()
+                buf = in_use.pop(0)
+            else:
+                buf = torch.empty(shape, dtype=dtype).pin_memory()
+        self._in_use.setdefault(sig, []).append(buf)
+        return buf
+
+    def release(self, buf: torch.Tensor) -> None:
+        """Return `buf` to the free pool. Caller MUST have already
+        host-synchronized on any event tracking a copy FROM this buffer
+        (`event.synchronize()`, not just a stream-level `wait_event()` --
+        see `GPUBufferPool.load`) before calling this, since the buffer's
+        memory becomes safe to overwrite again the moment this is called."""
+        sig = (tuple(buf.shape), buf.dtype)
+        in_use = self._in_use.get(sig)
+        if in_use:
+            for i, t in enumerate(in_use):
+                if t is buf:
+                    in_use.pop(i)
+                    break
+        self._free.setdefault(sig, []).append(buf)
+
+
 class GPUBufferPool:
     """Pre-allocated, reusable GPU buffers for offloaded block parameters
     (Issue #101), with an LRU residency cache on top (Issue #103). Every
@@ -118,6 +193,11 @@ class GPUBufferPool:
         # silently falls back to a plain synchronous load -- see there).
         self._prefetch_stream = torch.cuda.Stream(device=device) if device.type == "cuda" else None
         self._pending_events: dict[str, torch.cuda.Event] = {}  # key -> H2D-copy-done event
+        # Issue #118: bounded pinned staging buffers for prefetch() -- see
+        # _PinnedStagingPool's docstring for why pinning home tensors
+        # directly (the original #115 design) OOMs at real depth.
+        self._pinned_pool = _PinnedStagingPool()
+        self._staging_in_use: dict[str, list[torch.Tensor]] = {}  # key -> its staging buffers
 
     def capture_native_dtype(self, params: list[nn.Parameter]) -> None:
         """Record each param's true (training-time) dtype, once, before any
@@ -232,6 +312,23 @@ class GPUBufferPool:
             event = self._pending_events.pop(key, None)
             if event is not None:
                 torch.cuda.current_stream(self.device).wait_event(event)
+                # Issue #118: wait_event() above is a cheap GPU-side stream
+                # dependency, NOT a host-blocking sync -- it doesn't by
+                # itself guarantee the copy is done from the HOST's
+                # perspective right now. A host-side event.synchronize()
+                # is required before it's safe to hand this key's pinned
+                # staging buffers back to the pool for reuse by a plain
+                # (host-side, immediate) memcpy in a future prefetch() --
+                # otherwise a new copy could start overwriting a staging
+                # buffer's memory while the old async H2D copy reading
+                # from it (via wait_event's dependency, not yet actually
+                # complete) is still in flight. Cheap in practice: by the
+                # time load() runs, the transfer has usually already
+                # finished (it was kicked off during the PREVIOUS block's
+                # compute), so this typically returns instantly rather
+                # than actually blocking.
+                event.synchronize()
+                self._release_staging(key)
             return
         buffers = self._acquire_buffers(key, params)
         for p, buf in zip(params, buffers):
@@ -252,30 +349,43 @@ class GPUBufferPool:
         to prefetch -- either a genuine cache hit, or a previous prefetch
         for this key hasn't been consumed yet).
 
-        Requires the CPU home tensor to be pinned (page-locked) memory for
-        the H2D copy to actually run asynchronously -- PyTorch silently
-        falls back to a synchronous copy for `non_blocking=True` on
-        regular (pageable) CPU memory, which would defeat the entire point
-        of this method. Pins lazily, on first prefetch of a given
-        resting tensor (each time a block deactivates it gets a FRESH,
-        unpinned CPU tensor -- see `BlockCoordinateScheduler._activate`'s
-        deactivation loop -- so this check-and-pin happens again then).
+        Requires a PINNED (page-locked) source for the H2D copy to
+        actually run asynchronously -- PyTorch silently falls back to a
+        synchronous copy for `non_blocking=True` on regular (pageable) CPU
+        memory, which would defeat the entire point of this method. Issue
+        #118: rather than pinning the CPU home tensor itself (which OOMs
+        the OS/driver's pinned-memory ceiling at real depth -- see
+        `_PinnedStagingPool`'s docstring), each param's home data is first
+        copied (a fast plain host memcpy, not PCIe-bound) into a small,
+        bounded, reusable pinned STAGING buffer, and the actual async H2D
+        copy reads from that instead.
         """
         self.register_cpu_home(params)
         if self._prefetch_stream is None or key in self._resident:
             return
         buffers = self._acquire_buffers(key, params)
+        staging_bufs = []
         with torch.cuda.stream(self._prefetch_stream):
             for p, buf in zip(params, buffers):
                 home = self._cpu_home[id(p)]
-                if not home.is_pinned():
-                    home = home.pin_memory()
-                    self._cpu_home[id(p)] = home
-                buf.copy_(home, non_blocking=True)
+                staging = self._pinned_pool.acquire(home.shape, home.dtype)
+                staging.copy_(home)
+                buf.copy_(staging, non_blocking=True)
                 p.data = buf
+                staging_bufs.append(staging)
         event = torch.cuda.Event()
         event.record(self._prefetch_stream)
         self._pending_events[key] = event
+        self._staging_in_use[key] = staging_bufs
+
+    def _release_staging(self, key: str) -> None:
+        """Return `key`'s staging buffers (if any) to the pinned pool.
+        Caller must have already host-synchronized (`event.synchronize()`)
+        on `key`'s pending event first -- see `_PinnedStagingPool.release`."""
+        bufs = self._staging_in_use.pop(key, None)
+        if bufs:
+            for b in bufs:
+                self._pinned_pool.release(b)
 
     def _wait_and_clear_pending(self, key: str) -> None:
         """Issue #115: if `key` has a prefetch H2D copy still in flight
@@ -287,6 +397,7 @@ class GPUBufferPool:
         event = self._pending_events.pop(key, None)
         if event is not None:
             event.synchronize()
+            self._release_staging(key)
 
     def evict(self, key: str) -> None:
         """Force-release one resident entry now (used only when a call
