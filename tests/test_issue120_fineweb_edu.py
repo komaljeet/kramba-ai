@@ -140,21 +140,53 @@ def test_mixed_dataset_with_real_fineweb_edu_source():
     # shared cache_dir here (not an isolated tempdir) so this test reuses
     # the already-cached SlimPajama/OASST/WikiText .bin files instead of
     # re-extracting multi-GB corpora from scratch every run.
-    with redirect_stdout(buf):
-        ds = MixedLocalDataset(
-            tokenizer, seq_len=512, cache_dir=os.path.join(_REPO_ROOT, "data_cache"),
-            fineweb_edu_dir=_SMALL_FINEWEB_DIR,
-            fineweb_edu_token_bytes=5_000_000,  # keep it fast
-            mix=(0.0, 0.0, 0.0, 1.0),  # FineWeb-Edu only
-        )
-    out = buf.getvalue()
-    assert ds.source_names == ["FineWeb-Edu"]
-    assert len(ds) > 0
-    x, y, src_id = ds[0]
-    assert x.shape == (512,)
-    assert y.shape == (512,)
-    assert src_id == 0
-    assert "[data mix]" in out
+    # Issue #121: this test writes REAL artifacts into the shared
+    # data_cache/ (fineweb_edu_en.txt, tokenized/fineweb_edu.bin), capped
+    # tiny (5MB) for test speed. Without cleanup, a real training run
+    # using the same shared data_cache/ later silently hit
+    # _tokenize_text_to_bin's cache-hit path and reused this test's
+    # leftover 5MB-derived bin instead of tokenizing its own much larger
+    # real extraction -- caught only by manually reading a training run's
+    # log closely enough to notice an unexpected "cache hit" -- not
+    # caught by any automated check. try/finally so cleanup happens even
+    # if an assertion below fails.
+    fineweb_txt_cache = os.path.join(_REPO_ROOT, "data_cache", "fineweb_edu_en.txt")
+    fineweb_bin_cache = os.path.join(_REPO_ROOT, "data_cache", "tokenized", "fineweb_edu.bin")
+    try:
+        with redirect_stdout(buf):
+            ds = MixedLocalDataset(
+                tokenizer, seq_len=512, cache_dir=os.path.join(_REPO_ROOT, "data_cache"),
+                fineweb_edu_dir=_SMALL_FINEWEB_DIR,
+                fineweb_edu_token_bytes=5_000_000,  # keep it fast
+                mix=(0.0, 0.0, 0.0, 1.0),  # FineWeb-Edu only
+            )
+        out = buf.getvalue()
+        assert ds.source_names == ["FineWeb-Edu"]
+        assert len(ds) > 0
+        x, y, src_id = ds[0]
+        assert x.shape == (512,)
+        assert y.shape == (512,)
+        assert src_id == 0
+        assert "[data mix]" in out
+    finally:
+        # ds.sources holds numpy.memmap handles onto fineweb_bin_cache --
+        # Windows refuses to delete a file that's still memory-mapped by
+        # this (or any) process, even in a finally block, unless the
+        # memmap is explicitly released first (a bare `del ds` isn't
+        # reliably enough -- Python's GC timing isn't guaranteed to
+        # release the underlying OS handle before the next line runs).
+        if "ds" in locals():
+            ds.sources.clear()
+            del ds
+        import gc
+        gc.collect()
+        for path in (fineweb_txt_cache, fineweb_bin_cache):
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except PermissionError:
+                    print(f"  [warn] could not remove {path} (still locked) -- "
+                          f"a leftover from this run, harmless but worth a manual cleanup")
 
 
 def _run_all():
