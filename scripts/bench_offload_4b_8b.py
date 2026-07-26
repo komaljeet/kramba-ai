@@ -57,6 +57,7 @@ def run_probe(cfg: dict) -> dict:
             offload_inactive_weights=True, device=device,
             offload_park_dtype=torch.bfloat16,
             offload_prefetch=True,
+            offload_cache_blocks=cfg.get("cache_blocks", 1),
         )
 
         crit = torch.nn.CrossEntropyLoss()
