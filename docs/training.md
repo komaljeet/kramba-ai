@@ -380,6 +380,92 @@ which the first two callers alone didn't cover).
 
 14/14 `tests/test_block_coordinate_offload.py` + 7/7 `tests/test_block_coordinate.py` pass.
 
+### P1 bug found and fixed at real depth (Issue #118) — pinned host memory grew unbounded with layer count
+
+#115's `prefetch()`, as originally landed, pinned each block's ACTUAL CPU home tensor
+directly and left it pinned indefinitely — only replaced (and un-pinned) the next time that
+specific block completed a full BCD activate/deactivate cycle. Undetected by #115's own
+tests (3-4 layer toy models) and benchmarks (24-36 layers, never enough cumulative pinning to
+hit a ceiling). **Confirmed via a real 4.02B run (d=2048, 95 layers)**: crashed partway
+through the very first forward pass, from inside `pin_memory()` itself, with a CUDA
+out-of-memory error — traced and confirmed this was neither GPU VRAM (peak reserved was 64
+MiB at the point of failure) nor regular CPU RAM (the model's bf16 CPU footprint is ~8 GiB,
+well under this machine's ~15.3 GiB), but specifically the OS/driver's **pinned (page-locked)
+memory ceiling**, far tighter than either — a single forward pass prefetches every layer in
+sequence, not just the BCD-active one, so nothing released a block's pinning within one
+forward pass; by ~95 layers, cumulative pinning approached ~8 GiB.
+
+**Fix**: `GPUBufferPool` no longer pins home tensors directly. `_PinnedStagingPool` maintains
+a small, bounded pool of reusable pinned staging buffers keyed by shape signature (this
+project's blocks are shape-homogeneous per layer type, so the number of distinct shapes is
+small and depth-independent). `prefetch()` copies a block's home data into a staging buffer
+(a fast plain host memcpy, not PCIe-bound) before issuing the actual async H2D copy from it;
+the staging buffer returns to the pool once its copy is confirmed complete via a **host-side**
+`event.synchronize()` (not just the stream-level `wait_event()` used to make the GPU buffer
+itself safe for compute — a plain host memcpy reusing the staging buffer needs a true host
+block, not just a GPU-side dependency, or it could overwrite memory an in-flight async copy
+was still reading from).
+
+**Re-measured after the fix**: the same 4.02B config that crashed now completes cleanly —
+**938 MiB peak allocated, 1102 MiB peak reserved, 4.25 sec/step**
+(`scripts/bench_offload_4b_8b.py`, `results/offload_4b_8b.json`). An **8.01B** config
+(d=2048, 190 layers) was also attempted at the same time — it fails, but at a different,
+already-known, unrelated stage: real (non-meta) fp32 CPU construction of an 8B-param model
+needs ~32 GiB, exceeding this machine's ~15.3 GiB RAM (the same pre-existing construction-time
+ceiling documented in #102's extended finding for the 4.65 GiB config, just further out) —
+confirmed directly, not assumed (`torch.device("meta")` gives an accurate param count without
+allocating; the real, non-meta construction segfaults on its own, before the offload/GPU
+machinery is ever reached). Not a regression from #118 or anything this session touched — a
+separate, pre-existing hardware ceiling.
+
+New regression test `test_prefetch_pinned_memory_bounded_at_depth`: exercises the actual root
+cause (pinned-allocation count scaling with layer count) cheaply, via 30 tiny layers rather
+than a slow multi-GB real-depth run — asserts the number of distinct pinned buffers ever
+allocated stays bounded by (num shapes × max_per_shape), not by the 30-layer count. 15/15
+`tests/test_block_coordinate_offload.py` + 7/7 `tests/test_block_coordinate.py` pass.
+
+**Follow-up measurement: the real ceiling on this hardware is closer to ~6B than 4B, and the
+8B block is specifically CPU-RAM-at-construction, not VRAM.** Bisected directly rather than
+assumed:
+
+| Params | fp32 construction RAM needed | Real construction result |
+|---|---:|---|
+| 4.02B | 16.1 GiB | ✅ works (~21s) |
+| **5.995B** | 24.0 GiB | ✅ **works** (~33s — visibly slower, likely some page-file swap, but completes, not a crash) |
+| 8.01B | 32.0 GiB | ❌ segfaults (hard OOM, not a slow degradation) |
+
+**5.995B (d=2048, 142 layers) trains cleanly** with the full offload+bf16-park+prefetch
+stack: 985 MiB peak alloc, 1168 MiB peak reserved, 6.92 sec/step at batch_size=2; **batch_size=8
+also fits comfortably** (1612 MiB alloc, 1950 MiB reserved, 8.83 sec/step) — both far under
+the 6 GiB card. VRAM stays small regardless of param count under this offload scheme (it's
+governed by activation memory + the bounded per-block buffer/staging pools, not total
+weights); the real ceiling for *this* hardware is CPU RAM at construction time, and bf16-park
+being CPU RAM only bounds it via `torch.bfloat16` parked weights only in aggregate.
+
+**Batch-size ceiling, measured at 4.02B** (`d_model` swept, `seq_len=128`):
+
+| batch_size | peak_alloc | peak_reserved | sec/step |
+|---:|---:|---:|---:|
+| 2 | 938 MB | 1102 MB | 4.35 |
+| 4 | 1076 MB | 1142 MB | 4.31 |
+| 8 | 1424 MB | 1566 MB | 5.44 |
+| 16 | 2128 MB | 2600 MB | 9.22 |
+| 32 | 3536 MB | 4946 MB | 18.89 |
+| 48 | — | — | stalled >300s (consistent with WDDM spill-over past ~6 GiB, not a hard OOM) |
+
+**`offload_cache_blocks` (round-trip reduction) at 95-layer depth confirms the #103
+structural limit directly, not just extrapolated**: raising it from 1→32 costs +2.8 GiB VRAM
+for only ~8% faster steps (4.34s→4.00s) — a poor trade at this depth, because backward
+recomputes in reverse layer order, so a block must survive resident nearly the entire stack
+to get reused, which no practical cache size reaches at 95 layers. Not recommended past the
+default at this scale; #103 already documented this working well at the shallower ~1.5-2B
+sweet spot instead.
+
+`scripts/bench_offload_4b_8b.py` gained an `offload_cache_blocks` passthrough (was silently
+not wired to the probe config in the version committed with #118 -- caught while running this
+sweep, not by any test, since the bug just made every `cache_blocks` value produce identical
+results rather than erroring).
+
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 
 Memory **demand** is measured (card-independent; WDDM spill rows record true demand past
