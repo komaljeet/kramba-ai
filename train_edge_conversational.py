@@ -633,6 +633,67 @@ class MixedLocalDataset(Dataset):
         )
         total_chunks = int(min(sum(avail), total_cap))
 
+        # Issue #119: the max_repeat bind on whichever mix source is smallest
+        # (relative to its target share) silently caps the ENTIRE dataset's
+        # total token budget -- this already happened once (OASST capped the
+        # old 83M pretrain at ~135M tokens, undetected for a while) and would
+        # recur with WikiText-103 (a fixed ~119M-token corpus, nothing more
+        # to download) the moment a run targets Chinchilla-optimal volume for
+        # a bigger model (e.g. ~80-120B tokens for 4-6B params) -- the cap
+        # lands around ~2.4B tokens with WikiText still in the mix at 15%,
+        # ~2-3% of that floor, and training would look normal (loss
+        # decreasing) while silently never reaching enough fresh data. Print
+        # this loudly, always, rather than let it stay silent until someone
+        # does the arithmetic by hand after the fact.
+        self.total_chunks = total_chunks  # exposed for callers/tests, e.g. #119's cap warning
+        effective_tokens = total_chunks * self.seq_len
+        equiv_params_m = effective_tokens / 20 / 1e6  # 20 tokens/param, this project's Chinchilla convention
+        if total_cap < sum(avail):
+            # A source's max_repeat bind is the ACTIVE constraint: there is
+            # MORE raw data available than this mix could ever use at its
+            # current share, because the smallest-relative-to-share source
+            # would have to repeat past max_repeat to keep up. This is the
+            # #119/OASST failure mode -- fixable by changing the MIX (drop/
+            # reduce that source's share, or raise --max-repeat).
+            binding_idx = min(
+                range(len(avail)),
+                key=lambda i: (max_repeat * avail[i]) / ratios[i] if avail[i] > 0 and ratios[i] > 0 else float("inf"),
+            )
+            print(
+                f"[data mix] total pretrain budget capped at {effective_tokens:,} tokens "
+                f"({effective_tokens / 1e9:.2f}B) by a MIX-RATIO bind -- binding source: "
+                f"{self.source_names[binding_idx]!r} (share={ratios[binding_idx]:.2f}, "
+                f"max_repeat={max_repeat}) would need to repeat past max_repeat to keep "
+                f"up with the other source(s), even though more of THEM is available. "
+                f"At the 20 tokens/param Chinchilla convention this project uses, that's "
+                f"enough for a ~{equiv_params_m:.0f}M-param model -- if you're targeting "
+                f"something bigger, THIS MIX will silently under-serve it regardless of "
+                f"how much more data you download. Fix: drop/reduce the binding source's "
+                f"share, or raise --max-repeat (weighing the overfitting risk of "
+                f"repeating a small source that many times)."
+            )
+        else:
+            # No source's repeat cap is actually binding -- every available
+            # window from every source is being used, and the limit is
+            # simply TOTAL DATA VOLUME across all sources combined, not the
+            # mix ratio. Downloading more of any source (proportionate to
+            # its share) raises this ceiling directly -- changing shares
+            # will NOT help until raw volume grows past the point where one
+            # source's max_repeat bind becomes the active constraint instead
+            # (see the branch above).
+            print(
+                f"[data mix] total pretrain budget capped at {effective_tokens:,} tokens "
+                f"({effective_tokens / 1e9:.2f}B) by DATA VOLUME, not the mix ratio -- every "
+                f"available window from every source is already being used "
+                f"({sum(avail):,} total), none of them hit their max_repeat={max_repeat} "
+                f"limit. At the 20 tokens/param Chinchilla convention this project uses, "
+                f"that's enough for a ~{equiv_params_m:.0f}M-param model -- if you're "
+                f"targeting something bigger, download more data (proportionate to the "
+                f"current mix shares); adjusting the mix ratio alone will not raise this "
+                f"ceiling until raw volume grows enough for a source's repeat limit to "
+                f"become the active constraint instead."
+            )
+
         # Hold out the last `val_fraction` of each source's UNIQUE windows as a
         # token-disjoint validation set: those offsets never enter the train
         # index, so there is no leakage (whole seq_len windows are disjoint).
