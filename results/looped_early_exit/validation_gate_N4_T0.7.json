@@ -1,0 +1,46 @@
+{
+  "checkpoint": "checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt",
+  "step": 8000,
+  "n_trials_per_cell": 300,
+  "doc_baseline_full_forward_path": {
+    "near_window_recall_pct": 35.5,
+    "far_window_recall_pct": 8.5,
+    "note": "measured via model(x) full forward(), NOT forward_step -- see module docstring; the 'baseline' record above (N=1) is the apples-to-apples comparison for this sweep"
+  },
+  "results": [
+    {
+      "N": 1,
+      "T": 1.1,
+      "near_window_recall_pct": 33.67,
+      "far_window_recall_pct": 6.33,
+      "avg_loops_overall": 1.0,
+      "avg_loops_easy": 1.0,
+      "avg_loops_hard": 1.0,
+      "n_easy": 61,
+      "n_hard": 167,
+      "peak_vram_mb": 657.5,
+      "tokens_per_sec": 27.82
+    },
+    {
+      "N": 4,
+      "T": 0.7,
+      "near_window_recall_pct": 28.67,
+      "far_window_recall_pct": 7.0,
+      "avg_loops_overall": 1.0175438596491229,
+      "avg_loops_easy": 1.0,
+      "avg_loops_hard": 1.0239520958083832,
+      "n_easy": 61,
+      "n_hard": 167,
+      "peak_vram_mb": 656.8,
+      "tokens_per_sec": 54.34,
+      "gates": {
+        "near_recall_ge_30": false,
+        "far_recall_ge_7": true,
+        "avg_loops_below_half_N": true,
+        "tokens_per_sec_improves": true,
+        "all_pass": false
+      }
+    }
+  ],
+  "recommendation": null
+}

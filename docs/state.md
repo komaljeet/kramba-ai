@@ -444,3 +444,65 @@ committing to a multi-day pretrain up front. Scaling the *same* recipe (DeltaNet
 windowed-attention hybrid, same warm-start approach) to whatever size #107 lands on is now the
 well-justified next step when picked back up — not a guess, a conclusion from real measurement
 at the smaller scale first.
+
+## Looped early exit — no-retrain hyperparameter search FAILS the gate (Issue #122, 2026-08-01)
+
+Wrapped `EdgeHVN.forward_step` (`hvn/edge/looped.py`) so the block stack can re-run up to N
+times per token, exiting once normalized softmax entropy drops below threshold T — a
+"looped transformer" style weight-tied refinement, entropy-only exit signal (a trainable
+confidence-MLP was considered and dropped: with no retraining allowed, its weights would be
+random and its "confidence" scores meaningless). Contract preserved exactly — `forward_step`/
+`init_state`/`chat_step` signatures unchanged, `ChatSession` needs zero code changes
+(`tests/test_looped_early_exit.py`, 6/6 CPU parity/correctness tests, incl. a proof that a
+discarded loop's candidate state never leaks into the next loop's attempt).
+
+**Full grid N ∈ {2,4,8,16} × T ∈ {0.1,0.3,0.5,0.7} on `checkpoints/hybrid_a4_v2/
+hybrid_a4_step8000.pt`** (the checkpoint the 35.5%/8.5% recall baseline was originally measured
+on — `hybrid_tooluse_v1.pt`, named in the original task spec, does not exist in this working
+tree or any worktree). Measured via a dedicated `forward_step`-based generation harness
+(`scripts/sweep_looped_early_exit.py`), not `eval/synthetic_recall_probe.py`'s own `generate()`
+— that uses full `forward()`, which uses `_scan_chunked` and diverges numerically from
+`forward_step`'s `_scan_sequential` on a trained checkpoint (see the #97 incremental-decode
+entry above); reusing it would have silently never exercised the loop wrapper at all.
+
+**Result: every one of the 16 combinations fails.** The pattern is a clean binary, not a
+tunable middle ground:
+
+| T | Behavior (all N) |
+|---|---|
+| 0.1 / 0.3 | avg loops ≈ N (always maxes out) → recall = **0%**, near AND far, every time |
+| 0.5 | mixed loop counts, recall still **0%** near AND far |
+| 0.7 | avg loops ≈ **1.0–1.07** (almost never actually loops) → recall reverts to ~baseline |
+
+There is no hyperparameter point where the model loops *and* stays useful. **Root cause: the
+block stack was never trained to refine its own output** — a second pass through untrained
+weights pushes the hidden state off the distribution it was trained on, and exact-token recall
+collapses almost immediately. This was flagged as the key risk before implementation (an
+untrained "confidence" mechanism can't be assumed quality-neutral) and the sweep confirms it
+directly rather than just plausibly.
+
+**Closest candidate, N=4/T=0.7, re-run at the full 300-trial validation gate** (vs. a
+300-trial-measured N=1 baseline, not the old doc numbers — see harness note above):
+
+| Metric | Baseline | N=4,T=0.7 | Target | Result |
+|---|---:|---:|---|:---:|
+| Near-window recall | 33.67% | 28.67% | ≥30% | ❌ |
+| Far-window recall | 6.33% | 7.0% | ≥7% | ✅ (exactly on the line) |
+| Avg loops, easy tokens | — | 1.0 | ≤2 | ✅ |
+| Avg loops, hard tokens | — | 1.024 | ≥N/2 | ❌ |
+| Tokens/sec | 27.82 | 54.34 | improves | ✅ (see caveat) |
+
+**Overall FAIL**, and the two nominal passes don't rescue it: avg-loops-hard ≈ avg-loops-easy ≈
+1.0 means the mechanism isn't discriminating hard from easy tokens at all — at T=0.7 it's
+functionally inert, not "using" loops. The 2× tokens/sec figure is inconsistent with a loop
+count barely above 1.0 and is almost certainly single-run GPU/system measurement noise (one
+40-token generation per combo), not a real architectural speedup.
+
+**Decision: untrained looped early exit does not work on this checkpoint at any tested (N,T).**
+This is a real, informative negative result for the no-retrain phase of #122, not a bug —
+correctness was independently verified via the parity tests above. The next step, if this
+capability is still wanted, is a loop-aware **continued fine-tune** (train with randomized loop
+counts so the block learns to be a genuine refiner of its own output), reusing this checkpoint's
+existing pretrain/FT investment — not a from-scratch retrain, and not further hyperparameter
+search on the frozen checkpoint. Full sweep data: `results/looped_early_exit/sweep_results.json`,
+`results/looped_early_exit/validation_gate_N4_T0.7.json`.
