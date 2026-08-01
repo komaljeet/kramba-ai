@@ -145,3 +145,35 @@ def pop_loop_log(model) -> list[int]:
     if hasattr(model, "_loop_log"):
         model._loop_log.clear()
     return log
+
+
+def looped_forward_train(model, input_ids, position_ids, k: int, deep_supervise: bool = True):
+    """Full-sequence (training-time) counterpart to _looped_forward_step.
+
+    Runs the block stack k times over the WHOLE sequence via each block's
+    ``forward()`` (not ``forward_step``) -- there is no explicit external
+    state to clone/reset here, since a plain ``forward()`` call always
+    computes its own recurrence/attention from scratch internally; looping
+    is just re-feeding the previous loop's output hidden state back in,
+    exactly mirroring the inference-time "no fresh re-embedding, state
+    naturally resets every loop" semantics.
+
+    Returns a list of per-loop logits: length k if deep_supervise (train on
+    EVERY loop's prediction, not just the last -- otherwise the model is
+    never taught that an early loop's output alone should be usable, which
+    is exactly the property entropy-gated early exit depends on), else
+    length 1 (only the final loop).
+    """
+    if model.blocks is None:
+        raise NotImplementedError(
+            "looped training is not implemented for shared_weights=True models."
+        )
+    h = model.token_embedding(input_ids)
+    all_logits = []
+    for i in range(k):
+        for block in model.blocks:
+            h = block(h, position_ids=position_ids)
+        logits = model.decoder(model.final_norm(h))
+        if deep_supervise or i == k - 1:
+            all_logits.append(logits)
+    return all_logits
