@@ -288,15 +288,27 @@ def main():
     if sys.platform == "win32":
         os.system("chcp 65001 >nul 2>&1")
 
+    # triton-scan + megakernel-scan are unconditionally on (2026-08-01): both are
+    # validated identity-preserving vs the exact sequential scan (tests/test_issue83.py
+    # 7/7, rel-diff < 2e-3; megakernel backward "bit-identical loss", grad diff ~5e-8,
+    # scripts/ab_megakernel.py) AND, contrary to earlier assumption, MORE numerically
+    # reliable than the default eager `_scan_chunked` path they replace -- that path's
+    # own docstring documents it can be "silently wrong on decayed channels at large
+    # chunks / hard decay" (see docs/state.md, Issue #122). There is no real accuracy
+    # tradeoff to justify gating this behind an opt-in flag; only real known caveat is
+    # requiring a Triton-capable CUDA GPU (gracefully falls back via _HAS_TRITON_SCAN
+    # if unavailable). --fast now controls ONLY torch.compile, a genuinely separate
+    # tradeoff (compile-time warmup cost, less proven interaction with the loop-aware
+    # training path in continue_ft_looped.py).
     use_fast = args.fast
-    triton_scan = use_fast
-    megakernel_scan = use_fast
+    triton_scan = True
+    megakernel_scan = True
     compile_model = use_fast
 
     if use_fast and torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        print("[--fast] bf16 + TF32 + torch.compile + triton-scan + megakernel-scan")
+        print("[--fast] bf16 + TF32 + torch.compile (triton-scan + megakernel-scan are always on)")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"  device: {device}")

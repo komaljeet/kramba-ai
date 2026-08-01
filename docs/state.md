@@ -506,3 +506,60 @@ counts so the block learns to be a genuine refiner of its own output), reusing t
 existing pretrain/FT investment — not a from-scratch retrain, and not further hyperparameter
 search on the frozen checkpoint. Full sweep data: `results/looped_early_exit/sweep_results.json`,
 `results/looped_early_exit/validation_gate_N4_T0.7.json`.
+
+## Loop-aware continued-FT: recipe check + a scan-kernel default flip (Issue #122, 2026-08-01)
+
+**Stage 1 — cheap ~780K-param sandbox** (`scripts/train_looped_sandbox.py`, char-level,
+from-scratch, trains in minutes): tests the loop-aware training recipe itself (random loop
+count `k ~ Uniform[1,max_loops]` per step, loss averaged across EVERY loop's prediction —
+"deep supervision" — not just the final one, so the model is actually taught that an early
+loop's output alone should be usable). Result **ambiguous, not conclusive**: held-out loss got
+worse with more loops in both an initial (flawed, out-of-distribution held-out set) and a
+corrected (in-distribution train/val split) run. Root confound: the tiny repeated training
+corpus (583 chars × 200) is fully solvable at k=1 alone, so there's no training pressure for
+extra loops to do anything — the sandbox can't distinguish "recipe doesn't work" from "task was
+too easy to need it." Recorded in `results/looped_early_exit/sandbox_1m_results.json`.
+
+**Stage 2 — the real test** (`continue_ft_looped.py`): a genuine **continued fine-tune**, not a
+retrain — warm-starts directly from `checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt` (same
+checkpoint the #122 sweep above ran on) and continues training with the loop-aware objective on
+`data/grounded_qa_expanded.jsonl` (5,240 real, non-repeated examples — the sandbox's
+memorization confound doesn't apply). In progress; loss descending cleanly (0.87 → 0.46 by
+step 560/2000).
+
+**A real bug caught mid-run, and a genuine finding underneath it.** The first launch measured
+**41.88s/step** and was wrongly attributed to VRAM/WDDM spill-over (a documented failure mode
+elsewhere in this doc) — cutting `--batch-size` 4→2 didn't change `nvidia-smi`'s reported usage
+at all, which should have been the tell. The real cause, found by diffing against the working
+reference script (`continue_ft_hybrid.py`) rather than continuing to guess: that script's
+`--fast` enables the fused Triton scan + megakernel backward (#83/#96) on the DeltaNet blocks;
+`continue_ft_looped.py` had never wired them in at all, so it ran DeltaNet's slow default eager
+scan, uncompiled. Wiring them in: **~1s/step, a ~42x speedup**, confirmed with real
+`torch.cuda.max_memory_allocated()` instrumentation (4.6 GiB peak) in place of `nvidia-smi`
+guessing.
+
+**Default flipped: triton-scan + megakernel-scan are now unconditionally on in both
+`continue_ft_hybrid.py` and `continue_ft_looped.py`** (no `--fast` needed for this part
+anymore). This was checked thoroughly before flipping, not assumed:
+- `tests/test_issue83.py` + `tests/test_issue83_stacking.py` (7/7, re-run fresh) confirm the
+  Triton forward/backward/full-block match the exact sequential reference to rel-diff < 2e-3.
+- `scripts/ab_megakernel.py` documents the megakernel backward as loss-bit-identical, grad
+  diff ~5e-8.
+- **The direction of the risk is the opposite of what was first assumed.** The Triton kernel
+  implements the same safe log-space formulation as `_scan_chunked_stable`
+  (`hvn/core/deltanet_triton.py`: "never forms `1/P`"). The path it replaces — the *default*,
+  no-flag eager `_scan_chunked` — is the one with a real, code-documented correctness caveat:
+  its own docstring says it can be "silently wrong on decayed channels at large chunks / hard
+  decay," and the #44 `P`-floor fix only bounds the catastrophic Inf/NaN case, not full
+  accuracy. So enabling triton-scan isn't a speed-for-accuracy trade — it's strictly better on
+  both axes.
+
+**Scope of the flip, deliberately narrow.** Only `continue_ft_hybrid.py`/`continue_ft_looped.py`
+were changed. NOT touched: `DeltaNetBlock`'s own constructor default (`use_triton_scan=False`),
+`EdgeHVN`'s own default (also `False`, and it doesn't expose `use_megakernel_scan` as a
+constructor arg at all — only settable post-construction), or `train_edge_conversational.py`'s
+own more elaborate `--fast`/`--triton-scan` machinery (which already conditionally enables
+triton-scan under `--fast` for `--arch hvn`, gated by logic not fully audited here). Those are
+wider-reaching, separately-scoped changes — affecting the main pretraining script, past
+benchmark reproducibility assumptions, and other callers — not something to flip as a
+side-effect of an #122 stage-2 script fix.

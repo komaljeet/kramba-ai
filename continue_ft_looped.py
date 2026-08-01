@@ -22,6 +22,14 @@ single plain forward() pass, teaching the SAME weights to be a genuine
 multi-step refiner instead of leaving them untrained for looping (which is
 what scripts/sweep_looped_early_exit.py proved does not work).
 
+The fused Triton scan + megakernel backward (#83/#96) are always on (no --fast
+flag needed) -- verified identity-preserving AND more numerically reliable
+than the default eager scan they replace (see docs/state.md, Issue #122);
+measured ~42x faster in this script. torch.compile is intentionally NOT used:
+looped_forward_train() bypasses model.forward() to implement the custom
+multi-loop logic, so compiling the top-level model would compile a path
+that's never invoked here -- a no-op, not a speedup.
+
 Usage::
 
     python continue_ft_looped.py --max-steps 2000 --max-loops 4 \\
@@ -46,19 +54,6 @@ from train_edge_conversational import GPT2_VOCAB_SIZE, _save_edge_checkpoint, lo
 from finetune_edge_conversational import GroundedQADataset
 from continue_ft_hybrid import enable_scan_flags
 from hvn.edge.looped import looped_forward_train
-
-# NOTE on torch.compile: continue_ft_hybrid.py's --fast also enables
-# torch.compile(model), but that compiles model.forward() (the single-pass
-# path). looped_forward_train() bypasses forward() entirely -- it calls
-# token_embedding/blocks/final_norm/decoder directly to implement the
-# custom multi-loop logic -- so compiling the top-level model would compile
-# a path that's never actually invoked here, a no-op, not a speedup.
-# Getting torch.compile to help would need compiling looped_forward_train
-# itself (untested, dynamic loop count k complicates graph capture -- out
-# of scope for this pass). triton_scan/megakernel_scan DO help here: they
-# are per-block flags checked inside each DeltaNetBlock's own forward(),
-# so they apply regardless of whether that block is invoked via the
-# top-level model.forward() or called directly, as looped_forward_train does.
 
 
 def continue_ft_looped(model, dataloader, device, *, lr, max_steps, max_loops,
@@ -176,8 +171,6 @@ def main():
     ap.add_argument("--max-loops", type=int, default=4)
     ap.add_argument("--save-every", type=int, default=500)
     ap.add_argument("--checkpoint-dir", type=str, default="checkpoints/hybrid_looped_ft")
-    ap.add_argument("--fast", action="store_true",
-                    help="triton-scan + megakernel-scan (NOT torch.compile -- see module note)")
     args = ap.parse_args()
 
     if sys.platform == "win32":
@@ -208,11 +201,14 @@ def main():
     model, base_step, _ = load_checkpoint_for_resume(args.checkpoint_init, device)
     print(f"  Warm-started from step {base_step} of {args.checkpoint_init}")
     model = model.to(device)
-    if args.fast:
-        enable_scan_flags(model, triton_scan=True, megakernel_scan=True)
-        if device.type == "cuda":
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
+    # triton-scan + megakernel-scan are unconditionally on (2026-08-01) -- both are
+    # validated identity-preserving AND more numerically reliable than the default
+    # eager scan path they replace (see docs/state.md, Issue #122). No accuracy
+    # tradeoff to gate behind a flag; measured ~42x faster in this script alone.
+    enable_scan_flags(model, triton_scan=True, megakernel_scan=True)
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
     log_path = os.path.join(args.checkpoint_dir, "looped_ft_log.csv")
     out_ckpt = continue_ft_looped(
