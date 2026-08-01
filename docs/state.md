@@ -563,3 +563,32 @@ triton-scan under `--fast` for `--arch hvn`, gated by logic not fully audited he
 wider-reaching, separately-scoped changes — affecting the main pretraining script, past
 benchmark reproducibility assumptions, and other callers — not something to flip as a
 side-effect of an #122 stage-2 script fix.
+
+**Follow-up — attempted the broader flip too, and the caution above was justified.** Tried
+flipping `DeltaNetBlock`/`EdgeHVN`'s own class-level `use_triton_scan`/`use_megakernel_scan`
+constructor defaults to `True` (the true single source of truth every caller inherits from).
+Two real, previously-undiscovered caveats surfaced from actually running the broader test suite
+rather than assuming the earlier scoped verification generalized:
+
+- **`use_megakernel_scan=True` by default breaks `torch.compile` fusion**:
+  `tests/test_issue83_stacking.py::test_zero_graph_breaks` failed — 2 graph breaks instead of 0.
+  Correctness is unaffected (all parity tests still passed), but it's a real compile-fusion
+  regression, not just noise. Reverted this one back to `False` at the class level.
+- **`use_triton_scan=True` by default breaks `BlockCoordinateScheduler` weight-offload
+  parity** — a real, non-trivial loss divergence (0.297 vs 0.010 for the eager scan, not
+  floating-point noise) specifically in
+  `tests/test_block_coordinate_offload.py::test_lru_cache_hit_avoids_reload_and_preserves_parity`.
+  Isolated with a standalone repro to confirm it's the scan flag and not something else, and
+  confirmed `grad_checkpoint` alone (no BCD/offload) is unaffected
+  (`tests/test_edgehvn_grad_checkpoint.py` 5/5) — narrow to the offload buffer-caching
+  mechanism specifically, not root-caused, so also reverted to `False` at the class level.
+
+**Net decision: class-level defaults (`DeltaNetBlock`, `EdgeHVN`) stay `False`.** Only
+`continue_ft_hybrid.py`/`continue_ft_looped.py` have it on (verified safe there — neither uses
+BCD/offload or `torch.compile` alongside the loop-aware path). This also answers why
+`train_edge_conversational.py`'s own `--fast`/`--triton-scan` wiring was left untouched: that
+script supports `--block-coordinate`, so the same BCD-offload interaction risk applies there
+too — extending the flip to it would need the same root-cause work this pass didn't do.
+`use_megakernel_scan` is now explicitly threaded through `EdgeHVN`'s constructor (previously
+only settable post-construction) even though its default stays `False` — harmless plumbing
+improvement, kept regardless of the revert.
