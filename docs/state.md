@@ -592,3 +592,52 @@ too — extending the flip to it would need the same root-cause work this pass d
 `use_megakernel_scan` is now explicitly threaded through `EdgeHVN`'s constructor (previously
 only settable post-construction) even though its default stays `False` — harmless plumbing
 improvement, kept regardless of the revert.
+
+## Stage 2 result — loop-aware continued-FT does NOT fix the recall collapse (Issue #122, 2026-08-01)
+
+`continue_ft_looped.py` completed: 2000 steps (115.3 min, `--fast`, batch_size=2, grad_accum=16,
+max_loops=3, warm-started from `checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt` on
+`data/grounded_qa_expanded.jsonl`), final train loss 0.2507 (ppl 1.28), clean convergence.
+
+**Validation (`scripts/validate_looped_ft.py`)** — fixed loop counts N=1,2,4
+(`entropy_threshold=-1.0` forces exactly N loops every time, isolating "does looping still
+corrupt recall" from any entropy-threshold question), 20 trials/N, near-window synthetic
+recall, FT checkpoint vs the frozen baseline it was warm-started from:
+
+| N | FT checkpoint (2000 steps) | Frozen baseline |
+|---|---:|---:|
+| 1 | 30.0% (6/20) | 45.0% (9/20) |
+| 2 | **0.0%** (0/20) | **0.0%** (0/20) |
+| 4 | **0.0%** (0/20) | **0.0%** (0/20) |
+
+**Verdict: the loop-aware continued-FT does not fix the collapse.** Identical pattern on both
+checkpoints — recall craters to exactly 0% the instant looping actually happens (N>1), and the
+FT checkpoint is even slightly *worse* at plain single-pass (N=1) recall than the frozen
+baseline it started from (30% vs 45%) — a real cost with zero offsetting benefit at N>1.
+Real, non-repeated training data (`data/grounded_qa_expanded.jsonl`, 5,240 examples) rules out
+the memorization confound that made the stage-1 sandbox result ambiguous — this is a clean
+negative result, not an artifact of insufficient data variety.
+
+**Working hypothesis for why, not yet tested:** the deep-supervision recipe (loss averaged
+across every sampled loop's prediction, `hvn.edge.looped.looped_forward_train`) has a
+structural gap. The same weights are trained to satisfy "loop 1 alone should already answer
+correctly" and "loop 2 — which further transforms loop 1's now-correct hidden state — should
+*also* answer correctly," with nothing in the objective rewarding "leave the answer alone once
+it's already right." Real looped-transformer/universal-transformer designs typically need an
+explicit mechanism for that (step embeddings, learned halting, or a residual-style update that
+lets later iterations be small perturbations rather than full re-transformations) — a plain
+re-application of the full block stack has no such pressure built in. More training steps on
+the same recipe would not obviously fix a structural gap like this; it would need a different
+training design, not more of the same one.
+
+**Status: Issue #122's Looped Early Exit, as implemented (weight-tied loop over the
+already-full-depth 12-layer hybrid + naive deep supervision), does not deliver a working
+mechanism — neither without retraining (the original N×T sweep) nor with a real continued-FT
+(this stage). Parking here rather than continuing to iterate on this specific recipe.** If
+picked up again, the honest next steps are (a) a genuinely weight-shared/looped architecture
+(this repo already has `EdgeHVN(shared_weights=True)` infrastructure for that — the original
+issue's own "reuse a single weight-shared block" framing, never actually used by this work,
+which instead looped the full already-deep hybrid) or (b) a training objective with an explicit
+settle/halt mechanism, not just randomized-depth deep supervision. Full results:
+`results/looped_early_exit/validate_looped_ft.json`,
+`checkpoints/hybrid_looped_ft/hybrid_looped_step2000.pt`.
