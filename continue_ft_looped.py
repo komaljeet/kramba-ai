@@ -44,7 +44,21 @@ from torch.utils.data import DataLoader
 
 from train_edge_conversational import GPT2_VOCAB_SIZE, _save_edge_checkpoint, load_checkpoint_for_resume
 from finetune_edge_conversational import GroundedQADataset
+from continue_ft_hybrid import enable_scan_flags
 from hvn.edge.looped import looped_forward_train
+
+# NOTE on torch.compile: continue_ft_hybrid.py's --fast also enables
+# torch.compile(model), but that compiles model.forward() (the single-pass
+# path). looped_forward_train() bypasses forward() entirely -- it calls
+# token_embedding/blocks/final_norm/decoder directly to implement the
+# custom multi-loop logic -- so compiling the top-level model would compile
+# a path that's never actually invoked here, a no-op, not a speedup.
+# Getting torch.compile to help would need compiling looped_forward_train
+# itself (untested, dynamic loop count k complicates graph capture -- out
+# of scope for this pass). triton_scan/megakernel_scan DO help here: they
+# are per-block flags checked inside each DeltaNetBlock's own forward(),
+# so they apply regardless of whether that block is invoked via the
+# top-level model.forward() or called directly, as looped_forward_train does.
 
 
 def continue_ft_looped(model, dataloader, device, *, lr, max_steps, max_loops,
@@ -78,6 +92,8 @@ def continue_ft_looped(model, dataloader, device, *, lr, max_steps, max_loops,
     accum_loss_t = torch.zeros((), device=device)
     n_steps_accum = 0
     data_iter = iter(dataloader)
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
 
     while global_step < max_steps:
         try:
@@ -120,9 +136,14 @@ def continue_ft_looped(model, dataloader, device, *, lr, max_steps, max_loops,
                 n_steps_accum = 0
                 cur_lr = optimizer.param_groups[0]["lr"]
                 ppl = math.exp(min(mean_loss, 20))
+                mem_str = ""
+                if device.type == "cuda":
+                    peak_alloc = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+                    peak_reserved = torch.cuda.max_memory_reserved(device) / (1024 ** 2)
+                    mem_str = f" | peak_alloc {peak_alloc:.0f}MiB | peak_reserved {peak_reserved:.0f}MiB"
                 print(f"  Step {global_step:5d}/{max_steps} | k~U[1,{max_loops}] | "
                      f"loss {mean_loss:.4f} | ppl {ppl:.2f} | lr {cur_lr:.2e} | "
-                     f"{(time.time()-start)/max(1,global_step):.2f}s/step", flush=True)
+                     f"{(time.time()-start)/max(1,global_step):.2f}s/step{mem_str}", flush=True)
                 writer.writerow([global_step, k, f"{mean_loss:.6f}", f"{ppl:.4f}",
                                  f"{cur_lr:.8f}", time.strftime("%Y-%m-%d %H:%M:%S")])
                 csv_file.flush()
@@ -155,6 +176,8 @@ def main():
     ap.add_argument("--max-loops", type=int, default=4)
     ap.add_argument("--save-every", type=int, default=500)
     ap.add_argument("--checkpoint-dir", type=str, default="checkpoints/hybrid_looped_ft")
+    ap.add_argument("--fast", action="store_true",
+                    help="triton-scan + megakernel-scan (NOT torch.compile -- see module note)")
     args = ap.parse_args()
 
     if sys.platform == "win32":
@@ -185,6 +208,11 @@ def main():
     model, base_step, _ = load_checkpoint_for_resume(args.checkpoint_init, device)
     print(f"  Warm-started from step {base_step} of {args.checkpoint_init}")
     model = model.to(device)
+    if args.fast:
+        enable_scan_flags(model, triton_scan=True, megakernel_scan=True)
+        if device.type == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
 
     log_path = os.path.join(args.checkpoint_dir, "looped_ft_log.csv")
     out_ckpt = continue_ft_looped(
