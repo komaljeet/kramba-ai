@@ -675,3 +675,35 @@ remaining direction over further training-recipe tweaks on the current already-f
 hybrid. Full results: `results/looped_early_exit/sandbox_1m_gated_results.json` (v1),
 `results/looped_early_exit/sandbox_1m_gated_v2_results.json` (v2). Not attempted on the real
 83M checkpoint -- the cheap sandbox check is exactly what caught this before that spend.
+
+## First positive signal — looping WITHOUT early exit modestly helps (Issue #122, 2026-08-02)
+
+Every attempt above trained with deep supervision (every sampled loop count's prediction
+graded independently), because that's what entropy-gated early exit requires (loop 1 alone
+must already be a usable answer). That requirement was never separated from "does repeated
+computation help at all" until this check. `scripts/train_looped_sandbox_fixed.py` drops early
+exit entirely: fixed N loops every step (no random k), loss on ONLY the final loop's
+prediction -- the standard way weight-tied/looped depth is normally trained in the literature.
+Same disposable ~780K-param sandbox, N=1 (plain single-pass baseline) vs N=4, same 3000
+training steps, held-out loss:
+
+| N | held-out loss |
+|---|---:|
+| 1 (single pass) | 5.0050 |
+| 4 (always 4 loops, final-loop-only supervision) | **4.9621** |
+
+**N=4 beats N=1** — modest (~0.9% relative) but real and the first improving result in this
+entire investigation. Confirms the hypothesis from the gated-fix section above: deep
+supervision's requirement that loop 1 already be independently correct was actively
+suppressing the model's ability to use loop 2+ productively. Remove that requirement and
+repeated computation *is* mildly useful at this toy scale.
+
+**This cleanly separates two previously-conflated questions.** "Does looping help at all"
+(this result: yes, mildly, when not required to also support early exit) is now distinct from
+"does early exit specifically work" (still no — every early-exit-compatible training attempt,
+deep-supervised or gated, failed). A **fixed-depth looped model with no early exit** is a
+plausible, still-open direction; **early exit** (the original #122 ask — cheap tokens skip
+loops, hard tokens get more) remains unproven and every attempt at it so far has failed.
+Whether a fixed-depth loop is worth the N× inference cost without the early-exit savings is a
+separate cost/benefit question, not yet evaluated. Full results:
+`results/looped_early_exit/sandbox_1m_fixed_N1.json`, `sandbox_1m_fixed_N4.json`.
