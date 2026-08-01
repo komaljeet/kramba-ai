@@ -641,3 +641,37 @@ which instead looped the full already-deep hybrid) or (b) a training objective w
 settle/halt mechanism, not just randomized-depth deep supervision. Full results:
 `results/looped_early_exit/validate_looped_ft.json`,
 `checkpoints/hybrid_looped_ft/hybrid_looped_step2000.pt`.
+
+## Gated-loop fix attempt — tested cheaply, makes things worse when opened (Issue #122, 2026-08-02)
+
+Tried the (b) option above directly: `scripts/train_looped_sandbox_gated.py` adds a learned
+per-token gate so loop 2+ blends the block stack's raw output with the previous hidden state
+(`h <- h + sigmoid(loop_gate(h)) * (Blocks(h) - h)`) instead of overwriting it outright — loop 1
+stays the full ungated pass. Same disposable ~780K-param, from-scratch, char-level sandbox as
+stage 1 (not a fine-tune — deliberately tiny so this is a fast, cheap mechanism check before
+touching the real 83M checkpoint again).
+
+**v1** (gate bias init -3, `sigmoid(-3)~=0.047`, near-closed at start), 3000 steps: partial
+win. Loss still degrades with more loops but ~3x less than the ungated recipe (+0.09 k1->k4 vs
+ungated's +0.27). Gate barely moved during training (0.047 -> 0.049).
+
+**v2** (gate bias init -1, `sigmoid(-1)~=0.27`, more open at start, hypothesis: v1's gate was
+gradient-starved by starting too saturated), 5000 steps: **hypothesis was wrong, and the result
+is worse on every axis** — both overall single-pass quality (k=1 loss 5.80 vs v1's 4.56) and
+the loop-degradation amount (+0.19 k1->k4 vs v1's +0.09). The gate spent the whole run trying
+to close itself back down (0.27 -> 0.257) and never got back to where v1 started.
+
+**Reading:** starting the gate MORE open made things worse, not better -- the correct amount of
+gate openness is "as closed as possible," and v1's conservative init was already closer to
+right. This rules out the "gradient-starved gate" explanation and points to a cleaner, stronger
+conclusion: **any exposure to the block stack's repeated (loop 2+) transformation hurts,
+independent of how the gate is tuned** -- not a fixable hyperparameter/init issue. The gate
+mechanism works as designed (it lets the model suppress harmful extra loops), but there's
+nothing useful in the block stack's second-pass output for it to let through. This is now the
+second training-side fix attempted (deep supervision alone, then deep supervision + gating) that
+fails to make looping productive on this architecture -- reinforces the (a) option above
+(a genuinely weight-shared, deliberately-smaller-and-looped architecture) as the more promising
+remaining direction over further training-recipe tweaks on the current already-full-depth
+hybrid. Full results: `results/looped_early_exit/sandbox_1m_gated_results.json` (v1),
+`results/looped_early_exit/sandbox_1m_gated_v2_results.json` (v2). Not attempted on the real
+83M checkpoint -- the cheap sandbox check is exactly what caught this before that spend.
