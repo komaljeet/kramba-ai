@@ -57,7 +57,8 @@ from hvn.edge.looped import looped_forward_train
 
 
 def continue_ft_looped(model, dataloader, device, *, lr, max_steps, max_loops,
-                       grad_accum, save_every, checkpoint_dir, log_path, warmup_frac=0.03):
+                       grad_accum, save_every, checkpoint_dir, log_path, warmup_frac=0.03,
+                       fixed_n=False, deep_supervise=True):
     print("\n" + "=" * 70)
     print("LOOP-AWARE CONTINUE-FT (Issue #122 stage 2)")
     print("=" * 70)
@@ -100,10 +101,10 @@ def continue_ft_looped(model, dataloader, device, *, lr, max_steps, max_loops,
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         position_ids = torch.arange(x.size(1), device=device).unsqueeze(0).expand(x.size(0), -1)
-        k = int(torch.randint(1, max_loops + 1, (1,)).item())
+        k = max_loops if fixed_n else int(torch.randint(1, max_loops + 1, (1,)).item())
 
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-            per_loop_logits = looped_forward_train(model, x, position_ids, k, deep_supervise=True)
+            per_loop_logits = looped_forward_train(model, x, position_ids, k, deep_supervise=deep_supervise)
             loss = sum(criterion(lg.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1))
                       for lg in per_loop_logits) / len(per_loop_logits)
             loss = loss / grad_accum
@@ -136,7 +137,8 @@ def continue_ft_looped(model, dataloader, device, *, lr, max_steps, max_loops,
                     peak_alloc = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
                     peak_reserved = torch.cuda.max_memory_reserved(device) / (1024 ** 2)
                     mem_str = f" | peak_alloc {peak_alloc:.0f}MiB | peak_reserved {peak_reserved:.0f}MiB"
-                print(f"  Step {global_step:5d}/{max_steps} | k~U[1,{max_loops}] | "
+                k_desc = f"fixed k={max_loops}" if fixed_n else f"k~U[1,{max_loops}]"
+                print(f"  Step {global_step:5d}/{max_steps} | {k_desc} | "
                      f"loss {mean_loss:.4f} | ppl {ppl:.2f} | lr {cur_lr:.2e} | "
                      f"{(time.time()-start)/max(1,global_step):.2f}s/step{mem_str}", flush=True)
                 writer.writerow([global_step, k, f"{mean_loss:.6f}", f"{ppl:.4f}",
@@ -171,6 +173,14 @@ def main():
     ap.add_argument("--max-loops", type=int, default=4)
     ap.add_argument("--save-every", type=int, default=500)
     ap.add_argument("--checkpoint-dir", type=str, default="checkpoints/hybrid_looped_ft")
+    ap.add_argument("--fixed-n", action="store_true",
+                    help="always run exactly --max-loops loops (no random k) -- the "
+                         "no-early-exit recipe (docs/state.md 'First positive signal'). "
+                         "Implies --no-deep-supervise is the natural pairing.")
+    ap.add_argument("--no-deep-supervise", action="store_true",
+                    help="grade only the FINAL loop's prediction, not every sampled loop's. "
+                         "This is what let looping beat a single pass on the sandbox check "
+                         "(4.9621 vs 5.0050) after deep supervision consistently failed.")
     args = ap.parse_args()
 
     if sys.platform == "win32":
@@ -216,6 +226,7 @@ def main():
         lr=args.lr, max_steps=args.max_steps, max_loops=args.max_loops,
         grad_accum=args.grad_accum, save_every=args.save_every,
         checkpoint_dir=args.checkpoint_dir, log_path=log_path,
+        fixed_n=args.fixed_n, deep_supervise=not args.no_deep_supervise,
     )
     print(f"\nFinal checkpoint: {out_ckpt}")
 
