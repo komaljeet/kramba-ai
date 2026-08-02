@@ -749,3 +749,38 @@ up again, not a variation on anything tried here. Full results:
 `results/looped_early_exit/validate_looped_ft_fixed_step500.json`,
 `results/looped_early_exit/validate_looped_ft_fixed_step2000.json`,
 `checkpoints/hybrid_looped_ft_fixed/hybrid_looped_step2000.pt`.
+
+## Mechanism diagnostic — the input-injection/skip-attention hypothesis is REFUTED (2026-08-02)
+
+All four training recipes above failed identically (recall → 0% the instant N>1, general loss
+fine) — a pattern consistent with looping destroying information exact recall depends on,
+rather than a trainable deficiency. Two mechanism-level fixes were proposed and tested directly
+on the **frozen** checkpoint (`scripts/diagnose_loop_recall_collapse.py`, zero training, ~20 min
+GPU): (A) re-add the original token embedding every loop (`h ← Blocks(h + x0)`, standard in
+Universal Transformer / Looped Transformer, absent from this implementation), and (B) run the 2
+windowed-attention layers only once (loop 1) and loop only the 10 DeltaNet layers, on the theory
+that attention specifically needs an un-smeared input to copy exactly.
+
+**Neither rescues recall, alone or combined** — all four variants (current / A / B / A+B)
+collapse to exactly 0% at N=4, N=1 sanity-checked at 45% matching the known baseline. This
+refutes the specific hypothesis: it is not simply "attention loses its token anchor across
+loops" (A alone would have fixed that) and not simply "re-running attention on an already-
+transformed hidden state corrupts the copy" (B alone would have fixed that, and did not — even
+with attention frozen after loop 1, recall still died).
+
+**Revised hypothesis, not yet tested:** the destructive mechanism more likely sits in the
+**DeltaNet recurrence itself**, not attention. DeltaNet's update is an overwrite —
+`S ← diag(α)S + β(v − Sk)kᵀ` — keyed on k/q computed from whatever hidden state is fed in. On
+loop 2+, k/q are computed from an already-transformed hidden state rather than the original
+token, so the overwrite plausibly replaces loop 1's correctly-keyed association with a
+differently-keyed one instead of refining it. Testing this needs inspecting the actual
+recurrent state matrix across loop iterations (real mechanistic-interpretability work), not
+another architectural toggle — a materially larger investigation than anything tried in this
+doc so far, and not started. Full results: `results/looped_early_exit/diagnose_loop_recall_collapse.json`.
+
+**Status: parking here.** Five real experiments now agree (4 training recipes + this
+no-training mechanism probe) that looping this architecture's block stack, in every form
+tried, destroys exact recall. The training-recipe angle and the two most obvious
+architecture-level bypasses are exhausted. Remaining open directions, neither started:
+(a) genuine weight-shared smaller-and-looped architecture (see above), (b) direct inspection of
+the DeltaNet state matrix across loops to confirm or refute the overwrite hypothesis.
