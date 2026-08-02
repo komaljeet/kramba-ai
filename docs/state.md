@@ -1026,3 +1026,51 @@ tracking *better* than dense-fp (159.2 vs 170.8), which would have been suspicio
 should not beat full precision. It was an artifact of comparing mid-trajectory points across
 arms that converge at different rates; the final numbers (143.2 vs 119.4) show ternary
 behaving normally. Do not compare arms mid-run.
+
+## Issue #109 re-examined — the trunk, not the 3rd attention layer, was the larger factor (2026-08-02)
+
+Issue #109 attributed a 3-attn recall regression to "an architecture question (layer
+count/placement)" and closed without merging. Re-checking the code showed the comparison was
+**confounded**: it measured **3-attn on the 102K trunk** against **2-attn on the 51K trunk**,
+changing two variables. The writeup noticed the trunks differed ("stronger trunk + lower loss,
+worse recall") but read the stronger trunk as making the regression more *surprising* rather
+than as a candidate *cause*.
+
+**The control already existed on disk and had never been probed** —
+`checkpoints/hybrid_a4_2attn_102k/` is 2-attn on the 102K trunk, i.e. the PASS architecture
+with the regression's trunk. All three arms, `eval/synthetic_recall_probe.py`, 200 trials each:
+
+| arm | near-window recall |
+|---|---:|
+| 2-attn / 51K trunk (PASS baseline) | **37.0%** (74/200) |
+| 2-attn / 102K trunk ← *the missing control* | **25.0%** (50/200) |
+| 3-attn / 102K trunk | **15.5%** (31/200) |
+
+The baseline reproduces the documented 35.5% at 37.0%, so the harness is sound.
+
+- **Trunk effect** (holding attn=2): 37.0 → 25.0 = **−12.0pp**
+- **Layer effect** (holding trunk=102K): 25.0 → 15.5 = **−9.5pp**
+- Both significant at n=200 (~2.6 SE and ~2.4 SE)
+
+**Verdict: right decision, incomplete root cause.** A 3rd attention layer does genuinely hurt
+(15.5% vs 25.0% on the same trunk), so reverting to 2-attn was correct. But #109 assigned the
+entire −21.5pp drop to layer count when the trunk accounted for more of it than layer count
+did. Its stated root cause is incomplete, not wrong.
+
+**The larger finding, and it was never documented at all: doubling pretraining made
+recall-after-FT WORSE.** 51K trunk → 37.0%, 102K trunk → 25.0%, architecture identical. A
+more-converged recurrence-only trunk appears harder to bolt fresh attention onto — consistent
+with reduced plasticity in a further-converged model, though the mechanism is not established
+here. Five `hybrid_a4_2attn_102k` variants (base, chatmix, chatmix5k, hilr, noternary) were
+run and none were written up; `grep "102k" docs/` returned nothing before this entry, which is
+why it sat undiscovered.
+
+**Consequence for scaling plans.** This is direct evidence against "pretrain recurrence-heavy,
+fine-tune windowed attention in later" as a large-scale recipe: more pretraining can degrade
+the attention-insertion step. The trunk-length/recall relationship should be characterised at
+small scale before any large pretrain commits to that ordering — a cheap sweep (probe several
+trunk checkpoints through the same short A4 FT) would settle it.
+
+**Process note.** Both this and the #122 state-commit bug were found the same way: checking
+whether a comparison changed one variable or two. That question is cheaper than any of the GPU
+time it recovered.
