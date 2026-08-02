@@ -139,6 +139,9 @@ class DeltaNetBlock(nn.Module):
         train_chunk: int = 32,
         use_triton_scan: bool = False,
         use_megakernel_scan: bool = False,
+        moe_experts: int = 1,
+        moe_top_k: int = 2,
+        moe_aux_loss_weight: float = 0.01,
         # Accepted for interface compatibility with HVNBlock construction
         # (ignored — DeltaNet defines its own dynamics):
         bond_dimension: int | None = None,
@@ -212,7 +215,19 @@ class DeltaNetBlock(nn.Module):
         nn.init.xavier_uniform_(self.out_proj.weight)
 
         # FFN branch (parallel residual)
-        if use_swiglu:
+        # Issue #123: optionally a Mixture-of-Experts FFN. The FFN is ~40% of
+        # this block's FLOPs (4d^2 of ~10d^2), and MoE is the only lever that
+        # attacks FLOPs-per-token rather than memory -- see hvn/core/moe.py for
+        # why the recurrence (q/k/v) is deliberately NOT routed. Default off:
+        # moe_experts<=1 leaves the dense path byte-identical.
+        if moe_experts and moe_experts > 1:
+            from .moe import MoEFFN
+            self.ffn = MoEFFN(
+                d_model, num_experts=moe_experts, top_k=moe_top_k,
+                expansion=3 if use_swiglu else 2, dropout=dropout,
+                use_swiglu=use_swiglu, aux_loss_weight=moe_aux_loss_weight,
+            )
+        elif use_swiglu:
             self.ffn = SwiGLU(d_model, expansion=3, dropout=dropout)
         else:
             self.ffn = nn.Sequential(
