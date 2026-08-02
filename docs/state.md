@@ -784,3 +784,75 @@ tried, destroys exact recall. The training-recipe angle and the two most obvious
 architecture-level bypasses are exhausted. Remaining open directions, neither started:
 (a) genuine weight-shared smaller-and-looped architecture (see above), (b) direct inspection of
 the DeltaNet state matrix across loops to confirm or refute the overwrite hypothesis.
+
+## ⚠️ RETRACTION — every #122 result above was measuring a one-line bug (2026-08-02)
+
+**All of the negative conclusions in the six #122 sections above are invalid.** They do not
+show that looping this architecture destroys recall; they show that
+*looping-with-corrupted-memory* destroys recall. The bug was in the first file written for
+this issue and silently confounded everything downstream.
+
+**The bug.** `hvn/edge/looped.py` committed the **last** loop's recurrent state as the state
+carried to the next token. Only loop 1 runs the blocks on the real token embedding — loops 2+
+run them on an already-transformed hidden state, so their k/v are not derived from this token
+at all. For DeltaNet the state *is* the memory (`S ← diag(α)S + β(v − Sk)kᵀ`), so committing a
+later loop's state writes an association keyed on noise, once per extra loop — N writes per
+token instead of one — corrupting precisely what the next token must read back.
+
+**How it was found: by looking at the failure instead of scoring it.** Five experiments had all
+measured the same binary (did the answer contain the target word) and none had inspected the
+behaviour. Doing so (`scripts/observe_loop_failure.py`) showed the N=4 output is raw HTML/web
+markup — this doc's own documented signature for the *base pretrain model* — meaning looping
+knocked the model out of its instruction-following distribution rather than merely degrading
+the answer. It also measured the residual stream growing 351 → 2560 (7.3×) over 8 loops at a
+near-constant +315/loop, with argmax locking onto token 3467 (`' \'`) from loop 2 onward.
+
+The decisive isolation came from a **failed sanity check**. That script's α-sweep included
+α=0, which leaves `h` at loop 1's value so the logits are provably identical to N=1 and it
+*must* reproduce ~45%. It returned 0/20. That invalidated the α curve, but with the logits held
+identical the only remaining difference from N=1 was which state got committed. A 2×2 then
+separated the two candidate mechanisms (`scripts/test_state_commit_hypothesis.py`, frozen
+checkpoint, 20 trials/cell):
+
+| | state ← loop 1 | state ← loop 4 |
+|---|---:|---:|
+| **logits ← loop 1** | 40.0% (N=1 baseline ✓) | **0.0%** |
+| **logits ← loop 4** | **35.0%** | 0.0% (old behaviour) |
+
+Cell (c) is decisive: loop-4 logits over a clean loop-1 state hold at 35%, statistically
+indistinguishable from the 40% baseline. **The residual-stream drift is real but survivable —
+it is not the cause.** The single fatal mechanism is the state commit.
+
+**Fix:** commit loop 1's state unconditionally, regardless of which loop the exit fires on.
+Extra loops refine the *prediction*; they do not rewrite *memory*. One line.
+`tests/test_looped_early_exit.py` had asserted the loop-2 state and so locked the bug in —
+rewritten to assert loop 1's, plus a guard that the two states genuinely differ so it cannot
+silently pass again (6/6).
+
+**Post-fix re-validation** (frozen checkpoint, fixed N, early exit disabled, two independent
+runs of the same checkpoint so their spread calibrates the noise floor):
+
+| N | run A | run B | pooled |
+|---:|---:|---:|---:|
+| 1 | 40.0% | 45.0% | 42.5% |
+| 2 | 35.0% | 45.0% | 40.0% |
+| 4 | 35.0% | 35.0% | 35.0% |
+| 8 | 30.0% | 25.0% | 27.5% |
+
+Recall **holds at every N**, versus exactly 0.0% at every N>1 before the fix. A pooled
+monotonic decline (42.5% → 27.5%) is visible and directionally consistent with the measured
+drift, but at ~2 standard errors it is suggestive rather than established — ±2 hits at n=20 is
+ordinary noise here, as the two identical-checkpoint runs demonstrate.
+
+**What is now known vs still open.** Looping is non-destructive — that is settled. The original
+#122 ask (entropy-gated early exit buying a speedup at maintained quality) is **untested**: the
+above used fixed N with the exit disabled. The N×T sweep must be re-run from scratch, because
+entropy was previously computed on garbage logits, so the threshold behaviour that drove the
+original sweep's conclusions ("low T always maxes out loops, high T never loops") was itself a
+symptom of the bug. Likewise the four training runs are re-opened: they trained against
+corrupted memory, so their failures carry no information about the training recipes themselves.
+
+**Process note worth keeping.** The α=0 sanity check that exposed this was added on the fifth
+experiment. Had a "this configuration must reproduce the known baseline" assertion been built
+into the very first sweep, the four training runs (~6 h GPU) would never have been spent. Every
+scoring harness in this project should carry a cell whose correct answer is already known.
