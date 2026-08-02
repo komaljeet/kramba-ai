@@ -982,3 +982,47 @@ direction is now measured rather than assumed, and it favors sharing.
 **Next, if pursued:** compose sharing with ternary (BitNet b1.58, `hvn/edge/ternary.py`) — 3.67×
 from sharing on top of ~10× from ternary is the actual path to the README's ~2 GB 10B-class
 target, and neither multiplier has been measured in combination with the other.
+
+## Sharing × ternary compose cleanly — ~70× storage for +54% PPL (2026-08-02)
+
+Sharing and ternary had never been combined anywhere in this repo. They are orthogonal
+levers — sharing cuts the NUMBER of weights (3.67× at d=512/12L), ternary cuts BYTES PER
+weight (fp32 → 1.58 bits, ~20×) — so their storage benefits multiply arithmetically. The
+open question was whether their *quality* costs also compose, or compound worse.
+
+Reason to expect compounding: a shared block's weights are reused at all 12 virtual layers,
+so quantization error in that one block is applied 12 times rather than once.
+
+2×2 at d=512, 12 layers, 5M-token budget, WikiText-103/BPE-8000
+(`results/weight_sharing/ternary_2x2.json`):
+
+| arm | PPL | vs dense-fp |
+|---|---:|---:|
+| dense fp | 119.4 | — |
+| shared fp | 154.1 | ×1.290 |
+| dense ternary | 143.2 | ×1.200 |
+| **shared + ternary** | **183.8** | ×1.540 |
+
+**Clean composition predicted 119.4 × 1.290 × 1.200 = 184.8; measured 183.8 — within 0.6%.**
+The prediction was recorded before the final arm completed, so this is a real test rather
+than a post-hoc fit. **The costs compose multiplicatively with no compounding penalty** — the
+12×-reuse mechanism does not bite.
+
+**Consequence: ~70× storage reduction (3.67× params × ~20× bits) for +54% PPL.** That is the
+concrete path to the README's edge target, with both multipliers now individually measured
+and their combination verified rather than assumed.
+
+Harness consistency check passed: this run's dense-fp (119.4) and shared-fp (154.1) reproduce
+the previous run's 120.7 / 156.1 at the same config, within ~1.5%.
+
+**Caveats.** 5M tokens is undertrained and likely *understates* ternary specifically, since
+QAT normally needs longer to converge — the +20% ternary cost is probably a pessimistic
+bound. Param counts are unchanged for the ternary arms (fp32 shadow weights are retained for
+the STE gradient during training); the storage win is arithmetic, realised post-`.freeze()`.
+Single seed, one width, one depth.
+
+**A mid-run misread worth recording:** at the 3M-token mark dense-ternary was reported as
+tracking *better* than dense-fp (159.2 vs 170.8), which would have been suspicious — ternary
+should not beat full precision. It was an artifact of comparing mid-trajectory points across
+arms that converge at different rates; the final numbers (143.2 vs 119.4) show ternary
+behaving normally. Do not compare arms mid-run.
