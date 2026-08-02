@@ -16,6 +16,19 @@
 > an existing strong model into this format remains an optional accelerator for later, not the
 > primary road.
 >
+> **⚠️ Reality check (2026-08-02) — read before planning around the sequencing below.**
+> Training cost is `~6 · params · tokens`, and Chinchilla scales tokens with params, so it grows
+> as **N²**. Decomposing this project's own measured throughput (142M at 9,102 tok/s vs 6B at
+> 116 tok/s), the 3,300× gap is 42× more params × 42× more tokens × **only ~2× offload
+> inefficiency**. The extensive memory engineering (#99–#118) genuinely got a 6B model to run
+> forward+backward on a 6 GB card at ~1 GiB peak — and that is **not the same as being able to
+> train it**: 6B at Chinchilla is ~33 years on this hardware, ~30× out of reach even with every
+> known lever stacked. **The honest local ceiling is ~142M** (3.6 days). Everything above that
+> needs rented compute, and no architecture — HVN or otherwise — changes that. See
+> [`docs/training.md`](docs/training.md) § "The compute wall". The *inference* half of the dream
+> below is intact and measured; the *training-it-yourself* half is not achievable on this
+> hardware.
+>
 > **Sequencing (this is a staged bet, not a next-hour target):**
 > 1. **Now — 83M sandbox.** Prove the recipe cheaply: does the recurrence+windowed-attention
 >    hybrid actually deliver exact recall a pure recurrence can't? This is R&D validation, not
