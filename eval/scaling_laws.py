@@ -65,6 +65,8 @@ if _PROJECT_ROOT not in sys.path:
 
 from benchmark import TransformerLM, SimpleSSMLM, count_parameters  # noqa: E402
 from hvn.core import HamiltonianVortexNetwork  # noqa: E402
+from hvn.core.moe import collect_moe_aux_loss  # noqa: E402
+from hvn.edge.model import EdgeHVN  # noqa: E402
 from train import CharTokenizer, TextDataset  # noqa: E402
 from .datasets import DATASET_REGISTRY  # noqa: E402
 
@@ -227,6 +229,10 @@ def train_compute_matched(
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
             logits = model(batch_x)
             loss = criterion(logits.reshape(-1, model.vocab_size), batch_y.reshape(-1))
+            # Issue #123: MoE needs its load-balancing term in the objective or
+            # routing collapses onto a handful of experts and the remaining
+            # capacity is dead weight. Exactly zero for non-MoE models.
+            loss = loss + collect_moe_aux_loss(model)
 
         optimizer.zero_grad()
         if scaler is not None:
@@ -412,6 +418,25 @@ def run_scaling_laws(
                 bond_dimension=bond_dim, chunk_size=64, dropout=0.1,
                 use_deltanet=True, weightless=True, grad_checkpoint=grad_checkpoint,
             )
+        # --- Issue #123 2x2: {dense, shared} x {dense FFN, MoE FFN} ---------
+        # Sharing cuts stored params (~3.67x at d=512/12L); MoE buys capacity at
+        # sub-linear compute (3.79x params at 1.40x FLOPs). Neither has been run
+        # with the other. All four arms are EdgeHVN+DeltaNet so the only
+        # variables are the two levers.
+        _edge_arms = {
+            "EdgeHVN-DeltaNet":            dict(shared_weights=False, moe_experts=1),
+            "EdgeHVN-DeltaNet-Shared":     dict(shared_weights=True,  moe_experts=1),
+            "EdgeHVN-DeltaNet-MoE":        dict(shared_weights=False, moe_experts=8),
+            "EdgeHVN-DeltaNet-Shared-MoE": dict(shared_weights=True,  moe_experts=8),
+        }
+        for _arm, _cfg in _edge_arms.items():
+            if _arm in models:
+                model_specs[_arm] = EdgeHVN(
+                    vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
+                    n_heads=4, dropout=0.1, use_deltanet=True,
+                    grad_checkpoint=grad_checkpoint, moe_top_k=2, **_cfg,
+                )
+
         if "Transformer" in models:
             model_specs["Transformer"] = TransformerLM(
                 vocab_size=vocab_size, d_model=d_model, n_layers=n_layers, n_heads=4,
@@ -684,6 +709,8 @@ def main() -> None:
     parser.add_argument("--compile", action="store_true", help="Use torch.compile.")
     parser.add_argument("--models", type=str, nargs="+", default=None,
                         choices=["HVN", "HVN-DeltaNet", "HVN-DeltaNet-Weightless",
+                                 "EdgeHVN-DeltaNet", "EdgeHVN-DeltaNet-Shared",
+                                 "EdgeHVN-DeltaNet-MoE", "EdgeHVN-DeltaNet-Shared-MoE",
                                  "Transformer", "SSM"],
                         help="Which models to compare (default: HVN, Transformer, SSM). "
                              "Add 'HVN-DeltaNet' to sweep the Issue #34 block (Issue #39); "

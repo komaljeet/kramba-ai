@@ -74,6 +74,8 @@ class EdgeHVN(nn.Module):
         attn_window: Optional[int] = None,
         grad_checkpoint: bool = False,
         tie_embeddings: bool = False,
+        moe_experts: int = 1,
+        moe_top_k: int = 2,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -132,10 +134,14 @@ class EdgeHVN(nn.Module):
                     window=attn_window,
                 )
             if t == "deltanet":
+                # Issue #123: moe_experts>1 routes this block's FFN through a
+                # Mixture-of-Experts (capacity at sub-linear compute). Default
+                # 1 = dense, byte-identical to the pre-#123 path.
                 return DeltaNetBlock(
                     d_model=d_model, n_heads=n_heads, dropout=dropout,
                     conv_kernel=deltanet_conv_kernel,
                     use_triton_scan=use_triton_scan,
+                    moe_experts=moe_experts, moe_top_k=moe_top_k,
                 )
             if t == "hvn":
                 return HVNBlock(
