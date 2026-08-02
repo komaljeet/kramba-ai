@@ -28,9 +28,19 @@ Design (Issue #122 spec, resolved ambiguities noted):
   loop starts from a clone of the state that existed *before* this token
   (the DeltaNet recurrent matrix / attention KV cache as of the end of the
   previous committed token) — a rejected loop's candidate state is
-  discarded, never blended in. The state actually carried forward to the
-  NEXT token position is whichever loop's candidate state won (exited on,
-  or the final loop if never confident).
+  discarded, never blended in.
+* **The state carried forward to the NEXT token is always LOOP 1's**,
+  regardless of which loop the exit fired on. Only loop 1 sees the real
+  token embedding; loops 2+ run the blocks on an already-transformed hidden
+  state, so their k/v are not derived from this token, and writing them into
+  the DeltaNet memory corrupts what the next token must read back. Measured
+  on the frozen checkpoint: committing a later loop's state drops near-window
+  recall 40% -> 0% *with the logits held identical*, while loop-4 logits over
+  a clean loop-1 state hold at 35%
+  (``scripts/test_state_commit_hypothesis.py``). Extra loops refine the
+  *prediction*; they do not rewrite *memory*. An earlier version of this file
+  committed the last loop's state instead, which silently invalidated every
+  experiment run against it (see docs/state.md).
 * ``forward_step`` / ``init_state`` / ``init_conversation_state`` /
   ``chat_step`` keep their exact existing signatures — this monkeypatches
   only ``forward_step`` (via ``types.MethodType``), so
@@ -88,7 +98,7 @@ def _looped_forward_step(self, input_ids, states, position_idx=None):
     base_states = states
     x = self.token_embedding(input_ids)  # [B, 1, D] — only re-embedded on loop 1
     logits = None
-    new_states = None
+    committed_states = None
     loops_used = 0
 
     for i in range(self._looped_max_loops):
@@ -100,7 +110,33 @@ def _looped_forward_step(self, input_ids, states, position_idx=None):
             candidate_states.append(st)
         logits = self.decoder(self.final_norm(h))
         loops_used = i + 1
-        new_states = candidate_states
+
+        # Commit LOOP 1's state, always -- never a later loop's.
+        #
+        # Measured (scripts/test_state_commit_hypothesis.py, frozen checkpoint,
+        # 20 trials, near-window synthetic recall):
+        #     logits L1 / state L1  ->  40.0%   (the N=1 baseline)
+        #     logits L1 / state L4  ->   0.0%   <- committing a later loop's state
+        #     logits L4 / state L1  ->  35.0%   <- drifted logits are FINE
+        #     logits L4 / state L4  ->   0.0%   (the old behaviour here)
+        # Committing a later loop's state destroys recall on its own, with the
+        # logits held identical; drifted logits with a clean state do not.
+        #
+        # Why: only loop 1 runs the blocks on the actual token embedding. Loops
+        # 2+ run them on an already-transformed hidden state, so their k/v are
+        # not derived from this token at all. For DeltaNet the state IS the
+        # memory (S <- diag(a)S + b(v - Sk)k^T), so committing a later loop's
+        # state writes an association keyed on noise -- and does it once per
+        # extra loop, N times per token instead of once. It corrupts exactly
+        # what the next token needs to read back.
+        #
+        # Semantically this is also the right contract: extra loops exist to
+        # refine the PREDICTION for the current token, not to rewrite memory.
+        # What the model records is "I saw token X at position t", which is
+        # what loop 1 -- and only loop 1 -- actually computes.
+        if i == 0:
+            committed_states = candidate_states
+
         x = h  # feed the refined hidden state into the next loop, if any
 
         ent = normalized_entropy(logits, self.vocab_size)
@@ -108,7 +144,7 @@ def _looped_forward_step(self, input_ids, states, position_idx=None):
             break
 
     self._loop_log.append(loops_used)
-    return logits, new_states
+    return logits, committed_states
 
 
 def enable_looped_early_exit(model, max_loops: int, entropy_threshold: float):

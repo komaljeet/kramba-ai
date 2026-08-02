@@ -54,13 +54,19 @@ def test_max_loops_1_is_bit_identical_to_base_forward_step():
             assert torch.equal(sa[k], sb[k]), f"state mismatch in key {k!r}"
 
 
-def test_state_resets_per_loop_not_carried_from_discarded_loop():
-    """max_loops=2, threshold that can never be satisfied -> always runs both
-    loops. Manually replay 2 loops of the SAME per-block forward_step calls
-    (feeding loop-1's hidden state into loop-2, resetting state to the
-    pre-token snapshot each time) and check the wrapper matches exactly --
-    proving loop 2 used a fresh clone of the pre-token state, not loop 1's
-    candidate state.
+def test_commits_loop1_state_and_final_loop_logits():
+    """max_loops=2, threshold that can never be satisfied -> always runs both loops.
+
+    Checks the two halves of the contract separately:
+      * LOGITS come from the LAST loop run (loop 2 here), computed by feeding
+        loop 1's hidden state back through the stack with the per-loop state
+        reset to the pre-token snapshot.
+      * STATE committed is LOOP 1's, NOT loop 2's -- only loop 1 runs the blocks
+        on the real token embedding, so only its state records "I saw token X".
+        Committing loop 2's state instead measured 40% -> 0% near-window recall
+        on the frozen checkpoint (scripts/test_state_commit_hypothesis.py); an
+        earlier version of this test asserted the loop-2 state and so locked the
+        bug in place.
     """
     model = _tiny_hybrid_model(seed=1)
     base_states = model.init_state(1)
@@ -89,10 +95,19 @@ def test_state_resets_per_loop_not_carried_from_discarded_loop():
     with torch.no_grad():
         looped_logits, looped_states = model.forward_step(tok, [_clone_state(s) for s in base_states], position_idx=0)
 
+    # Logits: from the LAST loop (loop 2).
     assert torch.equal(expected_logits, looped_logits)
-    for sa, sb in zip(loop2_states, looped_states):
+
+    # State: from LOOP 1 -- and provably NOT loop 2's.
+    for sa, sb in zip(loop1_states, looped_states):
         for k in sa:
-            assert torch.equal(sa[k], sb[k]), f"loop-2 state mismatch in key {k!r}"
+            assert torch.equal(sa[k], sb[k]), f"committed state should be loop 1's; mismatch in {k!r}"
+
+    differs = any(
+        not torch.equal(s1[k], s2[k])
+        for s1, s2 in zip(loop1_states, loop2_states) for k in s1
+    )
+    assert differs, "loop-1 and loop-2 states are identical, so this test cannot detect a regression"
 
     log = pop_loop_log(model)
     assert log == [2], f"expected exactly 2 loops used, got {log}"
@@ -162,7 +177,7 @@ def test_normalized_entropy_bounds():
 
 if __name__ == "__main__":
     test_max_loops_1_is_bit_identical_to_base_forward_step()
-    test_state_resets_per_loop_not_carried_from_discarded_loop()
+    test_commits_loop1_state_and_final_loop_logits()
     test_entropy_threshold_gates_exit()
     test_disable_restores_original_forward_step()
     test_chat_session_needs_zero_changes()
