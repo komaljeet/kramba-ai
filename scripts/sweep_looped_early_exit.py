@@ -195,7 +195,41 @@ def main():
                               gen_tokens_for_speed=args.gen_tokens_for_speed, seed=args.seed)
     print(json.dumps(baseline, indent=2))
 
-    records = [baseline]
+    # --- Known-answer cell: MUST equal the baseline, by construction ---
+    # max_loops=8 engages the loop machinery, but T=1.1 is trivially satisfiable
+    # (normalized entropy is always <= 1), so it exits at loop 1 every time and is
+    # therefore mathematically equivalent to the N=1 baseline above.
+    #
+    # This exists because the N=1 baseline alone CANNOT catch a bug in the looping
+    # path -- it never loops. The state-commit bug that silently invalidated the
+    # first six #122 experiments (see the retraction in docs/state.md) lived
+    # exactly there, and every harness in that investigation would have passed an
+    # N=1-only check. Any scoring harness here should carry a cell that exercises
+    # the machinery under test and whose correct answer is already known.
+    print("\n=== SANITY: max_loops=8, T=1.1 (exits at loop 1 -> must equal baseline) ===")
+    sanity = evaluate_combo(model, tok, device, N=8, T=1.1, n_trials=args.n_trials,
+                            gen_tokens_for_speed=args.gen_tokens_for_speed, seed=args.seed)
+    print(json.dumps(sanity, indent=2))
+
+    delta = abs(sanity["near_window_recall_pct"] - baseline["near_window_recall_pct"])
+    if sanity["avg_loops_overall"] is not None and sanity["avg_loops_overall"] > 1.05:
+        raise SystemExit(
+            f"\nABORT: sanity cell averaged {sanity['avg_loops_overall']:.2f} loops/token, "
+            f"expected ~1.0 -- T=1.1 should always exit at loop 1. The exit logic is wrong; "
+            f"the grid below would measure nothing."
+        )
+    if delta > 20.0:
+        raise SystemExit(
+            f"\nABORT: sanity cell recall {sanity['near_window_recall_pct']:.1f}% vs baseline "
+            f"{baseline['near_window_recall_pct']:.1f}% (delta {delta:.1f}pp). These are "
+            f"mathematically the same computation, so the loop wrapper is corrupting state "
+            f"even when it exits at loop 1. Fix that before trusting any grid result."
+        )
+    print(f"  SANITY OK: {sanity['near_window_recall_pct']:.1f}% vs baseline "
+          f"{baseline['near_window_recall_pct']:.1f}% (delta {delta:.1f}pp), "
+          f"avg loops {sanity['avg_loops_overall']:.2f}")
+
+    records = [baseline, sanity]
     for N, T in itertools.product(args.n_grid, args.t_grid):
         print(f"\n=== N={N} T={T} ===")
         rec = evaluate_combo(model, tok, device, N=N, T=T, n_trials=args.n_trials,
