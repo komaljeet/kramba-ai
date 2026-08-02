@@ -923,3 +923,62 @@ retraction above: same shape of answer, entirely different epistemic standing.
 **Still genuinely open:** the four training runs (deep supervision, gated, fixed-N) all trained
 against corrupted memory, so their failures carry no information about the recipes themselves.
 Anything re-run there should carry a known-answer cell in its own harness before GPU is spent.
+
+## ALBERT weight sharing — fewer params AND better quality, measured (2026-08-02)
+
+The "small model, big-model quality" question this project is actually built around had never
+been tested. Issue #122's looping work looped a *full-depth* model, which saves zero params;
+issue #32 Phase 2.4 shipped `SharedWeightHVN` and measured a 3.62× param reduction but never
+paired it with a quality number. This closes that gap.
+
+**Setup.** `eval/scaling_laws.py` gains two arms — `EdgeHVN-DeltaNet` (dense) and
+`EdgeHVN-DeltaNet-Shared` (`shared_weights=True`). Same class, same blocks, sharing is the only
+variable. WikiText-103, BPE-8000, 5M-token compute-matched budget, **12 layers**, bf16.
+`param_count` uses `sum(p.numel())`, which counts a shared block once, so reported params are
+the real storage footprint.
+
+| d_model | arm | params | eval PPL |
+|---:|---|---:|---:|
+| 256 | dense | 12,018,032 | 194.8 |
+| 256 | **shared** | **4,763,996** | 251.6 |
+| 512 | dense | 39,756,656 | 120.7 |
+| 512 | **shared** | **10,830,684** | 156.1 |
+
+**Headline, and it needs no extrapolation — two real measured configs:**
+
+    shared d=512 : 10.83M params, PPL 156.1
+    dense  d=256 : 12.02M params, PPL 194.8
+
+**The shared model has ~10% FEWER parameters and ~20% BETTER perplexity than the dense one.**
+That is the goal stated in the README's "The Dream" — small footprint, quality of something
+bigger — demonstrated directly rather than argued.
+
+**Why it works.** The PPL cost of sharing is **+29% at both widths** (194.8→251.6 and
+120.7→156.1), strikingly stable. But the param saving **grows** with width: 2.52× at d=256,
+3.67× at d=512. A fixed quality cost against a growing param saving means **the trade improves
+as the model scales** — the opposite of the compounding-loss worry. Against an equal-param
+dense model (via this repo's own −0.504 exponent): shared is ~19% better at d=256 and ~33%
+better at d=512.
+
+**This also corrects a live misconception.** HVN is not "much worse than a Transformer" —
+§8.12 has HVN-DeltaNet at 159.4 vs Transformer 172.0 at d=512, and 129.4 vs 150.8 at d=768,
+with a steeper exponent (−0.504 vs −0.406). Sharing therefore compounds *onto a winning
+baseline*, not a deficit. The variant that genuinely loses to a Transformer is the pre-#34
+default HVN block (194.3 vs 150.8 at d=768).
+
+**A design error caught cheaply, worth recording.** The first sweep was configured at 2 layers
+(copying the documented width-sweep configs) and showed only a 7% param saving — sharing scales
+with **depth**, not width, and at 2 layers there is barely anything to share, with the
+8000-vocab embedding dominating the model anyway. A 90-second smoke test exposed it before any
+real GPU was spent. The known-answer check here was **param arithmetic** — dense at d=512 was
+predicted at ~39.7M and measured 39,756,656 — which is exactly the check that would have caught
+the 2-layer flaw upfront had it been done first.
+
+**Caveats.** 5M tokens is undertrained, so the absolute PPLs are high and only the *comparison*
+carries signal. Two width points, single seed, one depth. Whether the +29% constant and the
+growing param saving hold at a full training budget or at 1B+ scale is **untested** — but the
+direction is now measured rather than assumed, and it favors sharing.
+
+**Next, if pursued:** compose sharing with ternary (BitNet b1.58, `hvn/edge/ternary.py`) — 3.67×
+from sharing on top of ~10× from ternary is the actual path to the README's ~2 GB 10B-class
+target, and neither multiplier has been measured in combination with the other.
