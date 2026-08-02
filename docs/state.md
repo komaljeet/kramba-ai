@@ -856,3 +856,70 @@ corrupted memory, so their failures carry no information about the training reci
 experiment. Had a "this configuration must reproduce the known baseline" assertion been built
 into the very first sweep, the four training runs (~6 h GPU) would never have been spent. Every
 scoring harness in this project should carry a cell whose correct answer is already known.
+
+## Post-fix N×T sweep — mechanism works, early exit's PREMISE does not (2026-08-02)
+
+Re-ran the sweep the retraction above invalidated, on the frozen checkpoint with the
+state-commit fix in place, 20 trials/cell. The harness now carries a **known-answer cell**
+(`max_loops=8, T=1.1`: the loop machinery is engaged but the threshold is trivially
+satisfiable, so it must exit at loop 1 and equal the N=1 baseline by construction). It
+passed at 45.0% vs 45.0%, delta 0.0pp — the check that would have caught the original bug,
+which an N=1-only baseline could not, since N=1 never loops.
+
+| cell | near% | avg loops | easy | hard | **hard−easy** |
+|---|---:|---:|---:|---:|---:|
+| baseline (N=1) | 45.0 | 1.00 | 1.00 | 1.00 | 0.00 |
+| sanity (N=8, T=1.1) | 45.0 | 1.00 | 1.00 | 1.00 | 0.00 |
+| N=2 T=0.1 | 40.0 | 1.97 | 1.96 | 1.97 | +0.01 |
+| N=2 T=0.3 | 35.0 | 1.64 | 1.75 | 1.60 | −0.15 |
+| N=2 T=0.5 | 40.0 | 1.24 | 1.27 | 1.23 | −0.05 |
+| N=2 T=0.7 | 35.0 | 1.02 | 1.00 | 1.02 | +0.02 |
+| N=4 T=0.1 | 40.0 | 3.91 | 3.94 | 3.90 | −0.04 |
+| N=4 T=0.3 | 35.0 | 2.86 | 3.23 | 2.73 | **−0.50** |
+| N=4 T=0.5 | 40.0 | 1.71 | 1.80 | 1.67 | −0.13 |
+| N=4 T=0.7 | 50.0 | 1.04 | 1.00 | 1.06 | +0.06 |
+| N=8 T=0.1 | 25.0 | 7.79 | 7.81 | 7.78 | −0.02 |
+| N=8 T=0.3 | 25.0 | 5.25 | 5.96 | 5.07 | **−0.89** |
+| N=8 T=0.5 | 15.0 | 2.55 | 2.47 | 2.57 | +0.10 |
+| N=8 T=0.7 | 35.0 | 1.10 | 1.00 | 1.13 | +0.13 |
+
+The N=16 row and N=8's remaining cells were killed deliberately — the conclusion was already
+determined and the sign is consistent across N=2/4/8 (`sweep_after_fix_partial.json`).
+
+**1. The mechanism works.** Recall holds 35–50% at N=2 and N=4 versus **exactly 0.0% at every
+N>1** pre-fix, and the loop count is genuinely tunable (T=0.3 → 1.64, T=0.5 → 1.24). The
+pre-fix finding that there was no usable middle range — "low T always maxes out, high T never
+loops" — is **superseded**: that was a symptom of entropy being computed on corrupted logits.
+
+**2. Early exit's premise fails, and it fails backwards.** The whole idea is that hard tokens
+earn more compute. Measured, hard tokens get *less*: seven of twelve looping cells are
+negative, and — the part that matters — **every large effect is negative** (−0.89, −0.50,
+−0.15) while every positive is trivial (≤ +0.13, all in cells that barely loop at all).
+Wherever looping actually happens, the gate spends compute on the wrong tokens.
+
+Mechanistically this is coherent, not anomalous. "Hard" here means the model's previous greedy
+prediction missed. The entropy gating the exit is over the **next** token. After a surprising
+token the model often lands somewhere formulaic and commits confidently → exits early. After a
+predictable token it can sit at a genuine branch point with many plausible continuations →
+high entropy, keeps looping. **Entropy over the next token measures branchiness, not difficulty
+of the current one**, and those are different quantities. No threshold repairs that, and it is
+scale-independent.
+
+**3. Heavy looping costs recall.** N=8 reads 25% / 25% / 15% against the 45% baseline —
+consistent with the residual-stream drift measured earlier (‖h‖ 351→2560, 7.3× over 8 loops).
+Looping is roughly neutral at N=2–4 and actively harmful beyond. Combined with (2), there is no
+configuration that both loops meaningfully and helps.
+
+**4. Throughput numbers here are unusable.** N=4/T=0.3 reads 10.80 tok/s on *fewer* loops than
+N=4/T=0.1's 17.02 — physically impossible, so single-generation timing is noise-dominated. The
+apparent 1.7× at N=2/T=0.7 comes from averaging 1.02 loops, i.e. from not looping, not from
+smart gating. Any real throughput claim needs repeated timed runs.
+
+**Verdict, and how it differs from the retracted one.** Entropy-gated early exit does not work
+on this model — but this time for a *measured property of the model*, on a mechanism proven
+sound by a known-answer cell, rather than as the shadow of a bug. Distinguish this from the
+retraction above: same shape of answer, entirely different epistemic standing.
+
+**Still genuinely open:** the four training runs (deep supervision, gated, fixed-N) all trained
+against corrupted memory, so their failures carry no information about the recipes themselves.
+Anything re-run there should carry a known-answer cell in its own harness before GPU is spent.
