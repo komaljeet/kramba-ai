@@ -707,3 +707,45 @@ loops, hard tokens get more) remains unproven and every attempt at it so far has
 Whether a fixed-depth loop is worth the N× inference cost without the early-exit savings is a
 separate cost/benefit question, not yet evaluated. Full results:
 `results/looped_early_exit/sandbox_1m_fixed_N1.json`, `sandbox_1m_fixed_N4.json`.
+
+## Real-scale check of the fixed-N recipe — sandbox signal did NOT transfer (Issue #122, 2026-08-02)
+
+Ran the sandbox's winning recipe (fixed N=4 loops, final-loop-only supervision, no early exit)
+as a real continued-FT on the 83M checkpoint (`continue_ft_looped.py --fixed-n
+--no-deep-supervise`, 2000 steps, 196.3 min, final train loss 0.30). Validated at N=1/2/4 on
+both the step-500 (25% through) and step-2000 (final) checkpoints:
+
+| N | Fixed-N FT, step 500 (early) | Fixed-N FT, step 2000 (final) | Frozen baseline |
+|---|---:|---:|---:|
+| 1 | 26.7% | 30.0% | 45.0% |
+| 2 | — | **0.0%** | **0.0%** |
+| 4 | **0.0%** | **0.0%** | **0.0%** |
+
+**The sandbox's positive signal did not transfer.** Same collapse pattern as every prior
+attempt, identical at both the early and final checkpoint — more training didn't help within
+this run's budget either. The toy-scale result (N=4 beating N=1 by ~0.9% in held-out *loss*)
+was a real, measured effect, but it didn't translate into the *recall* metric that actually
+matters here — a small general next-token-prediction improvement is not the same thing as
+fixing long-range associative recall, which apparently needs a qualitatively different fix, not
+just "let the model use more compute if it wants to." This is the reason the real-scale check
+mattered rather than treating the sandbox result as sufficient evidence on its own.
+
+**This exhausts the training-recipe angle for Issue #122.** Three distinct training approaches
+tried on the current (already-full-depth, 12-layer) hybrid architecture, all fail on the recall
+metric:
+1. Deep supervision (every sampled loop graded independently) — fails, recall collapses to 0%.
+2. Deep supervision + a learned per-token gate — fails; opening the gate further made both
+   overall quality and the collapse *worse*, not better.
+3. Fixed-N, final-loop-only supervision (no early exit at all) — showed a small, real
+   toy-scale loss improvement, but recall still collapses to 0% at real scale.
+
+**Final status: parking Issue #122 as far as training-recipe iteration on this architecture
+goes.** The only genuinely untested direction left is architectural — a real weight-shared,
+deliberately-smaller-and-looped model (`EdgeHVN(shared_weights=True)` already exists in this
+repo for that), which this entire investigation never actually tried; everything above looped
+the already-full-depth 12-layer hybrid instead. That's a materially different, larger
+commitment (its own from-scratch-vs-pretrain decision) and a separate piece of work if picked
+up again, not a variation on anything tried here. Full results:
+`results/looped_early_exit/validate_looped_ft_fixed_step500.json`,
+`results/looped_early_exit/validate_looped_ft_fixed_step2000.json`,
+`checkpoints/hybrid_looped_ft_fixed/hybrid_looped_step2000.pt`.
