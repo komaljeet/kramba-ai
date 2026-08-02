@@ -12,14 +12,18 @@ Model policy (strict):
     however small — "this one's simple enough to guess at" is exactly where it goes wrong.
   - **Before building anything:** check the plan against the issue's own wording, and
     check that the measurement can actually detect the thing being claimed.
-- **Sonnet** — writing: docs/state.md entries, commit messages, MR descriptions, issue
-  text. Prose about work already done and already understood.
-- **Haiku** — reading: locating code, summarizing files/dirs, mapping the repo.
+  - **Writing too** — docs/state.md entries, commit messages, MR text. Do NOT switch
+    models mid-task to write these up. Writing about work just done needs the full
+    session context, so it cannot be handed to a subagent, and toggling `/model` by hand
+    for a docs turn is friction with no upside. Opus writes it inline.
+- **Haiku** — reading: locating code, summarizing files/dirs, mapping the repo. The one
+  thing that genuinely delegates cleanly (a fresh agent can grep/summarize without
+  needing session history).
 
-> **Cap note.** Opus is cap-limited on Pro and this policy routes the highest-volume work
-> to it. If the cap becomes the binding constraint, the lever is to hand *writing* and
-> *reading* away more aggressively (Sonnet/Haiku, via subagents) — **not** to let Sonnet
-> take back coding or "small" debugging, which is what this policy exists to prevent.
+> **Cap note.** Opus is cap-limited on Pro and this policy routes nearly everything to it.
+> If the cap becomes the binding constraint, the lever is to push *reading* onto
+> **repo-reader** (Haiku) more aggressively — **not** to let coding or "small" debugging
+> drift back to a cheaper model, which is what this policy exists to prevent.
 
 ## Where knowledge lives — read ON DEMAND, don't preload all of it
 - Doc hub / map of everything → docs/index.md
@@ -41,10 +45,8 @@ Do NOT re-explore the repo if docs/index.md already points to the answer.
   results that don't match expectations. Invoke it for **every** unexplained failure,
   however small — never triage one inline. Once it names the cause, **coder** fixes it.
 
-Writing (docs/state.md, commit messages, MR text) is Sonnet's, but note it is usually
-*not* delegable to a subagent: writing up work just done needs the full session context,
-which is exactly what a fresh subagent lacks. In practice, switch the session model
-(`/model`) for a writing turn rather than spawning an agent for it.
+There is no writer agent, deliberately: writing up work just done needs the full session
+context a fresh subagent lacks. Opus writes docs/commits/MR text inline.
 
 ## Working rules (see docs/ai_rules.md for the full version)
 - Long GPU benchmarks/monitors → run in background + tail logs, never block the session.
