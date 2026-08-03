@@ -559,3 +559,50 @@ selected with knowledge of the answer, so this is an upper bound on the entire f
 
 This closes the "make it adaptive" branch analytically rather than by exhaustion: the ceiling
 is measured, and it is below the do-nothing floor. `results/ghost/oracle_scores.json`.
+
+### Two corrections to the Phase 2 method, both raised by the maintainer — verdict survives both (#126)
+
+The Phase 2 result above was measured with **10-step delta spacing** at an anchor (step 10200)
+where the loss curve is nearly flat. Both choices were wrong, and both were challenged:
+
+1. **"It needs to be PER STEP."** Correct, and it mattered. Weight-delta coherence measured at
+   1-step spacing is **median cos +0.890**, against +0.463 at the 10-step spacing originally
+   used. The block measurement was discarding roughly half the available signal. Full ladder
+   (flat anchor): gap 1 **+0.890**, gap 2 +0.864, gap 5 +0.675, gap 10 +0.463, gap 20 +0.219.
+2. **"At a flat curve we do not need GHOST."** Also correct, and more serious: where the loss
+   barely moves, the frozen null control is a near-perfect predictor for free, so it wins for
+   reasons unrelated to the method. That made the original test unfair and the verdict
+   unearned. Re-anchored at **step 600**, where the curve drops ~10x faster (−0.7 to −1.2 loss
+   per 1k steps vs ~−0.1 at step 10200) and where real training gains **0.48 loss over 500
+   steps** while freezing falls **9.55%** behind — i.e. the null control now has real ground
+   to lose.
+
+**Per-step deltas, early steep anchor (step 600) — the fair test:**
+
+| N | real | frozen (null) | GHOST | oracle (cheats) | oracle alpha |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 5.49893 | **5.49368** | 5.50430 | 5.50324 | +0.892 |
+| 2 | 5.49948 | **5.49368** | 5.52232 | 5.51626 | +0.830 |
+| 5 | 5.49323 | **5.49368** | 5.61955 | 5.56444 | +0.700 |
+| 10 | 5.47345 | **5.49368** | 6.03026 | 5.63838 | +0.526 |
+| 50 | 5.40985 | **5.49368** | 128.8 | 5.91104 | +0.143 |
+| 100 | 5.33866 | **5.49368** | 425.3 | 6.17017 | +0.074 |
+| 500 | 5.01457 | **5.49368** | 9023.1 | 7.71704 | +0.020 |
+
+**GHOST and the cheating oracle both lose to doing nothing at every horizon, in the regime
+where GHOST is supposed to earn its keep, at the granularity that maximises the signal.** The
+N=10 gate now fails the spec's own 5% band too (+10.17%), not just the null control.
+
+**Why 90%-coherent motion still cannot be ridden.** Direction is highly predictable; magnitude
+and curvature are not. Extrapolation scales the last delta by `f = N/gap`, so at gap 1 an N=500
+jump applies 500x a single step along a direction that is only locally valid — the true path
+curves away. The oracle's fitted coefficient shows this directly: it shrinks 0.892 -> 0.020 as
+N grows, i.e. the best possible use of the observed direction is to follow it less and less,
+converging on the frozen baseline. And even at N=1 with alpha 0.892 the oracle is still
+marginally worse than freezing: the reliably predictable component of an update is the
+momentum the optimizer already applies, while the component that actually reduces loss comes
+from gradients of data not yet seen, which no function of past weights contains.
+
+**Verdict unchanged, now earned rather than assumed.** The negative result stands at the
+correct granularity and in the correct regime. Artifacts:
+`results/ghost/scores_perstep_flat.json`, `results/ghost/scores_perstep_early.json`.
