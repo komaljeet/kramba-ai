@@ -1,0 +1,258 @@
+{
+  "series_dir": "results/ghost/series_early",
+  "series_meta": {
+    "base_checkpoint": "C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/edge_chinchilla20k/edge_conversational_step500.pt",
+    "base_step": 500,
+    "steps": 800,
+    "save_every": null,
+    "warmup_steps": 100,
+    "snapshot_steps": [
+      500,
+      560,
+      580,
+      590,
+      595,
+      596,
+      598,
+      599,
+      600,
+      601,
+      602,
+      605,
+      610,
+      650,
+      700,
+      1100
+    ],
+    "lr": 0.0003,
+    "batch_size": 4,
+    "seq_len": 512,
+    "optimizer": "AdamW(fused, wd=0.01), constant LR",
+    "optimizer_state_saved": false,
+    "note": "constant LR by design \u2014 an LR schedule is itself a source of weight-delta inconsistency and would confound the measurement"
+  },
+  "gap": 1,
+  "anchor_step": 600,
+  "probe": {
+    "batches": 16,
+    "batch_size": 4,
+    "seq_len": 512,
+    "seed": 1234
+  },
+  "extrapolation_config": {
+    "cos_threshold": 0.3,
+    "ratio_tol": 2.0,
+    "poly_cos_threshold": 0.9,
+    "allow_poly": true,
+    "eps": 1e-12
+  },
+  "plan_summary": {
+    "config": {
+      "cos_threshold": 0.3,
+      "ratio_tol": 2.0,
+      "poly_cos_threshold": 0.9,
+      "allow_poly": true,
+      "eps": 1e-12
+    },
+    "n_tensors": 221,
+    "n_extrapolated": 221,
+    "n_held": 0,
+    "params_total": 83094705,
+    "params_extrapolated": 83094705,
+    "param_fraction_extrapolated": 1.0
+  },
+  "optimizer_state_policy": "not carried \u2014 this codebase never saves AdamW moments, so every jump starts with cold moments",
+  "gate_N": 10,
+  "results": [
+    {
+      "N": 1,
+      "target_step": 601,
+      "real_loss": 5.498934894800186,
+      "predicted_loss": 5.504299581050873,
+      "frozen_loss": 5.493675336241722,
+      "rel_err_predicted": 0.0009755864277934101,
+      "rel_err_frozen": 0.0009564685996623654,
+      "within_5pct": true,
+      "beats_frozen": false,
+      "beats_frozen_margin": -0.010624244809150696,
+      "oracle_loss": 5.503241524100304,
+      "rel_err_oracle": 0.0007831751752852826,
+      "oracle_beats_frozen": false,
+      "oracle_alpha": {
+        "n_tensors_fitted": 221,
+        "alpha_median": 0.8923312814028845,
+        "alpha_min": 0.5855438018825965,
+        "alpha_max": 1.0511121740701956
+      }
+    },
+    {
+      "N": 2,
+      "target_step": 602,
+      "real_loss": 5.4994813203811646,
+      "predicted_loss": 5.522319972515106,
+      "frozen_loss": 5.493675336241722,
+      "rel_err_predicted": 0.0041528738445389835,
+      "rel_err_frozen": 0.0010557330412097911,
+      "within_5pct": true,
+      "beats_frozen": false,
+      "beats_frozen_margin": -0.028644636273384094,
+      "oracle_loss": 5.516255348920822,
+      "rel_err_oracle": 0.003050111012740925,
+      "oracle_beats_frozen": false,
+      "oracle_alpha": {
+        "n_tensors_fitted": 221,
+        "alpha_median": 0.8304267426868572,
+        "alpha_min": 0.49566448740314156,
+        "alpha_max": 1.041312824456745
+      }
+    },
+    {
+      "N": 5,
+      "target_step": 605,
+      "real_loss": 5.493233263492584,
+      "predicted_loss": 5.619545966386795,
+      "frozen_loss": 5.493675336241722,
+      "rel_err_predicted": 0.022994236151170015,
+      "rel_err_frozen": 8.047587421343357e-05,
+      "within_5pct": true,
+      "beats_frozen": false,
+      "beats_frozen_margin": -0.12587063014507294,
+      "oracle_loss": 5.564443066716194,
+      "rel_err_oracle": 0.012963185761082154,
+      "oracle_beats_frozen": false,
+      "oracle_alpha": {
+        "n_tensors_fitted": 221,
+        "alpha_median": 0.6999024341016362,
+        "alpha_min": 0.16582030948671464,
+        "alpha_max": 0.9765788671590706
+      }
+    },
+    {
+      "N": 10,
+      "target_step": 610,
+      "real_loss": 5.4734495133161545,
+      "predicted_loss": 6.030264511704445,
+      "frozen_loss": 5.493675336241722,
+      "rel_err_predicted": 0.10173017893626965,
+      "rel_err_frozen": 0.0036952607083267992,
+      "within_5pct": false,
+      "beats_frozen": false,
+      "beats_frozen_margin": -0.5365891754627228,
+      "oracle_loss": 5.638379245996475,
+      "rel_err_oracle": 0.030132685480896326,
+      "oracle_beats_frozen": false,
+      "oracle_alpha": {
+        "n_tensors_fitted": 221,
+        "alpha_median": 0.5263705455782031,
+        "alpha_min": -0.21251403653367038,
+        "alpha_max": 0.9372077062576462
+      }
+    },
+    {
+      "N": 50,
+      "target_step": 650,
+      "real_loss": 5.409853965044022,
+      "predicted_loss": 128.8377275466919,
+      "frozen_loss": 5.493675336241722,
+      "rel_err_predicted": 22.81537993061953,
+      "rel_err_frozen": 0.015494202198306183,
+      "within_5pct": false,
+      "beats_frozen": false,
+      "beats_frozen_margin": -123.34405221045017,
+      "oracle_loss": 5.91103658080101,
+      "rel_err_oracle": 0.09264254062963606,
+      "oracle_beats_frozen": false,
+      "oracle_alpha": {
+        "n_tensors_fitted": 221,
+        "alpha_median": 0.14339443276267066,
+        "alpha_min": -0.19322958422630915,
+        "alpha_max": 0.8545019644386825
+      }
+    },
+    {
+      "N": 100,
+      "target_step": 700,
+      "real_loss": 5.338664785027504,
+      "predicted_loss": 425.2629566192627,
+      "frozen_loss": 5.493675336241722,
+      "rel_err_predicted": 78.65717529445367,
+      "rel_err_frozen": 0.029035453143443534,
+      "within_5pct": false,
+      "beats_frozen": false,
+      "beats_frozen_margin": -419.769281283021,
+      "oracle_loss": 6.17017188668251,
+      "rel_err_oracle": 0.15575188462609618,
+      "oracle_beats_frozen": false,
+      "oracle_alpha": {
+        "n_tensors_fitted": 221,
+        "alpha_median": 0.07389685158732699,
+        "alpha_min": -0.21687062435999388,
+        "alpha_max": 0.77523491305905
+      }
+    },
+    {
+      "N": 500,
+      "target_step": 1100,
+      "real_loss": 5.014568477869034,
+      "predicted_loss": 9023.145446777344,
+      "frozen_loss": 5.493675336241722,
+      "rel_err_predicted": 1798.3862256741531,
+      "rel_err_frozen": 0.09554298849186066,
+      "within_5pct": false,
+      "beats_frozen": false,
+      "beats_frozen_margin": -9017.651771441102,
+      "oracle_loss": 7.71703839302063,
+      "rel_err_oracle": 0.5389237233629371,
+      "oracle_beats_frozen": false,
+      "oracle_alpha": {
+        "n_tensors_fitted": 221,
+        "alpha_median": 0.01987232733292401,
+        "alpha_min": -0.11705024339511141,
+        "alpha_max": 0.570272383657446
+      }
+    }
+  ],
+  "delta_consistency_vs_gap": [
+    {
+      "gap_steps": 1,
+      "median_cos": 0.8951926773438147,
+      "n_extrapolated": 221,
+      "n_tensors": 221,
+      "param_fraction_extrapolated": 1.0
+    },
+    {
+      "gap_steps": 2,
+      "median_cos": 0.8575111860570664,
+      "n_extrapolated": 221,
+      "n_tensors": 221,
+      "param_fraction_extrapolated": 1.0
+    },
+    {
+      "gap_steps": 5,
+      "median_cos": 0.6315347557800993,
+      "n_extrapolated": 212,
+      "n_tensors": 221,
+      "param_fraction_extrapolated": 0.9999566759398207
+    },
+    {
+      "gap_steps": 10,
+      "median_cos": 0.4058151492400254,
+      "n_extrapolated": 182,
+      "n_tensors": 221,
+      "param_fraction_extrapolated": 0.9997468912128636
+    },
+    {
+      "gap_steps": 20,
+      "median_cos": 0.24578048773075356,
+      "n_extrapolated": 32,
+      "n_tensors": 221,
+      "param_fraction_extrapolated": 0.6361170786995393
+    }
+  ],
+  "gate": {
+    "N": 10,
+    "within_5pct": false,
+    "beats_frozen": false,
+    "passed": false
+  }
+}

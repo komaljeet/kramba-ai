@@ -1,0 +1,147 @@
+{
+  "series_dir": "results/ghost/series_v2",
+  "series_meta": {
+    "base_checkpoint": "C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/edge_chinchilla20k/edge_conversational_step10000.pt",
+    "base_step": 10000,
+    "steps": 800,
+    "save_every": null,
+    "warmup_steps": 200,
+    "snapshot_steps": [
+      10000,
+      10100,
+      10150,
+      10160,
+      10180,
+      10190,
+      10200,
+      10210,
+      10250,
+      10300,
+      10700
+    ],
+    "lr": 0.0003,
+    "batch_size": 4,
+    "seq_len": 512,
+    "optimizer": "AdamW(fused, wd=0.01), constant LR",
+    "optimizer_state_saved": false,
+    "note": "constant LR by design \u2014 an LR schedule is itself a source of weight-delta inconsistency and would confound the measurement"
+  },
+  "gap": 10,
+  "anchor_step": 10200,
+  "probe": {
+    "batches": 16,
+    "batch_size": 4,
+    "seq_len": 512,
+    "seed": 1234
+  },
+  "extrapolation_config": {
+    "cos_threshold": 0.3,
+    "ratio_tol": 2.0,
+    "poly_cos_threshold": 0.9,
+    "allow_poly": true,
+    "eps": 1e-12
+  },
+  "plan_summary": {
+    "config": {
+      "cos_threshold": 0.3,
+      "ratio_tol": 2.0,
+      "poly_cos_threshold": 0.9,
+      "allow_poly": true,
+      "eps": 1e-12
+    },
+    "n_tensors": 221,
+    "n_extrapolated": 197,
+    "n_held": 24,
+    "params_total": 83094705,
+    "params_extrapolated": 82822793,
+    "param_fraction_extrapolated": 0.9967276855968139
+  },
+  "optimizer_state_policy": "not carried \u2014 this codebase never saves AdamW moments, so every jump starts with cold moments",
+  "gate_N": 10,
+  "results": [
+    {
+      "N": 10,
+      "target_step": 10210,
+      "real_loss": 4.140357866883278,
+      "predicted_loss": 4.228529915213585,
+      "frozen_loss": 4.13901287317276,
+      "rel_err_predicted": 0.02129575538277805,
+      "rel_err_frozen": 0.00032484962743820723,
+      "within_5pct": true,
+      "beats_frozen": false,
+      "beats_frozen_margin": -0.08951704204082489
+    },
+    {
+      "N": 50,
+      "target_step": 10250,
+      "real_loss": 4.109522044658661,
+      "predicted_loss": 5.368709176778793,
+      "frozen_loss": 4.13901287317276,
+      "rel_err_predicted": 0.30640719734226934,
+      "rel_err_frozen": 0.0071762185951599255,
+      "within_5pct": false,
+      "beats_frozen": false,
+      "beats_frozen_margin": -1.2296963036060333
+    },
+    {
+      "N": 100,
+      "target_step": 10300,
+      "real_loss": 4.100464090704918,
+      "predicted_loss": 7.436925709247589,
+      "frozen_loss": 4.13901287317276,
+      "rel_err_predicted": 0.8136790238221777,
+      "rel_err_frozen": 0.009401077930477649,
+      "within_5pct": false,
+      "beats_frozen": false,
+      "beats_frozen_margin": -3.297912836074829
+    },
+    {
+      "N": 500,
+      "target_step": 10700,
+      "real_loss": 3.988037094473839,
+      "predicted_loss": 25.757985472679138,
+      "frozen_loss": 4.13901287317276,
+      "rel_err_predicted": 5.458812910334154,
+      "rel_err_frozen": 0.03785716509711658,
+      "within_5pct": false,
+      "beats_frozen": false,
+      "beats_frozen_margin": -21.618972599506378
+    }
+  ],
+  "delta_consistency_vs_gap": [
+    {
+      "gap_steps": 10,
+      "median_cos": 0.4738701155573519,
+      "n_extrapolated": 197,
+      "n_tensors": 221,
+      "param_fraction_extrapolated": 0.9967276855968139
+    },
+    {
+      "gap_steps": 20,
+      "median_cos": 0.25050482227409476,
+      "n_extrapolated": 35,
+      "n_tensors": 221,
+      "param_fraction_extrapolated": 0.6612566829619289
+    },
+    {
+      "gap_steps": 50,
+      "median_cos": 0.06321599193535431,
+      "n_extrapolated": 4,
+      "n_tensors": 221,
+      "param_fraction_extrapolated": 0.31027682209113083
+    },
+    {
+      "gap_steps": 100,
+      "median_cos": 0.026228851269877156,
+      "n_extrapolated": 4,
+      "n_tensors": 221,
+      "param_fraction_extrapolated": 0.0006111701100569524
+    }
+  ],
+  "gate": {
+    "N": 10,
+    "within_5pct": true,
+    "beats_frozen": false,
+    "passed": false
+  }
+}

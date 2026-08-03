@@ -1,0 +1,72 @@
+{
+  "anchor_step": 10000,
+  "spacing": 500,
+  "probe": {
+    "batches": 16,
+    "batch_size": 4,
+    "seq_len": 512,
+    "seed": 1234
+  },
+  "latest_loss": 4.182697311043739,
+  "real_future_losses": {
+    "10500": 4.158137291669846,
+    "11000": 4.117435172200203,
+    "11500": 4.123288452625275,
+    "12000": 4.102387994527817,
+    "13000": 4.03321772813797
+  },
+  "averages": [
+    {
+      "k": 2,
+      "steps_averaged": [
+        9500,
+        10000
+      ],
+      "loss": 4.147150367498398,
+      "gain_vs_latest": 0.03554694354534149,
+      "steps_of_training_equivalent": 500
+    },
+    {
+      "k": 3,
+      "steps_averaged": [
+        9000,
+        9500,
+        10000
+      ],
+      "loss": 4.1261357963085175,
+      "gain_vs_latest": 0.05656151473522186,
+      "steps_of_training_equivalent": 500
+    },
+    {
+      "k": 5,
+      "steps_averaged": [
+        8000,
+        8500,
+        9000,
+        9500,
+        10000
+      ],
+      "loss": 4.12856924533844,
+      "gain_vs_latest": 0.05412806570529938,
+      "steps_of_training_equivalent": 500
+    },
+    {
+      "k": 10,
+      "steps_averaged": [
+        5500,
+        6000,
+        6500,
+        7000,
+        7500,
+        8000,
+        8500,
+        9000,
+        9500,
+        10000
+      ],
+      "loss": 4.2088309824466705,
+      "gain_vs_latest": -0.026133671402931213,
+      "steps_of_training_equivalent": 0
+    }
+  ]
+}
