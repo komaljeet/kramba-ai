@@ -1,0 +1,23 @@
+{
+  "checkpoint": "checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt",
+  "step": 8000,
+  "n_trials": 20,
+  "results": {
+    "current (no injection, loops everything)": {
+      "1": 0.45,
+      "4": 0.0
+    },
+    "A: input injection": {
+      "1": 0.45,
+      "4": 0.0
+    },
+    "B: skip attention on loops 2+": {
+      "1": 0.35,
+      "4": 0.0
+    },
+    "A+B: injection + skip attention": {
+      "1": 0.45,
+      "4": 0.0
+    }
+  }
+}

@@ -152,13 +152,35 @@ class DeltaNetBlock(nn.Module):
         # (trained α~0.95 → near full-seq chunk), safe at hard decay. Opt-in.
         self.adaptive_chunk = False
         # Use the fused Triton scan (#83) for the training forward when available.
-        # Identity-preserving (same math as _scan_sequential, validated to ~1e-7)
-        # and numerically stable at all decay, unlike the eager _scan_chunked.
+        # Identity-preserving (rel-diff < 2e-3 vs _scan_sequential,
+        # tests/test_issue83.py) and MORE numerically reliable than the eager
+        # _scan_chunked path it replaces in isolation (that path's own docstring
+        # documents it can be silently wrong on decayed channels at large chunks
+        # / hard decay). Kept opt-in at the class default (2026-08-01, Issue
+        # #122): a broader default-flip attempt found a real, non-trivial loss
+        # divergence (0.297 vs 0.010 for eager) specifically in the
+        # BlockCoordinateScheduler weight-offload + buffer-caching combination
+        # (tests/test_block_coordinate_offload.py::
+        # test_lru_cache_hit_avoids_reload_and_preserves_parity) -- narrow to
+        # that advanced feature (grad_checkpoint alone is unaffected,
+        # tests/test_edgehvn_grad_checkpoint.py 5/5), not root-caused, so the
+        # class-level default stays False until it is. Explicitly enabled
+        # (and verified safe there -- no BCD/offload involved) in
+        # continue_ft_hybrid.py / continue_ft_looped.py via enable_scan_flags.
         self.use_triton_scan = bool(use_triton_scan)
         # Design B (#96): when use_triton_scan is on, route the scan through the
         # fused blockwise-recompute backward instead of the 2-kernel sequential
-        # backward. Same math; opt-in until the end-to-end --fast A/B confirms a
-        # real step-level win (micro-bench: ~1.18x scan at d=64).
+        # backward. Loss bit-identical, grad diff ~5e-8 (scripts/ab_megakernel.py),
+        # ~1.05x faster step + ~4x less transient backward VRAM -- BUT kept
+        # opt-in (default False), unlike use_triton_scan: 2026-08-01 testing
+        # found it introduces 2 torch.compile graph breaks that triton_scan
+        # alone doesn't (tests/test_issue83_stacking.py::test_zero_graph_breaks
+        # caught this when a broader default-flip attempt briefly defaulted
+        # this True too). Correctness is unaffected either way -- this is a
+        # compile-fusion caveat, not a numerics one -- but it's real enough
+        # that "unconditionally on" isn't as clean a case as triton_scan's.
+        # Still explicitly enabled where already proven (continue_ft_hybrid.py
+        # / continue_ft_looped.py's enable_scan_flags), just not the bare default.
         self.use_megakernel_scan = bool(use_megakernel_scan)
         assert d_model % n_heads == 0, (
             f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"

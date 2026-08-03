@@ -1,0 +1,152 @@
+{
+  "n_params": 780366,
+  "vocab_size": 37,
+  "steps": 3000,
+  "max_loops": 4,
+  "deep_supervise": true,
+  "train_history": [
+    {
+      "step": 0,
+      "k": 2,
+      "loss": 3.6184754371643066,
+      "gate_bias_sigmoid": 0.047439832240343094
+    },
+    {
+      "step": 150,
+      "k": 2,
+      "loss": 0.16435635089874268,
+      "gate_bias_sigmoid": 0.04857979342341423
+    },
+    {
+      "step": 300,
+      "k": 3,
+      "loss": 0.09867945313453674,
+      "gate_bias_sigmoid": 0.04877430573105812
+    },
+    {
+      "step": 450,
+      "k": 1,
+      "loss": 0.08681723475456238,
+      "gate_bias_sigmoid": 0.04875965416431427
+    },
+    {
+      "step": 600,
+      "k": 4,
+      "loss": 0.06764709204435349,
+      "gate_bias_sigmoid": 0.048672329634428024
+    },
+    {
+      "step": 750,
+      "k": 4,
+      "loss": 0.06809788942337036,
+      "gate_bias_sigmoid": 0.04862207919359207
+    },
+    {
+      "step": 900,
+      "k": 2,
+      "loss": 0.06942340731620789,
+      "gate_bias_sigmoid": 0.04865105077624321
+    },
+    {
+      "step": 1050,
+      "k": 3,
+      "loss": 0.07772652059793472,
+      "gate_bias_sigmoid": 0.04860425367951393
+    },
+    {
+      "step": 1200,
+      "k": 1,
+      "loss": 0.07165073603391647,
+      "gate_bias_sigmoid": 0.04858417063951492
+    },
+    {
+      "step": 1350,
+      "k": 3,
+      "loss": 0.06635855883359909,
+      "gate_bias_sigmoid": 0.0486580915749073
+    },
+    {
+      "step": 1500,
+      "k": 4,
+      "loss": 0.06168995797634125,
+      "gate_bias_sigmoid": 0.04866023361682892
+    },
+    {
+      "step": 1650,
+      "k": 4,
+      "loss": 0.06362123787403107,
+      "gate_bias_sigmoid": 0.04867260903120041
+    },
+    {
+      "step": 1800,
+      "k": 2,
+      "loss": 0.06311959773302078,
+      "gate_bias_sigmoid": 0.048721302300691605
+    },
+    {
+      "step": 1950,
+      "k": 3,
+      "loss": 0.06231239438056946,
+      "gate_bias_sigmoid": 0.048784639686346054
+    },
+    {
+      "step": 2100,
+      "k": 3,
+      "loss": 0.06546195596456528,
+      "gate_bias_sigmoid": 0.048848707228899
+    },
+    {
+      "step": 2250,
+      "k": 2,
+      "loss": 0.06013503298163414,
+      "gate_bias_sigmoid": 0.04886274412274361
+    },
+    {
+      "step": 2400,
+      "k": 4,
+      "loss": 0.06914950162172318,
+      "gate_bias_sigmoid": 0.04889863356947899
+    },
+    {
+      "step": 2550,
+      "k": 4,
+      "loss": 0.057894911617040634,
+      "gate_bias_sigmoid": 0.048918746411800385
+    },
+    {
+      "step": 2700,
+      "k": 2,
+      "loss": 0.05711905658245087,
+      "gate_bias_sigmoid": 0.048993080854415894
+    },
+    {
+      "step": 2850,
+      "k": 4,
+      "loss": 0.056135326623916626,
+      "gate_bias_sigmoid": 0.04897553101181984
+    }
+  ],
+  "eval_by_loop_depth": [
+    {
+      "k": 1,
+      "held_out_loss": 4.5602216720581055,
+      "normalized_entropy": 0.1938752830028534
+    },
+    {
+      "k": 2,
+      "held_out_loss": 4.594378471374512,
+      "normalized_entropy": 0.18911471962928772
+    },
+    {
+      "k": 3,
+      "held_out_loss": 4.624309539794922,
+      "normalized_entropy": 0.18521147966384888
+    },
+    {
+      "k": 4,
+      "held_out_loss": 4.650594711303711,
+      "normalized_entropy": 0.1819566786289215
+    }
+  ],
+  "verdict": "GATED RECIPE PARTIALLY HELPS: loss doesn't monotonically improve but doesn't collapse either"
+}

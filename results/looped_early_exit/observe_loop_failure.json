@@ -1,0 +1,90 @@
+{
+  "checkpoint": "checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt",
+  "step": 8000,
+  "samples": [
+    {
+      "expected": "Renvex",
+      "n1": "Drosist",
+      "n4": "<!</span>\n\n\tpublic classList(int eonList = int("
+    },
+    {
+      "expected": "Yurunda",
+      "n1": "Yuruku",
+      "n4": "</span>\n\n\t<!}\n|\\s\\n\u201d, \ufffd"
+    },
+    {
+      "expected": "Blenorix",
+      "n1": "Blenorix",
+      "n4": "<span class=\"list = jsonList() => {public void(StringError;}"
+    }
+  ],
+  "residual_trace": [
+    {
+      "loop": 1,
+      "h_norm": 350.8084411621094,
+      "cos_to_loop1": 0.9999998807907104,
+      "entropy": 0.7801939845085144,
+      "argmax_token": 0
+    },
+    {
+      "loop": 2,
+      "h_norm": 658.991943359375,
+      "cos_to_loop1": 0.9802001714706421,
+      "entropy": 0.8225562572479248,
+      "argmax_token": 3467
+    },
+    {
+      "loop": 3,
+      "h_norm": 970.353515625,
+      "cos_to_loop1": 0.9548822641372681,
+      "entropy": 0.8337118029594421,
+      "argmax_token": 3467
+    },
+    {
+      "loop": 4,
+      "h_norm": 1284.399658203125,
+      "cos_to_loop1": 0.9330998659133911,
+      "entropy": 0.8377684354782104,
+      "argmax_token": 3467
+    },
+    {
+      "loop": 5,
+      "h_norm": 1600.645751953125,
+      "cos_to_loop1": 0.9145926833152771,
+      "entropy": 0.8392921090126038,
+      "argmax_token": 3467
+    },
+    {
+      "loop": 6,
+      "h_norm": 1918.8154296875,
+      "cos_to_loop1": 0.8986598253250122,
+      "entropy": 0.8398003578186035,
+      "argmax_token": 3467
+    },
+    {
+      "loop": 7,
+      "h_norm": 2238.7158203125,
+      "cos_to_loop1": 0.884763240814209,
+      "entropy": 0.8399044871330261,
+      "argmax_token": 3467
+    },
+    {
+      "loop": 8,
+      "h_norm": 2560.16064453125,
+      "cos_to_loop1": 0.8725035190582275,
+      "entropy": 0.839838445186615,
+      "argmax_token": 3467
+    }
+  ],
+  "h_norm_growth_1_to_8": 7.297887804667146,
+  "alpha_sweep_n4": {
+    "0.0": 0.0,
+    "0.02": 0.0,
+    "0.05": 0.0,
+    "0.1": 0.0,
+    "0.2": 0.0,
+    "0.35": 0.0,
+    "0.5": 0.0,
+    "1.0": 0.0
+  }
+}

@@ -65,6 +65,8 @@ if _PROJECT_ROOT not in sys.path:
 
 from benchmark import TransformerLM, SimpleSSMLM, count_parameters  # noqa: E402
 from hvn.core import HamiltonianVortexNetwork  # noqa: E402
+from hvn.edge.model import EdgeHVN  # noqa: E402
+from hvn.edge.ternary import apply_ternary_to_model  # noqa: E402
 from train import CharTokenizer, TextDataset  # noqa: E402
 from .datasets import DATASET_REGISTRY  # noqa: E402
 
@@ -412,6 +414,67 @@ def run_scaling_laws(
                 bond_dimension=bond_dim, chunk_size=64, dropout=0.1,
                 use_deltanet=True, weightless=True, grad_checkpoint=grad_checkpoint,
             )
+        # --- ALBERT-style weight sharing (Issue #32 Phase 2.4) ---
+        # The actual "fewer params, same quality" test. Both arms are EdgeHVN with
+        # DeltaNet blocks, so the ONLY variable is whether the layers share one set
+        # of weights. Sharing turns O(L) block-parameter storage into O(1) plus a
+        # couple of scalars per layer (SharedWeightHVN's per-layer RoPE offset and
+        # residual scale, which keep the virtual layers from collapsing into a
+        # literal repeated function).
+        #
+        # `param_count` below uses `sum(p.numel() ...)`, which counts a shared block
+        # exactly once -- so the reported params are the real storage footprint, not
+        # the unrolled-forward count, and the params-vs-PPL comparison is honest.
+        if "EdgeHVN-DeltaNet" in models:
+            model_specs["EdgeHVN-DeltaNet"] = EdgeHVN(
+                vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
+                n_heads=4, dropout=0.1, use_deltanet=True, shared_weights=False,
+                grad_checkpoint=grad_checkpoint,
+            )
+        if "EdgeHVN-DeltaNet-Shared" in models:
+            model_specs["EdgeHVN-DeltaNet-Shared"] = EdgeHVN(
+                vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
+                n_heads=4, dropout=0.1, use_deltanet=True, shared_weights=True,
+                grad_checkpoint=grad_checkpoint,
+            )
+        # --- Ternary (BitNet b1.58) arms, incl. composed with sharing ---
+        # Sharing and ternary are ORTHOGONAL levers: sharing cuts the NUMBER of
+        # weights (~3.67x at d=512/12L), ternary cuts BYTES PER weight (fp32 ->
+        # 1.58 bits, ~20x). Their storage benefits multiply. Never previously
+        # combined anywhere in this repo -- these arms test whether their QUALITY
+        # costs also compose cleanly, or compound worse than the product.
+        #
+        # Reason to suspect worse: a shared block's weights are reused at every
+        # one of the 12 virtual layers, so quantization error in that single block
+        # is applied 12 times rather than once. That is a real mechanism for
+        # super-additive damage, and it is the point of measuring rather than
+        # assuming.
+        #
+        # NOTE on param counts: TernaryLinear keeps a full-precision shadow weight
+        # for the STE gradient during training, so `param_count` is UNCHANGED for
+        # these arms -- the storage win only materialises after `.freeze()`. Read
+        # the ternary arms' size benefit as arithmetic (1.58/32 bits), and read
+        # these runs for QUALITY cost only.
+        _ternary_arms = {
+            "EdgeHVN-DeltaNet-Ternary": False,
+            "EdgeHVN-DeltaNet-Shared-Ternary": True,
+        }
+        for _arm, _shared in _ternary_arms.items():
+            if _arm in models:
+                _m = EdgeHVN(
+                    vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
+                    n_heads=4, dropout=0.1, use_deltanet=True, shared_weights=_shared,
+                    grad_checkpoint=grad_checkpoint,
+                )
+                # Same exclusion set the trained checkpoints use
+                # (train_edge_conversational.load_checkpoint_for_resume): the tiny
+                # gate projections and the output decoder stay full precision.
+                _excl = ("beta_proj", "alpha_proj", "decoder")
+                _targets = [n for n, mod in _m.named_modules()
+                            if isinstance(mod, nn.Linear) and not any(p in n for p in _excl)]
+                apply_ternary_to_model(_m, target_names=_targets)
+                model_specs[_arm] = _m
+
         if "Transformer" in models:
             model_specs["Transformer"] = TransformerLM(
                 vocab_size=vocab_size, d_model=d_model, n_layers=n_layers, n_heads=4,
@@ -684,10 +747,16 @@ def main() -> None:
     parser.add_argument("--compile", action="store_true", help="Use torch.compile.")
     parser.add_argument("--models", type=str, nargs="+", default=None,
                         choices=["HVN", "HVN-DeltaNet", "HVN-DeltaNet-Weightless",
+                                 "EdgeHVN-DeltaNet", "EdgeHVN-DeltaNet-Shared",
+                                 "EdgeHVN-DeltaNet-Ternary",
+                                 "EdgeHVN-DeltaNet-Shared-Ternary",
                                  "Transformer", "SSM"],
                         help="Which models to compare (default: HVN, Transformer, SSM). "
                              "Add 'HVN-DeltaNet' to sweep the Issue #34 block (Issue #39); "
-                             "'HVN-DeltaNet-Weightless' for the Issue #40 hybrid.")
+                             "'HVN-DeltaNet-Weightless' for the Issue #40 hybrid; "
+                             "'EdgeHVN-DeltaNet' + 'EdgeHVN-DeltaNet-Shared' for the "
+                             "ALBERT-style weight-sharing A/B (same class, sharing is the "
+                             "only variable -- the fewer-params-same-quality test).")
     parser.add_argument("--precision", type=str, default="fp32",
                         choices=["fp32", "fp16", "bf16"])
     parser.add_argument("--tokenizer", type=str, default="char", choices=["char", "bpe"],
