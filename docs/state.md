@@ -680,3 +680,45 @@ latest arm's local rate of ~0.018 nats/100 steps at that point).
 **Caveats:** one anchor, one seed, one A/B. The absolute gaps (~0.02-0.06 nats) are small,
 though the sign is consistent across 11/11 paired evaluations on an identical probe set, and
 the control separates cleanly in the opposite direction. `results/ghost/ab_continue.json`.
+
+#### Periodic in-loop averaging does NOT compound — keep it at the end of the run (#128)
+
+Two arms from step 10,000, 2,000 steps each, identical pre-materialised batch sequence.
+``baseline`` trains plainly; ``periodic`` replaces its live weights with the mean of the last 3
+snapshots every 250 steps and continues from there. The reference that matters is the third
+number, free from the baseline arm: its own last-3 snapshots averaged at the end — the
+already-proven one-shot application.
+
+| arm | loss @ 2,000 steps | vs baseline |
+|---|---:|---:|
+| baseline, no averaging | 3.70874 | — |
+| **baseline + end-of-run average** | **3.66057** | **−0.04817** |
+| periodic averaging in-loop | 3.72787 | **+0.01914 (worse)** |
+
+**Periodic averaging is worse than not averaging at all**, and 0.0673 worse than applying it
+once at the end.
+
+**The mechanism, which is the interesting part.** Every injection helped, and the gains did not
+diminish: **+0.0243, +0.0405, +0.1401, +0.0732, +0.0615, +0.0646**. The averaged point is
+genuinely better each time. But immediately BEFORE each injection the periodic arm was behind
+the baseline — by 0.035 (step 1000), 0.056 (1250), 0.061 (1500), 0.054 (1750). Training onward
+from an averaged point descends more slowly than training from the raw trajectory, and the
+injections spend their gains repairing a deficit they created. The largest single gain (+0.1401)
+came where the trajectory had bounced upward, confirming these injections act mainly as
+volatility damping, not as progress.
+
+This is the same 40%-decay observed in the #128 A/B, seen from the inside: averaging buys a
+better point *now* at the cost of a slower descent afterwards. One application at the end
+collects the benefit and pays none of the cost, which is exactly why the end-of-run form wins.
+
+**Method flaw found mid-run and fixed, disclosed rather than buried.** The arms were seeded once
+before the data loader rather than once per arm. The model has dropout, so the second arm drew a
+different mask sequence and drifted from the first *before any injection*: 0.0036 apart at step
+250, 0.0041 at step 500. Both gaps above (0.019 and 0.067) are 5x and 17x that drift, so the
+verdict is unaffected — but `torch.manual_seed` is now called per arm in both `repeat_average`
+and `ab_continue`. **The #128 A/B reported earlier carries the same flaw**; its margins
+(0.011-0.057, averaged ahead 11/11, control behind 11/11) also exceed the drift, so its verdict
+stands, but it should be re-run under per-arm seeding to remove the asterisk.
+
+**Settled recommendation: average the last 2-5 checkpoints once, at the end of a run.** Do not
+put it in the training loop. `results/ghost/repeat_average.json`.

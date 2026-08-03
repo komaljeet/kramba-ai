@@ -527,6 +527,10 @@ def ab_continue(args) -> int:
 
     results: Dict[str, List[dict]] = {}
     for arm, sd in (("latest", latest_sd), ("averaged", avg_sd), ("perturbed", pert_sd)):
+        # Re-seed per arm so dropout draws the same mask sequence in every arm
+        # (see repeat_average for the measurement that exposed this).
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
         model, _st, _ck = tec.load_checkpoint_for_resume(args.base, device)
         model.load_state_dict({k: v.to(device) for k, v in sd.items()}, strict=False)
         opt = torch.optim.AdamW(model.parameters(), lr=args.lr,
@@ -587,6 +591,155 @@ def ab_continue(args) -> int:
            "verdict": {"advantage_start": first, "advantage_end": last,
                        "fraction_retained": retained, "survives": survives,
                        "perturbed_control_also_beats_latest": pert_helps}}
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    with open(args.out, "w") as fh:
+        json.dump(out, fh, indent=2)
+    print(f"[ghost] wrote {args.out}")
+    return 0
+
+
+def repeat_average(args) -> int:
+    """Does averaging COMPOUND when applied repeatedly during training?
+
+    #128 established that averaging the last k checkpoints is both a better
+    model and a real (decaying) head start. The remaining question is whether
+    applying it over and over inside the loop stacks, or whether each
+    application merely re-buys the same fading gain and the run lands in the
+    same place. That is what decides inside-the-loop vs end-of-run.
+
+    Two arms, identical pre-materialised batch sequence, identical fresh
+    optimizer:
+
+      baseline   plain training; snapshots taken but never fed back
+      periodic   every ``--ra-interval`` steps, the live weights are REPLACED
+                 by the mean of the last ``--ra-k`` snapshots, then training
+                 continues from there
+
+    A third number costs nothing and is the reference that matters: the mean of
+    the BASELINE arm's final k snapshots — i.e. the already-proven end-of-run
+    application. Periodic averaging only earns a place in the training loop if
+    it beats that, not merely if it beats the raw baseline.
+
+    Optimizer-state policy: AdamW moments are CARRIED across an injection
+    rather than reset. The moments describe a trajectory the injection
+    perturbs, so this is a real (small) inconsistency — but resetting them
+    every interval would throw away far more, and the arms differ only in the
+    injection, so the comparison stays clean either way.
+    """
+    import train_edge_conversational as tec
+
+    device = require_cuda()
+    tokenizer = build_tokenizer()
+    probes = load_probe_batches(tokenizer, args.probe_batches, args.batch_size,
+                                args.seq_len, args.data_dir)
+    torch.manual_seed(args.seed)
+    loader, _v, _s = tec.build_dataset_pipeline(
+        tokenizer=tokenizer, seq_len=args.seq_len, batch_size=args.batch_size,
+        data_dir=args.data_dir, val_fraction=0.0, num_workers=0)
+
+    batches: List[torch.Tensor] = []
+    for batch in loader:
+        batches.append((batch[0] if isinstance(batch, (tuple, list)) else batch).clone())
+        if len(batches) >= args.ra_steps:
+            break
+    print(f"[ghost] materialised {len(batches)} identical batches for both arms")
+
+    results: Dict[str, dict] = {}
+    for arm in ("baseline", "periodic"):
+        # Re-seed per arm. Without this the arms are NOT identical before the
+        # first injection: the model has dropout, so the second arm draws a
+        # different mask sequence and drifts from the first on identical data.
+        # Measured on the run that exposed this: 0.0036 apart at step 250 and
+        # 0.0041 at step 500, with no injection yet applied. Small next to the
+        # ~0.05 effect, but it is avoidable noise sitting directly on top of
+        # the quantity being compared.
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+        model, _st, _ck = tec.load_checkpoint_for_resume(args.base, device)
+        opt = torch.optim.AdamW(model.parameters(), lr=args.lr,
+                                weight_decay=0.01, fused=True)
+        buf: List[Dict[str, torch.Tensor]] = []
+        traj = [{"step": 0, "loss": evaluate_loss(model, probes, device)}]
+        injections: List[dict] = []
+        print(f"[ghost] --- arm '{arm}' start loss {traj[0]['loss']:.5f}")
+        model.train()
+        t0 = time.time()
+        for i, xb in enumerate(batches, start=1):
+            xb = xb.to(device)
+            x, y = xb[:, :-1], xb[:, 1:]
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                logits = model(x)
+                loss = nn.functional.cross_entropy(
+                    logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1))
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            opt.zero_grad(set_to_none=True)
+
+            if i % args.ra_interval == 0:
+                core = getattr(model, "_orig_mod", model)
+                buf.append({k: v.detach().to("cpu", copy=True)
+                            for k, v in core.state_dict().items()})
+                buf[:] = buf[-args.ra_k:]
+                before = evaluate_loss(model, probes, device)
+                after = before
+                if arm == "periodic" and len(buf) == args.ra_k:
+                    avg = average_state_dicts(buf)
+                    model.load_state_dict({k: v.to(device) for k, v in avg.items()},
+                                          strict=False)
+                    after = evaluate_loss(model, probes, device)
+                    # The injected weights become the buffer's newest entry,
+                    # otherwise the next average re-averages the pre-injection
+                    # trajectory and the intervention partially undoes itself.
+                    buf[-1] = {k: v.clone() for k, v in avg.items()}
+                    injections.append({"step": i, "before": before, "after": after,
+                                       "gain": before - after})
+                    print(f"[ghost]     {arm} step {i:<5} inject: {before:.5f} -> "
+                          f"{after:.5f} ({before - after:+.5f})", flush=True)
+                else:
+                    print(f"[ghost]     {arm:<9} step {i:<5} probe loss {before:.5f} "
+                          f"({(time.time() - t0) / 60:.1f} min)", flush=True)
+                traj.append({"step": i, "loss": after})
+                model.train()
+
+        final = {"trajectory": traj, "injections": injections,
+                 "final_loss": traj[-1]["loss"]}
+        if arm == "baseline" and len(buf) >= args.ra_k:
+            tail = average_state_dicts(buf[-args.ra_k:])
+            model.load_state_dict({k: v.to(device) for k, v in tail.items()},
+                                  strict=False)
+            final["tail_average_loss"] = evaluate_loss(model, probes, device)
+            print(f"[ghost] baseline + END-OF-RUN average of last {args.ra_k}: "
+                  f"{final['tail_average_loss']:.5f}")
+        results[arm] = final
+        del model, opt, buf
+        torch.cuda.empty_cache()
+
+    base_final = results["baseline"]["final_loss"]
+    tail = results["baseline"].get("tail_average_loss")
+    per_final = results["periodic"]["final_loss"]
+    print("\n[ghost] === does periodic averaging compound? ===")
+    print(f"[ghost] baseline, no averaging          {base_final:.5f}")
+    if tail is not None:
+        print(f"[ghost] baseline + end-of-run average   {tail:.5f} "
+              f"({tail - base_final:+.5f} vs baseline)")
+    print(f"[ghost] periodic averaging in-loop      {per_final:.5f} "
+          f"({per_final - base_final:+.5f} vs baseline)")
+    compounds = tail is not None and per_final < tail
+    print(f"[ghost] periodic vs end-of-run: {per_final - tail:+.5f}" if tail else "")
+    print(f"[ghost] VERDICT: periodic averaging {'COMPOUNDS' if compounds else 'does NOT compound'} "
+          f"-- {'belongs in the training loop' if compounds else 'keep it as an end-of-run step'}")
+    if results["periodic"]["injections"]:
+        gains = [x["gain"] for x in results["periodic"]["injections"]]
+        print(f"[ghost] per-injection gains: "
+              f"{', '.join(f'{g:+.4f}' for g in gains)}")
+
+    out = {"base": args.base.replace("\\", "/"), "ra_steps": args.ra_steps,
+           "ra_interval": args.ra_interval, "ra_k": args.ra_k, "lr": args.lr,
+           "optimizer_state_on_injection": "carried, not reset",
+           "results": results,
+           "verdict": {"baseline_final": base_final, "tail_average": tail,
+                       "periodic_final": per_final, "compounds": compounds}}
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w") as fh:
         json.dump(out, fh, indent=2)
@@ -756,6 +909,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--make-series", action="store_true")
     mode.add_argument("--score", action="store_true")
+    mode.add_argument("--repeat-average", action="store_true",
+                      help="does periodic in-loop averaging compound?")
     mode.add_argument("--ab-continue", action="store_true",
                       help="A/B: continue training from latest vs averaged vs perturbed")
     mode.add_argument("--average", action="store_true",
@@ -794,6 +949,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--ab-steps", type=int, default=1000)
     p.add_argument("--ab-eval-every", type=int, default=100)
     p.add_argument("--seed", type=int, default=7)
+    p.add_argument("--ra-steps", type=int, default=2000)
+    p.add_argument("--ra-interval", type=int, default=250)
+    p.add_argument("--ra-k", type=int, default=3)
     p.add_argument("--avg-spacing", type=int, default=500)
     p.add_argument("--future-steps", type=int, nargs="+",
                    default=[10500, 11000, 11500, 12000, 13000])
@@ -806,6 +964,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return average(args)
     if args.ab_continue:
         return ab_continue(args)
+    if args.repeat_average:
+        return repeat_average(args)
     return score(args)
 
 
