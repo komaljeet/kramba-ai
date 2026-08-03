@@ -505,3 +505,331 @@ gate Phase 2 on a different (deliberately transition-rich) run or proceed straig
 extrapolator. **The `2 sigma above rolling mean` rule itself is sound and reusable** — with the
 persistence requirement (`open_run`) added, without which a bare k-sigma test produces
 `n * Phi(-k)` false positives by construction (28 on a 1,200-sample noise curve, measured).
+
+## GHOST Phase 2 — weight-delta extrapolation is measurably worse than doing nothing (Issue #126, 2026-08-03)
+
+`ghost/extrapolator.py` (epic #124, method by Rambarun Komaljeet) takes three consecutive
+checkpoints, measures each weight tensor's delta consistency, and predicts the weights N steps
+later so those N steps need not be computed. Phase 2's gate: predicted weights at **N=10**
+within **5%** of the real trained weights' loss at the same step.
+
+**The spec's gate PASSES. The binding gate — beating the null control — FAILS at every N.**
+
+The measurement needed a checkpoint series this repo did not have: its own checkpoints are
+spaced 500 steps apart, far coarser than the N=10..500 jumps in question, so
+`ghost/harness.py --make-series` continued `edge_chinchilla20k/step10000` for 800 steps
+(AdamW, constant LR, batch 4 x seq 512, 1.59 steps/s, 8.4 min) and snapshotted the 11 steps the
+analysis actually reads. Anchor at step 10200 (200 steps of warmup so any data-mix transient
+has settled), extrapolator inputs at 10180/10190/10200, all arms scored on **one fixed
+16-batch held-out probe set**.
+
+| N | real loss | predicted | frozen (null control) | pred err | frozen err |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 4.14036 | 4.22853 | 4.13901 | +2.13% | **+0.03%** |
+| 50 | 4.10952 | 5.36871 | 4.13901 | +30.64% | **+0.72%** |
+| 100 | 4.10046 | 7.43693 | 4.13901 | +81.37% | **+0.94%** |
+| 500 | 3.98804 | 25.75799 | 4.13901 | +545.88% | **+3.79%** |
+
+At N=10 the prediction is within 5% of real — and **doing nothing is ~70x more accurate**
+(0.03% vs 2.13%). This is precisely the failure mode the null control was added to catch: a
++/-5% band is satisfiable by any method that barely moves, because over 10 steps the weights
+barely move. By N=500 the extrapolated model is destroyed (loss 25.8 vs 4.0).
+
+**One genuinely useful positive finding: the trajectory is real, but only at short range.**
+Median cosine between consecutive weight deltas, measured at four spacings from the same
+anchor:
+
+| delta spacing | median cos(D1, D2) | params passing the consistency gate |
+|---:|---:|---:|
+| 10 steps | **+0.474** | 99.67% |
+| 20 steps | +0.251 | 66.13% |
+| 50 steps | +0.063 | 31.03% |
+| 100 steps | +0.026 | 0.06% |
+| 500 steps (repo's own checkpoints) | −0.012 | 0.11% |
+
+Weight motion IS directionally coherent at 10-step spacing and decorrelates to noise by ~100
+steps. An earlier reading of this project's native 500-step checkpoints (median cos −0.012)
+was simply the wrong measurement scale — worth recording, because it would have supported the
+right conclusion for the wrong reason.
+
+**Why coherent deltas still do not buy a jump.** cos ~ 0.47 means the observed delta is roughly
+half signal, half noise. Extrapolation multiplies that delta by `f = N/gap`, so injected noise
+grows linearly in N while the true drift it is trying to capture is tiny — over 10 real steps
+the probe loss moves by 0.001. There is no horizon where the trade wins: short N has no signal
+worth capturing, long N has no valid linear trajectory.
+
+**The obvious repairs were tried and the failure is monotone, not a bad configuration.**
+
+| gate | params extrapolated | N=10 error | vs frozen |
+|---|---:|---:|---|
+| cos>=0.30 + quadratic | 99.67% | +2.13% | loses |
+| cos>=0.30, linear only | 99.67% | +2.13% | loses |
+| cos>=0.70, linear only | 31.03% | +0.83% | loses |
+| cos>=0.90, linear only | 0.06% | +0.03% | ties — it *is* frozen |
+
+Prediction error is monotone increasing in how much gets extrapolated, and the limit of
+tightening the gate is the frozen baseline itself. **Shrinkage/damping needs no separate
+experiment: damping is equivalent to reducing effective coverage, and this table shows the
+optimum coverage is zero.** The extrapolator either injects noise or does nothing.
+
+**Optimizer-state policy (recorded per #126):** this codebase's `_save_edge_checkpoint` never
+stores AdamW moments, so every resume — and therefore every GHOST jump — already starts with
+cold moment estimates. Nothing is extrapolated for them. This is a real per-jump cost that
+would compound in Phase 3, on top of the weight error above.
+
+**Caveats, stated so the result is not oversold.** One anchor, one model (83M ternary EdgeHVN),
+one optimizer, constant LR. A different regime — early training with large coherent drift, or
+a much smaller LR — could in principle behave differently. But the mechanism that fails here
+(noise amplified by `f` against a drift too small to matter) is not specific to this
+configuration, and the 5%-gate-passes-while-losing-to-frozen result would repeat wherever the
+loss curve is as flat as it is at step 10200.
+
+**Verdict: Phase 2 fails its binding gate.** Building Phase 3's training loop (#127) on this
+mechanism would wrap a control loop around a step that is measurably worse than not taking it.
+Artifacts: `results/ghost/extrapolation_scores.json`, `results/ghost/scores_{nopoly,cos07,cos09}.json`.
+
+### Oracle upper bound — an adaptive/learned GHOST cannot work either (#126 follow-up)
+
+The natural next proposal is to make GHOST *adaptive*: train normally, watch how wrong the
+predictions are, fit the prediction function, repeat until it is good enough. That hypothesis
+is testable without building it, by computing the **oracle**: for each tensor, the scalar
+`alpha` in `W_pred = W3 + alpha * f * D2` chosen by least squares **using the true future
+weights**. No adaptive, fitted, meta-learned or scheduled variant can beat a coefficient
+selected with knowledge of the answer, so this is an upper bound on the entire family.
+
+| N | oracle (cheats) | frozen | real | oracle err | median fitted alpha |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 4.17811 | **4.13901** | 4.14036 | +0.91% | **+0.465** |
+| 50 | 4.26663 | **4.13901** | 4.10952 | +3.82% | **+0.120** |
+| 100 | 4.28950 | **4.13901** | 4.10046 | +4.61% | **+0.058** |
+| 500 | 4.19223 | **4.13901** | 3.98804 | +5.12% | **+0.012** |
+
+**The oracle loses to doing nothing at every horizon.** Two consequences:
+
+1. **The optimal adaptive coefficient collapses toward zero as the jump grows** (0.465 -> 0.012).
+   A self-tuning GHOST converges on "predict almost nothing" — the frozen baseline — and it
+   does so *faster* the further ahead it tries to jump. The intuition that a fitted function
+   improves with horizon is exactly inverted by the measurement.
+2. **Even at its best (alpha 0.465 at N=10, which is essentially the measured delta correlation
+   of 0.474) it is still worse in loss than freezing.** The oracle minimises *weight-space*
+   distance to the true future weights and still loses in *loss space*: the component of the
+   update that past deltas can predict is not the component that reduces loss. The predictable
+   part is drift the optimizer's own momentum already applies; the part that constitutes
+   learning comes from gradients of data the model has not seen yet, and that information is
+   not present in past weights at any fitting budget.
+
+This closes the "make it adaptive" branch analytically rather than by exhaustion: the ceiling
+is measured, and it is below the do-nothing floor. `results/ghost/oracle_scores.json`.
+
+### Two corrections to the Phase 2 method, both raised by the maintainer — verdict survives both (#126)
+
+The Phase 2 result above was measured with **10-step delta spacing** at an anchor (step 10200)
+where the loss curve is nearly flat. Both choices were wrong, and both were challenged:
+
+1. **"It needs to be PER STEP."** Correct, and it mattered. Weight-delta coherence measured at
+   1-step spacing is **median cos +0.890**, against +0.463 at the 10-step spacing originally
+   used. The block measurement was discarding roughly half the available signal. Full ladder
+   (flat anchor): gap 1 **+0.890**, gap 2 +0.864, gap 5 +0.675, gap 10 +0.463, gap 20 +0.219.
+2. **"At a flat curve we do not need GHOST."** Also correct, and more serious: where the loss
+   barely moves, the frozen null control is a near-perfect predictor for free, so it wins for
+   reasons unrelated to the method. That made the original test unfair and the verdict
+   unearned. Re-anchored at **step 600**, where the curve drops ~10x faster (−0.7 to −1.2 loss
+   per 1k steps vs ~−0.1 at step 10200) and where real training gains **0.48 loss over 500
+   steps** while freezing falls **9.55%** behind — i.e. the null control now has real ground
+   to lose.
+
+**Per-step deltas, early steep anchor (step 600) — the fair test:**
+
+| N | real | frozen (null) | GHOST | oracle (cheats) | oracle alpha |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 5.49893 | **5.49368** | 5.50430 | 5.50324 | +0.892 |
+| 2 | 5.49948 | **5.49368** | 5.52232 | 5.51626 | +0.830 |
+| 5 | 5.49323 | **5.49368** | 5.61955 | 5.56444 | +0.700 |
+| 10 | 5.47345 | **5.49368** | 6.03026 | 5.63838 | +0.526 |
+| 50 | 5.40985 | **5.49368** | 128.8 | 5.91104 | +0.143 |
+| 100 | 5.33866 | **5.49368** | 425.3 | 6.17017 | +0.074 |
+| 500 | 5.01457 | **5.49368** | 9023.1 | 7.71704 | +0.020 |
+
+**GHOST and the cheating oracle both lose to doing nothing at every horizon, in the regime
+where GHOST is supposed to earn its keep, at the granularity that maximises the signal.** The
+N=10 gate now fails the spec's own 5% band too (+10.17%), not just the null control.
+
+**Why 90%-coherent motion still cannot be ridden.** Direction is highly predictable; magnitude
+and curvature are not. Extrapolation scales the last delta by `f = N/gap`, so at gap 1 an N=500
+jump applies 500x a single step along a direction that is only locally valid — the true path
+curves away. The oracle's fitted coefficient shows this directly: it shrinks 0.892 -> 0.020 as
+N grows, i.e. the best possible use of the observed direction is to follow it less and less,
+converging on the frozen baseline. And even at N=1 with alpha 0.892 the oracle is still
+marginally worse than freezing: the reliably predictable component of an update is the
+momentum the optimizer already applies, while the component that actually reduces loss comes
+from gradients of data not yet seen, which no function of past weights contains.
+
+**Verdict unchanged, now earned rather than assumed.** The negative result stands at the
+correct granularity and in the correct regime. Artifacts:
+`results/ghost/scores_perstep_flat.json`, `results/ghost/scores_perstep_early.json`.
+
+### Weight averaging — the positive result that came out of the GHOST work (#126 follow-up)
+
+GHOST's premise was that the weight trajectory is coherent. #126 measured that it is (median
+cos **+0.890** at 1-step spacing) but that *extrapolating* along it amplifies the delta's noise
+by `f = N/gap` and loses to doing nothing at every horizon. **Averaging is the same observation
+with the opposite arithmetic: it cancels the noise instead of amplifying it, keeping the shared
+drift.** It skips no training step, so it does not violate the rule the extrapolation result
+established — it asks only whether the weights already paid for are being used well.
+
+Measured on the EXISTING `edge_chinchilla20k` checkpoints (500-step spacing, no new training),
+same fixed 16-batch probe set, three independent anchors:
+
+| anchor | latest | avg k=2 | avg k=3 | avg k=5 | avg k=10 | worth (real steps) |
+|---:|---:|---:|---:|---:|---:|---|
+| 8,000 | 4.30812 | **4.24677** | **4.26304** | **4.25888** | — | < 500 |
+| 10,000 | 4.18270 | **4.14715** | **4.12614** | **4.12857** | 4.20883 (worse) | ~500-1000 |
+| 14,000 | 4.01125 | **3.98420** | **3.98165** | **3.99291** | — | ~1000 |
+
+**9 of 9 (anchor x k in 2,3,5) improve on the latest checkpoint**, gains 0.018-0.061 nats, for
+the cost of loading a few checkpoints and averaging them. `k=10` (a 4,500-step window) is
+*worse* than the latest — the averaging window has to be short relative to the drift, otherwise
+it mixes in weights from a materially different model.
+
+Because the gain is roughly constant in loss terms while real training slows down, **the gain
+is worth more steps the later it is applied**: <500 steps at anchor 8K, ~1,000 steps at 14K.
+
+**The important caveat — this is an evaluation-time gain, not yet a proven training speedup.**
+Every number above evaluates an averaged model. The untested question is whether training
+*continued from* the averaged weights stays ahead, or whether the advantage washes out within a
+few hundred steps. That is the difference between "free better checkpoint" (certain, measured)
+and "free training steps" (plausible, unmeasured), and it is the one experiment that decides
+whether this is worth wiring into the training loop.
+
+Artifacts: `results/ghost/weight_averaging.json`, `weight_averaging_{8000,14000}.json`.
+
+#### A/B: the averaging advantage SURVIVES continued training (#128)
+
+The open question above — free better checkpoint, or free training steps? — resolved by a
+three-arm A/B from anchor step 10,000. All arms replay a byte-identical, pre-materialised
+1,000-batch sequence from a freshly constructed optimizer, so the ONLY difference is the
+starting weights. Third arm is a matched-norm control: the anchor plus Gaussian noise scaled
+per tensor to the exact displacement averaging applied.
+
+| step | latest | averaged | perturbed (control) | averaged's lead |
+|---:|---:|---:|---:|---:|
+| 0 | 4.18270 | **4.12614** | 4.32291 | +0.0566 |
+| 200 | 4.08988 | **4.06539** | 4.13684 | +0.0245 |
+| 500 | 3.95263 | **3.92361** | 3.96371 | +0.0290 |
+| 700 | 3.89700 | **3.86775** | 3.90928 | +0.0293 |
+| 1000 | 3.85241 | **3.82978** | 3.86580 | +0.0226 |
+
+**Averaged leads at all 11 evaluation points; the perturbed control trails at all 11.** The
+control is what makes this interpretable: an identical-magnitude *random* displacement makes
+the model worse immediately (4.183 -> 4.323) and never recovers the gap, so the gain comes from
+the direction averaging selects, not from perturbation acting as noise injection.
+
+**It is a real head start that partially decays, not a compounding multiplier.** 40% of the
+initial advantage is retained at 1,000 steps. In training-step terms: the averaged arm starts
+~500 steps ahead and is still ~100-150 steps ahead after 1,000 steps of training (using the
+latest arm's local rate of ~0.018 nats/100 steps at that point).
+
+**Practical read:**
+- **Certain:** applying it once at the end of any run gives a strictly better final model for
+  seconds of arithmetic. There is no reason not to do this.
+- **Measured:** it is also a genuine, if modest, training speedup — the head start does not
+  wash out within 1,000 steps.
+- **Unknown:** whether applying it repeatedly during a run compounds, or whether each
+  application just re-buys the same decaying ~0.05 and the run converges to the same place. That
+  is the question that decides whether it belongs *inside* the training loop or only at the end.
+
+**Caveats:** one anchor, one seed, one A/B. The absolute gaps (~0.02-0.06 nats) are small,
+though the sign is consistent across 11/11 paired evaluations on an identical probe set, and
+the control separates cleanly in the opposite direction. `results/ghost/ab_continue.json`.
+
+#### Periodic in-loop averaging does NOT compound — keep it at the end of the run (#128)
+
+Two arms from step 10,000, 2,000 steps each, identical pre-materialised batch sequence.
+``baseline`` trains plainly; ``periodic`` replaces its live weights with the mean of the last 3
+snapshots every 250 steps and continues from there. The reference that matters is the third
+number, free from the baseline arm: its own last-3 snapshots averaged at the end — the
+already-proven one-shot application.
+
+| arm | loss @ 2,000 steps | vs baseline |
+|---|---:|---:|
+| baseline, no averaging | 3.70874 | — |
+| **baseline + end-of-run average** | **3.66057** | **−0.04817** |
+| periodic averaging in-loop | 3.72787 | **+0.01914 (worse)** |
+
+**Periodic averaging is worse than not averaging at all**, and 0.0673 worse than applying it
+once at the end.
+
+**The mechanism, which is the interesting part.** Every injection helped, and the gains did not
+diminish: **+0.0243, +0.0405, +0.1401, +0.0732, +0.0615, +0.0646**. The averaged point is
+genuinely better each time. But immediately BEFORE each injection the periodic arm was behind
+the baseline — by 0.035 (step 1000), 0.056 (1250), 0.061 (1500), 0.054 (1750). Training onward
+from an averaged point descends more slowly than training from the raw trajectory, and the
+injections spend their gains repairing a deficit they created. The largest single gain (+0.1401)
+came where the trajectory had bounced upward, confirming these injections act mainly as
+volatility damping, not as progress.
+
+This is the same 40%-decay observed in the #128 A/B, seen from the inside: averaging buys a
+better point *now* at the cost of a slower descent afterwards. One application at the end
+collects the benefit and pays none of the cost, which is exactly why the end-of-run form wins.
+
+**Method flaw found mid-run and fixed, disclosed rather than buried.** The arms were seeded once
+before the data loader rather than once per arm. The model has dropout, so the second arm drew a
+different mask sequence and drifted from the first *before any injection*: 0.0036 apart at step
+250, 0.0041 at step 500. Both gaps above (0.019 and 0.067) are 5x and 17x that drift, so the
+verdict is unaffected — but `torch.manual_seed` is now called per arm in both `repeat_average`
+and `ab_continue`. **The #128 A/B reported earlier carries the same flaw**; its margins
+(0.011-0.057, averaged ahead 11/11, control behind 11/11) also exceed the drift, so its verdict
+stands, but it should be re-run under per-arm seeding to remove the asterisk.
+
+**Settled recommendation: average the last 2-5 checkpoints once, at the end of a run.** Do not
+put it in the training loop. `results/ghost/repeat_average.json`.
+
+### 3 parallel networks + weight averaging loses to one network at 3x batch (#130)
+
+Maintainer proposal: train K networks side by side, average their weights periodically, and
+hand the average back to each perturbed (`avg+d`, `avg`, `avg-d`) so they stay diverse. This is
+a real family of methods — Federated Averaging / Local SGD for the averaging, Population-Based
+Training for the perturbation — but its benefit is normally *parallelism across devices*. The
+question here is whether it helps on ONE card, where 3 networks each get a third of the
+throughput.
+
+The honest comparison holds **total tokens constant**: 3 nets at batch 4 vs 1 net at batch 12,
+same 1.8M tokens, byte-identical batch sequence (900 batches of 4 materialised once; the single
+arm concatenates each group of 3). Averaging every 10 rounds, ensemble scored on its **averaged**
+weights, per-arm seeding, same fixed 16-batch probe set used throughout #126/#128.
+
+| round | `single` (1 net, batch 12) | `avg3` (3 nets, batch 4) | gap |
+|---:|---:|---:|---:|
+| 50 | **4.08878** | 4.13034 | 0.042 |
+| 100 | **4.02920** | 4.08133 | 0.052 |
+| 150 | **3.95435** | 4.02212 | 0.068 |
+| 200 | **3.91598** | 3.98804 | **0.072** |
+
+**The single network wins at every checkpoint and the gap widens monotonically.** Run stopped at
+round 200 of 300 on a pre-declared trigger (stop if the gap widens again at 200), not after
+seeing a result that suited a conclusion.
+
+**Interpretation.** Averaging K models trained from a common point on different batches
+approximates one model trained on the K-times-larger batch — so `avg3` should have tracked
+`single` closely. It does not: it falls steadily behind. The three networks diverge between
+averaging points by more than the averaging recovers, and 10 rounds of independent drift is
+already too much at this scale.
+
+**One prediction of mine that the data refuted.** I expected the ensemble to lose badly on
+wall-clock (3x as many forward/backward passes, plus 20 averaging operations copying 3 x 332 MB
+state dicts). It did not: 12.7 min vs 13.0 min at round 200 — **near parity, marginally
+faster**. Batch 12 at seq 512 is evidently bandwidth-bound on this card, so three batch-4 passes
+cost about what one batch-12 pass costs. The verdict rests entirely on quality; the compute
+overhead I predicted would dominate does not exist here.
+
+**`avg3_delta` (the +/-d variant) was deliberately NOT measured.** It is `avg3` plus a
+perturbation, so it would have to beat `avg3` *and* then close a 0.072 gap that was still
+widening — against the strictly more favourable of the two variants. #128's matched-norm
+perturbation control is the relevant prior: perturbing averaged weights cost 0.14 and never
+recovered. Recorded as a stated decision, not an omission; the harness supports it
+(`--parallel-ensemble`) if it is ever worth 20 minutes.
+
+**Where this DOES apply: multiple GPUs.** With 3 cards the arithmetic inverts — the ensemble
+arms run concurrently instead of sequentially, and this becomes standard data-parallel training,
+which this repo already has (#65 DDP/FSDP). Nothing here argues against that; it argues against
+paying 3x the memory for it on one card.

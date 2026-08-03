@@ -1,0 +1,54 @@
+[ghost] loading base checkpoint C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/edge_chinchilla20k/edge_conversational_step10000.pt
+[ghost] resumed at global_step=10000
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[ghost] data: {'mix_ratio': {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}, 'seq_len': 512, 'batch_size': 4, 'source': 'mixed_local', 'total_tokens': 1333955864, 'num_samples': 223757, 'num_batches': 55939}
+[ghost] 16 snapshots planned: [10000, 10160, 10180, 10190, 10195, 10196, 10198, 10199, 10200, 10201, 10202, 10205, 10210, 10250, 10300, 10700]
+[ghost] training 800 steps, snapshot every None
+C:\Users\komal\Documents\Codes\kramba-ai\.claude\worktrees\ghost-126\ghost\harness.py:273: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\torch\csrc\autograd\generated\python_variable_methods.cpp:839.)
+  print(f"[ghost] step {step} ({done}/{args.steps})  loss {float(loss):.4f}  "
+[ghost] step 10050 (50/800)  loss 3.9017  1.43 steps/s
+[ghost] step 10100 (100/800)  loss 5.0671  1.49 steps/s
+[ghost] step 10150 (150/800)  loss 4.7918  1.53 steps/s
+[ghost] step 10200 (200/800)  loss 5.0170  1.52 steps/s
+[ghost] step 10250 (250/800)  loss 5.0506  1.52 steps/s
+[ghost] step 10300 (300/800)  loss 4.2874  1.53 steps/s
+[ghost] step 10350 (350/800)  loss 5.0069  1.54 steps/s
+[ghost] step 10400 (400/800)  loss 3.1033  1.55 steps/s
+[ghost] step 10450 (450/800)  loss 3.2192  1.56 steps/s
+[ghost] step 10500 (500/800)  loss 4.3526  1.57 steps/s
+[ghost] step 10550 (550/800)  loss 4.4725  1.57 steps/s
+[ghost] step 10600 (600/800)  loss 4.6928  1.57 steps/s
+[ghost] step 10650 (650/800)  loss 4.3480  1.58 steps/s
+[ghost] step 10700 (700/800)  loss 4.1011  1.58 steps/s
+[ghost] step 10750 (750/800)  loss 4.6135  1.58 steps/s
+[ghost] step 10800 (800/800)  loss 3.9927  1.59 steps/s
+[ghost] series complete in 8.4 min -> results/ghost/series_perstep
