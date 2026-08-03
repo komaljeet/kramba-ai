@@ -445,6 +445,65 @@ windowed-attention hybrid, same warm-start approach) to whatever size #107 lands
 well-justified next step when picked back up — not a guess, a conclusion from real measurement
 at the smaller scale first.
 
+## MoE FFN on DeltaNet — works, but loses to simply scaling the dense model (Issue #123, 2026-08-02)
+
+MoE was scoped as the only remaining lever that attacks FLOPs-per-token rather than memory
+(the offload work turned out to be only ~2x of the 3,300x 6B-vs-142M gap; params and tokens
+are the other 42x each). Implemented as `hvn/core/moe.py::MoEFFN` — E experts, top-k routing,
+Switch-style load-balancing aux loss — routing **only the FFN** (~40% of block FLOPs). The
+recurrence is deliberately left dense; see the module docstring for why routing q/k/v risks
+mixing incompatible subspaces inside a single recurrent state, a failure mode transformers do
+not have.
+
+2x2 at d=512, 12 layers, 5M-token budget, E=8/top-2 (`results/moe/moe_2x2.json`):
+
+| arm | params | eval PPL | wall-clock |
+|---|---:|---:|---:|
+| dense | 39,756,656 | 119.657 | 556.6s |
+| shared | 10,830,684 | 156.424 | 510.2s |
+| MoE | 128,015,216 | 105.544 | 1062.3s |
+| shared + MoE | 18,185,564 | 131.344 | 930.4s |
+
+Harness consistency check passed: the dense arm reproduces the ternary 2x2's 119.396 at 119.657
+(0.2%), and shared reproduces 154.1/156.1 at 156.424.
+
+**The bar, set before the numbers landed.** MoE is better than dense in absolute terms (−11.8%),
+but that is the wrong comparison. The question is whether it beats what the *same compute* buys
+by simply scaling the dense model up. Using this repo's measured −0.504 exponent, 1.40× params
+(MoE's theoretical FLOP cost) is worth **19%**; the *measured* wall-clock cost was **1.91×**,
+which raises the bar to **~39%**.
+
+| comparison | gain | bar | verdict |
+|---|---:|---:|:---:|
+| dense → MoE | −11.8% | 19% / 39% | ❌ |
+| shared → shared+MoE | −16.0% | 19% / 39% | ❌ |
+
+**Verdict: at this budget, 3.2× the parameters bought less quality than 1.4× the compute would
+have.** Scaling the dense model is the better use of the same FLOPs. The failure is consistent
+across both the dense and shared baselines, so it is not an artifact of one configuration.
+
+**The levers do compose.** MoE helps the shared model (−16.0%) at least as much as it helps the
+dense one (−11.8%), so sharing and MoE are not fighting each other — MoE simply is not worth
+its compute in either. This closes acceptance criteria 4 and 5 of #123 with a negative result.
+
+**Two caveats, neither of which rescues the result:**
+- **The 1.91× vs 1.40× gap is partly implementation.** `MoEFFN` loops over experts in Python
+  rather than batching them; a tuned kernel would narrow the wall-clock penalty. But the
+  FLOP-based 19% bar is missed regardless, so optimisation changes the margin, not the verdict.
+- **5M tokens is very undertrained, and MoE has an extra thing to learn.** Routing — which
+  expert for which token — is a harder learning problem than a dense FFN's, and may simply not
+  have had the data to specialise. **This is the single strongest reason not to treat this as
+  final**, and it is untested. If MoE is revisited, the first thing to check is whether the gain
+  grows with token budget; a fixed ~12-16% that does not grow means the routing never learned
+  anything useful.
+
+**One result worth keeping regardless of the compute verdict.** shared+MoE reaches PPL 131.3 at
+**18.19M stored params**, against dense needing **39.76M** for 119.7 — **2.2× fewer stored
+parameters for 10% worse PPL**. That is a deployment-size story, not a training-compute one, and
+it stacks with ternary's ~20x bits (measured to compose cleanly earlier today). For the
+edge-inference thesis this project is actually built around, that combination matters more than
+the training-FLOP comparison MoE just lost.
+
 ## Looped early exit — no-retrain hyperparameter search FAILS the gate (Issue #122, 2026-08-01)
 
 Wrapped `EdgeHVN.forward_step` (`hvn/edge/looped.py`) so the block stack can re-run up to N

@@ -65,6 +65,7 @@ if _PROJECT_ROOT not in sys.path:
 
 from benchmark import TransformerLM, SimpleSSMLM, count_parameters  # noqa: E402
 from hvn.core import HamiltonianVortexNetwork  # noqa: E402
+from hvn.core.moe import collect_moe_aux_loss  # noqa: E402
 from hvn.edge.model import EdgeHVN  # noqa: E402
 from hvn.edge.ternary import apply_ternary_to_model  # noqa: E402
 from train import CharTokenizer, TextDataset  # noqa: E402
@@ -229,6 +230,10 @@ def train_compute_matched(
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
             logits = model(batch_x)
             loss = criterion(logits.reshape(-1, model.vocab_size), batch_y.reshape(-1))
+            # Issue #123: MoE needs its load-balancing term in the objective or
+            # routing collapses onto a handful of experts and the remaining
+            # capacity is dead weight. Exactly zero for non-MoE models.
+            loss = loss + collect_moe_aux_loss(model)
 
         optimizer.zero_grad()
         if scaler is not None:
@@ -414,29 +419,25 @@ def run_scaling_laws(
                 bond_dimension=bond_dim, chunk_size=64, dropout=0.1,
                 use_deltanet=True, weightless=True, grad_checkpoint=grad_checkpoint,
             )
-        # --- ALBERT-style weight sharing (Issue #32 Phase 2.4) ---
-        # The actual "fewer params, same quality" test. Both arms are EdgeHVN with
-        # DeltaNet blocks, so the ONLY variable is whether the layers share one set
-        # of weights. Sharing turns O(L) block-parameter storage into O(1) plus a
-        # couple of scalars per layer (SharedWeightHVN's per-layer RoPE offset and
-        # residual scale, which keep the virtual layers from collapsing into a
-        # literal repeated function).
-        #
-        # `param_count` below uses `sum(p.numel() ...)`, which counts a shared block
-        # exactly once -- so the reported params are the real storage footprint, not
-        # the unrolled-forward count, and the params-vs-PPL comparison is honest.
-        if "EdgeHVN-DeltaNet" in models:
-            model_specs["EdgeHVN-DeltaNet"] = EdgeHVN(
-                vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
-                n_heads=4, dropout=0.1, use_deltanet=True, shared_weights=False,
-                grad_checkpoint=grad_checkpoint,
-            )
-        if "EdgeHVN-DeltaNet-Shared" in models:
-            model_specs["EdgeHVN-DeltaNet-Shared"] = EdgeHVN(
-                vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
-                n_heads=4, dropout=0.1, use_deltanet=True, shared_weights=True,
-                grad_checkpoint=grad_checkpoint,
-            )
+        # --- Issue #123 2x2: {dense, shared} x {dense FFN, MoE FFN} ---------
+        # Sharing cuts stored params (~3.67x at d=512/12L); MoE buys capacity at
+        # sub-linear compute (3.79x params at 1.40x FLOPs). Neither has been run
+        # with the other. All four arms are EdgeHVN+DeltaNet so the only
+        # variables are the two levers.
+        _edge_arms = {
+            "EdgeHVN-DeltaNet":            dict(shared_weights=False, moe_experts=1),
+            "EdgeHVN-DeltaNet-Shared":     dict(shared_weights=True,  moe_experts=1),
+            "EdgeHVN-DeltaNet-MoE":        dict(shared_weights=False, moe_experts=8),
+            "EdgeHVN-DeltaNet-Shared-MoE": dict(shared_weights=True,  moe_experts=8),
+        }
+        for _arm, _cfg in _edge_arms.items():
+            if _arm in models:
+                model_specs[_arm] = EdgeHVN(
+                    vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
+                    n_heads=4, dropout=0.1, use_deltanet=True,
+                    grad_checkpoint=grad_checkpoint, moe_top_k=2, **_cfg,
+                )
+
         # --- Ternary (BitNet b1.58) arms, incl. composed with sharing ---
         # Sharing and ternary are ORTHOGONAL levers: sharing cuts the NUMBER of
         # weights (~3.67x at d=512/12L), ternary cuts BYTES PER weight (fp32 ->
@@ -748,6 +749,7 @@ def main() -> None:
     parser.add_argument("--models", type=str, nargs="+", default=None,
                         choices=["HVN", "HVN-DeltaNet", "HVN-DeltaNet-Weightless",
                                  "EdgeHVN-DeltaNet", "EdgeHVN-DeltaNet-Shared",
+                                 "EdgeHVN-DeltaNet-MoE", "EdgeHVN-DeltaNet-Shared-MoE",
                                  "EdgeHVN-DeltaNet-Ternary",
                                  "EdgeHVN-DeltaNet-Shared-Ternary",
                                  "Transformer", "SSM"],

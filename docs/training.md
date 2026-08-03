@@ -709,3 +709,63 @@ python generate.py --prompt "Hamiltonian " --tokens 300 --temp 0.5 --top_k 5
 More/real data (bundled sample is only ~34K chars), 50–100+ epochs on small data, larger
 model (`--d_model 256 --num_layers 4 --bond_dim 64`), longer sequences (`--seq_len 128+`),
 BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 40-series.
+## The compute wall — why "fits in VRAM" was never the binding constraint (2026-08-02)
+
+Everything above this section is memory engineering: BCD (#99), grad checkpointing (#100), CPU
+offload (#101), the reserved-memory fix (#102), LRU residency (#103), bf16 parking (#113),
+prefetch (#115), bounded pinning (#118). It worked — this 6 GB card went from "1B is
+impossible" to a **measured ~6B forward+backward at ~1 GiB peak**.
+
+**Then the wall moved, and it is worth writing down exactly where it went.** Decomposing the
+measured gap between the two real throughput points on this hardware:
+
+| | measured |
+|---|---|
+| 142M, fits in VRAM | **9,102 tok/s** → Chinchilla (2.85B tok) in **3.6 days** |
+| 6B, offloaded | **116 tok/s** (1024 tok / 8.83 s) → Chinchilla (120B tok) in **~33 years** |
+
+That is a 3,300× gap. It decomposes as:
+
+| factor | multiplier | fixable? |
+|---|---:|---|
+| 42× more params (FLOPs per token) | 42× | only by changing architecture |
+| 42× more tokens (Chinchilla scales D with N) | 42× | only by accepting undertraining |
+| **offload / PCIe inefficiency** | **~2×** | yes — and it is the SMALLEST term |
+
+**Making PCIe transfer free would take 33 years to 16 years.** The memory engineering was real
+and necessary to *fit* the model, but it was never where the training cost lived. Training cost
+is `~6 · params · tokens`, and because Chinchilla scales tokens with params, it grows as **N²**.
+No memory technique touches that.
+
+**Why 8.83 s/step specifically.** At 6B the weights do not live on the GPU — every block is
+streamed from CPU RAM over PCIe each step, ~12 GB of bf16 weights moved per step, twice
+(forward + checkpoint recompute). It is data movement, not arithmetic. The corroborating
+evidence is in this doc already: #113 cut step time 1.55 s → 1.16 s purely by **halving the
+bytes moved**, which would do nothing if compute were the bottleneck.
+
+**Levers that actually attack N², with measured or estimated multipliers:**
+
+| lever | gain | status |
+|---|---:|---|
+| MoE / sparse activation | ~3–6× *predicted* | ❌ **measured worse than scaling dense** — see docs/state.md #123 |
+| Data quality (FineWeb-Edu, dedup) | 2–5× | ✅ #120 |
+| Muon optimizer | 1.6× | ✅ #86 |
+| Accept undertraining (< 20 tok/param) | 2–5× | free, costs quality |
+
+With MoE removed (it lost its A/B), the realistic stack is ~5–8×, which puts **~1B trainable
+locally in 6–8 months** and leaves **6B out of reach by roughly 30×**.
+
+**Practical ceilings on this hardware, stated plainly:**
+
+| target | local time | verdict |
+|---|---|---|
+| **142M** | **3.6 days** | ✅ the honest local ceiling |
+| 300M | ~129 days (measured, #112) | ❌ |
+| 1B | 6–8 months | ❌ |
+| 6B | 2.5–33 years | ❌ by ~30× |
+
+**A note for future planning.** "It fits in VRAM" and "it can be trained" are different claims,
+and this project spent considerable effort on the first while believing it was progress toward
+the second. The 6B-at-1-GiB result is a genuine engineering achievement and simultaneously not
+a training capability. Any future size decision should start from `6 · N · D ÷ throughput`, not
+from whether the model loads.
