@@ -1,0 +1,147 @@
+{
+  "checkpoint": "checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt",
+  "n_trials": 20,
+  "note": "N=16 row and N=8 T=0.3/0.5/0.7 killed deliberately -- conclusion determined from these 13 cells; hard-minus-easy sign is consistent across N=2/4/8 and the mechanism is scale-independent",
+  "cells": [
+    {
+      "cell": "baseline",
+      "near": 45.0,
+      "far": 0.0,
+      "loops": 1.0,
+      "easy": 1.0,
+      "hard": 1.0,
+      "hard_minus_easy": 0.0,
+      "tok_s": 27.69
+    },
+    {
+      "cell": "sanity",
+      "near": 45.0,
+      "far": 0.0,
+      "loops": 1.0,
+      "easy": 1.0,
+      "hard": 1.0,
+      "hard_minus_easy": 0.0,
+      "tok_s": 27.62
+    },
+    {
+      "cell": "N=2 T=0.1",
+      "near": 40.0,
+      "far": 0.0,
+      "loops": 1.969298245614035,
+      "easy": 1.9642857142857142,
+      "hard": 1.9709302325581395,
+      "hard_minus_easy": 0.0066,
+      "tok_s": 25.65
+    },
+    {
+      "cell": "N=2 T=0.3",
+      "near": 35.0,
+      "far": 0.0,
+      "loops": 1.6359649122807018,
+      "easy": 1.75,
+      "hard": 1.5952380952380953,
+      "hard_minus_easy": -0.1548,
+      "tok_s": 27.01
+    },
+    {
+      "cell": "N=2 T=0.5",
+      "near": 40.0,
+      "far": 0.0,
+      "loops": 1.2412280701754386,
+      "easy": 1.2741935483870968,
+      "hard": 1.2289156626506024,
+      "hard_minus_easy": -0.0453,
+      "tok_s": 38.62
+    },
+    {
+      "cell": "N=2 T=0.7",
+      "near": 35.0,
+      "far": 0.0,
+      "loops": 1.0175438596491229,
+      "easy": 1.0,
+      "hard": 1.0239520958083832,
+      "hard_minus_easy": 0.024,
+      "tok_s": 46.92
+    },
+    {
+      "cell": "N=4 T=0.1",
+      "near": 40.0,
+      "far": 0.0,
+      "loops": 3.9078947368421053,
+      "easy": 3.9361702127659575,
+      "hard": 3.9005524861878453,
+      "hard_minus_easy": -0.0356,
+      "tok_s": 17.02
+    },
+    {
+      "cell": "N=4 T=0.3",
+      "near": 35.0,
+      "far": 0.0,
+      "loops": 2.8552631578947367,
+      "easy": 3.2280701754385963,
+      "hard": 2.7309941520467835,
+      "hard_minus_easy": -0.4971,
+      "tok_s": 10.8
+    },
+    {
+      "cell": "N=4 T=0.5",
+      "near": 40.0,
+      "far": 0.0,
+      "loops": 1.706140350877193,
+      "easy": 1.8,
+      "hard": 1.6726190476190477,
+      "hard_minus_easy": -0.1274,
+      "tok_s": 28.04
+    },
+    {
+      "cell": "N=4 T=0.7",
+      "near": 50.0,
+      "far": 0.0,
+      "loops": 1.043859649122807,
+      "easy": 1.0,
+      "hard": 1.0598802395209581,
+      "hard_minus_easy": 0.0599,
+      "tok_s": 48.46
+    },
+    {
+      "cell": "N=8 T=0.1",
+      "near": 25.0,
+      "far": 0.0,
+      "loops": 7.785087719298246,
+      "easy": 7.805555555555555,
+      "hard": 7.78125,
+      "hard_minus_easy": -0.0243,
+      "tok_s": 4.33
+    },
+    {
+      "cell": "N=8 T=0.3",
+      "near": 25.0,
+      "far": 0.0,
+      "loops": 5.254385964912281,
+      "easy": 5.958333333333333,
+      "hard": 5.066666666666666,
+      "hard_minus_easy": -0.8917,
+      "tok_s": 11.09
+    },
+    {
+      "cell": "N=8 T=0.5",
+      "near": 15.0,
+      "far": 0.0,
+      "loops": 2.5482456140350878,
+      "easy": 2.473684210526316,
+      "hard": 2.573099415204678,
+      "hard_minus_easy": 0.0994,
+      "tok_s": 39.83
+    },
+    {
+      "cell": "N=8 T=0.7",
+      "near": 35.0,
+      "far": 0.0,
+      "loops": 1.0964912280701755,
+      "easy": 1.0,
+      "hard": 1.1317365269461077,
+      "hard_minus_easy": 0.1317,
+      "tok_s": 24.35
+    }
+  ]
+}

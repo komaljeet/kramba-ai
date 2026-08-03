@@ -1,0 +1,12 @@
+{
+  "checkpoint": "checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt",
+  "step": 8000,
+  "N": 4,
+  "n_trials": 20,
+  "cells": {
+    "a: logits L1 / state L1  (== N=1 baseline, sanity check)": 0.4,
+    "b: logits L1 / state LN  (state corruption alone)": 0.0,
+    "c: logits LN / state L1  (DECISIVE -- clean state)": 0.35,
+    "d: logits LN / state LN  (current behaviour)": 0.0
+  }
+}

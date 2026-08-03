@@ -1,0 +1,20 @@
+{
+  "ft": {
+    "checkpoint": "checkpoints/hybrid_looped_ft/hybrid_looped_step2000.pt",
+    "step": 2000,
+    "by_n": {
+      "1": 0.3,
+      "2": 0.0,
+      "4": 0.0
+    }
+  },
+  "baseline": {
+    "checkpoint": "checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt",
+    "step": 8000,
+    "by_n": {
+      "1": 0.45,
+      "2": 0.0,
+      "4": 0.0
+    }
+  }
+}

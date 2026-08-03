@@ -70,6 +70,7 @@ class EdgeHVN(nn.Module):
         deltanet_conv_kernel: int = 4,
         block_type: Optional[str] = None,
         use_triton_scan: bool = False,
+        use_megakernel_scan: bool = False,
         block_plan: Optional[list[str]] = None,
         attn_window: Optional[int] = None,
         grad_checkpoint: bool = False,
@@ -142,6 +143,7 @@ class EdgeHVN(nn.Module):
                     conv_kernel=deltanet_conv_kernel,
                     use_triton_scan=use_triton_scan,
                     moe_experts=moe_experts, moe_top_k=moe_top_k,
+                    use_megakernel_scan=use_megakernel_scan,
                 )
             if t == "hvn":
                 return HVNBlock(
