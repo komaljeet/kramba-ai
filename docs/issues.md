@@ -6,6 +6,33 @@
 
 ## Open Issues
 
+- **#124 — [EPIC] GHOST (Gradient Heuristic Omission via Step Teleportation)** ❌ **Negative
+  result** (2026-08-03): method by Rambarun Komaljeet — skip predictable training steps by
+  extrapolating weights, compute only phase transitions. **The step-skipping family is closed**;
+  what survived is one positive spin-off. Phases: #125 detector (gate failed — the documented
+  6K-7.5K transition is not in the data), #126 extrapolator (loses to doing nothing at every
+  horizon; a *cheating* oracle allowed to see the true future weights also loses, and its fitted
+  coefficient collapses toward zero as the jump grows), #127 trainer loop (**not built**, on the
+  #126 evidence). Two method corrections from the maintainer were applied and the verdict
+  survived both: measure deltas **per step** (coherence is median cos **+0.890** at 1-step
+  spacing vs +0.463 at 10-step) and anchor in a **steep** part of the loss curve, not a flat one.
+  Root cause: the predictable part of an update is momentum the optimizer already applies; the
+  part that constitutes learning comes from gradients of unseen data, which no function of past
+  weights contains. See [state.md](state.md).
+- **#128 — Weight averaging** ✅ **Positive** (2026-08-03): the spin-off that worked. Averaging
+  the last **2-5** checkpoints at the END of a run is worth ~500-1,000 steps of training for
+  seconds of arithmetic (9/9 anchor x k combinations improved; k=10 is *worse* — the window must
+  be short relative to the drift). The advantage survives continued training (40% retained at
+  1,000 steps) and a matched-norm perturbation control confirms it comes from the direction
+  averaging picks, not from displacement. **Periodic in-loop averaging does NOT compound** — it
+  is worse than plain training, because each injection spends its gain repairing a deficit it
+  created. Open: apply to hybrid/chat checkpoints, recall regression check.
+- **#130 — 3 parallel networks + averaging** ❌ **Negative on a single GPU** (2026-08-03): at
+  equal tokens, one network at 3x batch beats three at 1x batch with periodic averaging, and the
+  gap widens monotonically. Contrary to expectation the ensemble was NOT slower in wall-clock
+  (batch 12 at seq 512 is bandwidth-bound on this card), so the verdict rests purely on quality.
+  Applies to one card only — with 3 GPUs this is ordinary data parallelism (#65).
+
 - **#40 — Non-weights NN** 🔄 **Hybrid shipped (flag-gated)** (2026-07-04): fully weightless is
   not viable (it hands back the #34 learned-dynamics win), so `--weightless` freezes the DeltaNet
   `q/k/v/out` projections as seed-regenerated random features (`hvn/core/weightless.py`) while

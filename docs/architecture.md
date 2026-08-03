@@ -26,6 +26,7 @@ kramba-ai/
 │   ├── hf_model.py                # HVNConfig, HVNForCausalLM (HuggingFace wrapper)
 │   └── edge/                      # edge-devices branch: full Issue #32 compression suite
 ├── docs/                          # ISSUE_30_PLAN.md, dashboard.html (compendium → reorganized here)
+├── ghost/                         # GHOST training-acceleration research (epic #124): detector, extrapolator, harness
 ├── eval/                          # run_eval, scaling_laws, long_context, datasets, curriculum, coding, instruction, multimodal
 ├── tests/                         # test_*.py standalone test scripts (run from root: python tests/test_issueNN.py)
 ├── demos/                         # demo*.py showcase scripts (run from root: python demos/demo.py)
