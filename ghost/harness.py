@@ -747,6 +747,182 @@ def repeat_average(args) -> int:
     return 0
 
 
+def parallel_ensemble(args) -> int:
+    """3 parallel networks + weight averaging vs ONE network at 3x batch (#130).
+
+    The maintainer's proposal: train K networks side by side, periodically
+    average their weights, and hand the average back to each one perturbed --
+    ``avg+delta``, ``avg``, ``avg-delta`` -- so they stay diverse instead of
+    collapsing into the same model.
+
+    The honest comparison holds TOTAL TOKENS constant. Three networks at batch 4
+    obviously beat one network at batch 4; that is just more data. So the
+    baseline is one network at batch 12, and every arm sees the *same tokens in
+    the same order*: ``3S`` batches of 4 are materialised once, the ensemble
+    arms take one each per round, and the single arm concatenates each group of
+    three into a batch of 12.
+
+    Arms:
+      single       1 network,  batch 3B          -- the baseline
+      avg3         3 networks, batch B, averaged every --pe-interval rounds
+      avg3_delta   same, but redistributed as avg+d, avg, avg-d, where d is the
+                   per-tensor spread across the three nets before averaging
+                   (i.e. "keep them as diverse as they just were")
+
+    Wall-clock is reported per arm and is part of the verdict: the ensemble arms
+    run 3x as many forward/backward passes at a third the batch, which is a
+    worse fit for the GPU. On a single card a token-win that loses on wall-clock
+    is not a win.
+    """
+    import train_edge_conversational as tec
+
+    device = require_cuda()
+    tokenizer = build_tokenizer()
+    probes = load_probe_batches(tokenizer, args.probe_batches, args.batch_size,
+                                args.seq_len, args.data_dir)
+    torch.manual_seed(args.seed)
+    loader, _v, _s = tec.build_dataset_pipeline(
+        tokenizer=tokenizer, seq_len=args.seq_len, batch_size=args.batch_size,
+        data_dir=args.data_dir, val_fraction=0.0, num_workers=0)
+
+    K, rounds = args.pe_nets, args.pe_rounds
+    need = K * rounds
+    batches: List[torch.Tensor] = []
+    for batch in loader:
+        batches.append((batch[0] if isinstance(batch, (tuple, list)) else batch).clone())
+        if len(batches) >= need:
+            break
+    if len(batches) < need:
+        raise SystemExit(f"need {need} batches, loader gave {len(batches)}")
+    print(f"[ghost] {len(batches)} batches of {args.batch_size} materialised "
+          f"-> {rounds} rounds x {K} nets, identical tokens for every arm")
+
+    def fresh():
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+        m, _st, _ck = tec.load_checkpoint_for_resume(args.base, device)
+        o = torch.optim.AdamW(m.parameters(), lr=args.lr, weight_decay=0.01, fused=True)
+        return m, o
+
+    def train_on(model, opt, xb):
+        xb = xb.to(device)
+        x, y = xb[:, :-1], xb[:, 1:]
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            logits = model(x)
+            loss = nn.functional.cross_entropy(
+                logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1))
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        opt.step()
+        opt.zero_grad(set_to_none=True)
+        return float(loss)
+
+    results: Dict[str, dict] = {}
+
+    # ---- arm 1: one network, batch K*B ----
+    model, opt = fresh()
+    traj = [{"round": 0, "loss": evaluate_loss(model, probes, device)}]
+    print(f"[ghost] --- arm 'single' (1 net, batch {K * args.batch_size}) "
+          f"start {traj[0]['loss']:.5f}")
+    model.train()
+    t0 = time.time()
+    for r in range(rounds):
+        big = torch.cat(batches[r * K:(r + 1) * K], dim=0)
+        train_on(model, opt, big)
+        if (r + 1) % args.pe_eval_every == 0:
+            l = evaluate_loss(model, probes, device)
+            traj.append({"round": r + 1, "loss": l})
+            print(f"[ghost]     single     round {r + 1:<5} {l:.5f} "
+                  f"({(time.time() - t0) / 60:.1f} min)", flush=True)
+            model.train()
+    results["single"] = {"trajectory": traj, "final": traj[-1]["loss"],
+                         "minutes": (time.time() - t0) / 60}
+    del model, opt
+    torch.cuda.empty_cache()
+
+    # ---- arms 2 & 3: K networks + averaging ----
+    for arm, use_delta in (("avg3", False), ("avg3_delta", True)):
+        nets = []
+        for _ in range(K):
+            nets.append(fresh())
+        traj = [{"round": 0, "loss": evaluate_loss(nets[0][0], probes, device)}]
+        print(f"[ghost] --- arm '{arm}' ({K} nets, batch {args.batch_size}, "
+              f"average every {args.pe_interval}) start {traj[0]['loss']:.5f}")
+        for m, _o in nets:
+            m.train()
+        t0 = time.time()
+        for r in range(rounds):
+            for i, (m, o) in enumerate(nets):
+                train_on(m, o, batches[r * K + i])
+            if (r + 1) % args.pe_interval == 0:
+                sds = [{k: v.detach().to("cpu", copy=True)
+                        for k, v in getattr(m, "_orig_mod", m).state_dict().items()}
+                       for m, _o in nets]
+                avg = average_state_dicts(sds)
+                spread = {}
+                if use_delta:
+                    for name, t in avg.items():
+                        if not t.is_floating_point():
+                            continue
+                        stack = torch.stack([sd[name].to(torch.float64) for sd in sds])
+                        spread[name] = stack.std(dim=0)
+                for i, (m, _o) in enumerate(nets):
+                    if use_delta and i != K // 2:
+                        sign = 1.0 if i < K // 2 else -1.0
+                        new = {k: (v.to(torch.float64) + sign * spread[k]).to(v.dtype)
+                               if k in spread else v.clone() for k, v in avg.items()}
+                    else:
+                        new = {k: v.clone() for k, v in avg.items()}
+                    m.load_state_dict({k: v.to(device) for k, v in new.items()},
+                                      strict=False)
+                    m.train()
+            if (r + 1) % args.pe_eval_every == 0:
+                sds = [{k: v.detach().to("cpu", copy=True)
+                        for k, v in getattr(m, "_orig_mod", m).state_dict().items()}
+                       for m, _o in nets]
+                probe_model = nets[0][0]
+                saved = {k: v.detach().clone() for k, v in
+                         getattr(probe_model, "_orig_mod", probe_model).state_dict().items()}
+                avg_eval = average_state_dicts(sds)
+                probe_model.load_state_dict(
+                    {k: v.to(device) for k, v in avg_eval.items()}, strict=False)
+                l = evaluate_loss(probe_model, probes, device)
+                probe_model.load_state_dict(saved, strict=False)
+                traj.append({"round": r + 1, "loss": l})
+                print(f"[ghost]     {arm:<10} round {r + 1:<5} {l:.5f} (averaged) "
+                      f"({(time.time() - t0) / 60:.1f} min)", flush=True)
+                for m, _o in nets:
+                    m.train()
+        results[arm] = {"trajectory": traj, "final": traj[-1]["loss"],
+                        "minutes": (time.time() - t0) / 60}
+        del nets
+        torch.cuda.empty_cache()
+
+    print("\n[ghost] === equal tokens: 3 nets + averaging vs 1 net at 3x batch ===")
+    print(f"[ghost] {'arm':<12} {'final loss':>11} {'minutes':>9}")
+    for arm in ("single", "avg3", "avg3_delta"):
+        r = results[arm]
+        print(f"[ghost] {arm:<12} {r['final']:>11.5f} {r['minutes']:>9.1f}")
+    best = min(results, key=lambda a: results[a]["final"])
+    faster = min(results, key=lambda a: results[a]["minutes"])
+    print(f"[ghost] best quality: {best}   fastest: {faster}")
+    print(f"[ghost] VERDICT: {'ensemble wins' if best != 'single' else 'SINGLE network wins'} "
+          f"on quality at equal tokens; "
+          f"{'ensemble' if faster != 'single' else 'single'} wins on wall-clock")
+
+    out = {"base": args.base.replace("\\", "/"), "nets": K, "rounds": rounds,
+           "batch_per_net": args.batch_size, "single_batch": K * args.batch_size,
+           "average_interval": args.pe_interval, "seq_len": args.seq_len,
+           "tokens_per_arm": rounds * K * args.batch_size * args.seq_len,
+           "results": results,
+           "verdict": {"best_quality": best, "fastest": faster}}
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    with open(args.out, "w") as fh:
+        json.dump(out, fh, indent=2)
+    print(f"[ghost] wrote {args.out}")
+    return 0
+
+
 def score(args) -> int:
     """Score predicted vs real vs frozen at each N, on fixed probe batches."""
     import train_edge_conversational as tec
@@ -909,6 +1085,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--make-series", action="store_true")
     mode.add_argument("--score", action="store_true")
+    mode.add_argument("--parallel-ensemble", action="store_true",
+                      help="#130: K nets + averaging vs 1 net at Kx batch")
     mode.add_argument("--repeat-average", action="store_true",
                       help="does periodic in-loop averaging compound?")
     mode.add_argument("--ab-continue", action="store_true",
@@ -952,6 +1130,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--ra-steps", type=int, default=2000)
     p.add_argument("--ra-interval", type=int, default=250)
     p.add_argument("--ra-k", type=int, default=3)
+    p.add_argument("--pe-nets", type=int, default=3)
+    p.add_argument("--pe-rounds", type=int, default=300)
+    p.add_argument("--pe-interval", type=int, default=10)
+    p.add_argument("--pe-eval-every", type=int, default=25)
     p.add_argument("--avg-spacing", type=int, default=500)
     p.add_argument("--future-steps", type=int, nargs="+",
                    default=[10500, 11000, 11500, 12000, 13000])
@@ -966,6 +1148,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return ab_continue(args)
     if args.repeat_average:
         return repeat_average(args)
+    if args.parallel_ensemble:
+        return parallel_ensemble(args)
     return score(args)
 
 

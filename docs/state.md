@@ -722,3 +722,53 @@ stands, but it should be re-run under per-arm seeding to remove the asterisk.
 
 **Settled recommendation: average the last 2-5 checkpoints once, at the end of a run.** Do not
 put it in the training loop. `results/ghost/repeat_average.json`.
+
+### 3 parallel networks + weight averaging loses to one network at 3x batch (#130)
+
+Maintainer proposal: train K networks side by side, average their weights periodically, and
+hand the average back to each perturbed (`avg+d`, `avg`, `avg-d`) so they stay diverse. This is
+a real family of methods — Federated Averaging / Local SGD for the averaging, Population-Based
+Training for the perturbation — but its benefit is normally *parallelism across devices*. The
+question here is whether it helps on ONE card, where 3 networks each get a third of the
+throughput.
+
+The honest comparison holds **total tokens constant**: 3 nets at batch 4 vs 1 net at batch 12,
+same 1.8M tokens, byte-identical batch sequence (900 batches of 4 materialised once; the single
+arm concatenates each group of 3). Averaging every 10 rounds, ensemble scored on its **averaged**
+weights, per-arm seeding, same fixed 16-batch probe set used throughout #126/#128.
+
+| round | `single` (1 net, batch 12) | `avg3` (3 nets, batch 4) | gap |
+|---:|---:|---:|---:|
+| 50 | **4.08878** | 4.13034 | 0.042 |
+| 100 | **4.02920** | 4.08133 | 0.052 |
+| 150 | **3.95435** | 4.02212 | 0.068 |
+| 200 | **3.91598** | 3.98804 | **0.072** |
+
+**The single network wins at every checkpoint and the gap widens monotonically.** Run stopped at
+round 200 of 300 on a pre-declared trigger (stop if the gap widens again at 200), not after
+seeing a result that suited a conclusion.
+
+**Interpretation.** Averaging K models trained from a common point on different batches
+approximates one model trained on the K-times-larger batch — so `avg3` should have tracked
+`single` closely. It does not: it falls steadily behind. The three networks diverge between
+averaging points by more than the averaging recovers, and 10 rounds of independent drift is
+already too much at this scale.
+
+**One prediction of mine that the data refuted.** I expected the ensemble to lose badly on
+wall-clock (3x as many forward/backward passes, plus 20 averaging operations copying 3 x 332 MB
+state dicts). It did not: 12.7 min vs 13.0 min at round 200 — **near parity, marginally
+faster**. Batch 12 at seq 512 is evidently bandwidth-bound on this card, so three batch-4 passes
+cost about what one batch-12 pass costs. The verdict rests entirely on quality; the compute
+overhead I predicted would dominate does not exist here.
+
+**`avg3_delta` (the +/-d variant) was deliberately NOT measured.** It is `avg3` plus a
+perturbation, so it would have to beat `avg3` *and* then close a 0.072 gap that was still
+widening — against the strictly more favourable of the two variants. #128's matched-norm
+perturbation control is the relevant prior: perturbing averaged weights cost 0.14 and never
+recovered. Recorded as a stated decision, not an omission; the harness supports it
+(`--parallel-ensemble`) if it is ever worth 20 minutes.
+
+**Where this DOES apply: multiple GPUs.** With 3 cards the arithmetic inverts — the ensemble
+arms run concurrently instead of sequentially, and this becomes standard data-parallel training,
+which this repo already has (#65 DDP/FSDP). Nothing here argues against that; it argues against
+paying 3x the memory for it on one card.
