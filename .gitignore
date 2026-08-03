@@ -22,4 +22,8 @@ checkpoints/
 data_cache/
 # GHOST Phase 2 (#126): dense checkpoint series is a regenerable multi-GB
 # intermediate (scripts/ghost harness --make-series), not a result artifact.
-results/ghost/series/
+results/ghost/series*/
+
+# Git-Bash-on-Windows artifact: a literal dev/null directory created when a
+# hook or script redirects to /dev/null from a non-POSIX shell.
+dev/null/

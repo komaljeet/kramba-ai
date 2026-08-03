@@ -138,8 +138,32 @@ def evaluate_loss(model, batches: Sequence[torch.Tensor], device: torch.device) 
 # --------------------------------------------------------------------------
 
 
+def _wanted_steps(args, base_step: int) -> set:
+    """Exactly which steps need a snapshot — nothing more.
+
+    A full every-K series is enormous (80 x 332 MB = 26 GB for an 83M model)
+    and almost all of it is never read. Only these are:
+
+      * the three extrapolator inputs at each consistency gap g:
+        anchor-2g, anchor-g, anchor   (for g in --consistency-gaps)
+      * one real target per N: anchor+N
+
+    ``--save-every`` remains available for a genuinely dense series, but the
+    default derives the minimal set from the analysis that will consume it.
+    """
+    if args.save_every:
+        return {base_step + i for i in range(0, args.steps + 1, args.save_every)}
+    anchor = base_step + args.warmup_steps
+    wanted = {base_step, anchor}
+    for g in args.consistency_gaps:
+        wanted.update({anchor - 2 * g, anchor - g})
+    for n in args.n_values:
+        wanted.add(anchor + n)
+    return {s for s in wanted if base_step <= s <= base_step + args.steps}
+
+
 def make_series(args) -> int:
-    """Continue training from ``--base`` and snapshot weights every K steps."""
+    """Continue training from ``--base`` and snapshot the weights we need."""
     import train_edge_conversational as tec
 
     device = require_cuda()
@@ -165,17 +189,49 @@ def make_series(args) -> int:
     # and would confound the trajectory measurement this series exists for.
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01, fused=True)
 
+    wanted = _wanted_steps(args, base_step)
+    print(f"[ghost] {len(wanted)} snapshots planned: {sorted(wanted)}")
+
     def snapshot(step: int) -> None:
+        """Atomic, retrying snapshot write.
+
+        Written tmp-then-replace (the #54 discipline used elsewhere in this
+        repo) and retried: a mid-run ``torch.save`` on this machine died once
+        with a Windows ERROR_PATH_NOT_FOUND while writing the 6th of 80
+        checkpoints, consistent with the Avast real-time-scanning interference
+        already documented for this box in docs/training.md (#120). A snapshot
+        is pure output — losing the run to a transient AV file lock is not
+        acceptable when a retry costs nothing.
+        """
         sd = {k: v.detach().to("cpu", copy=True)
               for k, v in (getattr(model, "_orig_mod", model)).state_dict().items()}
-        torch.save({"model_state_dict": sd, "global_step": step},
-                   os.path.join(args.out_dir, f"step{step}.pt"))
+        path = os.path.join(args.out_dir, f"step{step}.pt")
+        tmp = path + ".tmp"
+        last: Optional[Exception] = None
+        for attempt in range(4):
+            try:
+                torch.save({"model_state_dict": sd, "global_step": step}, tmp)
+                os.replace(tmp, path)
+                return
+            except (RuntimeError, OSError) as exc:  # transient FS/AV failure
+                last = exc
+                print(f"[ghost] snapshot {step} attempt {attempt + 1} failed: {exc}",
+                      flush=True)
+                try:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                except OSError:
+                    pass
+                time.sleep(2.0 * (attempt + 1))
+        raise RuntimeError(f"snapshot at step {step} failed after 4 attempts") from last
 
     meta = {
         "base_checkpoint": args.base.replace("\\", "/"),
         "base_step": base_step,
         "steps": args.steps,
         "save_every": args.save_every,
+        "warmup_steps": args.warmup_steps,
+        "snapshot_steps": sorted(wanted),
         "lr": args.lr,
         "batch_size": args.batch_size,
         "seq_len": args.seq_len,
@@ -208,7 +264,7 @@ def make_series(args) -> int:
             opt.zero_grad(set_to_none=True)
             step += 1
             done += 1
-            if step % args.save_every == 0:
+            if step in wanted:
                 snapshot(step)
             if done % 50 == 0:
                 rate = done / max(time.time() - t0, 1e-6)
@@ -249,18 +305,21 @@ def score(args) -> int:
     steps = _series_steps(args.series_dir)
     if len(steps) < 4:
         raise SystemExit(f"need at least 4 snapshots in {args.series_dir}, found {len(steps)}")
-    gap = steps[1] - steps[0]
     meta_path = os.path.join(args.series_dir, "series_meta.json")
     meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
-    print(f"[ghost] {len(steps)} snapshots, spacing {gap} steps, "
-          f"range {steps[0]}-{steps[-1]}")
+    print(f"[ghost] {len(steps)} snapshots available: {steps}")
 
-    # Anchor: the third snapshot, so W1/W2/W3 all exist behind it.
-    anchor_idx = args.anchor_index
-    anchor = steps[anchor_idx]
-    w1, w2, w3 = (_load(args.series_dir, steps[anchor_idx - 2 + i]) for i in range(3))
+    gap = args.gap
+    anchor = args.anchor_step
+    if anchor is None:
+        anchor = int(meta.get("base_step", steps[0])) + int(
+            meta.get("warmup_steps", args.warmup_steps))
+    for need in (anchor, anchor - gap, anchor - 2 * gap):
+        if need not in steps:
+            raise SystemExit(f"missing snapshot at step {need} (have {steps})")
+    w1, w2, w3 = (_load(args.series_dir, anchor - 2 * gap + i * gap) for i in range(3))
     print(f"[ghost] anchor step {anchor}; inputs "
-          f"{steps[anchor_idx - 2]}, {steps[anchor_idx - 1]}, {anchor}")
+          f"{anchor - 2 * gap}, {anchor - gap}, {anchor} (gap {gap})")
 
     tokenizer = build_tokenizer()
     probes = load_probe_batches(tokenizer, args.probe_batches, args.batch_size,
@@ -322,10 +381,10 @@ def score(args) -> int:
     # 500-step-spaced checkpoints cannot answer.
     consistency = []
     for k in args.consistency_gaps:
-        if anchor_idx - 2 * (k // gap) < 0 or k % gap:
+        if (anchor - 2 * k) not in steps or (anchor - k) not in steps:
+            print(f"[ghost] gap {k}: missing inputs, skipping")
             continue
-        j = k // gap
-        a, b, c = (_load(args.series_dir, steps[anchor_idx - 2 * j + i * j]) for i in range(3))
+        a, b, c = (_load(args.series_dir, anchor - 2 * k + i * k) for i in range(3))
         p = build_plan(a["model_state_dict"], b["model_state_dict"],
                        c["model_state_dict"], cfg)
         cosines = sorted(t.cos for t in p.tensors)
@@ -389,12 +448,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--seq-len", type=int, default=512)
     p.add_argument("--lr", type=float, default=3e-4)
 
-    p.add_argument("--steps", type=int, default=600)
-    p.add_argument("--save-every", type=int, default=10)
+    p.add_argument("--steps", type=int, default=800)
+    p.add_argument("--save-every", type=int, default=None,
+                   help="dense series every K steps; default saves only the "
+                        "steps the analysis actually consumes")
+    p.add_argument("--warmup-steps", type=int, default=200,
+                   help="steps of continuation before the anchor, so the "
+                        "transient from any data-mix shift has settled")
     p.add_argument("--out-dir", default="results/ghost/series")
 
     p.add_argument("--series-dir", default="results/ghost/series")
-    p.add_argument("--anchor-index", type=int, default=21)
+    p.add_argument("--anchor-step", type=int, default=None)
+    p.add_argument("--gap", type=int, default=10,
+                   help="step spacing between the three extrapolator inputs")
     p.add_argument("--probe-batches", type=int, default=16)
     p.add_argument("--n-values", type=int, nargs="+", default=[10, 50, 100, 500])
     p.add_argument("--gate-n", type=int, default=10)

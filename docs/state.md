@@ -444,3 +444,85 @@ committing to a multi-day pretrain up front. Scaling the *same* recipe (DeltaNet
 windowed-attention hybrid, same warm-start approach) to whatever size #107 lands on is now the
 well-justified next step when picked back up — not a guess, a conclusion from real measurement
 at the smaller scale first.
+
+## GHOST Phase 2 — weight-delta extrapolation is measurably worse than doing nothing (Issue #126, 2026-08-03)
+
+`ghost/extrapolator.py` (epic #124, method by Rambarun Komaljeet) takes three consecutive
+checkpoints, measures each weight tensor's delta consistency, and predicts the weights N steps
+later so those N steps need not be computed. Phase 2's gate: predicted weights at **N=10**
+within **5%** of the real trained weights' loss at the same step.
+
+**The spec's gate PASSES. The binding gate — beating the null control — FAILS at every N.**
+
+The measurement needed a checkpoint series this repo did not have: its own checkpoints are
+spaced 500 steps apart, far coarser than the N=10..500 jumps in question, so
+`ghost/harness.py --make-series` continued `edge_chinchilla20k/step10000` for 800 steps
+(AdamW, constant LR, batch 4 x seq 512, 1.59 steps/s, 8.4 min) and snapshotted the 11 steps the
+analysis actually reads. Anchor at step 10200 (200 steps of warmup so any data-mix transient
+has settled), extrapolator inputs at 10180/10190/10200, all arms scored on **one fixed
+16-batch held-out probe set**.
+
+| N | real loss | predicted | frozen (null control) | pred err | frozen err |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 4.14036 | 4.22853 | 4.13901 | +2.13% | **+0.03%** |
+| 50 | 4.10952 | 5.36871 | 4.13901 | +30.64% | **+0.72%** |
+| 100 | 4.10046 | 7.43693 | 4.13901 | +81.37% | **+0.94%** |
+| 500 | 3.98804 | 25.75799 | 4.13901 | +545.88% | **+3.79%** |
+
+At N=10 the prediction is within 5% of real — and **doing nothing is ~70x more accurate**
+(0.03% vs 2.13%). This is precisely the failure mode the null control was added to catch: a
++/-5% band is satisfiable by any method that barely moves, because over 10 steps the weights
+barely move. By N=500 the extrapolated model is destroyed (loss 25.8 vs 4.0).
+
+**One genuinely useful positive finding: the trajectory is real, but only at short range.**
+Median cosine between consecutive weight deltas, measured at four spacings from the same
+anchor:
+
+| delta spacing | median cos(D1, D2) | params passing the consistency gate |
+|---:|---:|---:|
+| 10 steps | **+0.474** | 99.67% |
+| 20 steps | +0.251 | 66.13% |
+| 50 steps | +0.063 | 31.03% |
+| 100 steps | +0.026 | 0.06% |
+| 500 steps (repo's own checkpoints) | −0.012 | 0.11% |
+
+Weight motion IS directionally coherent at 10-step spacing and decorrelates to noise by ~100
+steps. An earlier reading of this project's native 500-step checkpoints (median cos −0.012)
+was simply the wrong measurement scale — worth recording, because it would have supported the
+right conclusion for the wrong reason.
+
+**Why coherent deltas still do not buy a jump.** cos ~ 0.47 means the observed delta is roughly
+half signal, half noise. Extrapolation multiplies that delta by `f = N/gap`, so injected noise
+grows linearly in N while the true drift it is trying to capture is tiny — over 10 real steps
+the probe loss moves by 0.001. There is no horizon where the trade wins: short N has no signal
+worth capturing, long N has no valid linear trajectory.
+
+**The obvious repairs were tried and the failure is monotone, not a bad configuration.**
+
+| gate | params extrapolated | N=10 error | vs frozen |
+|---|---:|---:|---|
+| cos>=0.30 + quadratic | 99.67% | +2.13% | loses |
+| cos>=0.30, linear only | 99.67% | +2.13% | loses |
+| cos>=0.70, linear only | 31.03% | +0.83% | loses |
+| cos>=0.90, linear only | 0.06% | +0.03% | ties — it *is* frozen |
+
+Prediction error is monotone increasing in how much gets extrapolated, and the limit of
+tightening the gate is the frozen baseline itself. **Shrinkage/damping needs no separate
+experiment: damping is equivalent to reducing effective coverage, and this table shows the
+optimum coverage is zero.** The extrapolator either injects noise or does nothing.
+
+**Optimizer-state policy (recorded per #126):** this codebase's `_save_edge_checkpoint` never
+stores AdamW moments, so every resume — and therefore every GHOST jump — already starts with
+cold moment estimates. Nothing is extrapolated for them. This is a real per-jump cost that
+would compound in Phase 3, on top of the weight error above.
+
+**Caveats, stated so the result is not oversold.** One anchor, one model (83M ternary EdgeHVN),
+one optimizer, constant LR. A different regime — early training with large coherent drift, or
+a much smaller LR — could in principle behave differently. But the mechanism that fails here
+(noise amplified by `f` against a drift too small to matter) is not specific to this
+configuration, and the 5%-gate-passes-while-losing-to-frozen result would repeat wherever the
+loss curve is as flat as it is at step 10200.
+
+**Verdict: Phase 2 fails its binding gate.** Building Phase 3's training loop (#127) on this
+mechanism would wrap a control loop around a step that is measurably worse than not taking it.
+Artifacts: `results/ghost/extrapolation_scores.json`, `results/ghost/scores_{nopoly,cos07,cos09}.json`.
