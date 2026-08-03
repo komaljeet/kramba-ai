@@ -1104,6 +1104,7 @@ def build_model_and_config(
     attn_window: int | None = None,
     grad_checkpoint: bool = False,
     tie_embeddings: bool = False,
+    optimizer: str = "muon",
 ) -> tuple[EdgeHVN, dict]:
     """Build the EdgeHVN model with DeltaNet (or transformer baseline) + config.
 
@@ -1139,7 +1140,13 @@ def build_model_and_config(
         "d_model": settings["d_model"],
         "num_layers": settings["num_layers"],
         "n_heads": settings["n_heads"],
-        "optimizer": "AdamW",
+        # Real optimizer name, passed in from the CLI. Was hardcoded "AdamW"
+        # while main() only wrote args.optimizer into config AFTER this
+        # function printed its banner -- so every log this project has ever
+        # produced reported "AdamW" no matter what actually ran. That stale
+        # banner caused a real misreading of the chinchilla20k/83m logs
+        # (both of which in fact ran Muon) during #129.
+        "optimizer": optimizer,
         "lr": 3e-4,
         "weight_decay": 0.01,
         "warmup_steps": 500,
@@ -2159,9 +2166,20 @@ def main():
                              "2-4 recommended for real training — overlaps data loading "
                              "with GPU compute. Identity-preserving (same data, same order "
                              "with fixed seed).")
-    parser.add_argument("--optimizer", type=str, default="adamw",
+    parser.add_argument("--optimizer", type=str, default="muon",
                         choices=["adamw", "muon", "lion", "galore", "adafactor"],
-                        help="Optimizer (Issue #86). 'muon' orthogonalises 2-D "
+                        help="Optimizer. DEFAULT 'muon' since #129: with ternary "
+                             "ON (the config this project actually trains with) "
+                             "and --fast, Muon reaches AdamW's 1000-step val loss "
+                             "in ~570 steps (1.75x fewer) and keeps a ~0.4 nat "
+                             "lead throughout; it also passes 6.0, which AdamW "
+                             "never reaches in 1000 steps. Muon's steps are ~12 pct "
+                             "slower, so the honest wall-clock win is ~1.6x. "
+                             "CAVEAT: measured over 1000 from-scratch steps; no "
+                             "run in this project has taken Muon past that, so "
+                             "watch early val on a long pretrain and fall back "
+                             "with --optimizer adamw if the curve misbehaves. "
+                             "'muon' orthogonalises 2-D "
                              "weight-matrix updates (faster convergence); 'lion' "
                              "is sign-momentum; 'galore' (Issue #84) projects "
                              "gradients into a low-rank subspace so Adam's "
@@ -2216,8 +2234,18 @@ def main():
                              "(not just memory bookkeeping) -- verified via CPU parity/"
                              "convergence checks (tests/test_tied_embeddings.py), but "
                              "still opt-in. Default: off (existing checkpoints unaffected).")
-    parser.add_argument("--fast", action="store_true",
-                        help="Meta-flag: enable the full recommended fast-training "
+    fast_group = parser.add_mutually_exclusive_group()
+    fast_group.add_argument("--no-fast", dest="fast", action="store_false",
+                            help="Disable the --fast preset and train from the bare "
+                                 "defaults (fp32, no compile, no Triton scan, "
+                                 "num_workers=0). Use for a controlled fp32 A/B or "
+                                 "parity test, where both arms must be bit-comparable "
+                                 "-- bf16/TF32 change precision, so --fast is not "
+                                 "appropriate there. This is the escape hatch for the "
+                                 "#129 default flip; before that, bare defaults were "
+                                 "what you got by saying nothing.")
+    fast_group.add_argument("--fast", dest="fast", action="store_true", default=True,
+                        help="Meta-flag, ON BY DEFAULT since #129: enable the full recommended fast-training "
                              "stack in one switch — bf16 + TF32 + torch.compile + "
                              "Triton scan + async DataLoader (4 workers). The bit-"
                              "identical levers (compile/triton/workers) never change "
@@ -2365,6 +2393,7 @@ def main():
         attn_window=args.attn_window,
         grad_checkpoint=args.grad_checkpoint,
         tie_embeddings=args.tie_embeddings,
+        optimizer=args.optimizer,
     )
     config["lr"] = args.lr
     config["precision"] = args.precision
