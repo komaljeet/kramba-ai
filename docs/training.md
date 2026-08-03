@@ -625,6 +625,63 @@ a one-line banner listing what it turned on (`[A]`/`[B]` tags). **Measured:** st
 **1.58× faster** (5.53 → 3.51 s/epoch, d=256/3L/seq128/B32); Category-A primitives proven
 exact (`tests/test_issue50.py`). Explicit flags always win.
 
+### `--fast` — the EdgeHVN equivalent, and what every real run here actually used
+
+`train.py`'s `--full` has a counterpart in `train_edge_conversational.py`: **`--fast`**, which
+expands to **bf16 + TF32 + `torch.compile` + Triton scan + async DataLoader (4 workers)**.
+Explicitly-passed levers override the preset (e.g. `--fast --precision fp32`).
+
+**Use `--fast` for every real training run.** This is not a suggestion added after the fact —
+it is what the project already does. `logs/chinchilla20k_pretrain.log`,
+`logs/chinchilla83m_pretrain.log` and `logs/hybrid_a4_2attn_102k.log` all open with the
+`[--fast]` banner. Until now the flag appeared **only in `--help`** and nowhere in `docs/` or
+the README, so a reader following the documentation would have run ~5x slower than every
+result in this file was produced at. (Measured directly while setting up the #129 A/B:
+0.2 steps/s without it vs the ~0.8 steps/s the speed-ceiling work records with it, at
+d=512/12L, batch 4, seq 512.)
+
+**Do NOT use it for a controlled fp32 A/B.** The bare defaults (fp32, `num_workers=0`, no
+compile) exist deliberately so both arms of a parity test are bit-comparable; `--fast`'s
+bf16/TF32 change precision. The bit-identical levers (compile / Triton scan / workers) never
+change the model, so an A/B that only needs *speed* parity can keep those.
+
+**Known, expected noise under `--fast`:** `torch.compile` logs
+`Not enough SMs to use max_autotune_gemm mode` on this card and falls back — documented in the
+speed-ceiling investigation, not an error. `reduce-overhead`/CUDA-graph modes do crash on
+`nn.Embedding` here; plain `torch.compile` (what `--fast` uses) is the supported configuration.
+
+### Muon is the default optimizer (Issue #129) — confirmed with ternary ON
+
+#86 measured Muon beating AdamW but ran `--no-ternary`, and every real run here trains with
+ternary ON. #129 repeated the A/B in the production configuration: ternary on, `--fast`,
+identical seed (init + data order), d=512/12L/8H, batch 4 x seq 512, 1,000 from-scratch steps,
+only `--optimizer` differing.
+
+| step | AdamW | Muon | Muon's lead |
+|---:|---:|---:|---:|
+| 100 | 8.8440 | 9.2837 | −0.44 |
+| 200 | 7.5055 | **7.1158** | +0.39 |
+| 300 | 7.0104 | **6.5695** | +0.44 |
+| 500 | 6.5427 | **6.1374** | +0.41 |
+| 700 | 6.3065 | **5.9200** | +0.39 |
+| 1000 | 6.0969 | **5.7021** | **+0.395** |
+
+**Steps to reach AdamW's own 1,000-step val loss (6.0969): AdamW 1,000, Muon ~570 — 1.75x
+fewer.** Muon also passes 6.0, which AdamW never reaches in the whole run. Muon starts *behind*
+(step 100) and overtakes by step 200, so a short smoke test can read the wrong way.
+
+**Wall-clock, which #86 did not report: Muon runs at 0.7 steps/s vs AdamW's 0.8 — ~12% slower
+per step.** The honest end-to-end win is therefore **~1.54x**, not 1.75x (1,250 s for AdamW's
+1,000 steps vs ~814 s for Muon's 570).
+
+**Ternary does not change Muon's relative advantage.** Final gap here (ternary on) is 0.395;
+#86's (ternary off) was 0.406. Near-identical — though these are two separate runs, not a
+controlled 2x2, so treat it as consistent rather than proven.
+
+**Caveat, stated because it bounds the claim:** 1,000 from-scratch steps is 1% of a real
+pretrain. No run in this project has taken Muon past that. Watch early val on a long run;
+`--optimizer adamw` is one flag away.
+
 ## Precision Guide
 
 | Precision | Speed | Memory | Stability | Notes |
