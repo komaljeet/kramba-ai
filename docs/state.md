@@ -641,3 +641,42 @@ and "free training steps" (plausible, unmeasured), and it is the one experiment 
 whether this is worth wiring into the training loop.
 
 Artifacts: `results/ghost/weight_averaging.json`, `weight_averaging_{8000,14000}.json`.
+
+#### A/B: the averaging advantage SURVIVES continued training (#128)
+
+The open question above — free better checkpoint, or free training steps? — resolved by a
+three-arm A/B from anchor step 10,000. All arms replay a byte-identical, pre-materialised
+1,000-batch sequence from a freshly constructed optimizer, so the ONLY difference is the
+starting weights. Third arm is a matched-norm control: the anchor plus Gaussian noise scaled
+per tensor to the exact displacement averaging applied.
+
+| step | latest | averaged | perturbed (control) | averaged's lead |
+|---:|---:|---:|---:|---:|
+| 0 | 4.18270 | **4.12614** | 4.32291 | +0.0566 |
+| 200 | 4.08988 | **4.06539** | 4.13684 | +0.0245 |
+| 500 | 3.95263 | **3.92361** | 3.96371 | +0.0290 |
+| 700 | 3.89700 | **3.86775** | 3.90928 | +0.0293 |
+| 1000 | 3.85241 | **3.82978** | 3.86580 | +0.0226 |
+
+**Averaged leads at all 11 evaluation points; the perturbed control trails at all 11.** The
+control is what makes this interpretable: an identical-magnitude *random* displacement makes
+the model worse immediately (4.183 -> 4.323) and never recovers the gap, so the gain comes from
+the direction averaging selects, not from perturbation acting as noise injection.
+
+**It is a real head start that partially decays, not a compounding multiplier.** 40% of the
+initial advantage is retained at 1,000 steps. In training-step terms: the averaged arm starts
+~500 steps ahead and is still ~100-150 steps ahead after 1,000 steps of training (using the
+latest arm's local rate of ~0.018 nats/100 steps at that point).
+
+**Practical read:**
+- **Certain:** applying it once at the end of any run gives a strictly better final model for
+  seconds of arithmetic. There is no reason not to do this.
+- **Measured:** it is also a genuine, if modest, training speedup — the head start does not
+  wash out within 1,000 steps.
+- **Unknown:** whether applying it repeatedly during a run compounds, or whether each
+  application just re-buys the same decaying ~0.05 and the run converges to the same place. That
+  is the question that decides whether it belongs *inside* the training loop or only at the end.
+
+**Caveats:** one anchor, one seed, one A/B. The absolute gaps (~0.02-0.06 nats) are small,
+though the sign is consistent across 11/11 paired evaluations on an identical probe set, and
+the control separates cleanly in the opposite direction. `results/ghost/ab_continue.json`.

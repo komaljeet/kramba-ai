@@ -454,6 +454,146 @@ def average(args) -> int:
     return 0
 
 
+def ab_continue(args) -> int:
+    """Does the averaging advantage SURVIVE continued training, or wash out?
+
+    This is the experiment that separates "free better checkpoint" (already
+    measured, certain) from "free training steps" (the claim worth wiring into
+    the training loop). Three arms continue training from the same anchor:
+
+      latest      the anchor checkpoint, unchanged                (baseline)
+      averaged    mean of the last k checkpoints
+      perturbed   anchor + Gaussian noise, per-tensor norm matched to the
+                  averaging displacement                          (CONTROL)
+
+    The perturbed arm is not decoration. Averaging MOVES the weights; without a
+    matched-norm control a gain could be nothing more than perturbation acting
+    as noise injection, which is a known (if weak) regulariser. If perturbed
+    tracks averaged, the direction averaging picks is irrelevant and the result
+    is not about averaging at all.
+
+    Every arm replays an IDENTICAL, pre-materialised batch sequence and starts
+    from a freshly constructed optimizer, so the only difference between arms is
+    the starting weights.
+    """
+    import train_edge_conversational as tec
+
+    device = require_cuda()
+    ckpt_dir = os.path.dirname(args.base)
+    stem = os.path.basename(args.base).rsplit("step", 1)[0]
+
+    def load_sd(step: int) -> Dict[str, torch.Tensor]:
+        return torch.load(os.path.join(ckpt_dir, f"{stem}step{step}.pt"),
+                          map_location="cpu", weights_only=False)["model_state_dict"]
+
+    anchor = args.anchor_step
+    avg_steps = [anchor - i * args.avg_spacing for i in range(args.avg_k[0] - 1, -1, -1)]
+    print(f"[ghost] anchor {anchor}; averaging {avg_steps}")
+
+    latest_sd = load_sd(anchor)
+    avg_sd = average_state_dicts([load_sd(s) for s in avg_steps])
+
+    gen = torch.Generator().manual_seed(4242)
+    pert_sd: Dict[str, torch.Tensor] = {}
+    for name, t in latest_sd.items():
+        if not t.is_floating_point():
+            pert_sd[name] = t.clone()
+            continue
+        disp = (avg_sd[name].to(torch.float64) - t.to(torch.float64))
+        dnorm = float(torch.linalg.vector_norm(disp))
+        noise = torch.randn(t.shape, generator=gen, dtype=torch.float64)
+        nnorm = float(torch.linalg.vector_norm(noise))
+        if nnorm > 0 and dnorm > 0:
+            noise = noise * (dnorm / nnorm)
+        pert_sd[name] = (t.to(torch.float64) + noise).to(t.dtype)
+
+    tokenizer = build_tokenizer()
+    probes = load_probe_batches(tokenizer, args.probe_batches, args.batch_size,
+                                args.seq_len, args.data_dir)
+    torch.manual_seed(args.seed)
+    loader, _v, _s = tec.build_dataset_pipeline(
+        tokenizer=tokenizer, seq_len=args.seq_len, batch_size=args.batch_size,
+        data_dir=args.data_dir, val_fraction=0.0, num_workers=0)
+
+    # Materialise once so every arm sees byte-identical batches in the same
+    # order. ~16 MB for 1,000 batches of 4x512 int64 — cheap insurance against
+    # data order becoming a confound between arms.
+    batches: List[torch.Tensor] = []
+    for batch in loader:
+        batches.append((batch[0] if isinstance(batch, (tuple, list)) else batch).clone())
+        if len(batches) >= args.ab_steps:
+            break
+    print(f"[ghost] materialised {len(batches)} identical batches for all arms")
+
+    results: Dict[str, List[dict]] = {}
+    for arm, sd in (("latest", latest_sd), ("averaged", avg_sd), ("perturbed", pert_sd)):
+        model, _st, _ck = tec.load_checkpoint_for_resume(args.base, device)
+        model.load_state_dict({k: v.to(device) for k, v in sd.items()}, strict=False)
+        opt = torch.optim.AdamW(model.parameters(), lr=args.lr,
+                                weight_decay=0.01, fused=True)
+        traj = [{"step": 0, "loss": evaluate_loss(model, probes, device)}]
+        print(f"[ghost] --- arm '{arm}' start loss {traj[0]['loss']:.5f}")
+        model.train()
+        t0 = time.time()
+        for i, xb in enumerate(batches, start=1):
+            xb = xb.to(device)
+            x, y = xb[:, :-1], xb[:, 1:]
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                logits = model(x)
+                loss = nn.functional.cross_entropy(
+                    logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1))
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            opt.zero_grad(set_to_none=True)
+            if i % args.ab_eval_every == 0:
+                l = evaluate_loss(model, probes, device)
+                traj.append({"step": i, "loss": l})
+                print(f"[ghost]     {arm:<10} step {i:<5} probe loss {l:.5f} "
+                      f"({(time.time() - t0) / 60:.1f} min)", flush=True)
+                model.train()
+        results[arm] = traj
+        del model, opt
+        torch.cuda.empty_cache()
+
+    print("\n[ghost] === A/B: does the averaging advantage survive training? ===")
+    print(f"[ghost] {'step':>6}  {'latest':>9}  {'averaged':>9}  {'perturbed':>9}  "
+          f"{'avg-latest':>11}")
+    verdict_rows = []
+    for idx in range(len(results["latest"])):
+        st = results["latest"][idx]["step"]
+        a = results["latest"][idx]["loss"]
+        b = results["averaged"][idx]["loss"]
+        c = results["perturbed"][idx]["loss"]
+        verdict_rows.append({"step": st, "latest": a, "averaged": b,
+                             "perturbed": c, "advantage": a - b})
+        print(f"[ghost] {st:>6}  {a:>9.5f}  {b:>9.5f}  {c:>9.5f}  {a - b:>+11.5f}")
+
+    first, last = verdict_rows[0]["advantage"], verdict_rows[-1]["advantage"]
+    survives = last > 0
+    retained = (last / first) if abs(first) > 1e-9 else 0.0
+    print(f"\n[ghost] advantage at start {first:+.5f} -> at step "
+          f"{verdict_rows[-1]['step']} {last:+.5f} ({retained:.0%} retained)")
+    print(f"[ghost] VERDICT: averaging advantage {'SURVIVES' if survives else 'WASHES OUT'} "
+          f"continued training")
+    pert_helps = verdict_rows[-1]["perturbed"] < verdict_rows[-1]["latest"]
+    print(f"[ghost] control: perturbed {'also beats' if pert_helps else 'loses to'} latest "
+          f"-> gain is {'NOT clearly' if pert_helps else 'specifically'} from averaging")
+
+    out = {"anchor_step": anchor, "averaged_steps": avg_steps, "ab_steps": args.ab_steps,
+           "lr": args.lr, "batch_size": args.batch_size, "seq_len": args.seq_len,
+           "probe_batches": len(probes), "trajectories": results,
+           "comparison": verdict_rows,
+           "verdict": {"advantage_start": first, "advantage_end": last,
+                       "fraction_retained": retained, "survives": survives,
+                       "perturbed_control_also_beats_latest": pert_helps}}
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    with open(args.out, "w") as fh:
+        json.dump(out, fh, indent=2)
+    print(f"[ghost] wrote {args.out}")
+    return 0
+
+
 def score(args) -> int:
     """Score predicted vs real vs frozen at each N, on fixed probe batches."""
     import train_edge_conversational as tec
@@ -616,6 +756,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--make-series", action="store_true")
     mode.add_argument("--score", action="store_true")
+    mode.add_argument("--ab-continue", action="store_true",
+                      help="A/B: continue training from latest vs averaged vs perturbed")
     mode.add_argument("--average", action="store_true",
                       help="latest-weight-averaging test (LAWA/SWA-style)")
 
@@ -649,6 +791,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--oracle", action="store_true",
                    help="also evaluate the cheating least-squares upper bound")
     p.add_argument("--avg-k", type=int, nargs="+", default=[2, 3, 5, 10])
+    p.add_argument("--ab-steps", type=int, default=1000)
+    p.add_argument("--ab-eval-every", type=int, default=100)
+    p.add_argument("--seed", type=int, default=7)
     p.add_argument("--avg-spacing", type=int, default=500)
     p.add_argument("--future-steps", type=int, nargs="+",
                    default=[10500, 11000, 11500, 12000, 13000])
@@ -659,6 +804,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return make_series(args)
     if args.average:
         return average(args)
+    if args.ab_continue:
+        return ab_continue(args)
     return score(args)
 
 
