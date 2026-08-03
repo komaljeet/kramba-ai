@@ -47,7 +47,7 @@ import os
 import sys
 import time
 from dataclasses import asdict
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -57,6 +57,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ghost.extrapolator import ExtrapolationConfig, build_plan, extrapolate  # noqa: E402
 
 GPT2_VOCAB_SIZE = 50257
+
+Tensors = Mapping[str, torch.Tensor]
 
 
 # --------------------------------------------------------------------------
@@ -297,6 +299,52 @@ def _load(series_dir: str, step: int) -> dict:
                       map_location="cpu", weights_only=False)
 
 
+def oracle_weights(
+    w2: Tensors, w3: Tensors, w_true: Tensors, n_steps: int, gap: int
+) -> Tuple[Dict[str, torch.Tensor], dict]:
+    """The best GHOST that could possibly exist, allowed to cheat.
+
+    For each tensor, pick the scalar ``alpha`` that minimises the distance
+    between the prediction ``W3 + alpha * f * D2`` and the ACTUAL future
+    weights — using the future weights to choose it. That is
+
+        alpha* = <dW_true, f*D2> / |f*D2|^2
+
+    the least-squares optimum, which no real method can beat within this
+    family. It is an upper bound on every adaptive, fitted or learned variant
+    that predicts from the last observed delta: a per-tensor learned scaling,
+    a schedule of alphas, a meta-learned shrinkage — all of them are choosing
+    an alpha without being allowed to see the answer, so all of them do at
+    best this well.
+
+    If the oracle cannot beat the frozen baseline, no adaptive GHOST can.
+    """
+    f = n_steps / float(gap)
+    out: Dict[str, torch.Tensor] = {}
+    alphas: List[float] = []
+    for name, t3 in w3.items():
+        if name not in w2 or name not in w_true or not t3.is_floating_point():
+            out[name] = t3.clone()
+            continue
+        step = (f * (t3 - w2[name]).to(torch.float64))
+        target = (w_true[name] - t3).to(torch.float64)
+        denom = float(torch.dot(step.flatten(), step.flatten()))
+        if denom <= 1e-30:
+            out[name] = t3.clone()
+            continue
+        alpha = float(torch.dot(target.flatten(), step.flatten())) / denom
+        alphas.append(alpha)
+        out[name] = (t3.to(torch.float64) + alpha * step).to(t3.dtype)
+    alphas_sorted = sorted(alphas)
+    stats = {
+        "n_tensors_fitted": len(alphas),
+        "alpha_median": alphas_sorted[len(alphas_sorted) // 2] if alphas_sorted else 0.0,
+        "alpha_min": alphas_sorted[0] if alphas_sorted else 0.0,
+        "alpha_max": alphas_sorted[-1] if alphas_sorted else 0.0,
+    }
+    return out, stats
+
+
 def score(args) -> int:
     """Score predicted vs real vs frozen at each N, on fixed probe batches."""
     import train_edge_conversational as tec
@@ -353,10 +401,19 @@ def score(args) -> int:
         if target not in steps:
             print(f"[ghost] N={n}: no real checkpoint at step {target}, skipping")
             continue
-        real_loss = loss_of(_load(args.series_dir, target)["model_state_dict"])
+        true_sd = _load(args.series_dir, target)["model_state_dict"]
+        real_loss = loss_of(true_sd)
         pred, _ = extrapolate(w1["model_state_dict"], w2["model_state_dict"],
                               w3["model_state_dict"], n, gap, cfg, plan)
         pred_loss = loss_of(pred)
+
+        oracle_loss = None
+        oracle_stats = None
+        if args.oracle:
+            ow, oracle_stats = oracle_weights(w2["model_state_dict"],
+                                              w3["model_state_dict"],
+                                              true_sd, n, gap)
+            oracle_loss = loss_of(ow)
 
         rel = abs(pred_loss - real_loss) / max(abs(real_loss), 1e-9)
         rel_frozen = abs(frozen_loss - real_loss) / max(abs(real_loss), 1e-9)
@@ -372,10 +429,20 @@ def score(args) -> int:
             "beats_frozen": pred_loss < frozen_loss,
             "beats_frozen_margin": frozen_loss - pred_loss,
         }
+        if oracle_loss is not None:
+            row["oracle_loss"] = oracle_loss
+            row["rel_err_oracle"] = abs(oracle_loss - real_loss) / max(abs(real_loss), 1e-9)
+            row["oracle_beats_frozen"] = oracle_loss < frozen_loss
+            row["oracle_alpha"] = oracle_stats
         rows.append(row)
         print(f"[ghost] N={n:<4} real {real_loss:.5f}  pred {pred_loss:.5f} "
               f"({rel:+.2%})  frozen {frozen_loss:.5f} ({rel_frozen:+.2%})  "
               f"{'BEATS frozen' if row['beats_frozen'] else 'loses to frozen'}")
+        if oracle_loss is not None:
+            print(f"         ORACLE (cheats, upper bound) {oracle_loss:.5f} "
+                  f"({row['rel_err_oracle']:+.2%})  median alpha "
+                  f"{oracle_stats['alpha_median']:+.3f}  "
+                  f"{'BEATS frozen' if row['oracle_beats_frozen'] else 'loses to frozen'}")
 
     # Delta-consistency vs measurement scale — the question the repo's own
     # 500-step-spaced checkpoints cannot answer.
@@ -468,6 +535,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--cos-threshold", type=float, default=0.30)
     p.add_argument("--ratio-tol", type=float, default=2.0)
     p.add_argument("--no-poly", action="store_true")
+    p.add_argument("--oracle", action="store_true",
+                   help="also evaluate the cheating least-squares upper bound")
     p.add_argument("--out", default="results/ghost/extrapolation_scores.json")
 
     args = p.parse_args(argv)

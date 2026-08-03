@@ -526,3 +526,36 @@ loss curve is as flat as it is at step 10200.
 **Verdict: Phase 2 fails its binding gate.** Building Phase 3's training loop (#127) on this
 mechanism would wrap a control loop around a step that is measurably worse than not taking it.
 Artifacts: `results/ghost/extrapolation_scores.json`, `results/ghost/scores_{nopoly,cos07,cos09}.json`.
+
+### Oracle upper bound — an adaptive/learned GHOST cannot work either (#126 follow-up)
+
+The natural next proposal is to make GHOST *adaptive*: train normally, watch how wrong the
+predictions are, fit the prediction function, repeat until it is good enough. That hypothesis
+is testable without building it, by computing the **oracle**: for each tensor, the scalar
+`alpha` in `W_pred = W3 + alpha * f * D2` chosen by least squares **using the true future
+weights**. No adaptive, fitted, meta-learned or scheduled variant can beat a coefficient
+selected with knowledge of the answer, so this is an upper bound on the entire family.
+
+| N | oracle (cheats) | frozen | real | oracle err | median fitted alpha |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 4.17811 | **4.13901** | 4.14036 | +0.91% | **+0.465** |
+| 50 | 4.26663 | **4.13901** | 4.10952 | +3.82% | **+0.120** |
+| 100 | 4.28950 | **4.13901** | 4.10046 | +4.61% | **+0.058** |
+| 500 | 4.19223 | **4.13901** | 3.98804 | +5.12% | **+0.012** |
+
+**The oracle loses to doing nothing at every horizon.** Two consequences:
+
+1. **The optimal adaptive coefficient collapses toward zero as the jump grows** (0.465 -> 0.012).
+   A self-tuning GHOST converges on "predict almost nothing" — the frozen baseline — and it
+   does so *faster* the further ahead it tries to jump. The intuition that a fitted function
+   improves with horizon is exactly inverted by the measurement.
+2. **Even at its best (alpha 0.465 at N=10, which is essentially the measured delta correlation
+   of 0.474) it is still worse in loss than freezing.** The oracle minimises *weight-space*
+   distance to the true future weights and still loses in *loss space*: the component of the
+   update that past deltas can predict is not the component that reduces loss. The predictable
+   part is drift the optimizer's own momentum already applies; the part that constitutes
+   learning comes from gradients of data the model has not seen yet, and that information is
+   not present in past weights at any fitting budget.
+
+This closes the "make it adaptive" branch analytically rather than by exhaustion: the ceiling
+is measured, and it is below the do-nothing floor. `results/ghost/oracle_scores.json`.
