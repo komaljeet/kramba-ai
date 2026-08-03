@@ -625,6 +625,31 @@ a one-line banner listing what it turned on (`[A]`/`[B]` tags). **Measured:** st
 **1.58× faster** (5.53 → 3.51 s/epoch, d=256/3L/seq128/B32); Category-A primitives proven
 exact (`tests/test_issue50.py`). Explicit flags always win.
 
+### `--fast` — the EdgeHVN equivalent, and what every real run here actually used
+
+`train.py`'s `--full` has a counterpart in `train_edge_conversational.py`: **`--fast`**, which
+expands to **bf16 + TF32 + `torch.compile` + Triton scan + async DataLoader (4 workers)**.
+Explicitly-passed levers override the preset (e.g. `--fast --precision fp32`).
+
+**Use `--fast` for every real training run.** This is not a suggestion added after the fact —
+it is what the project already does. `logs/chinchilla20k_pretrain.log`,
+`logs/chinchilla83m_pretrain.log` and `logs/hybrid_a4_2attn_102k.log` all open with the
+`[--fast]` banner. Until now the flag appeared **only in `--help`** and nowhere in `docs/` or
+the README, so a reader following the documentation would have run ~5x slower than every
+result in this file was produced at. (Measured directly while setting up the #129 A/B:
+0.2 steps/s without it vs the ~0.8 steps/s the speed-ceiling work records with it, at
+d=512/12L, batch 4, seq 512.)
+
+**Do NOT use it for a controlled fp32 A/B.** The bare defaults (fp32, `num_workers=0`, no
+compile) exist deliberately so both arms of a parity test are bit-comparable; `--fast`'s
+bf16/TF32 change precision. The bit-identical levers (compile / Triton scan / workers) never
+change the model, so an A/B that only needs *speed* parity can keep those.
+
+**Known, expected noise under `--fast`:** `torch.compile` logs
+`Not enough SMs to use max_autotune_gemm mode` on this card and falls back — documented in the
+speed-ceiling investigation, not an error. `reduce-overhead`/CUDA-graph modes do crash on
+`nn.Embedding` here; plain `torch.compile` (what `--fast` uses) is the supported configuration.
+
 ## Precision Guide
 
 | Precision | Speed | Memory | Stability | Notes |

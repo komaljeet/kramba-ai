@@ -48,6 +48,17 @@ tasks and tail their logs with a monitor** rather than blocking the session:
 This keeps the session responsive while long GPU jobs run, and the filtered monitor
 notifies the moment a result or failure lands — no polling.
 
+### Real training runs: always pass `--fast`
+
+`train_edge_conversational.py --fast` turns on the recommended stack in one switch (bf16 +
+TF32 + `torch.compile` + Triton scan + 4 DataLoader workers). Every real run in this project
+was launched with it — the pretrain and hybrid-FT logs all open with the `[--fast]` banner —
+and without it training is roughly 5x slower (0.2 vs ~0.8 steps/s measured at d=512/12L).
+
+The bare defaults (fp32, no compile, `num_workers=0`) are deliberate: they exist so a
+controlled fp32 A/B has bit-comparable arms. Use them for parity experiments, `--fast` for
+everything else. Details and caveats: [`training.md`](training.md) section "`--fast`".
+
 ### GPU / CUDA requirement
 
 All training, benchmarking, and evaluation **must run on GPU, never CPU**. Environment:
