@@ -1105,6 +1105,8 @@ def build_model_and_config(
     grad_checkpoint: bool = False,
     tie_embeddings: bool = False,
     optimizer: str = "muon",
+    precision: str = "bf16",
+    lr: float = 3e-4,
 ) -> tuple[EdgeHVN, dict]:
     """Build the EdgeHVN model with DeltaNet (or transformer baseline) + config.
 
@@ -1133,7 +1135,11 @@ def build_model_and_config(
         "arch": arch,
         "ternary": apply_ternary,
         "use_deltanet": arch == "hvn",
-        "precision": "bf16",  # overridden by caller via config["precision"]
+        # Real values from the CLI. These used to be hardcoded here and only
+        # overwritten by main() AFTER this function printed its banner, so the
+        # banner reported "bf16" and "3e-4" whatever was actually passed --
+        # the same defect that made the optimizer line always say "AdamW".
+        "precision": precision,
         "batch_size": settings["batch_size"],
         "grad_accum": settings["grad_accum"],
         "seq_len": settings["seq_len"],
@@ -1147,7 +1153,7 @@ def build_model_and_config(
         # banner caused a real misreading of the chinchilla20k/83m logs
         # (both of which in fact ran Muon) during #129.
         "optimizer": optimizer,
-        "lr": 3e-4,
+        "lr": lr,
         "weight_decay": 0.01,
         "warmup_steps": 500,
         "cosine_schedule": True,
@@ -2394,6 +2400,8 @@ def main():
         grad_checkpoint=args.grad_checkpoint,
         tie_embeddings=args.tie_embeddings,
         optimizer=args.optimizer,
+        precision=args.precision,
+        lr=args.lr,
     )
     config["lr"] = args.lr
     config["precision"] = args.precision
