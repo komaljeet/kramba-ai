@@ -1074,3 +1074,64 @@ trunk checkpoints through the same short A4 FT) would settle it.
 **Process note.** Both this and the #122 state-commit bug were found the same way: checking
 whether a comparison changed one variable or two. That question is cheaper than any of the GPU
 time it recovered.
+
+## GHOST Phase 1 — the detector works; the documented 6K-7.5K "phase transition" does not exist (Issue #125, 2026-08-03)
+
+`ghost/detector.py` (epic #124, method by Rambarun Komaljeet) reads a training-loss CSV,
+smooths it, differentiates it, and flags stretches where the gradient sits `k` sigma below its
+trailing-window mean — sustained acceleration, i.e. a phase transition. Phase 1's gate was:
+correctly identify the transition this file documents at **steps 6000-7500**.
+
+**The gate FAILS, and the detector is not the reason. The ground truth is.**
+
+At the spec defaults (window=50 samples, k=2.0) the detector finds **0 transitions across all
+102,000 steps** of `checkpoints/edge_chinchilla83m/training_log.csv`, while correctly finding a
+planted transition in synthetic data and correctly reporting 0 on a smooth-decay control.
+The 80-point sensitivity sweep (`results/ghost/detected_transitions.json`) is what makes this
+conclusive rather than a tuning argument:
+
+| setting | detections on the real log | hits 6K-7.5K | detections on a **pure-noise** control |
+|---|---:|:---:|---:|
+| window=20, k=1.5, open_run=1 | 92 | yes | **90** |
+| window=35, k=2.0, open_run=1 | 35 | yes | **37** |
+| window=100, k=1.5, open_run=1 | 71 | yes | **77** |
+| window=35, k=1.5, open_run=5 | **1** (at 42550-42800, 2.17 sigma) | no | **0** |
+
+**Every setting that "detects" the 6K-7.5K transition finds just as many transitions in a
+smooth synthetic curve that has none.** The hit is noise, not signal. The one setting with a
+real signal-to-noise separation finds a single weak candidate at ~42.5K and nothing at 6K-7.5K.
+
+**Independent corroboration from held-out val loss** (`val_log.csv`), which needs no detector at
+all — the improvement rate is *decelerating* monotonically straight through the claimed window:
+
+| val step | 2000 | 4000 | 6000 | 8000 | 10000 | 12000 |
+|---|---:|---:|---:|---:|---:|---:|
+| val loss | 5.204 | 4.893 | 4.738 | 4.634 | 4.563 | 4.504 |
+| delta per 1k steps | — | −0.156 | −0.077 | −0.052 | −0.036 | −0.029 |
+
+A phase transition is an *acceleration*. Across 4K→8K the rate roughly halves at every
+checkpoint. Nothing accelerates.
+
+**Correction to this document.** The "EdgeHVN 83M — the measured PPL picture" section above
+states the run had "a mid-run flat patch ~step 3K-5.5K that then **broke through and
+accelerated** ~step 6K-7.5K — a phase transition, the opposite of a ceiling." That reading is
+**retracted**. There is a mild flat patch (nearer ~3.3K-4.3K in a 500-step rolling mean), but
+the descent that follows it is slower than the descent that preceded it, not faster. The
+underlying conclusion that section drew — *undertrained, not capacity-limited* — is unaffected
+and still stands on the val-PPL trajectory (110 → 63.45). Only the "phase transition"
+characterisation was wrong: it was a narrative read of a noisy train-loss trace whose
+sample-to-sample sigma (~0.15 nats) is larger than the entire descent it rides on (~0.1 nats
+per 1,000 steps by step 6K).
+
+**What this means for GHOST (#124).** The method's premise is that training consists of
+predictable stretches punctuated by phase transitions that must be computed for real. This
+project's only long training run contains **no detectable phase transition at all** at a
+threshold that doesn't also fire on noise. That is not a refutation of GHOST — it is arguably
+the *best possible* case for the extrapolator (a curve with no transitions is entirely
+predictable stretch), and it removes the detector from the critical path. But it does mean the
+detector cannot be validated against this repo's data, and Phase 3's "disable the extrapolator
+near a transition" branch would never fire on a run like this one. Decide at #124 whether to
+gate Phase 2 on a different (deliberately transition-rich) run or proceed straight to the
+extrapolator. **The `2 sigma above rolling mean` rule itself is sound and reusable** — with the
+persistence requirement (`open_run`) added, without which a bare k-sigma test produces
+`n * Phi(-k)` false positives by construction (28 on a 1,200-sample noise curve, measured).

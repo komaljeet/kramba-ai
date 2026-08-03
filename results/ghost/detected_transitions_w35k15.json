@@ -1,0 +1,49 @@
+{
+  "log": "C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/edge_chinchilla83m/training_log.csv",
+  "n_samples": 2040,
+  "step_range": [
+    50,
+    102000
+  ],
+  "config": {
+    "window": 35,
+    "smooth": 15,
+    "k_start": 1.5,
+    "open_run": 5,
+    "k_end": 1.0,
+    "end_patience": 3,
+    "merge_gap": 5,
+    "min_samples": 1,
+    "sigma_floor": 1e-12
+  },
+  "n_detections": 1,
+  "transitions": [
+    {
+      "start_step": 42550,
+      "end_step": 42800,
+      "start_index": 850,
+      "end_index": 855,
+      "peak_sigma": 2.166053890800074,
+      "mean_gradient": -0.0002891725555555554,
+      "baseline_gradient": 4.3459980952381273e-05,
+      "closed": true
+    }
+  ],
+  "ground_truth": {
+    "window": [
+      6000,
+      7500
+    ],
+    "tolerance_steps": 500,
+    "detected": false,
+    "matching_transitions": [],
+    "n_other_detections": 1
+  },
+  "negative_control": {
+    "description": "smooth exponential decay, matched noise \u2014 must detect 0",
+    "n_detections": 0,
+    "passed": true,
+    "transitions": []
+  },
+  "sweep": null
+}
