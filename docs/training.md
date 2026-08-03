@@ -650,6 +650,38 @@ change the model, so an A/B that only needs *speed* parity can keep those.
 speed-ceiling investigation, not an error. `reduce-overhead`/CUDA-graph modes do crash on
 `nn.Embedding` here; plain `torch.compile` (what `--fast` uses) is the supported configuration.
 
+### Muon is the default optimizer (Issue #129) — confirmed with ternary ON
+
+#86 measured Muon beating AdamW but ran `--no-ternary`, and every real run here trains with
+ternary ON. #129 repeated the A/B in the production configuration: ternary on, `--fast`,
+identical seed (init + data order), d=512/12L/8H, batch 4 x seq 512, 1,000 from-scratch steps,
+only `--optimizer` differing.
+
+| step | AdamW | Muon | Muon's lead |
+|---:|---:|---:|---:|
+| 100 | 8.8440 | 9.2837 | −0.44 |
+| 200 | 7.5055 | **7.1158** | +0.39 |
+| 300 | 7.0104 | **6.5695** | +0.44 |
+| 500 | 6.5427 | **6.1374** | +0.41 |
+| 700 | 6.3065 | **5.9200** | +0.39 |
+| 1000 | 6.0969 | **5.7021** | **+0.395** |
+
+**Steps to reach AdamW's own 1,000-step val loss (6.0969): AdamW 1,000, Muon ~570 — 1.75x
+fewer.** Muon also passes 6.0, which AdamW never reaches in the whole run. Muon starts *behind*
+(step 100) and overtakes by step 200, so a short smoke test can read the wrong way.
+
+**Wall-clock, which #86 did not report: Muon runs at 0.7 steps/s vs AdamW's 0.8 — ~12% slower
+per step.** The honest end-to-end win is therefore **~1.54x**, not 1.75x (1,250 s for AdamW's
+1,000 steps vs ~814 s for Muon's 570).
+
+**Ternary does not change Muon's relative advantage.** Final gap here (ternary on) is 0.395;
+#86's (ternary off) was 0.406. Near-identical — though these are two separate runs, not a
+controlled 2x2, so treat it as consistent rather than proven.
+
+**Caveat, stated because it bounds the claim:** 1,000 from-scratch steps is 1% of a real
+pretrain. No run in this project has taken Muon past that. Watch early val on a long run;
+`--optimizer adamw` is one flag away.
+
 ## Precision Guide
 
 | Precision | Speed | Memory | Stability | Notes |
