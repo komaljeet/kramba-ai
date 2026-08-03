@@ -606,3 +606,38 @@ from gradients of data not yet seen, which no function of past weights contains.
 **Verdict unchanged, now earned rather than assumed.** The negative result stands at the
 correct granularity and in the correct regime. Artifacts:
 `results/ghost/scores_perstep_flat.json`, `results/ghost/scores_perstep_early.json`.
+
+### Weight averaging — the positive result that came out of the GHOST work (#126 follow-up)
+
+GHOST's premise was that the weight trajectory is coherent. #126 measured that it is (median
+cos **+0.890** at 1-step spacing) but that *extrapolating* along it amplifies the delta's noise
+by `f = N/gap` and loses to doing nothing at every horizon. **Averaging is the same observation
+with the opposite arithmetic: it cancels the noise instead of amplifying it, keeping the shared
+drift.** It skips no training step, so it does not violate the rule the extrapolation result
+established — it asks only whether the weights already paid for are being used well.
+
+Measured on the EXISTING `edge_chinchilla20k` checkpoints (500-step spacing, no new training),
+same fixed 16-batch probe set, three independent anchors:
+
+| anchor | latest | avg k=2 | avg k=3 | avg k=5 | avg k=10 | worth (real steps) |
+|---:|---:|---:|---:|---:|---:|---|
+| 8,000 | 4.30812 | **4.24677** | **4.26304** | **4.25888** | — | < 500 |
+| 10,000 | 4.18270 | **4.14715** | **4.12614** | **4.12857** | 4.20883 (worse) | ~500-1000 |
+| 14,000 | 4.01125 | **3.98420** | **3.98165** | **3.99291** | — | ~1000 |
+
+**9 of 9 (anchor x k in 2,3,5) improve on the latest checkpoint**, gains 0.018-0.061 nats, for
+the cost of loading a few checkpoints and averaging them. `k=10` (a 4,500-step window) is
+*worse* than the latest — the averaging window has to be short relative to the drift, otherwise
+it mixes in weights from a materially different model.
+
+Because the gain is roughly constant in loss terms while real training slows down, **the gain
+is worth more steps the later it is applied**: <500 steps at anchor 8K, ~1,000 steps at 14K.
+
+**The important caveat — this is an evaluation-time gain, not yet a proven training speedup.**
+Every number above evaluates an averaged model. The untested question is whether training
+*continued from* the averaged weights stays ahead, or whether the advantage washes out within a
+few hundred steps. That is the difference between "free better checkpoint" (certain, measured)
+and "free training steps" (plausible, unmeasured), and it is the one experiment that decides
+whether this is worth wiring into the training loop.
+
+Artifacts: `results/ghost/weight_averaging.json`, `weight_averaging_{8000,14000}.json`.

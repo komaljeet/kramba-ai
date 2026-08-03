@@ -345,6 +345,115 @@ def oracle_weights(
     return out, stats
 
 
+def average_state_dicts(sds: Sequence[Tensors]) -> Dict[str, torch.Tensor]:
+    """Plain mean of float tensors; non-float entries taken from the newest."""
+    newest = sds[-1]
+    out: Dict[str, torch.Tensor] = {}
+    for name, t in newest.items():
+        if not t.is_floating_point() or any(name not in sd for sd in sds):
+            out[name] = t.clone()
+            continue
+        acc = torch.zeros_like(t, dtype=torch.float64)
+        for sd in sds:
+            acc += sd[name].to(torch.float64)
+        out[name] = (acc / len(sds)).to(t.dtype)
+    return out
+
+
+def average(args) -> int:
+    """Latest-weight averaging (LAWA/SWA-style) vs the latest checkpoint alone.
+
+    The opposite move to extrapolation, and the reason it is worth testing after
+    #126's negative result: extrapolation AMPLIFIES the noise in a weight delta
+    by ``f``, whereas averaging CANCELS it while leaving the shared drift
+    intact. Same observation about trajectory coherence, opposite arithmetic.
+
+    Unlike GHOST this does not skip any training step, so it cannot violate the
+    rule the extrapolation result established (the information in a step comes
+    from gradients on unseen data). It asks a narrower question: are the weights
+    you have ALREADY paid for being used as well as they could be?
+
+    The comparison that matters is not "is the average better than the latest"
+    but "how many real training steps is the average worth" — so the real
+    checkpoints ahead of the anchor are evaluated on the same probe set and the
+    average is placed on that scale.
+    """
+    import train_edge_conversational as tec
+
+    device = require_cuda()
+    ckpt_dir, prefix = os.path.dirname(args.base), os.path.basename(args.base)
+    stem = prefix.rsplit("step", 1)[0]
+
+    def path_for(step: int) -> str:
+        return os.path.join(ckpt_dir, f"{stem}step{step}.pt")
+
+    def load_sd(step: int) -> Dict[str, torch.Tensor]:
+        return torch.load(path_for(step), map_location="cpu",
+                          weights_only=False)["model_state_dict"]
+
+    anchor = args.anchor_step
+    spacing = args.avg_spacing
+    available = [s for s in ([anchor - i * spacing for i in range(max(args.avg_k) - 1, -1, -1)]
+                             + args.future_steps) if os.path.exists(path_for(s))]
+    if anchor not in available:
+        raise SystemExit(f"anchor checkpoint {path_for(anchor)} not found")
+    print(f"[ghost] anchor {anchor}, spacing {spacing}, available {available}")
+
+    tokenizer = build_tokenizer()
+    probes = load_probe_batches(tokenizer, args.probe_batches, args.batch_size,
+                                args.seq_len, args.data_dir)
+    model, _s, _c = tec.load_checkpoint_for_resume(args.base, device)
+
+    def loss_of(sd: Dict[str, torch.Tensor]) -> float:
+        model.load_state_dict({k: v.to(device) for k, v in sd.items()}, strict=False)
+        return evaluate_loss(model, probes, device)
+
+    rows: List[dict] = []
+    base_loss = loss_of(load_sd(anchor))
+    print(f"[ghost] latest checkpoint (step {anchor}) loss {base_loss:.5f}")
+
+    future = {}
+    for s in args.future_steps:
+        if os.path.exists(path_for(s)):
+            future[s] = loss_of(load_sd(s))
+            print(f"[ghost] real training to step {s:<6} loss {future[s]:.5f} "
+                  f"({future[s] - base_loss:+.5f})")
+
+    for k in args.avg_k:
+        steps = [anchor - i * spacing for i in range(k - 1, -1, -1)]
+        if not all(os.path.exists(path_for(s)) for s in steps):
+            print(f"[ghost] k={k}: missing checkpoints, skipping")
+            continue
+        avg_loss = loss_of(average_state_dicts([load_sd(s) for s in steps]))
+        gain = base_loss - avg_loss
+        # Translate the gain into "steps of real training bought", by finding
+        # the furthest real checkpoint the average is at least as good as.
+        equiv = 0
+        for s in sorted(future):
+            if avg_loss <= future[s]:
+                equiv = s - anchor
+        rows.append({"k": k, "steps_averaged": steps, "loss": avg_loss,
+                     "gain_vs_latest": gain, "steps_of_training_equivalent": equiv})
+        print(f"[ghost] avg k={k:<3} ({steps[0]}..{steps[-1]})  loss {avg_loss:.5f}  "
+              f"{'BETTER' if gain > 0 else 'worse'} than latest by {abs(gain):.5f}  "
+              f"~= {equiv} steps of real training")
+
+    out = {
+        "anchor_step": anchor,
+        "spacing": spacing,
+        "probe": {"batches": len(probes), "batch_size": args.batch_size,
+                  "seq_len": args.seq_len, "seed": 1234},
+        "latest_loss": base_loss,
+        "real_future_losses": {str(k): v for k, v in future.items()},
+        "averages": rows,
+    }
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    with open(args.out, "w") as fh:
+        json.dump(out, fh, indent=2)
+    print(f"[ghost] wrote {args.out}")
+    return 0
+
+
 def score(args) -> int:
     """Score predicted vs real vs frozen at each N, on fixed probe batches."""
     import train_edge_conversational as tec
@@ -507,6 +616,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--make-series", action="store_true")
     mode.add_argument("--score", action="store_true")
+    mode.add_argument("--average", action="store_true",
+                      help="latest-weight-averaging test (LAWA/SWA-style)")
 
     p.add_argument("--base", default="checkpoints/edge_chinchilla20k/"
                                      "edge_conversational_step10000.pt")
@@ -537,10 +648,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--no-poly", action="store_true")
     p.add_argument("--oracle", action="store_true",
                    help="also evaluate the cheating least-squares upper bound")
+    p.add_argument("--avg-k", type=int, nargs="+", default=[2, 3, 5, 10])
+    p.add_argument("--avg-spacing", type=int, default=500)
+    p.add_argument("--future-steps", type=int, nargs="+",
+                   default=[10500, 11000, 11500, 12000, 13000])
     p.add_argument("--out", default="results/ghost/extrapolation_scores.json")
 
     args = p.parse_args(argv)
-    return make_series(args) if args.make_series else score(args)
+    if args.make_series:
+        return make_series(args)
+    if args.average:
+        return average(args)
+    return score(args)
 
 
 if __name__ == "__main__":  # pragma: no cover
