@@ -1,0 +1,87 @@
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[ghost] materialised 2000 identical batches for both arms
+[ghost] --- arm 'baseline' start loss 4.18270
+[ghost]     baseline  step 250   probe loss 4.08879 (2.6 min)
+[ghost]     baseline  step 500   probe loss 3.95263 (5.2 min)
+[ghost]     baseline  step 750   probe loss 3.90009 (7.8 min)
+[ghost]     baseline  step 1000  probe loss 3.85241 (10.4 min)
+[ghost]     baseline  step 1250  probe loss 3.87822 (13.0 min)
+[ghost]     baseline  step 1500  probe loss 3.78903 (15.6 min)
+[ghost]     baseline  step 1750  probe loss 3.75478 (18.2 min)
+[ghost]     baseline  step 2000  probe loss 3.70874 (20.8 min)
+[ghost] baseline + END-OF-RUN average of last 3: 3.66057
+[ghost] --- arm 'periodic' start loss 4.18270
+[ghost]     periodic  step 250   probe loss 4.09242 (2.6 min)
+[ghost]     periodic  step 500   probe loss 3.95677 (5.3 min)
+[ghost]     periodic step 750   inject: 3.90310 -> 3.87878 (+0.02432)
+[ghost]     periodic step 1000  inject: 3.88771 -> 3.84725 (+0.04046)
+[ghost]     periodic step 1250  inject: 3.93451 -> 3.79436 (+0.14015)
+[ghost]     periodic step 1500  inject: 3.85003 -> 3.77680 (+0.07323)
+[ghost]     periodic step 1750  inject: 3.80933 -> 3.74785 (+0.06148)
+[ghost]     periodic step 2000  inject: 3.79248 -> 3.72787 (+0.06460)
+
+[ghost] === does periodic averaging compound? ===
+[ghost] baseline, no averaging          3.70874
+[ghost] baseline + end-of-run average   3.66057 (-0.04817 vs baseline)
+[ghost] periodic averaging in-loop      3.72787 (+0.01914 vs baseline)
+[ghost] periodic vs end-of-run: +0.06730
+[ghost] VERDICT: periodic averaging does NOT compound -- keep it as an end-of-run step
+[ghost] per-injection gains: +0.0243, +0.0405, +0.1401, +0.0732, +0.0615, +0.0646
+[ghost] wrote results/ghost/repeat_average.json
