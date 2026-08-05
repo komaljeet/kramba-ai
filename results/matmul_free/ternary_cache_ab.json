@@ -1,0 +1,45 @@
+{
+  "issue": 131,
+  "checkpoint": "checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt",
+  "ternary_modules": 82,
+  "modules_patched": 82,
+  "tokens": 64,
+  "repeats": 7,
+  "baseline_tok_s": {
+    "mean": 26.554993295989828,
+    "std": 0.5289425732872948,
+    "min": 25.500994937248148,
+    "max": 27.19314521993213,
+    "samples": [
+      25.500994937248148,
+      26.453603830235178,
+      26.477456555682455,
+      26.6515996289993,
+      26.730518077948947,
+      26.87763482188266,
+      27.19314521993213
+    ]
+  },
+  "cached_tok_s": {
+    "mean": 53.64598798525738,
+    "std": 1.4887691701380743,
+    "min": 51.14704030857658,
+    "max": 55.01447955313014,
+    "samples": [
+      51.14704030857658,
+      52.07891289818235,
+      53.59799128128078,
+      54.20413174384517,
+      54.641659569574735,
+      54.837700542211905,
+      55.01447955313014
+    ]
+  },
+  "speedup": 2.0201845802521317,
+  "known_answer_cell": {
+    "claim": "caching a deterministic function of frozen weights is a no-op",
+    "max_abs_logit_diff": 0.0,
+    "bit_identical": true,
+    "valid": true
+  }
+}
