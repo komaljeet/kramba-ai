@@ -1522,3 +1522,82 @@ recovered. Recorded as a stated decision, not an omission; the harness supports 
 arms run concurrently instead of sequentially, and this becomes standard data-parallel training,
 which this repo already has (#65 DDP/FSDP). Nothing here argues against that; it argues against
 paying 3x the memory for it on one card.
+
+### Window fit — averaging the direction makes it WORSE, and that closes #124 (#126 follow-up, 2026-08-05)
+
+The one objection #126 never answered. Its oracle proved that no method can win by choosing
+*how far* to travel along the last delta — but it never left that direction. The maintainer's
+challenge was the right one: fit the *function* of the motion from a window of observed steps
+rather than extrapolating a single noisy delta, and do it where the premise holds (settled
+training, not the huge-PPL beginning). A window fit averages the per-step deltas, and averaging
+is the arithmetic that CANCELS their noise rather than amplifying it — the mechanism behind the
+one positive result in this epic (#128). If a denoised direction were usable, the whole family
+would reopen.
+
+`ghost/window_fit.py` streams a least-squares polynomial fit of each weight tensor against step
+number. The window is never stored: the normal equations need only the scalar moments `sum(u^p)`
+and tensor accumulators `sum(u^p * W_u)`, so a K-step window costs `degree+1` tensors instead of
+K checkpoints, and one accumulator set serves every degree. Accumulation runs on `W - W_ref`,
+never raw weights — per-step motion is ~1e-5 of a weight's magnitude, close enough to fp32
+epsilon that summing raw weights would grind away part of the signal being fitted. Verified
+against synthetic linear/quadratic trajectories: prediction error 4-7 orders below the motion,
+Gram solve in float64 (cond 4.6e2 at K=20/d=1 to 1.0e7 at K=50/d=2).
+
+Measured at the **settled anchor step 10,200** — #126's primary anchor, `--warmup-steps 200`
+from `edge_chinchilla20k/step10000`, AdamW constant LR 3e-4, batch 4 x seq 512, same fixed
+16-batch probe set. Windows K in {20, 50}, degrees {1, 2}, two prediction modes
+(`locked` = real anchor + fitted displacement; `fiteval` = the fit's own value, whose N=0 is a
+smoothed anchor), plus `last_delta` (#126 at gap 1) and a per-arm oracle that rescales the
+FITTED direction using the true future weights. 13 arms x 8 horizons.
+
+**The test was fair: real training gains 0.236 nats over the 500-step horizon (4.11941 ->
+3.88303), so the null control had real ground to lose.**
+
+**Not one arm beats frozen at any horizon.** Best result anywhere is `oracle_w50_d1` at N=1,
+4.12019 vs frozen 4.11941 — and that arm is allowed to see the answer.
+
+**The finding, which inverts the hypothesis.** Averaging did not denoise the direction; it
+destroyed it. Median cosine between predicted and true displacement at N=1:
+
+| arm | velocity estimate | median cos |
+|---|---|---:|
+| `last_delta` | 1 step | **+0.890** |
+| `w20_d2` | quadratic slope at the anchor | +0.628 |
+| `w20_d1` | mean over 20 steps | +0.433 |
+| `w50_d2` | quadratic over 50 | +0.340 |
+| `w50_d1` | mean over 50 steps | **+0.166** |
+
+Monotone in how much history is mixed in: **the more steps averaged, the worse the direction
+points.** The noise that averaging cancels is not separable from the only locally-valid part of
+the direction. A window mean estimates where the weights HAVE been going, which is not where
+they are ABOUT to go.
+
+**Why the window fit still beat `last_delta` in loss at large N — it moves less, not better.**
+At N=500 `w50_d1` travels 3.3x the true distance and `last_delta` 7.5x (loss 15.9 vs 13,661).
+That is a smaller wrong step. The repair for over-travel is exactly what the oracle does, and
+its fitted coefficient collapses toward zero on the same signature as #126:
+
+| N | oracle alpha (w50_d1) | oracle alpha (w20_d1) |
+|---:|---:|---:|
+| 1 | +0.293 | +0.561 |
+| 10 | +0.164 | +0.349 |
+| 100 | +0.014 | +0.038 |
+| 500 | +0.006 | +0.010 |
+
+**Secondary result — the averaging gain has a lower bound too.** The `fiteval` arm at N=0 is a
+smoothed anchor over 20-50 steps, and it LOSES to the raw anchor (4.12430 vs 4.11941), where
+#128's averaging over checkpoints 500 steps apart WON. #128 established the window must be short
+relative to the drift; this adds the other side — tens of steps is too short to cancel anything
+worth cancelling, and only lags the anchor. One anchor, recorded as an observation rather than a
+theory.
+
+**Verdict: #124 is closed, on mechanism rather than exhaustion.** #126 showed the step length
+cannot be fixed; this shows the direction cannot be improved either, and that the best available
+direction is the most recent delta — which is ridable for about one step. The part of weight
+motion recoverable from weight history is drift the optimizer's momentum already applies; the
+part that constitutes learning comes from gradients of unseen data. No fitting budget, window
+length, polynomial degree or adaptive schedule changes that.
+
+Artifacts: `results/ghost/window_fit.json`, `results/ghost/window_fit.log`. The 2.2 GB of target
+checkpoints under `results/ghost/series_windowfit/` were deleted after scoring; the run is
+reproducible in ~15 min via `python -m ghost.harness --window-fit`.

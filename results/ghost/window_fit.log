@@ -1,0 +1,202 @@
+[wf] loading base checkpoint C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/edge_chinchilla20k/edge_conversational_step10000.pt
+[wf] base_step=10000 anchor=10200 horizon=500 windows=[20, 50] degrees=[1, 2]
+Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked critical (_ssl.c:1081). Will retry later.
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[wf] data: {'mix_ratio': {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}, 'seq_len': 512, 'batch_size': 4, 'source': 'mixed_local', 'total_tokens': 1333955864, 'num_samples': 223757, 'num_batches': 55939}
+[wf] training 700 steps (200 warmup + 500 horizon)
+C:\Users\komal\Documents\Codes\kramba-ai-wt-windowfit\ghost\harness.py:1223: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\torch\csrc\autograd\generated\python_variable_methods.cpp:839.)
+  print(f"[wf] step {step} (u={u:+d})  loss {float(loss):.4f}  "
+[wf] step 10050 (u=-150)  loss 4.8545  1.13 steps/s
+[wf] step 10100 (u=-100)  loss 4.5170  1.17 steps/s
+[wf] step 10150 (u=-50)  loss 4.4319  1.18 steps/s
+[wf] step 10200 (u=+0)  loss 5.0207  1.12 steps/s
+[wf] step 10250 (u=+50)  loss 4.5892  1.14 steps/s
+[wf] step 10300 (u=+100)  loss 5.1026  1.15 steps/s
+[wf] step 10350 (u=+150)  loss 4.5576  1.16 steps/s
+[wf] step 10400 (u=+200)  loss 3.8869  1.18 steps/s
+[wf] step 10450 (u=+250)  loss 5.0510  1.20 steps/s
+[wf] step 10500 (u=+300)  loss 4.1876  1.20 steps/s
+[wf] step 10550 (u=+350)  loss 4.2153  1.21 steps/s
+[wf] step 10600 (u=+400)  loss 3.7317  1.22 steps/s
+[wf] step 10650 (u=+450)  loss 4.2545  1.22 steps/s
+[wf] step 10700 (u=+500)  loss 4.6058  1.23 steps/s
+[wf] training done in 9.5 min
+[wf] fit window=20 degree=1: 20 obs, cond 4.642e+02, 221 tensors
+[wf] fit window=20 degree=2: 20 obs, cond 2.185e+05, 221 tensors
+[wf] fit window=50 degree=1: 50 obs, cond 3.145e+03, 221 tensors
+[wf] fit window=50 degree=2: 50 obs, cond 9.954e+06, 221 tensors
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[wf] 16 fixed probe batches (4x512)
+[wf] frozen (anchor, null control) loss 4.11941
+[wf] last_delta plan (gap 1): 100.00% of params extrapolated
+
+[wf] N=0  real 4.11941   frozen 4.11941
+        w20_d2_fiteval                  4.12430  loses to frozen
+        w20_d1_fiteval                  4.13078  loses to frozen
+        w50_d1_fiteval                  4.13131  loses to frozen
+        w50_d2_fiteval                  4.14279  loses to frozen
+
+[wf] N=1  real 4.11900   frozen 4.11941
+        oracle_w50_d1_locked            4.12019  loses to frozen
+        oracle_w20_d2_locked            4.12124  loses to frozen
+        oracle_w50_d2_locked            4.12145  loses to frozen
+        oracle_w20_d1_locked            4.12163  loses to frozen
+        w50_d1_locked                   4.12196  loses to frozen  cos +0.1655
+        last_delta                      4.12216  loses to frozen  cos +0.8904
+        w20_d1_locked                   4.12275  loses to frozen  cos +0.4325
+        w50_d2_locked                   4.12451  loses to frozen  cos +0.3402
+        w20_d2_locked                   4.12517  loses to frozen  cos +0.6282
+        w20_d2_fiteval                  4.13203  loses to frozen  cos +0.2259
+        w50_d1_fiteval                  4.13352  loses to frozen  cos -0.5139
+        w20_d1_fiteval                  4.13419  loses to frozen  cos -0.4096
+        w50_d2_fiteval                  4.15124  loses to frozen  cos -0.2693
+
+[wf] N=2  real 4.11945   frozen 4.11941
+        oracle_w50_d1_locked            4.12183  loses to frozen
+        oracle_w50_d2_locked            4.12377  loses to frozen
+        oracle_w20_d1_locked            4.12433  loses to frozen
+        w50_d1_locked                   4.12464  loses to frozen  cos +0.1603
+        last_delta                      4.12556  loses to frozen  cos +0.8660
+        oracle_w20_d2_locked            4.12588  loses to frozen
+        w20_d1_locked                   4.12736  loses to frozen  cos +0.4180
+        w50_d2_locked                   4.13052  loses to frozen  cos +0.3310
+        w20_d2_locked                   4.13559  loses to frozen  cos +0.6018
+        w50_d1_fiteval                  4.13710  loses to frozen  cos -0.4724
+        w20_d1_fiteval                  4.14068  loses to frozen  cos -0.2486
+        w20_d2_fiteval                  4.14565  loses to frozen  cos +0.3741
+        w50_d2_fiteval                  4.16129  loses to frozen  cos -0.1611
+
+[wf] N=5  real 4.11573   frozen 4.11941
+        oracle_w50_d1_locked            4.12464  loses to frozen
+        oracle_w50_d2_locked            4.12923  loses to frozen
+        oracle_w20_d1_locked            4.13255  loses to frozen
+        w50_d1_locked                   4.13339  loses to frozen  cos +0.1421
+        oracle_w20_d2_locked            4.14100  loses to frozen
+        w20_d1_locked                   4.14536  loses to frozen  cos +0.3807
+        w50_d1_fiteval                  4.14908  loses to frozen  cos -0.3631
+        w50_d2_locked                   4.15842  loses to frozen  cos +0.2981
+        last_delta                      4.15911  loses to frozen  cos +0.7795
+        w20_d1_fiteval                  4.16223  loses to frozen  cos +0.0247
+        w20_d2_locked                   4.20002  loses to frozen  cos +0.5399
+        w50_d2_fiteval                  4.20045  loses to frozen  cos +0.0250
+        w20_d2_fiteval                  4.21455  loses to frozen  cos +0.4575
+
+[wf] N=10  real 4.10844   frozen 4.11941
+        oracle_w50_d1_locked            4.12797  loses to frozen
+        oracle_w50_d2_locked            4.13851  loses to frozen
+        oracle_w20_d1_locked            4.14355  loses to frozen
+        w50_d1_locked                   4.14871  loses to frozen  cos +0.1083
+        oracle_w20_d2_locked            4.16403  loses to frozen
+        w50_d1_fiteval                  4.17239  loses to frozen  cos -0.2162
+        w20_d1_locked                   4.18437  loses to frozen  cos +0.3169
+        w20_d1_fiteval                  4.20326  loses to frozen  cos +0.1570
+        w50_d2_locked                   4.24478  loses to frozen  cos +0.2512
+        w50_d2_fiteval                  4.30703  loses to frozen  cos +0.1221
+        w20_d2_locked                   4.44325  loses to frozen  cos +0.4440
+        w20_d2_fiteval                  4.46381  loses to frozen  cos +0.4161
+        last_delta                      4.81855  loses to frozen  cos +0.6190
+
+[wf] N=50  real 4.10919   frozen 4.11941
+        oracle_w50_d1_locked            4.14299  loses to frozen
+        oracle_w50_d2_locked            4.18325  loses to frozen
+        oracle_w20_d1_locked            4.20076  loses to frozen
+        oracle_w20_d2_locked            4.22951  loses to frozen
+        w50_d1_locked                   4.40320  loses to frozen  cos +0.0342
+        w50_d1_fiteval                  4.47075  loses to frozen  cos -0.0053
+        w20_d1_locked                   4.88694  loses to frozen  cos +0.1223
+        w20_d1_fiteval                  4.92961  loses to frozen  cos +0.1092
+        w50_d2_locked                   7.15886  loses to frozen  cos +0.0995
+        w50_d2_fiteval                  7.30624  loses to frozen  cos +0.0921
+        w20_d2_locked                  13.99711  loses to frozen  cos +0.1586
+        w20_d2_fiteval                 14.13852  loses to frozen  cos +0.1578
+        last_delta                    110.44627  loses to frozen  cos +0.2134
+
+[wf] N=100  real 4.08627   frozen 4.11941
+        oracle_w50_d1_locked            4.14314  loses to frozen
+        oracle_w50_d2_locked            4.19637  loses to frozen
+        oracle_w20_d2_locked            4.21654  loses to frozen
+        oracle_w20_d1_locked            4.21715  loses to frozen
+        w50_d1_locked                   5.05348  loses to frozen  cos +0.0215
+        w50_d1_fiteval                  5.15879  loses to frozen  cos +0.0058
+        w20_d1_locked                   6.36202  loses to frozen  cos +0.0772
+        w20_d1_fiteval                  6.40659  loses to frozen  cos +0.0725
+        w50_d2_locked                  11.10397  loses to frozen  cos +0.0622
+        w50_d2_fiteval                 11.17803  loses to frozen  cos +0.0604
+        w20_d2_fiteval                 34.30019  loses to frozen  cos +0.0999
+        w20_d2_locked                  34.36568  loses to frozen  cos +0.1001
+        last_delta                    380.00277  loses to frozen  cos +0.1418
+
+[wf] N=500  real 3.88303   frozen 4.11941
+        oracle_w50_d1_locked            4.13213  loses to frozen
+        oracle_w20_d2_locked            4.17106  loses to frozen
+        oracle_w20_d1_locked            4.18548  loses to frozen
+        oracle_w50_d2_locked            4.19363  loses to frozen
+        w50_d1_locked                  15.88318  loses to frozen  cos +0.0209
+        w50_d1_fiteval                 16.01584  loses to frozen  cos +0.0197
+        w20_d1_locked                  16.16309  loses to frozen  cos +0.0466
+        w20_d1_fiteval                 16.24253  loses to frozen  cos +0.0462
+        w50_d2_locked                 156.21755  loses to frozen  cos +0.0298
+        w50_d2_fiteval                157.07622  loses to frozen  cos +0.0298
+        w20_d2_fiteval                701.83434  loses to frozen  cos +0.0425
+        w20_d2_locked                 705.17619  loses to frozen  cos +0.0425
+        last_delta                  13661.37665  loses to frozen  cos +0.0656
+
+[wf] GATE N=10: best arm oracle_w50_d1_locked at 4.12797 vs frozen 4.11941 -> LOSES to frozen
+[wf] wrote results/ghost/window_fit.json

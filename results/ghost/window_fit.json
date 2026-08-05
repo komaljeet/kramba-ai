@@ -1,0 +1,885 @@
+{
+  "mode": "window_fit",
+  "base_checkpoint": "C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/edge_chinchilla20k/edge_conversational_step10000.pt",
+  "base_step": 10000,
+  "anchor_step": 10200,
+  "warmup_steps": 200,
+  "windows": [
+    20,
+    50
+  ],
+  "degrees": [
+    1,
+    2
+  ],
+  "n_values": [
+    0,
+    1,
+    2,
+    5,
+    10,
+    50,
+    100,
+    500
+  ],
+  "lr": 0.0003,
+  "batch_size": 4,
+  "seq_len": 512,
+  "seed": 7,
+  "optimizer": "AdamW(fused, wd=0.01), constant LR",
+  "optimizer_state_policy": "not carried - a jump starts with cold moments",
+  "probe": {
+    "batches": 16,
+    "batch_size": 4,
+    "seq_len": 512,
+    "seed": 1234
+  },
+  "fits": {
+    "w20_d1": {
+      "degree": 1,
+      "window": 20,
+      "n_observations": 20,
+      "n_fitted": 221,
+      "n_held": 0,
+      "condition_number": 464.1707779513494
+    },
+    "w20_d2": {
+      "degree": 2,
+      "window": 20,
+      "n_observations": 20,
+      "n_fitted": 221,
+      "n_held": 0,
+      "condition_number": 218450.62616766305
+    },
+    "w50_d1": {
+      "degree": 1,
+      "window": 50,
+      "n_observations": 50,
+      "n_fitted": 221,
+      "n_held": 0,
+      "condition_number": 3144.651542744019
+    },
+    "w50_d2": {
+      "degree": 2,
+      "window": 50,
+      "n_observations": 50,
+      "n_fitted": 221,
+      "n_held": 0,
+      "condition_number": 9954097.025708657
+    }
+  },
+  "results": [
+    {
+      "N": 0,
+      "target_step": 10200,
+      "real_loss": 4.119413673877716,
+      "frozen_loss": 4.119413673877716,
+      "arms": {
+        "w20_d1_fiteval": 4.130783453583717,
+        "w20_d2_fiteval": 4.124303877353668,
+        "w50_d1_fiteval": 4.131313502788544,
+        "w50_d2_fiteval": 4.142791837453842
+      },
+      "diagnostics": {},
+      "best_arm": "w20_d2_fiteval",
+      "best_arm_loss": 4.124303877353668,
+      "any_arm_beats_frozen": false
+    },
+    {
+      "N": 1,
+      "target_step": 10201,
+      "real_loss": 4.119001090526581,
+      "frozen_loss": 4.119413673877716,
+      "arms": {
+        "last_delta": 4.122159451246262,
+        "w20_d1_locked": 4.122748374938965,
+        "oracle_w20_d1_locked": 4.121629148721695,
+        "w20_d1_fiteval": 4.134187832474709,
+        "w20_d2_locked": 4.125170141458511,
+        "oracle_w20_d2_locked": 4.121239796280861,
+        "w20_d2_fiteval": 4.13202740252018,
+        "w50_d1_locked": 4.121961742639542,
+        "oracle_w50_d1_locked": 4.120188742876053,
+        "w50_d1_fiteval": 4.133520245552063,
+        "w50_d2_locked": 4.124510437250137,
+        "oracle_w50_d2_locked": 4.121452301740646,
+        "w50_d2_fiteval": 4.151242479681969
+      },
+      "diagnostics": {
+        "last_delta": {
+          "n_tensors": 221,
+          "median_cos": 0.89037600406951,
+          "min_cos": 0.6484330730469651,
+          "max_cos": 0.9866025002160512,
+          "median_norm_ratio": 1.0261369782237262
+        },
+        "w20_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.4324958524710184,
+          "min_cos": -0.058526702592688384,
+          "max_cos": 0.9269693644889964,
+          "median_norm_ratio": 0.763628837459795
+        },
+        "oracle_w20_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.5608896623802677,
+          "alpha_min": -0.09250071410242862,
+          "alpha_max": 1.7056081300142485
+        },
+        "w20_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": -0.40960754972424823,
+          "min_cos": -0.9301296855600197,
+          "max_cos": 0.5106557970681297,
+          "median_norm_ratio": 2.870648647582239
+        },
+        "w20_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.6281715773691984,
+          "min_cos": 0.03295100838404643,
+          "max_cos": 0.9345111457086801,
+          "median_norm_ratio": 1.1989821640769007
+        },
+        "oracle_w20_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.5250226879848714,
+          "alpha_min": 0.018030815063145664,
+          "alpha_max": 1.1271299527358354
+        },
+        "w20_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.22593242728502677,
+          "min_cos": -0.5097691696021796,
+          "max_cos": 0.7706412542006497,
+          "median_norm_ratio": 2.0904689555178226
+        },
+        "w50_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.16547888188683982,
+          "min_cos": -0.1654055901762358,
+          "max_cos": 0.8941442123670131,
+          "median_norm_ratio": 0.563603263460415
+        },
+        "oracle_w50_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.29326492436228524,
+          "alpha_min": -0.44286526530738485,
+          "alpha_max": 1.4203840352175785
+        },
+        "w50_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": -0.5139423681788723,
+          "min_cos": -0.937267979898637,
+          "max_cos": 0.1853640728829064,
+          "median_norm_ratio": 7.121563813904134
+        },
+        "w50_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.34024858036893924,
+          "min_cos": -0.08517625462571878,
+          "max_cos": 0.886935705510884,
+          "median_norm_ratio": 1.0699232228623903
+        },
+        "oracle_w50_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.3162515261023456,
+          "alpha_min": -0.0969471480143815,
+          "alpha_max": 1.4428674313112588
+        },
+        "w50_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": -0.2693090075944976,
+          "min_cos": -0.7891352246709011,
+          "max_cos": 0.2661813860091741,
+          "median_norm_ratio": 4.958674951531001
+        }
+      },
+      "best_arm": "oracle_w50_d1_locked",
+      "best_arm_loss": 4.120188742876053,
+      "any_arm_beats_frozen": false
+    },
+    {
+      "N": 2,
+      "target_step": 10202,
+      "real_loss": 4.119445383548737,
+      "frozen_loss": 4.119413673877716,
+      "arms": {
+        "last_delta": 4.125558838248253,
+        "w20_d1_locked": 4.127359956502914,
+        "oracle_w20_d1_locked": 4.124327749013901,
+        "w20_d1_fiteval": 4.140684545040131,
+        "w20_d2_locked": 4.135593444108963,
+        "oracle_w20_d2_locked": 4.12587633728981,
+        "w20_d2_fiteval": 4.145649269223213,
+        "w50_d1_locked": 4.124641805887222,
+        "oracle_w50_d1_locked": 4.121834710240364,
+        "w50_d1_fiteval": 4.137098491191864,
+        "w50_d2_locked": 4.130517691373825,
+        "oracle_w50_d2_locked": 4.12376968562603,
+        "w50_d2_fiteval": 4.161286652088165
+      },
+      "diagnostics": {
+        "last_delta": {
+          "n_tensors": 221,
+          "median_cos": 0.8660160944649545,
+          "min_cos": 0.6444439331712193,
+          "max_cos": 0.9597871808958753,
+          "median_norm_ratio": 1.050971527403322
+        },
+        "w20_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.4179887261787722,
+          "min_cos": -0.07806008675299342,
+          "max_cos": 0.9263145678114959,
+          "median_norm_ratio": 0.783227404716235
+        },
+        "oracle_w20_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.5304744611924544,
+          "alpha_min": -0.1192676526292144,
+          "alpha_max": 1.6582000613340484
+        },
+        "w20_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": -0.24858816886655316,
+          "min_cos": -0.885150890379196,
+          "max_cos": 0.7218380686913536,
+          "median_norm_ratio": 1.6735526218129473
+        },
+        "w20_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.6018259327921452,
+          "min_cos": -0.008638880131523368,
+          "max_cos": 0.9284067398376881,
+          "median_norm_ratio": 1.2682969875004717
+        },
+        "oracle_w20_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.47764372877694233,
+          "alpha_min": -0.00472203582294928,
+          "alpha_max": 1.0779014204386068
+        },
+        "w20_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.3741170117165373,
+          "min_cos": -0.18116785537045138,
+          "max_cos": 0.8494181369221402,
+          "median_norm_ratio": 1.6541344817919013
+        },
+        "w50_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.16029592223320066,
+          "min_cos": -0.17995734940968677,
+          "max_cos": 0.8952629094619312,
+          "median_norm_ratio": 0.5779951942906647
+        },
+        "oracle_w50_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.2770194984636771,
+          "alpha_min": -0.5184699033345137,
+          "alpha_max": 1.3688986480898107
+        },
+        "w50_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": -0.4723770099762313,
+          "min_cos": -0.9399713568393754,
+          "max_cos": 0.35638101548746837,
+          "median_norm_ratio": 3.7613235180375457
+        },
+        "w50_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.3309762700801889,
+          "min_cos": -0.08279134424117156,
+          "max_cos": 0.8841680282191807,
+          "median_norm_ratio": 1.11414635816012
+        },
+        "oracle_w50_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.2970404833484976,
+          "alpha_min": -0.0896085991734449,
+          "alpha_max": 1.3134548135405335
+        },
+        "w50_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": -0.16106808235949258,
+          "min_cos": -0.6575792156668779,
+          "max_cos": 0.5082313465820144,
+          "median_norm_ratio": 2.947505968672207
+        }
+      },
+      "best_arm": "oracle_w50_d1_locked",
+      "best_arm_loss": 4.121834710240364,
+      "any_arm_beats_frozen": false
+    },
+    {
+      "N": 5,
+      "target_step": 10205,
+      "real_loss": 4.115729793906212,
+      "frozen_loss": 4.119413673877716,
+      "arms": {
+        "last_delta": 4.159111455082893,
+        "w20_d1_locked": 4.145357072353363,
+        "oracle_w20_d1_locked": 4.132553458213806,
+        "w20_d1_fiteval": 4.162230342626572,
+        "w20_d2_locked": 4.20001645386219,
+        "oracle_w20_d2_locked": 4.140998482704163,
+        "w20_d2_fiteval": 4.214551076292992,
+        "w50_d1_locked": 4.133389085531235,
+        "oracle_w50_d1_locked": 4.124643832445145,
+        "w50_d1_fiteval": 4.149083375930786,
+        "w50_d2_locked": 4.158418878912926,
+        "oracle_w50_d2_locked": 4.129225268959999,
+        "w50_d2_fiteval": 4.200449764728546
+      },
+      "diagnostics": {
+        "last_delta": {
+          "n_tensors": 221,
+          "median_cos": 0.7794549997229946,
+          "min_cos": 0.3470612981169909,
+          "max_cos": 0.9570532878375698,
+          "median_norm_ratio": 1.1337916998494457
+        },
+        "w20_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.380736662583172,
+          "min_cos": -0.13402731589065406,
+          "max_cos": 0.9245783134913017,
+          "median_norm_ratio": 0.8402570114061259
+        },
+        "oracle_w20_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.45048768821751123,
+          "alpha_min": -0.15348768166886795,
+          "alpha_max": 1.537485572915554
+        },
+        "w20_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.02471423493804206,
+          "min_cos": -0.564857588685355,
+          "max_cos": 0.859514377593793,
+          "median_norm_ratio": 1.1041482081204308
+        },
+        "w20_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.539948846074008,
+          "min_cos": -0.02015660809469784,
+          "max_cos": 0.9079817707981281,
+          "median_norm_ratio": 1.4792015326093844
+        },
+        "oracle_w20_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.3668337130448958,
+          "alpha_min": -0.009775146613110056,
+          "alpha_max": 0.9447878813307595
+        },
+        "w20_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.45748812637208797,
+          "min_cos": -0.09594158909059139,
+          "max_cos": 0.8807842564324416,
+          "median_norm_ratio": 1.6168183647144434
+        },
+        "w50_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.14205593074932907,
+          "min_cos": -0.2102472036823664,
+          "max_cos": 0.8993638703266522,
+          "median_norm_ratio": 0.6156188701908323
+        },
+        "oracle_w50_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.23090278532046604,
+          "alpha_min": -1.0075325969395754,
+          "alpha_max": 1.215266397733171
+        },
+        "w50_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": -0.36308685081543735,
+          "min_cos": -0.9272994831565018,
+          "max_cos": 0.656376302549304,
+          "median_norm_ratio": 1.7832694540984857
+        },
+        "w50_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.2981299744338007,
+          "min_cos": -0.2962801920380185,
+          "max_cos": 0.8749048135067385,
+          "median_norm_ratio": 1.2533843975603185
+        },
+        "oracle_w50_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.24045810443020138,
+          "alpha_min": -0.27432698068875877,
+          "alpha_max": 1.0716868552823855
+        },
+        "w50_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.024969477953340077,
+          "min_cos": -0.3992456640330412,
+          "max_cos": 0.7319979258117361,
+          "median_norm_ratio": 1.9142003992767405
+        }
+      },
+      "best_arm": "oracle_w50_d1_locked",
+      "best_arm_loss": 4.124643832445145,
+      "any_arm_beats_frozen": false
+    },
+    {
+      "N": 10,
+      "target_step": 10210,
+      "real_loss": 4.108436614274979,
+      "frozen_loss": 4.119413673877716,
+      "arms": {
+        "last_delta": 4.818550333380699,
+        "w20_d1_locked": 4.184365347027779,
+        "oracle_w20_d1_locked": 4.143546089529991,
+        "w20_d1_fiteval": 4.203256219625473,
+        "w20_d2_locked": 4.44325065612793,
+        "oracle_w20_d2_locked": 4.164033234119415,
+        "w20_d2_fiteval": 4.46381314098835,
+        "w50_d1_locked": 4.148709535598755,
+        "oracle_w50_d1_locked": 4.127972990274429,
+        "w50_d1_fiteval": 4.172390833497047,
+        "w50_d2_locked": 4.244782015681267,
+        "oracle_w50_d2_locked": 4.138506636023521,
+        "w50_d2_fiteval": 4.307027265429497
+      },
+      "diagnostics": {
+        "last_delta": {
+          "n_tensors": 221,
+          "median_cos": 0.6189968709734354,
+          "min_cos": 0.10210002121734893,
+          "max_cos": 0.9250334895407692,
+          "median_norm_ratio": 1.2465981103893093
+        },
+        "w20_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.3168664285221554,
+          "min_cos": -0.13882387166337073,
+          "max_cos": 0.9197976363233356,
+          "median_norm_ratio": 0.9178020724214938
+        },
+        "oracle_w20_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.3489471036915856,
+          "alpha_min": -0.16105385594602759,
+          "alpha_max": 1.1351474309300769
+        },
+        "w20_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.15702488099391906,
+          "min_cos": -0.44516182700775325,
+          "max_cos": 0.8938183876950104,
+          "median_norm_ratio": 1.0217547392793096
+        },
+        "w20_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.44400185873404757,
+          "min_cos": -0.07138395601225572,
+          "max_cos": 0.8699196987968305,
+          "median_norm_ratio": 1.8379897171087478
+        },
+        "oracle_w20_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.24282205541166382,
+          "alpha_min": -0.0373566362762609,
+          "alpha_max": 0.8084121177526322
+        },
+        "w20_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.41606107577940693,
+          "min_cos": -0.1105742411733,
+          "max_cos": 0.8577710007821052,
+          "median_norm_ratio": 1.9068086131684843
+        },
+        "w50_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.10828914577804942,
+          "min_cos": -0.3108660865617678,
+          "max_cos": 0.9005134639479185,
+          "median_norm_ratio": 0.6698084132849245
+        },
+        "oracle_w50_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.16421329220418598,
+          "alpha_min": -1.703456847725693,
+          "alpha_max": 1.3983546723735145
+        },
+        "w50_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": -0.21621852886658446,
+          "min_cos": -0.853419324152069,
+          "max_cos": 0.7953090701890383,
+          "median_norm_ratio": 1.1905878298823804
+        },
+        "w50_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.25118366627517635,
+          "min_cos": -0.31589432788347377,
+          "max_cos": 0.8570851679473799,
+          "median_norm_ratio": 1.459851394212433
+        },
+        "oracle_w50_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.17180407174909165,
+          "alpha_min": -0.24658180040470287,
+          "alpha_max": 0.9667846627092442
+        },
+        "w50_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.12214921053006329,
+          "min_cos": -0.3322594015129653,
+          "max_cos": 0.7943432380153761,
+          "median_norm_ratio": 1.7671760859051517
+        }
+      },
+      "best_arm": "oracle_w50_d1_locked",
+      "best_arm_loss": 4.127972990274429,
+      "any_arm_beats_frozen": false
+    },
+    {
+      "N": 50,
+      "target_step": 10250,
+      "real_loss": 4.109190195798874,
+      "frozen_loss": 4.119413673877716,
+      "arms": {
+        "last_delta": 110.44627380371094,
+        "w20_d1_locked": 4.88694404065609,
+        "oracle_w20_d1_locked": 4.200760930776596,
+        "w20_d1_fiteval": 4.929605096578598,
+        "w20_d2_locked": 13.997110545635223,
+        "oracle_w20_d2_locked": 4.229513019323349,
+        "w20_d2_fiteval": 14.138518273830414,
+        "w50_d1_locked": 4.403197690844536,
+        "oracle_w50_d1_locked": 4.142989948391914,
+        "w50_d1_fiteval": 4.47074992954731,
+        "w50_d2_locked": 7.158858388662338,
+        "oracle_w50_d2_locked": 4.1832535564899445,
+        "w50_d2_fiteval": 7.306236773729324
+      },
+      "diagnostics": {
+        "last_delta": {
+          "n_tensors": 221,
+          "median_cos": 0.21338279786927397,
+          "min_cos": -0.7729175234810408,
+          "max_cos": 0.49645834288012747,
+          "median_norm_ratio": 2.0707621397502827
+        },
+        "w20_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.12231150202050091,
+          "min_cos": -0.7001720678852303,
+          "max_cos": 0.9104388439593882,
+          "median_norm_ratio": 1.468729871270974
+        },
+        "oracle_w20_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.08263062955721749,
+          "alpha_min": -0.44675335413304557,
+          "alpha_max": 0.9002889893630978
+        },
+        "w20_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.10915067906175817,
+          "min_cos": -0.7162731513923947,
+          "max_cos": 0.908002611777881,
+          "median_norm_ratio": 1.4900735825476488
+        },
+        "w20_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.1585707823586986,
+          "min_cos": -0.5208484137927233,
+          "max_cos": 0.5673323657282566,
+          "median_norm_ratio": 6.2827685151992005
+        },
+        "oracle_w20_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.025588489068795198,
+          "alpha_min": -0.09432346712178642,
+          "alpha_max": 0.36434459597201924
+        },
+        "w20_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.15780698837265122,
+          "min_cos": -0.5238115861666754,
+          "max_cos": 0.5662254813653231,
+          "median_norm_ratio": 6.300695002268388
+        },
+        "w50_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.034187010196733716,
+          "min_cos": -0.5879753259672275,
+          "max_cos": 0.911666034546035,
+          "median_norm_ratio": 1.0772688436400708
+        },
+        "oracle_w50_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.031562502764807196,
+          "alpha_min": -0.5559623414737522,
+          "alpha_max": 2.2274785540888202
+        },
+        "w50_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": -0.005327766445283729,
+          "min_cos": -0.4528459295391879,
+          "max_cos": 0.9007230021838035,
+          "median_norm_ratio": 1.1720633220158316
+        },
+        "w50_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.09947863773584437,
+          "min_cos": -0.4412930685832416,
+          "max_cos": 0.7156742519501339,
+          "median_norm_ratio": 3.6365512682078336
+        },
+        "oracle_w50_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.02739366560687755,
+          "alpha_min": -0.1274889532341242,
+          "alpha_max": 0.5892105627317085
+        },
+        "w50_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.09205938614602768,
+          "min_cos": -0.43968763927958066,
+          "max_cos": 0.7341549288685895,
+          "median_norm_ratio": 3.7177286206136544
+        }
+      },
+      "best_arm": "oracle_w50_d1_locked",
+      "best_arm_loss": 4.142989948391914,
+      "any_arm_beats_frozen": false
+    },
+    {
+      "N": 100,
+      "target_step": 10300,
+      "real_loss": 4.086272329092026,
+      "frozen_loss": 4.119413673877716,
+      "arms": {
+        "last_delta": 380.00276947021484,
+        "w20_d1_locked": 6.362018823623657,
+        "oracle_w20_d1_locked": 4.217146798968315,
+        "w20_d1_fiteval": 6.406590610742569,
+        "w20_d2_locked": 34.36568284034729,
+        "oracle_w20_d2_locked": 4.216535195708275,
+        "w20_d2_fiteval": 34.30018877983093,
+        "w50_d1_locked": 5.053475573658943,
+        "oracle_w50_d1_locked": 4.1431447714567184,
+        "w50_d1_fiteval": 5.158791825175285,
+        "w50_d2_locked": 11.103966295719147,
+        "oracle_w50_d2_locked": 4.196365937590599,
+        "w50_d2_fiteval": 11.178029596805573
+      },
+      "diagnostics": {
+        "last_delta": {
+          "n_tensors": 221,
+          "median_cos": 0.14177282706243763,
+          "min_cos": -0.4808252454411045,
+          "max_cos": 0.45075650382279786,
+          "median_norm_ratio": 2.9021845565454147
+        },
+        "w20_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.0772316887226268,
+          "min_cos": -0.8221511828977718,
+          "max_cos": 0.8974277818899766,
+          "median_norm_ratio": 2.0128291560415525
+        },
+        "oracle_w20_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.03774200260092248,
+          "alpha_min": -0.3798717320102998,
+          "alpha_max": 0.8453181976574891
+        },
+        "w20_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.07253328062475199,
+          "min_cos": -0.8287723974826711,
+          "max_cos": 0.8964797952098083,
+          "median_norm_ratio": 2.02944906839764
+        },
+        "w20_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.10010224581837869,
+          "min_cos": -0.3053479433746844,
+          "max_cos": 0.5644464503035098,
+          "median_norm_ratio": 14.338523359048104
+        },
+        "oracle_w20_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.006959196102936588,
+          "alpha_min": -0.01717996686961119,
+          "alpha_max": 0.1402081122479072
+        },
+        "w20_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.09990932671966407,
+          "min_cos": -0.3071215626204158,
+          "max_cos": 0.5638565771885106,
+          "median_norm_ratio": 14.349783435873249
+        },
+        "w50_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.02150010248509529,
+          "min_cos": -0.6363105458045609,
+          "max_cos": 0.9034543080021125,
+          "median_norm_ratio": 1.4782214992900236
+        },
+        "oracle_w50_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.0139255840767168,
+          "alpha_min": -0.46208482346664814,
+          "alpha_max": 1.6259469062320098
+        },
+        "w50_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.0057729302734665505,
+          "min_cos": -0.5847088160698047,
+          "max_cos": 0.8990906312490758,
+          "median_norm_ratio": 1.5324217966119715
+        },
+        "w50_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.06216977043254137,
+          "min_cos": -0.5497941625360034,
+          "max_cos": 0.7495527279803986,
+          "median_norm_ratio": 7.3107973163412305
+        },
+        "oracle_w50_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.008524970983060643,
+          "alpha_min": -0.07686978886106341,
+          "alpha_max": 0.34189288673897367
+        },
+        "w50_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.06042857302044129,
+          "min_cos": -0.5499791298397606,
+          "max_cos": 0.7435885036474688,
+          "median_norm_ratio": 7.358293857436795
+        }
+      },
+      "best_arm": "oracle_w50_d1_locked",
+      "best_arm_loss": 4.1431447714567184,
+      "any_arm_beats_frozen": false
+    },
+    {
+      "N": 500,
+      "target_step": 10700,
+      "real_loss": 3.8830275386571884,
+      "frozen_loss": 4.119413673877716,
+      "arms": {
+        "last_delta": 13661.376647949219,
+        "w20_d1_locked": 16.16308730840683,
+        "oracle_w20_d1_locked": 4.185479372739792,
+        "w20_d1_fiteval": 16.242534816265106,
+        "w20_d2_locked": 705.1761856079102,
+        "oracle_w20_d2_locked": 4.1710620522499084,
+        "w20_d2_fiteval": 701.8343391418457,
+        "w50_d1_locked": 15.883178651332855,
+        "oracle_w50_d1_locked": 4.13213349878788,
+        "w50_d1_fiteval": 16.015842378139496,
+        "w50_d2_locked": 156.2175521850586,
+        "oracle_w50_d2_locked": 4.193626284599304,
+        "w50_d2_fiteval": 157.07621955871582
+      },
+      "diagnostics": {
+        "last_delta": {
+          "n_tensors": 221,
+          "median_cos": 0.06563901971510022,
+          "min_cos": -0.453158512705356,
+          "max_cos": 0.5167911646095167,
+          "median_norm_ratio": 7.452657036796957
+        },
+        "w20_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.046637428603064766,
+          "min_cos": -0.2873750529448243,
+          "max_cos": 0.805055576350907,
+          "median_norm_ratio": 4.4668140877120335
+        },
+        "oracle_w20_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.010406890862359516,
+          "alpha_min": -0.07994037588412424,
+          "alpha_max": 0.5742403883032623
+        },
+        "w20_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.0461710999013916,
+          "min_cos": -0.2850906391760147,
+          "max_cos": 0.8049324550605789,
+          "median_norm_ratio": 4.4734295585223105
+        },
+        "w20_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.042519425392859245,
+          "min_cos": -0.43237277100160126,
+          "max_cos": 0.6165383372695196,
+          "median_norm_ratio": 137.67962802230946
+        },
+        "oracle_w20_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.00030973103893589665,
+          "alpha_min": -0.0019082463999534288,
+          "alpha_max": 0.004341969418412867
+        },
+        "w20_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.04251717819620981,
+          "min_cos": -0.4324071112332204,
+          "max_cos": 0.6165489741441991,
+          "median_norm_ratio": 137.68516450303656
+        },
+        "w50_d1_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.02085171619694598,
+          "min_cos": -0.5545044606491847,
+          "max_cos": 0.8191759275326281,
+          "median_norm_ratio": 3.2958360393215473
+        },
+        "oracle_w50_d1_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.0063705840119971545,
+          "alpha_min": -0.2993259968701023,
+          "alpha_max": 0.5803979448034337
+        },
+        "w50_d1_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.019701484585458673,
+          "min_cos": -0.5847737329410316,
+          "max_cos": 0.8186598171747936,
+          "median_norm_ratio": 3.321876602419798
+        },
+        "w50_d2_locked": {
+          "n_tensors": 221,
+          "median_cos": 0.02984329081563462,
+          "min_cos": -0.14620816603337883,
+          "max_cos": 0.6781987403411193,
+          "median_norm_ratio": 58.64321642793734
+        },
+        "oracle_w50_d2_locked": {
+          "n_tensors_fitted": 221,
+          "alpha_median": 0.0005121420747801994,
+          "alpha_min": -0.0017772546293093163,
+          "alpha_max": 0.010353754018926726
+        },
+        "w50_d2_fiteval": {
+          "n_tensors": 221,
+          "median_cos": 0.029801947680164042,
+          "min_cos": -0.14634951567547388,
+          "max_cos": 0.6777059621514597,
+          "median_norm_ratio": 58.66080930096769
+        }
+      },
+      "best_arm": "oracle_w50_d1_locked",
+      "best_arm_loss": 4.13213349878788,
+      "any_arm_beats_frozen": false
+    }
+  ],
+  "gate": {
+    "N": 10,
+    "best_arm": "oracle_w50_d1_locked",
+    "beats_frozen": false
+  }
+}
