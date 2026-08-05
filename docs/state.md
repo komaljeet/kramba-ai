@@ -1601,3 +1601,89 @@ length, polynomial degree or adaptive schedule changes that.
 Artifacts: `results/ghost/window_fit.json`, `results/ghost/window_fit.log`. The 2.2 GB of target
 checkpoints under `results/ghost/series_windowfit/` were deleted after scoring; the run is
 reproducible in ~15 min via `python -m ghost.harness --window-fit`.
+
+## EdgeHVN decode ran at half speed — ternary weights re-derived every token (Issue #131, 2026-08-05)
+
+Opened to scope a MatMul-free integration (Zhu et al. 2024) into EdgeHVN's projection layers.
+The **bounding profile that was meant to decide whether to build it found a 2x speedup already
+sitting in the existing code**, and retired the original plan on the way.
+
+**The mechanism.** `TernaryLinear.forward` called `ternary_quantize_ste(self.weight)` on every
+invocation — `abs -> mean -> div -> round -> clamp -> mul -> sub -> add` across the **entire
+weight matrix**. In training that cost amortizes over `batch x seq` (4 x 512 = 2,048 tokens per
+forward). In incremental decode a forward pass **is one token**, so the same O(d^2) cost is paid
+per token, against a matvec that is also O(d^2) — the same order as the work it feeds. The
+weights are frozen at inference, so all of it was redundant.
+
+**Evidence** (`scripts/profile_decode_projections.py`, 64 tokens, profiling `forward_step` and
+NOT `forward` — the latter dispatches to `_scan_chunked`, a path serving never takes):
+
+| signal | value |
+|---|---|
+| projection calls (102 modules x 64 tokens) | 6,528 |
+| `aten::mean` calls | **6,656** |
+| `aten::div` calls | **6,656** |
+
+One absmean reduction and one divide per projection per token — 1:1, which is the diagnosis.
+Op-level device time: `aten::addmm` (the actual GEMM) **66 ms** vs ~**395 ms** for the
+quantization chain.
+
+**A flaw in that profile, disclosed rather than buried.** Its `projection_share_pct` (70.1%) and
+`PROCEED` verdict are **not trustworthy**: `key_averages()` returns both op-level (`aten::abs`)
+and kernel-level (`_ZN2at6native...AbsFunctor...`) entries carrying the *same* device time — they
+agree to the last decimal at 54,794.628 us — so summing across all events double-counts. The call
+*counts* are unaffected, and the A/B below needs no attribution at all, which is why the verdict
+rests on those instead.
+
+**The fix, measured.** Cache the dequantized weight under `eval()` + `no_grad`. Paired
+within-process A/B, run in **both arm orders**, because the baseline always running first would
+let GPU clock ramp inflate the second arm:
+
+| arm order | pre-#131 | cached | speedup |
+|---|---:|---:|---:|
+| legacy first | 22.30 | 43.21 | **1.94x** |
+| cached first | 48.40 | 21.45 | **2.26x** |
+
+Two earlier runs against a monkeypatched prototype read 2.02x and 1.99x. **Honest claim: ~2x**,
+consistent across four measurements and both orders.
+
+**Known-answer cell** (what the #122 retraction requires of every harness): caching a
+deterministic function of frozen weights is mathematically a no-op, so the cached arm MUST give
+bit-identical logits. `max|dlogits| = 0.000e+00` in all four runs. **No recall regression is
+possible by construction** — identical numbers, so no probe re-run is needed to clear it.
+
+**Do NOT quote the absolute tok/s.** The same arm read 21.45/22.30 (legacy) and
+40.56/43.21/48.40/53.65/81.05 (cached, across runs) — a ~1.5x spread on identical code, matching
+this repo's documented GPU-contention variance ("re-ran identical `main()` twice = 0.7 steps/s").
+Only the within-process paired ratio is meaningful on this machine.
+
+**Scope: serving only; no training win was available.** Training stays uncached — the STE needs
+the live shadow weight in the autograd graph and the weight moves every step. Nothing here
+touches the compute wall or the ~142M local ceiling. What changes: every EdgeHVN checkpoint
+*served* (Docker chat app, `EdgeToolCallingSession`, any `forward_step` eval) decodes ~2x faster
+with identical output.
+
+**Staleness is the real hazard, and it is guarded.** A weight cache has the exact failure shape
+of #117 (register-if-absent dedup silently served untrained weights while aggregate loss still
+trended down; no test caught it). So invalidation is aggressive rather than clever: on **any**
+mode transition (`train()` is the single entry point for both `.train()` and `.eval()`), on
+`_load_from_state_dict`, on `freeze()`, and on any dtype/device mismatch.
+`tests/test_issue131_ternary_cache.py` (9/9) asserts a specific weight's update survives a
+train->eval round trip **directly**, not via aggregate behaviour. One boundary is documented, not
+hidden: mutating a weight in place while *staying* in eval mode is unobservable to any hook and
+needs an explicit `invalidate_cache()` — a test pins that boundary so changing it is deliberate.
+
+**Consequence for the original MatMul-free plan.** It proposed replacing the projection GEMMs
+with ternary accumulation — the ~66 ms slice; the ~395 ms slice was redundant work that simply
+should not run. Also established while scoping: **ternarization is already shipped**
+(`apply_ternary_to_model` converts every `nn.Linear`; per #129 every real run trains ternary ON),
+and **no training-VRAM win is possible** from ternary QAT because the fp32 shadow weights stay
+resident — so the original spec's training-VRAM and memory gates were unachievable by
+construction. A fused ternary *kernel* remains open, but decode is launch-bound here (2,815
+kernel launches/token, CPU/device self-time ratio 0.91), so a future attempt should target launch
+count per the #43 precedent, not multiply count.
+
+**Untested:** batch>1 / the `generate_served` concurrent path, bf16 (this checkpoint decodes in
+fp32), and whether the win holds after `freeze()` (which replaces the 8-op chain with a cast+mul,
+already cheaper — expect a smaller ratio). Artifacts:
+`results/matmul_free/decode_profile.json`, `ternary_cache_ab{,_reversed,_landed,_landed_rev}.json`.

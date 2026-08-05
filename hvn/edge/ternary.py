@@ -78,13 +78,58 @@ class TernaryLinear(nn.Module):
         self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
         self._frozen_codes: torch.Tensor | None = None
         self._frozen_scale: torch.Tensor | None = None
+        # Issue #131: dequantized weight reused across inference-only forwards.
+        # A plain attribute, NOT a buffer -- it must never enter a state_dict.
+        self._wcache: torch.Tensor | None = None
+
+    def _dequantized(self, dtype: torch.dtype) -> torch.Tensor:
+        if self._frozen_codes is not None:
+            return self._frozen_codes.to(dtype) * self._frozen_scale
+        return ternary_quantize_ste(self.weight).to(dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self._frozen_codes is not None:
-            w = self._frozen_codes.to(x.dtype) * self._frozen_scale
-        else:
-            w = ternary_quantize_ste(self.weight)
+        if self.training or torch.is_grad_enabled():
+            # Training / grad-enabled path is unchanged and uncached: the STE
+            # needs the live shadow weight inside the autograd graph, and the
+            # weight moves every optimizer step.
+            return F.linear(x, self._dequantized(x.dtype), self.bias)
+
+        # Inference: the weight is frozen for the duration, so re-deriving it
+        # per call is pure waste. Issue #131 measured this at ~2x of EdgeHVN's
+        # entire decode wall-clock -- ``ternary_quantize_ste`` runs
+        # abs/mean/div/round/clamp/mul/sub/add over the WHOLE weight matrix on
+        # every token, which is the same O(d^2) order as the matvec it feeds.
+        # Caching is a mathematical no-op (verified bit-identical logits, both
+        # arm orders, results/matmul_free/ternary_cache_ab*.json).
+        w = self._wcache
+        if w is None or w.dtype != x.dtype or w.device != x.device:
+            w = self._dequantized(x.dtype).detach()
+            self._wcache = w
         return F.linear(x, w, self.bias)
+
+    def invalidate_cache(self) -> None:
+        """Drop the cached dequantized weight (see :meth:`train`)."""
+        self._wcache = None
+
+    def train(self, mode: bool = True):
+        """Invalidate the #131 cache on ANY mode transition.
+
+        ``nn.Module.train()`` is the single entry point for both ``.train()``
+        and ``.eval()``, so clearing here covers both directions. That matters:
+        the failure mode of a weight cache is silent staleness -- a model that
+        trains, returns to eval, and then multiplies by pre-training weights
+        while the loss curve still looks plausible. Issue #117 was exactly that
+        bug (``register_cpu_home``'s register-if-absent dedup reset every block
+        to its untrained init, and zero cross-cycle learning happened while
+        aggregate loss still trended down), so this cache is invalidated
+        aggressively rather than cleverly.
+        """
+        self._wcache = None
+        return super().train(mode)
+
+    def _load_from_state_dict(self, *args, **kwargs):
+        self._wcache = None
+        return super()._load_from_state_dict(*args, **kwargs)
 
     def freeze(self) -> None:
         """Discard the full-precision shadow weight, keeping only ternary codes + scale.
@@ -95,6 +140,7 @@ class TernaryLinear(nn.Module):
         codes, scale = ternary_codes(self.weight)
         self._frozen_codes = codes
         self._frozen_scale = scale
+        self._wcache = None  # #131: freezing changes the weight source
         self.weight.requires_grad_(False)
 
     def memory_bytes(self) -> int:

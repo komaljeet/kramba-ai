@@ -1,0 +1,133 @@
+{
+  "issue": 131,
+  "checkpoint": "checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt",
+  "step": 8000,
+  "dtype": "torch.float32",
+  "params_total": 83079329,
+  "params_projections": 31528016,
+  "projection_modules": 102,
+  "decode": {
+    "tokens": 64,
+    "batch": 1,
+    "tokens_per_sec_mean": 40.55992342004141,
+    "tokens_per_sec_std": 0.946530688553117,
+    "tokens_per_sec_min": 39.00910533471642,
+    "tokens_per_sec_max": 41.57391029260385,
+    "samples": [
+      39.00910533471642,
+      39.67509568206579,
+      40.27135087922277,
+      40.89667754755157,
+      41.14792421581516,
+      41.34539998831429,
+      41.57391029260385
+    ]
+  },
+  "profile": {
+    "total_device_self_us": 2297119.0660000774,
+    "total_cpu_self_us": 2096247.500000037,
+    "projection_device_us": 1610633.8550000205,
+    "projection_calls": 13056,
+    "kernel_launches": 180172,
+    "kernel_launches_per_token": 2815.1875,
+    "cpu_to_device_ratio": 0.9125550046694734
+  },
+  "projection_share_pct": 70.11538404078382,
+  "thresholds": {
+    "proceed_above": 30.0,
+    "stop_below": 15.0
+  },
+  "verdict": "PROCEED - projections dominate enough for a kernel to matter",
+  "top_ops_by_device_self_time": [
+    {
+      "op": "SCOPE_A_PROJ",
+      "self_device_us": 1177915.9339999962,
+      "count": 6528,
+      "pct_of_device": 51.27796601553942
+    },
+    {
+      "op": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIfEESt5arrayIPcLy3EEEEviT0_T1_",
+      "self_device_us": 95430.0770000173,
+      "count": 13568,
+      "pct_of_device": 4.154337422578082
+    },
+    {
+      "op": "aten::mul",
+      "self_device_us": 72914.93600002672,
+      "count": 12672,
+      "pct_of_device": 3.1741905362786387
+    },
+    {
+      "op": "_ZN2at6native18elementwise_kernelILi128ELi2EZNS0_22gpu_kernel_impl_nocastINS0_13BinaryFunctorIfffNS0_15binary_internal10MulFunctorIfEEEEEEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+      "self_device_us": 67700.15500001969,
+      "count": 10496,
+      "pct_of_device": 2.9471765744343617
+    },
+    {
+      "op": "aten::addmm",
+      "self_device_us": 66182.05499999525,
+      "count": 3520,
+      "pct_of_device": 2.881089447193375
+    },
+    {
+      "op": "aten::mean",
+      "self_device_us": 61886.077999995236,
+      "count": 6656,
+      "pct_of_device": 2.6940735861705285
+    },
+    {
+      "op": "_ZN2at6native13reduce_kernelILi512ELi1ENS0_8ReduceOpIfNS0_7MeanOpsIffffEEjfLi4ELi4EEEEEvT1_",
+      "self_device_us": 58736.68500000112,
+      "count": 6656,
+      "pct_of_device": 2.5569717246863486
+    },
+    {
+      "op": "aten::div",
+      "self_device_us": 57952.65899999696,
+      "count": 6656,
+      "pct_of_device": 2.5228408861238805
+    },
+    {
+      "op": "_ZN2at6native18elementwise_kernelILi128ELi2EZNS0_22gpu_kernel_impl_nocastINS0_13BinaryFunctorIfffNS0_15binary_internal10DivFunctorIfEEEEEEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+      "self_device_us": 57692.976999996434,
+      "count": 6528,
+      "pct_of_device": 2.5115362043664518
+    },
+    {
+      "op": "aten::abs",
+      "self_device_us": 54794.628000003635,
+      "count": 10496,
+      "pct_of_device": 2.385362988406879
+    },
+    {
+      "op": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_10AbsFunctorIfEESt5arrayIPcLy2EEEEviT0_T1_",
+      "self_device_us": 54794.628000003635,
+      "count": 5248,
+      "pct_of_device": 2.385362988406879
+    },
+    {
+      "op": "aten::add",
+      "self_device_us": 52702.98800000691,
+      "count": 9088,
+      "pct_of_device": 2.2943080652661796
+    },
+    {
+      "op": "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_49_GLOBAL__N__a62a4dcd_16_TensorCompare_cu_71e06f4e19launch_clamp_scalarERNS_18TensorIteratorBaseEN3c106ScalarES6_NS0_6detail11ClampLimitsEENKUlvE_clEvENKUlvE5_clEvEUlfE_St5arrayIPcLy2EEEEviT0_T1_",
+      "self_device_us": 52251.62200000909,
+      "count": 11776,
+      "pct_of_device": 2.274658844349487
+    },
+    {
+      "op": "aten::clamp",
+      "self_device_us": 49423.029000012124,
+      "count": 10496,
+      "pct_of_device": 2.1515223016311187
+    },
+    {
+      "op": "aten::sub",
+      "self_device_us": 45598.01000001037,
+      "count": 5888,
+      "pct_of_device": 1.9850085559304151
+    }
+  ]
+}
