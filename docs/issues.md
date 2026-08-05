@@ -13,12 +13,19 @@
   6K-7.5K transition is not in the data), #126 extrapolator (loses to doing nothing at every
   horizon; a *cheating* oracle allowed to see the true future weights also loses, and its fitted
   coefficient collapses toward zero as the jump grows), #127 trainer loop (**not built**, on the
-  #126 evidence). Two method corrections from the maintainer were applied and the verdict
-  survived both: measure deltas **per step** (coherence is median cos **+0.890** at 1-step
-  spacing vs +0.463 at 10-step) and anchor in a **steep** part of the loss curve, not a flat one.
-  Root cause: the predictable part of an update is momentum the optimizer already applies; the
-  part that constitutes learning comes from gradients of unseen data, which no function of past
-  weights contains. See [state.md](state.md).
+  #126 evidence). **Three** method corrections from the maintainer were applied and the verdict
+  survived all of them: measure deltas **per step** (coherence is median cos **+0.890** at 1-step
+  spacing vs +0.463 at 10-step); anchor in a **steep** part of the loss curve, not a flat one;
+  and (2026-08-05) fit the motion over a **window** of observed steps instead of extrapolating
+  one noisy delta, at a settled anchor rather than the huge-PPL beginning. The window fit
+  (`ghost/window_fit.py`) is the one gap the oracle left open — that oracle only searched step
+  *length* along a fixed direction, never a different direction — and it closes the epic: a
+  denoised direction is measurably **worse**, median cos falling monotonically from +0.890 (last
+  delta) to +0.166 (50-step mean) as more history is averaged in. Root cause: the predictable
+  part of an update is momentum the optimizer already applies; the part that constitutes learning
+  comes from gradients of unseen data, which no function of past weights contains — so the best
+  available direction is the most recent delta, ridable for about one step. See
+  [state.md](state.md).
 - **#128 — Weight averaging** ✅ **Positive** (2026-08-03): the spin-off that worked. Averaging
   the last **2-5** checkpoints at the END of a run is worth ~500-1,000 steps of training for
   seconds of arithmetic (9/9 anchor x k combinations improved; k=10 is *worse* — the window must

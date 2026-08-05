@@ -1078,6 +1078,281 @@ def score(args) -> int:
 
 
 # --------------------------------------------------------------------------
+# --window-fit
+# --------------------------------------------------------------------------
+
+
+def _load_path(path: str) -> dict:
+    return torch.load(path, map_location="cpu", weights_only=False)
+
+
+def window_fit_run(args) -> int:
+    """Does a DENOISED direction, fitted over a window, beat doing nothing?
+
+    #126 closed "rescale the last delta", including a cheating oracle over that
+    family. It did NOT close "fit the motion over a window of K steps", because
+    a window fit can produce a different DIRECTION, not merely a different step
+    length along the same one. That is the one gap the negative result leaves
+    open, and this mode is the test of it.
+
+    Everything is measured at the SETTLED anchor (base + --warmup-steps = step
+    10,200 with the defaults) — where #126's primary test ran, and where the
+    premise "we have enough history to know how the weights are moving"
+    actually holds.
+
+    Arms per horizon N, all scored on ONE fixed probe set:
+
+        real            the actually-trained weights at anchor+N   (target)
+        frozen          the anchor, unchanged                      (NULL CONTROL)
+        last_delta      #126's method at gap 1                     (reference)
+        wK_dD_locked    anchor + fitted displacement (window K, degree D)
+        wK_dD_fiteval   the fit's own value; its N=0 is a smoothed anchor, so
+                        this arm carries #128's averaging gain for free and any
+                        N>0 result must be read against its own N=0
+        oracle_wK_dD    best per-tensor rescaling of the fitted direction,
+                        chosen using the true future weights (upper bound on
+                        tuning the step length of this direction)
+
+    The binding comparison is ``frozen``, not the spec's +/-5% band: over short
+    horizons the weights barely move, so anything that barely moves satisfies
+    the band while predicting nothing.
+    """
+    import train_edge_conversational as tec
+    from ghost.window_fit import (WindowFit, direction_cosine, oracle_rescale,
+                                  predict)
+
+    device = require_cuda()
+    os.makedirs(args.out_dir, exist_ok=True)
+    torch.manual_seed(args.seed)
+
+    windows = sorted({int(k) for k in args.wf_windows})
+    degrees = sorted({int(d) for d in args.wf_degrees})
+    kmax, dmax = max(windows), max(degrees)
+    n_values = sorted({int(n) for n in args.n_values})
+    if min(n_values) < 0:
+        raise SystemExit("--n-values must be >= 0")
+
+    print(f"[wf] loading base checkpoint {args.base}")
+    model, base_step, _ckpt = tec.load_checkpoint_for_resume(args.base, device)
+    raw = getattr(model, "_orig_mod", model)
+    anchor = base_step + args.warmup_steps
+    horizon = max(n_values)
+    total_steps = args.warmup_steps + horizon
+    print(f"[wf] base_step={base_step} anchor={anchor} horizon={horizon} "
+          f"windows={windows} degrees={degrees}")
+    if args.warmup_steps < kmax + 2:
+        raise SystemExit(
+            f"--warmup-steps ({args.warmup_steps}) must exceed the largest "
+            f"window ({kmax}) by at least 2, so the window sits entirely inside "
+            f"the settled stretch and the last_delta arm has its inputs")
+
+    tokenizer = build_tokenizer()
+    loader, _val, stats = tec.build_dataset_pipeline(
+        tokenizer=tokenizer, seq_len=args.seq_len, batch_size=args.batch_size,
+        data_dir=args.data_dir, val_fraction=0.0, num_workers=0)
+    print(f"[wf] data: {stats}")
+
+    # Same optimizer as #126's series: constant LR, so an LR schedule is not
+    # itself a source of weight-delta inconsistency inside the fitting window.
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01,
+                            fused=True)
+
+    def cpu_sd() -> Dict[str, torch.Tensor]:
+        return {k: v.detach().to("cpu", copy=True) for k, v in raw.state_dict().items()}
+
+    def save_target(step: int, sd: Dict[str, torch.Tensor]) -> str:
+        path = os.path.join(args.out_dir, f"target{step}.pt")
+        tmp = path + ".tmp"
+        last: Optional[Exception] = None
+        for attempt in range(4):   # AV-interference retry, as in --make-series
+            try:
+                torch.save({"model_state_dict": sd, "global_step": step}, tmp)
+                os.replace(tmp, path)
+                return path
+            except (RuntimeError, OSError) as exc:
+                last = exc
+                print(f"[wf] target {step} attempt {attempt + 1} failed: {exc}",
+                      flush=True)
+                time.sleep(2.0 * (attempt + 1))
+        raise RuntimeError(f"could not save target at step {step}") from last
+
+    fitters: Dict[int, WindowFit] = {}
+    anchor_sd: Optional[Dict[str, torch.Tensor]] = None
+    prev_sd: Dict[int, Dict[str, torch.Tensor]] = {}    # u -> state, u in {-2,-1}
+    target_paths: Dict[int, str] = {}
+    wanted_targets = {anchor + n for n in n_values if n > 0}
+
+    model.train()
+    step, done = base_step, 0
+    t0 = time.time()
+    print(f"[wf] training {total_steps} steps "
+          f"({args.warmup_steps} warmup + {horizon} horizon)")
+    while done < total_steps:
+        for batch in loader:
+            xb = (batch[0] if isinstance(batch, (tuple, list)) else batch).to(device)
+            x, y = xb[:, :-1], xb[:, 1:]
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                logits = model(x)
+                loss = nn.functional.cross_entropy(
+                    logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1))
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            opt.zero_grad(set_to_none=True)
+            step += 1
+            done += 1
+            u = step - anchor
+
+            if -kmax < u <= 0:                  # inside the largest window
+                sd = cpu_sd()
+                for k in windows:
+                    if u == -(k - 1):
+                        # This snapshot is both the reference and the first
+                        # observation for window k.
+                        fitters[k] = WindowFit(sd, degree=dmax, window=k)
+                    if k in fitters:
+                        fitters[k].observe(sd, u)
+                if u in (-2, -1):
+                    prev_sd[u] = sd
+                if u == 0:
+                    anchor_sd = sd
+            elif step in wanted_targets:
+                target_paths[step] = save_target(step, cpu_sd())
+
+            if done % 50 == 0:
+                print(f"[wf] step {step} (u={u:+d})  loss {float(loss):.4f}  "
+                      f"{done / max(time.time() - t0, 1e-6):.2f} steps/s", flush=True)
+            if done >= total_steps:
+                break
+
+    if anchor_sd is None:
+        raise RuntimeError("anchor snapshot was never taken")
+    print(f"[wf] training done in {(time.time() - t0) / 60:.1f} min")
+
+    # ---- fit -------------------------------------------------------------
+    # Solve one window at a time and drop its accumulators immediately: at 83M
+    # params every accumulator is 332 MB, and holding all windows' accumulators
+    # alongside all windows' coefficients would roughly double peak host RAM.
+    fits: Dict[Tuple[int, int], object] = {}
+    for k in windows:
+        for d in degrees:
+            fr = fitters[k].solve(degree=d)
+            fits[(k, d)] = fr
+            print(f"[wf] fit window={k} degree={d}: {fr.n_observations} obs, "
+                  f"cond {fr.condition_number:.3e}, {len(fr.coeffs)} tensors")
+        fitters[k].release()
+
+    # ---- score -----------------------------------------------------------
+    probes = load_probe_batches(tokenizer, args.probe_batches, args.batch_size,
+                                args.seq_len, args.data_dir)
+    print(f"[wf] {len(probes)} fixed probe batches "
+          f"({args.batch_size}x{args.seq_len})")
+
+    def loss_of(state: Mapping[str, torch.Tensor]) -> float:
+        missing, unexpected = model.load_state_dict(
+            {k: v.to(device) for k, v in state.items()}, strict=False)
+        if missing or unexpected:
+            print(f"  [warn] missing={len(missing)} unexpected={len(unexpected)}")
+        return evaluate_loss(model, probes, device)
+
+    frozen_loss = loss_of(anchor_sd)
+    print(f"[wf] frozen (anchor, null control) loss {frozen_loss:.5f}")
+
+    cfg = ExtrapolationConfig(cos_threshold=args.cos_threshold,
+                              ratio_tol=args.ratio_tol,
+                              allow_poly=not args.no_poly)
+    ld_plan = build_plan(prev_sd[-2], prev_sd[-1], anchor_sd, cfg)
+    print(f"[wf] last_delta plan (gap 1): "
+          f"{ld_plan.param_fraction_extrapolated:.2%} of params extrapolated")
+
+    rows = []
+    for n in n_values:
+        if n == 0:
+            true_sd, real_loss = anchor_sd, frozen_loss
+        else:
+            true_sd = _load_path(target_paths[anchor + n])["model_state_dict"]
+            real_loss = loss_of(true_sd)
+
+        arms: Dict[str, float] = {}
+        diag: Dict[str, dict] = {}
+
+        if n > 0:
+            ld, _ = extrapolate(prev_sd[-2], prev_sd[-1], anchor_sd, n, 1, cfg, ld_plan)
+            arms["last_delta"] = loss_of(ld)
+            diag["last_delta"] = direction_cosine(ld, anchor_sd, true_sd)
+
+        for (k, d), fr in fits.items():
+            for mode, tag in (("anchor_locked", "locked"), ("fit_eval", "fiteval")):
+                if n == 0 and mode == "anchor_locked":
+                    continue          # identical to frozen by construction
+                name = f"w{k}_d{d}_{tag}"
+                pred = predict(fr, fitters[k].reference, anchor_sd, n, mode=mode)
+                arms[name] = loss_of(pred)
+                if n > 0:
+                    diag[name] = direction_cosine(pred, anchor_sd, true_sd)
+                    if args.oracle and mode == "anchor_locked":
+                        ow, ostats = oracle_rescale(pred, anchor_sd, true_sd)
+                        arms[f"oracle_{name}"] = loss_of(ow)
+                        diag[f"oracle_{name}"] = ostats
+                del pred
+
+        best = min(arms.items(), key=lambda kv: kv[1]) if arms else ("none", float("nan"))
+        rows.append({
+            "N": n,
+            "target_step": anchor + n,
+            "real_loss": real_loss,
+            "frozen_loss": frozen_loss,
+            "arms": arms,
+            "diagnostics": diag,
+            "best_arm": best[0],
+            "best_arm_loss": best[1],
+            "any_arm_beats_frozen": bool(best[1] < frozen_loss),
+        })
+        print(f"\n[wf] N={n}  real {real_loss:.5f}   frozen {frozen_loss:.5f}")
+        for name, val in sorted(arms.items(), key=lambda kv: kv[1]):
+            mark = "BEATS frozen" if val < frozen_loss else "loses to frozen"
+            cos = diag.get(name, {}).get("median_cos")
+            extra = f"  cos {cos:+.4f}" if cos is not None else ""
+            print(f"        {name:<26} {val:12.5f}  {mark}{extra}", flush=True)
+        if n > 0:
+            del true_sd
+
+    out = {
+        "mode": "window_fit",
+        "base_checkpoint": args.base.replace("\\", "/"),
+        "base_step": base_step,
+        "anchor_step": anchor,
+        "warmup_steps": args.warmup_steps,
+        "windows": windows,
+        "degrees": degrees,
+        "n_values": n_values,
+        "lr": args.lr,
+        "batch_size": args.batch_size,
+        "seq_len": args.seq_len,
+        "seed": args.seed,
+        "optimizer": "AdamW(fused, wd=0.01), constant LR",
+        "optimizer_state_policy": "not carried - a jump starts with cold moments",
+        "probe": {"batches": len(probes), "batch_size": args.batch_size,
+                  "seq_len": args.seq_len, "seed": 1234},
+        "fits": {f"w{k}_d{d}": fr.summary() for (k, d), fr in fits.items()},
+        "results": rows,
+    }
+    gate = next((r for r in rows if r["N"] == args.gate_n), None)
+    if gate:
+        out["gate"] = {"N": args.gate_n, "best_arm": gate["best_arm"],
+                       "beats_frozen": gate["any_arm_beats_frozen"]}
+        print(f"\n[wf] GATE N={args.gate_n}: best arm {gate['best_arm']} at "
+              f"{gate['best_arm_loss']:.5f} vs frozen {frozen_loss:.5f} -> "
+              f"{'BEATS frozen' if gate['any_arm_beats_frozen'] else 'LOSES to frozen'}")
+
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    with open(args.out, "w") as fh:
+        json.dump(out, fh, indent=2)
+    print(f"[wf] wrote {args.out}")
+    return 0
+
+
+# --------------------------------------------------------------------------
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -1093,6 +1368,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                       help="A/B: continue training from latest vs averaged vs perturbed")
     mode.add_argument("--average", action="store_true",
                       help="latest-weight-averaging test (LAWA/SWA-style)")
+    mode.add_argument("--window-fit", action="store_true",
+                      help="#126 follow-up: least-squares fit of the weight "
+                           "motion over a K-step window vs the frozen anchor")
 
     p.add_argument("--base", default="checkpoints/edge_chinchilla20k/"
                                      "edge_conversational_step10000.pt")
@@ -1137,11 +1415,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--avg-spacing", type=int, default=500)
     p.add_argument("--future-steps", type=int, nargs="+",
                    default=[10500, 11000, 11500, 12000, 13000])
+    p.add_argument("--wf-windows", type=int, nargs="+", default=[20, 50],
+                   help="fitting window lengths K, in steps. Each costs "
+                        "(max degree + 2) full-model fp32 tensors of RAM.")
+    p.add_argument("--wf-degrees", type=int, nargs="+", default=[1, 2],
+                   help="polynomial degrees to fit; all degrees share one "
+                        "accumulator set per window")
     p.add_argument("--out", default="results/ghost/extrapolation_scores.json")
 
     args = p.parse_args(argv)
+    if args.window_fit and args.out.endswith("extrapolation_scores.json"):
+        args.out = "results/ghost/window_fit.json"
     if args.make_series:
         return make_series(args)
+    if args.window_fit:
+        return window_fit_run(args)
     if args.average:
         return average(args)
     if args.ab_continue:
