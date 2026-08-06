@@ -265,14 +265,48 @@ class DeltaNetBlock(nn.Module):
     # ------------------------------------------------------------------
     # Shared projection / gating helpers
     # ------------------------------------------------------------------
-    def _causal_conv(self, x: torch.Tensor) -> torch.Tensor:
-        """Causal depthwise conv over a full sequence.  x: [B, S, D] → [B, S, D]."""
+    def _causal_conv(self, x: torch.Tensor,
+                     doc_ids: torch.Tensor | None = None) -> torch.Tensor:
+        """Causal depthwise conv over a full sequence.  x: [B, S, D] → [B, S, D].
+
+        With ``doc_ids`` (packed rows, Issue #132) the conv is made
+        *segment-safe*: its ``K-1`` backward taps must not read tokens from a
+        previous document.  Position ``t``'s tap at offset ``j`` reads
+        ``x[t-j]``, which is only valid when ``doc_ids[t-j] == doc_ids[t]``; the
+        contribution is zeroed otherwise, exactly as if the document began at a
+        sequence boundary.  Implemented as ``K`` masked shifted multiplies
+        rather than one ``conv1d`` because the validity mask is per-(position,
+        tap) -- ``K`` is small (default 4), so this is cheap, and it is only
+        taken on the packed path.
+        """
         if not self.conv_kernel:
             return x
-        xt = x.transpose(1, 2)  # [B, D, S]
-        xt = F.pad(xt, (self.conv_kernel - 1, 0))  # left-pad → causal
-        y = self.conv(xt)  # [B, D, S]
-        return y.transpose(1, 2)
+        if doc_ids is None:
+            xt = x.transpose(1, 2)  # [B, D, S]
+            xt = F.pad(xt, (self.conv_kernel - 1, 0))  # left-pad → causal
+            y = self.conv(xt)  # [B, D, S]
+            return y.transpose(1, 2)
+
+        # Segment-safe path. self.conv is depthwise (groups=D), so its weight is
+        # [D, 1, K]; tap index kk indexes offset j = (K-1) - kk into the past.
+        B, S, D = x.shape
+        K = self.conv_kernel
+        w = self.conv.weight.view(D, K)              # [D, K]
+        y = x.new_zeros(B, S, D)
+        for kk in range(K):
+            j = (K - 1) - kk                         # how far back this tap reads
+            if j == 0:
+                shifted = x
+                valid = x.new_ones(B, S, 1)
+            else:
+                shifted = F.pad(x, (0, 0, j, 0))[:, :S]          # x[t-j]
+                same = torch.zeros(B, S, device=x.device, dtype=torch.bool)
+                same[:, j:] = doc_ids[:, j:] == doc_ids[:, :-j]
+                valid = same.unsqueeze(-1).to(x.dtype)
+            y = y + shifted * valid * w[:, kk].view(1, 1, D)
+        if self.conv.bias is not None:
+            y = y + self.conv.bias.view(1, 1, D)
+        return y
 
     def _project(self, xc: torch.Tensor):
         """Compute q, k, v, α, β, g from the conv'd, normed input.
@@ -581,6 +615,7 @@ class DeltaNetBlock(nn.Module):
         x: torch.Tensor,
         position_ids: torch.Tensor | None = None,
         return_state: bool = False,
+        doc_ids: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, dict]:
         """Process a sequence.  x: [B, S, D] → [B, S, D].
 
@@ -590,14 +625,34 @@ class DeltaNetBlock(nn.Module):
         (``{"S": [B*n_heads, d, d], "conv": [B, D, K-1]}``) after absorbing the
         whole sequence, so generation can continue via ``forward_step``
         (prompt prefill for Issue #36).  The state matches ``init_state``.
+
+        ``doc_ids`` ([B, S], Issue #132) marks which packed document each
+        position belongs to.  When given, the two sequence-axis carries in this
+        block are cut at every document boundary: the depthwise conv's backward
+        taps (see :meth:`_causal_conv`) and the recurrent state, the latter by
+        forcing the decay gate ``alpha_t = 0`` at each document's first token so
+        ``S_t`` depends on nothing before ``t``.
         """
         B, S, D = x.shape
         H, d = self.n_heads, self.d_head
         N = B * H
 
         x_norm = self.norm(x)
-        xc = self._causal_conv(x_norm)
+        xc = self._causal_conv(x_norm, doc_ids=doc_ids)
         q, k, v, alpha, beta, gate = self._project(xc)
+
+        if doc_ids is not None:
+            if alpha is None:
+                raise ValueError(
+                    "Packed training (doc_ids) requires the decay gate: the "
+                    "document-boundary state reset is expressed as alpha_t = 0, "
+                    "and use_decay_gate=False removes alpha entirely. Either "
+                    "enable the decay gate or train without packing."
+                )
+            # Exact reset: alpha = 0 at each document's first token.
+            from .packing import doc_start_mask
+            starts = doc_start_mask(doc_ids)                   # [B, S] bool
+            alpha = alpha * (~starts).view(B, S, 1, 1).to(alpha.dtype)
 
         # Move to [N, S, d] for the batched-over-heads recurrence
         def to_N(t):  # [B, S, H, *] → [N, S, *]
@@ -621,6 +676,23 @@ class DeltaNetBlock(nn.Module):
         # Reassociated (chunked-parallel) delta rule for training speed; falls
         # back to the plain sequential scan for short sequences or when disabled.
         elif self.train_chunk and S > 1:
+            if doc_ids is not None:
+                # The chunked scans fold alpha into a cumprod / log-space
+                # reparameterization and clamp it at 1e-6, so they cannot
+                # represent the hard zero the boundary reset needs -- they would
+                # leak ~1e-6 of the previous document's state instead of cutting
+                # it. The Triton scan (deltanet_triton.py) is sequential over S
+                # with a direct `state = state * a_t` multiply, so alpha=0 is
+                # exact there; _scan_sequential likewise. Refuse rather than
+                # ship a silently-approximate packed path.
+                raise RuntimeError(
+                    "Packed training (doc_ids) is not supported by the eager "
+                    "chunked scan: its cumprod/log-space alpha reparameterization "
+                    "cannot represent the alpha=0 document-boundary reset (it "
+                    "clamps at 1e-6, leaking state across documents). Enable the "
+                    "Triton scan (use_triton_scan=True, the default in the FT "
+                    "scripts) or set train_chunk=0 to use the exact sequential scan."
+                )
             chunk = (self._safe_chunk(alphaN, self.train_chunk, S)
                      if self.adaptive_chunk else self.train_chunk)
             oN = self._scan_chunked(qN, kN, vN, alphaN, betaN, chunk,

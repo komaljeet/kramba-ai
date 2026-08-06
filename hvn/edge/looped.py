@@ -183,7 +183,8 @@ def pop_loop_log(model) -> list[int]:
     return log
 
 
-def looped_forward_train(model, input_ids, position_ids, k: int, deep_supervise: bool = True):
+def looped_forward_train(model, input_ids, position_ids, k: int, deep_supervise: bool = True,
+                         doc_ids=None):
     """Full-sequence (training-time) counterpart to _looped_forward_step.
 
     Runs the block stack k times over the WHOLE sequence via each block's
@@ -199,16 +200,22 @@ def looped_forward_train(model, input_ids, position_ids, k: int, deep_supervise:
     never taught that an early loop's output alone should be usable, which
     is exactly the property entropy-gated early exit depends on), else
     length 1 (only the final loop).
+
+    ``doc_ids`` ([B, S], Issue #132) isolates packed documents. It is forwarded
+    to every block on every loop: each loop recomputes the full
+    recurrence/attention from scratch, so the boundary cut has to be reapplied
+    each time rather than once up front.
     """
     if model.blocks is None:
         raise NotImplementedError(
             "looped training is not implemented for shared_weights=True models."
         )
+    blk_kw = {} if doc_ids is None else {"doc_ids": doc_ids}
     h = model.token_embedding(input_ids)
     all_logits = []
     for i in range(k):
         for block in model.blocks:
-            h = block(h, position_ids=position_ids)
+            h = block(h, position_ids=position_ids, **blk_kw)
         logits = model.decoder(model.final_norm(h))
         if deep_supervise or i == k - 1:
             all_logits.append(logits)

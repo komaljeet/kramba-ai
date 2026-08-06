@@ -93,10 +93,18 @@ def continue_ft_looped(model, dataloader, device, *, lr, max_steps, max_loops,
 
     while global_step < max_steps:
         try:
-            x, y = next(data_iter)
+            batch = next(data_iter)
         except StopIteration:
             data_iter = iter(dataloader)
-            x, y = next(data_iter)
+            batch = next(data_iter)
+
+        # Packed rows (Issue #132) carry a third element, doc_ids.
+        if len(batch) == 3:
+            x, y, doc_ids = batch
+            doc_ids = doc_ids.to(device, non_blocking=True)
+        else:
+            x, y = batch
+            doc_ids = None
 
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -104,7 +112,9 @@ def continue_ft_looped(model, dataloader, device, *, lr, max_steps, max_loops,
         k = max_loops if fixed_n else int(torch.randint(1, max_loops + 1, (1,)).item())
 
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-            per_loop_logits = looped_forward_train(model, x, position_ids, k, deep_supervise=deep_supervise)
+            per_loop_logits = looped_forward_train(model, x, position_ids, k,
+                                                   deep_supervise=deep_supervise,
+                                                   doc_ids=doc_ids)
             loss = sum(criterion(lg.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1))
                       for lg in per_loop_logits) / len(per_loop_logits)
             loss = loss / grad_accum
@@ -177,6 +187,16 @@ def main():
                     help="always run exactly --max-loops loops (no random k) -- the "
                          "no-early-exit recipe (docs/state.md 'First positive signal'). "
                          "Implies --no-deep-supervise is the natural pairing.")
+    ap.add_argument("--pack", action="store_true",
+                    help="padding-free sequence packing (Issue #132) -- the grounded-QA "
+                         "corpus is 83%% padding at seq_len=512, so this is a large "
+                         "wall-clock win for the same real tokens. Documents are isolated "
+                         "inside a row, so it is exact, not an approximation.")
+    ap.add_argument("--pack-seed", type=int, default=0,
+                    help="seed for the packing shuffle (--pack)")
+    ap.add_argument("--pack-strategy", type=str, default="shuffled_first_fit",
+                    choices=["shuffled_first_fit", "first_fit_decreasing"],
+                    help="bin-packing policy for --pack")
     ap.add_argument("--no-deep-supervise", action="store_true",
                     help="grade only the FINAL loop's prediction, not every sampled loop's. "
                          "This is what let looping beat a single pass on the sandbox check "
@@ -198,7 +218,16 @@ def main():
     print("=" * 70)
     records = [json.loads(line) for line in open(args.grounded_data, encoding="utf-8")]
     print(f"  Grounded-QA: {len(records)} records from {args.grounded_data}")
-    dataset = GroundedQADataset(tokenizer, records, seq_len=args.seq_len)
+    dataset = GroundedQADataset(tokenizer, records, seq_len=args.seq_len,
+                                pad=not args.pack)
+    if args.pack:
+        from hvn.core.packing import PackedDataset
+        from finetune_edge_conversational import EOS_ID
+        print("  Packing (Issue #132) — padding-free rows:")
+        print("   ", end=" ")
+        dataset = PackedDataset(dataset.examples, seq_len=args.seq_len,
+                                pad_id=EOS_ID, seed=args.pack_seed,
+                                strategy=args.pack_strategy)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
                             drop_last=True, pin_memory=(device.type == "cuda"))
 

@@ -1,0 +1,32 @@
+{
+  "packing_stats": {
+    "n_examples": 5240,
+    "n_rows": 1012,
+    "examples_per_row": 5.177865612648222,
+    "real_tokens": 499077,
+    "packed_budget": 519156,
+    "padded_budget": 2688120,
+    "packed_waste_frac": 0.038676236044657086,
+    "padded_waste_frac": 0.814339761617785,
+    "row_reduction": 5.177865612648222
+  },
+  "padded": {
+    "steps_measured": 25,
+    "seconds": 8.254879474639893,
+    "s_per_step": 0.3301951789855957,
+    "real_tokens": 135,
+    "real_tokens_per_step": 5.4,
+    "us_per_real_token": 61147.25536770291,
+    "peak_gib": 2.081414222717285
+  },
+  "packed": {
+    "steps_measured": 25,
+    "seconds": 8.602012157440186,
+    "s_per_step": 0.3440804862976074,
+    "real_tokens": 728,
+    "real_tokens_per_step": 29.12,
+    "us_per_real_token": 11815.95076571454,
+    "peak_gib": 2.14676570892334
+  },
+  "speedup_per_real_token": 5.1749754700340596
+}

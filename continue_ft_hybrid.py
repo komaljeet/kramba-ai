@@ -190,17 +190,25 @@ def continue_ft(model, dataloader, sampler, device, *, lr, max_steps, grad_accum
 
     while global_step < max_steps:
         try:
-            x, y = next(data_iter)
+            batch = next(data_iter)
         except StopIteration:
             # Epoch boundary: re-create the iterator. WeightedRandomSampler
             # reshuffles fresh each iter() call, so the next epoch is a new mix.
             data_iter = iter(dataloader)
-            x, y = next(data_iter)
+            batch = next(data_iter)
+
+        # Packed rows (Issue #132) carry a third element, doc_ids.
+        if len(batch) == 3:
+            x, y, doc_ids = batch
+            doc_ids = doc_ids.to(device, non_blocking=True)
+        else:
+            x, y = batch
+            doc_ids = None
 
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-            logits = model(x)
+            logits = model(x) if doc_ids is None else model(x, doc_ids=doc_ids)
             loss = criterion(logits.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1))
             loss = loss / grad_accum
         loss.backward()
@@ -268,6 +276,19 @@ def main():
                     help="0-indexed layer positions for the 2 attention blocks")
     ap.add_argument("--attn-window", type=int, default=4096)
     ap.add_argument("--seq-len", type=int, default=512)
+    ap.add_argument("--pack", action="store_true",
+                    help="padding-free sequence packing (Issue #132) -- the grounded-QA "
+                         "corpus is 83%% padding at seq_len=512, so this is a large "
+                         "wall-clock win for the SAME training (same real tokens, ~6 "
+                         "examples per row). Documents are isolated inside a row "
+                         "(DeltaNet state reset + conv taps + attention mask), so it is "
+                         "exact, not an approximation -- but it does change gradient "
+                         "composition per step, so re-gate recall after switching.")
+    ap.add_argument("--pack-seed", type=int, default=0,
+                    help="seed for the packing shuffle (--pack)")
+    ap.add_argument("--pack-strategy", type=str, default="shuffled_first_fit",
+                    choices=["shuffled_first_fit", "first_fit_decreasing"],
+                    help="bin-packing policy for --pack")
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--grad-accum", type=int, default=8)
     ap.add_argument("--lr", type=float, default=2e-5)
@@ -325,19 +346,36 @@ def main():
     import json
     records = [json.loads(line) for line in open(args.grounded_data, encoding="utf-8")]
     print(f"  Grounded-QA: {len(records)} records from {args.grounded_data}")
-    grounded_ds = GroundedQADataset(tokenizer, records, seq_len=args.seq_len)
+    grounded_ds = GroundedQADataset(tokenizer, records, seq_len=args.seq_len,
+                                    pad=not args.pack)
 
     chat_ds = None
     if args.chat_mix > 0:
         try:
             max_conv = 200 if args.smoke else args.max_conversations
             convos = build_oasst_conversations(max_conversations=max_conv)
-            chat_ds = InstructionDataset(tokenizer, convos, seq_len=args.seq_len)
+            chat_ds = InstructionDataset(tokenizer, convos, seq_len=args.seq_len,
+                                         pad=not args.pack)
             print(f"  Chat mix: {len(chat_ds)} OASST examples (target chat fraction={args.chat_mix})")
         except Exception as e:
             print(f"  Chat mix DISABLED (OASST cache unavailable: {e})")
             print(f"  -> running pure grounded-QA. Set --chat-mix 0 to silence this.")
             chat_ds = None
+
+    if args.pack:
+        # Issue #132: pack each corpus independently so a row never mixes
+        # corpora -- that keeps the chat_mix fraction meaning what the flag says.
+        from hvn.core.packing import PackedDataset
+        print("\n  Packing (Issue #132) — padding-free rows:")
+        print("    grounded:", end=" ")
+        grounded_ds = PackedDataset(grounded_ds.examples, seq_len=args.seq_len,
+                                    pad_id=EOS_ID, seed=args.pack_seed,
+                                    strategy=args.pack_strategy)
+        if chat_ds is not None:
+            print("    chat:", end=" ")
+            chat_ds = PackedDataset(chat_ds.examples, seq_len=args.seq_len,
+                                    pad_id=EOS_ID, seed=args.pack_seed,
+                                    strategy=args.pack_strategy)
 
     # Combine via a WeightedRandomSampler so P(chat)=chat_mix when chat_ds exists.
     if chat_ds is not None and args.chat_mix > 0:
