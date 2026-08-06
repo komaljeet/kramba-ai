@@ -1762,3 +1762,46 @@ keeps the `WeightedRandomSampler` mix fractions meaning what the flags say. `HVN
 baseline). Packing changes gradient composition per step — ~5 examples per row instead of 1 — so
 it is **not** a "same result, faster" change on paper, and a speedup that moves recall is not a
 win. The isolation is proven exact; what is unproven is whether the denser step is as good a step.
+
+## Packing recall re-gate — PASSES: 5.15x faster, no detectable recall cost (Issue #132, 2026-08-06)
+
+The remaining acceptance criterion from the entry above. Two FT arms, identical except `--pack`,
+matched on **real tokens** (same passes over the corpus, so the packed arm takes 5.18x fewer
+optimizer steps -- which is exactly the risk being measured, not a flaw in the design), then
+`eval/synthetic_recall_probe.py` at the 300-trial bar on both.
+
+| arm | steps | wall-clock | near-window | far-window (W=128, 16 distractors) |
+|---|---:|---:|---:|---:|
+| padded (control) | 5,000 | **89.1 min** | 7.3% (22/300) | 3.7% (11/300) |
+| packed | 965 | **17.3 min** | 6.0% (18/300) | 3.3% (10/300) |
+
+**5.15x end-to-end wall-clock speedup** — confirming the 5.17x/real-token microbenchmark
+(`scripts/ab_packing.py`) on a real 90-minute training run rather than a 30-step timing loop.
+
+**Recall difference is not statistically detectable.** Two-proportion tests: near z=+0.65
+(p=0.51), far z=+0.22 (p=0.82). Neither is close to significance at n=300 per cell. Packing costs
+5.18x fewer optimizer updates and the model does not measurably care.
+
+**PASS.** The concern going in was that packing is not a "same result, faster" change on paper --
+~5 examples per row instead of 1 changes gradient composition, and 5x fewer updates at the same LR
+schedule is less optimization. Measured: neither shows up above noise.
+
+**Three caveats, stated because the absolute numbers look wrong next to this doc's other entries:**
+- **The trunk differs.** `edge_conversational_step51000.pt` (what `hybrid_a4_v2` used) is not in
+  this checkout, so both arms warm-started from `step101000`. Absolute numbers are therefore NOT
+  comparable to the historical 35.5% near / 8.5% far -- which is precisely why **both** arms were
+  measured fresh rather than one against the doc. The same mistake #122 had to correct.
+- **`--chat-mix 0`** (pure grounded-QA, both arms) to keep the packing ratio exactly 5.18x and drop
+  the OASST cache dependency. a4_v2 used a 30% chat mix.
+- **Deep in the overfitting regime**: 5,000 steps x 32 rows over 5,240 examples is ~30 passes;
+  final train loss 0.0084 (ppl 1.01). This depresses both arms equally and explains why 7.3% sits
+  so far below 35.5%. The probe scores **invented** pseudo-words never in training, so it still
+  measures the general recall skill rather than memorized pairs -- but a less-overfit run would be
+  a better absolute measurement. The A/B remains controlled either way.
+
+**What this licenses and what it does not.** It licenses using `--pack` on a grounded-QA-style FT
+at this scale: the speedup is real and the quality cost is below detection. It does **not**
+establish that packing is free at every mix/length distribution -- OASST conversations are longer
+(smaller packing ratio, fewer documents per row), so both the win and any risk shrink there, and
+that case was not measured. Artifacts: `results/packing/regate_{padded,packed}_{near,far}.txt`,
+`scripts/regate_packing.sh`, checkpoints under `checkpoints/regate_{padded,packed}/`.
