@@ -1687,3 +1687,78 @@ count per the #43 precedent, not multiply count.
 fp32), and whether the win holds after `freeze()` (which replaces the 8-op chain with a cast+mul,
 already cheaper — expect a smaller ratio). Artifacts:
 `results/matmul_free/decode_profile.json`, `ternary_cache_ab{,_reversed,_landed,_landed_rev}.json`.
+
+## Padding-free sequence packing — 5.17x cheaper per real token (Issue #132, 2026-08-06)
+
+The fine-tune datasets padded every example to `seq_len+1` with EOS and `-100` labels. Padding
+tokens contribute nothing to the gradient, so that compute was pure waste. Measured on the real
+corpora with the real GPT-2 tokenizer at `seq_len=512`:
+
+| corpus | n | median | p90 | max | padding waste |
+|---|---:|---:|---:|---:|---:|
+| `data/grounded_qa_expanded.jsonl` | 5,240 | 86 | 115 | 205 | **83.0%** |
+| `data/tool_use_train.jsonl` | 600 | 180 | 340 | 340 | **63.6%** |
+
+The grounded-QA corpus is the one behind the whole recall track — `hybrid_a4_v2` (161.6 min), the
+#122 deep-supervised (115.3 min) and fixed-N (196.3 min) FTs all paid the 83%.
+
+**This is not "fewer tokens needed to learn."** Same real tokens, same epochs — packing puts ~5.2
+real examples in the row that held one, so the corpus costs 5.18x fewer rows.
+
+**Measured A/B** (`scripts/ab_packing.py`, real 83M hybrid config — 12 layers / 2 windowed-attn /
+d=512 / ternary / triton+megakernel scan — on the real corpus, `results/packing/ab_packing.json`):
+
+| arm | s/step | real (non-`-100`) tokens/step | us/real token | peak VRAM |
+|---|---:|---:|---:|---:|
+| padded | 0.330 | 5 | 61,147 | 2.08 GiB |
+| packed | 0.344 | 29 | 11,816 | 2.15 GiB |
+
+**5.17x cheaper per real token**, against a 5.18x row-reduction ceiling — i.e. packing captures
+essentially all of the available win. Corpus packing: 5,240 examples -> 1,012 rows, waste
+81.4% -> 3.9%. The predicted cost of losing the flash `is_causal` fast path on the 2 attention
+layers turned out to be **~4%** (0.330 -> 0.344 s/step), and VRAM is flat.
+
+**Why the boundary reset is exact rather than an epsilon — the finding that made this cheap.**
+Document isolation needs the DeltaNet recurrent state cut at each document's first token, which is
+expressible as forcing the decay gate `alpha_t = 0` there. `alpha` is a plain tensor passed *as
+data* into every scan, so **no kernel changed**. And `hvn/core/deltanet_triton.py`'s scan is
+sequential over S with a direct `state = state * a_t` multiply ("fp32 throughout -- no
+reparameterization, so stable at any alpha"), so `alpha=0` is a mathematically exact reset there —
+measured 4.8e-7 packed-vs-separate max abs diff, against 0.60 for the leakage it removes. The
+eager `_scan_chunked`/`_scan_chunked_stable` paths fold alpha into a cumprod/log-space form that
+clamps at 1e-6 and *cannot* represent a hard zero; rather than ship a silently-approximate path,
+`DeltaNetBlock.forward` **raises** when asked to pack under them. The FT scripts already default
+to the Triton scan (2026-08-01 flip), so this costs nothing in practice.
+
+**Three sequence-axis carries, all cut** (`hvn/core/packing.py` + the blocks):
+1. **Recurrent state** — `alpha=0` at document starts.
+2. **The depthwise causal conv** — its `K-1`(=3) backward taps read across a boundary. Fixed with
+   a segment-safe conv (K masked shifted multiplies instead of one `conv1d`), only on the packed
+   path. This one is easy to miss and would have leaked 3 tokens per boundary silently.
+3. **Attention** — block-diagonal document mask AND-ed into the existing explicit-mask branch.
+
+RoPE needed nothing (it is relative, and cross-document keys are masked anyway). A fourth issue
+surfaced while building: the **causal shift** means the last token of document A would be trained
+to predict document B's *first* token. The current corpora mask their first token anyway (the
+prompt is `-100`), so it is a no-op on them — but `PackedDataset` cuts it explicitly so the class
+is not silently corpus-dependent.
+
+**Verification.** `tests/test_packing.py` 27/27, including per-document parity vs
+`_scan_sequential`, an explicit cross-document isolation proof on EdgeHVN logits, a
+non-vacuousness check (doc_ids must actually *change* the result), the conv-boundary test, the
+grad-checkpoint recompute path, and GPU parity for both the triton and megakernel scans. Full
+suite 309 passed (`tests/test_issue33.py` syntax error and 6 `ckpt_path`-fixture errors in
+`test_issue51/65/67` are pre-existing on `main` — verified by stashing).
+
+**Scope, deliberately narrow.** `--pack` is opt-in on `finetune_edge_conversational.py`,
+`continue_ft_hybrid.py`, `continue_ft_looped.py`. Class-level defaults on `DeltaNetBlock`/`EdgeHVN`
+are **unchanged** — the same lesson as the #122 scan-default flip, which surfaced two real
+regressions when broadened. Each corpus packs independently so a row never mixes corpora, which
+keeps the `WeightedRandomSampler` mix fractions meaning what the flags say. `HVNBlock` and
+`shared_weights=True` raise `NotImplementedError` rather than leak.
+
+**NOT yet done — the remaining acceptance criterion.** A real packed-vs-padded FT run re-gated on
+`eval/synthetic_recall_probe.py` at the 300-trial bar (against the 35.5% near / 8.5% far
+baseline). Packing changes gradient composition per step — ~5 examples per row instead of 1 — so
+it is **not** a "same result, faster" change on paper, and a speedup that moves recall is not a
+win. The isolation is proven exact; what is unproven is whether the denser step is as good a step.

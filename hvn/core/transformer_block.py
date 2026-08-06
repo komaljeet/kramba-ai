@@ -120,8 +120,22 @@ class TransformerBlock(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def _attention(self, x_norm: torch.Tensor) -> torch.Tensor:
-        """Causal multi-head softmax attention with RoPE. x_norm: [B, S, D]."""
+    def _attention(self, x_norm: torch.Tensor,
+                   doc_ids: torch.Tensor | None = None) -> torch.Tensor:
+        """Causal multi-head softmax attention with RoPE. x_norm: [B, S, D].
+
+        ``doc_ids`` ([B, S], Issue #132) restricts attention to within-document
+        keys for packed rows, by AND-ing a block-diagonal document mask into the
+        attention mask (together with causality and, when set, the sliding
+        window). This forces the explicit-mask path -- the fused
+        ``is_causal=True`` flash kernel cannot express a per-batch segment mask
+        -- which is why packing costs a little on the attention layers. Only the
+        hybrid's 2 attention layers pay it; the other 10 are DeltaNet.
+
+        RoPE needs no adjustment: it is relative, so a document starting at
+        offset 300 still sees correct relative distances within itself, and
+        cross-document keys are masked out here anyway.
+        """
         B, S, D = x_norm.shape
         H, d = self.n_heads, self.d_head
         q = self.q_proj(x_norm).view(B, S, H, d).transpose(1, 2)  # [B, H, S, d]
@@ -132,17 +146,27 @@ class TransformerBlock(nn.Module):
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
 
-        if self.window is not None and S > self.window:
-            # Sliding-window causal attention: query i attends to keys in
-            # [i-window+1, i] (no future). This is the bounded-KV-cache design —
-            # only taken when the sequence exceeds the window (inference/gate).
-            # At training seq_len=512 (< W=4096) the else branch runs, so the
-            # flash is_causal=True fast path is unchanged → no training regression.
+        windowed = self.window is not None and S > self.window
+        if windowed or doc_ids is not None:
+            # Explicit-mask path. Taken when attention is sliding-window (the
+            # bounded-KV-cache design, sequence longer than `window`) and/or the
+            # row is packed (document isolation). At training seq_len=512
+            # (< W=4096) with no packing, neither applies and the
+            # is_causal=True flash fast path below is unchanged → no regression
+            # for existing runs.
             pos = torch.arange(S, device=x_norm.device)
             dist = pos[:, None] - pos[None, :]              # [S, S], dist[i,j]=i-j
             mask = torch.zeros(S, S, device=x_norm.device, dtype=q.dtype)
             mask = mask.masked_fill(dist < 0, float("-inf"))            # future keys
-            mask = mask.masked_fill(dist >= self.window, float("-inf"))  # beyond window
+            if windowed:
+                mask = mask.masked_fill(dist >= self.window, float("-inf"))
+            if doc_ids is not None:
+                from .packing import segment_attn_mask
+                same = segment_attn_mask(doc_ids)           # [B, 1, S, S] bool
+                # Broadcast the [S, S] causal/window mask against the per-batch
+                # document mask → [B, 1, S, S].
+                mask = mask.view(1, 1, S, S).expand(B, 1, S, S).clone()
+                mask = mask.masked_fill(~same, float("-inf"))
             o = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, is_causal=False)
         else:
             # Fused causal scaled-dot-product attention (flash when available)
@@ -151,14 +175,18 @@ class TransformerBlock(nn.Module):
         return self.out_proj(o)
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor | None = None,
-                return_state: bool = False):
+                return_state: bool = False,
+                doc_ids: torch.Tensor | None = None):
         """Process a sequence. x: [B, S, D] → [B, S, D].
 
         Parallel-residual, identical to DeltaNetBlock:
         ``x = x + dropout(attn(norm(x))) + ffn(norm(x))``.
+
+        ``doc_ids`` ([B, S], Issue #132) isolates packed documents — see
+        :meth:`_attention`.
         """
         x_norm = self.norm(x)
-        attn_out = self._attention(x_norm)
+        attn_out = self._attention(x_norm, doc_ids=doc_ids)
         ffn_out = self.ffn(x_norm)
         out = x + self.dropout(attn_out) + ffn_out
         if return_state:

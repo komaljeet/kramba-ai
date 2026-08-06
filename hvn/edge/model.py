@@ -239,7 +239,8 @@ class EdgeHVN(nn.Module):
             self._offload_pool.evict(name)
         return out
 
-    def _offload_wrap_checkpointed(self, name: str, block: nn.Module, x_in, position_ids):
+    def _offload_wrap_checkpointed(self, name: str, block: nn.Module, x_in, position_ids,
+                                   doc_ids=None):
         """Offload wrapper for a checkpointed LAYER block (Issue #101).
 
         Unlike `_offload_wrap_plain`, a checkpointed segment gets invoked
@@ -288,8 +289,18 @@ class EdgeHVN(nn.Module):
         (or cache-hit) weights; see the `_self_loading_forward` closure
         below.
         """
+        # doc_ids (Issue #132) is a non-differentiable int tensor, so it is
+        # captured by the closure rather than passed as a checkpoint arg --
+        # checkpoint only needs to track tensors that carry grad. Kept out of
+        # the kwargs entirely when unset, so the unpacked path is unchanged.
+        _kw = {} if doc_ids is None else {"doc_ids": doc_ids}
         if name == self._offload_active_name:
-            return checkpoint(block, x_in, position_ids, use_reentrant=False)
+            if doc_ids is None:
+                return checkpoint(block, x_in, position_ids, use_reentrant=False)
+
+            def _active_forward(x_arg, pos_arg):
+                return block(x_arg, position_ids=pos_arg, **_kw)
+            return checkpoint(_active_forward, x_in, position_ids, use_reentrant=False)
 
         pool = self._offload_pool
         params = list(block.parameters())
@@ -300,7 +311,7 @@ class EdgeHVN(nn.Module):
             # is a cheap no-op (Issue #103), a miss re-copies into a reused
             # buffer (Issue #101). Either way, safe to call unconditionally.
             pool.load(name, params)
-            return block(x_arg, position_ids=pos_arg)
+            return block(x_arg, position_ids=pos_arg, **_kw)
 
         pool.load(name, params)  # ensure call #1 itself has weights present
         out = checkpoint(_self_loading_forward, x_in, position_ids, use_reentrant=False)
@@ -314,10 +325,43 @@ class EdgeHVN(nn.Module):
             pool.evict(name)  # no call #2 coming -- free the slot now
         return out
 
-    def forward(self, input_ids: torch.Tensor, position_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, input_ids: torch.Tensor, position_ids: Optional[torch.Tensor] = None,
+                doc_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Forward the full stack.
+
+        ``doc_ids`` ([B, S], Issue #132) marks which packed document each
+        position belongs to, so blocks can cut their sequence-axis carries at
+        document boundaries (DeltaNet: conv taps + recurrent state; attention:
+        a block-diagonal mask). ``None`` (the default) is the unpacked path and
+        is byte-identical to before.
+        """
         B, S = input_ids.shape
         if position_ids is None:
             position_ids = torch.arange(S, device=input_ids.device).unsqueeze(0).expand(B, -1)
+        if doc_ids is not None:
+            if doc_ids.shape != input_ids.shape:
+                raise ValueError(
+                    f"doc_ids shape {tuple(doc_ids.shape)} must match input_ids "
+                    f"{tuple(input_ids.shape)}"
+                )
+            # HVNBlock carries its own Hamiltonian state along the sequence and
+            # has no boundary-reset mechanism, so a packed row would leak across
+            # documents there. Only the deltanet+transformer hybrid (the FT
+            # target) supports packing.
+            unsupported = sorted({t for t in self.block_plan if t == "hvn"})
+            if unsupported or self.shared_block is not None:
+                raise NotImplementedError(
+                    "Packed training (doc_ids) supports 'deltanet' and "
+                    "'transformer' blocks only; this model's block_plan is "
+                    f"{self.block_plan}"
+                    + (" with shared_weights=True" if self.shared_block is not None else "")
+                    + ". The hybrid FT configuration (deltanet + windowed "
+                    "attention) is the supported path."
+                )
+        # Only forward doc_ids when packing is actually in use, so the unpacked
+        # path stays byte-identical and block types that never take the kwarg
+        # (HVNBlock, SharedWeightHVN) are unaffected.
+        blk_kw = {} if doc_ids is None else {"doc_ids": doc_ids}
 
         offload = (getattr(self, "_offload_active_name", None) is not None
                    and self.training and torch.is_grad_enabled())
@@ -355,6 +399,7 @@ class EdgeHVN(nn.Module):
             x = self.token_embedding(input_ids)
 
         if self.shared_block is not None:
+            # doc_ids is rejected above for the shared path, so blk_kw is empty here.
             x = self.shared_block(x, position_ids=position_ids)
         else:
             use_ckpt = self.grad_checkpoint and self.training and torch.is_grad_enabled()
@@ -364,7 +409,8 @@ class EdgeHVN(nn.Module):
                 if offload:
                     # offload requires grad_checkpoint=True (enforced above),
                     # so use_ckpt is guaranteed True here.
-                    x = self._offload_wrap_checkpointed(name, block, x_in, position_ids)
+                    x = self._offload_wrap_checkpointed(name, block, x_in, position_ids,
+                                                        doc_ids=doc_ids)
                     # Issue #115: kick off the NEXT offloadable segment's
                     # H2D transfer now, on a side stream -- issued AFTER
                     # this block's own load()/compute above (not before),
@@ -394,9 +440,17 @@ class EdgeHVN(nn.Module):
                         if next_name != self._offload_active_name:
                             self._offload_pool.prefetch(next_name, next_params)
                 elif use_ckpt:
-                    x = checkpoint(block, x_in, position_ids, use_reentrant=False)
+                    if doc_ids is None:
+                        x = checkpoint(block, x_in, position_ids, use_reentrant=False)
+                    else:
+                        # doc_ids is non-differentiable; capture it in a closure
+                        # rather than adding a positional checkpoint arg.
+                        def _ckpt_forward(x_arg, pos_arg, _b=block, _d=doc_ids):
+                            return _b(x_arg, position_ids=pos_arg, doc_ids=_d)
+                        x = checkpoint(_ckpt_forward, x_in, position_ids,
+                                       use_reentrant=False)
                 else:
-                    x = block(x_in, position_ids=position_ids)
+                    x = block(x_in, position_ids=position_ids, **blk_kw)
 
         if offload:
             return self._offload_wrap_plain(
