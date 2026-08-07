@@ -37,8 +37,55 @@ add `--grad_accum 4` to recover effective batch.
 
 ### Measured RTX 4050 training envelope (Issue #69)
 
-Measured with `python -m eval.vram_envelope` (DeltaNet block, vocab 8000, B=8, S=128, bf16,
-fused AdamW; full grid in `results/vram_envelope_rtx4050.json`):
+> ## ⚠️ CORRECTION (2026-08-07) — this table does NOT describe the real training script
+>
+> **Every VRAM number in this section, and in the BCD/GaLore/offload sections below, was
+> measured on a model with `VOCAB = 8000`. The real pretrain uses GPT-2's 50,257.** The
+> constant is hardcoded in every bench: `scripts/bench_block_coordinate_vram.py:31`,
+> `bench_harness.py:36`, `bench_galore_vram.py:32`, `bench_offload_vram.py:29`,
+> `bench_offload_prefetch.py:22`, `bench_offload_bf16_park.py:29`,
+> `bench_offload_4b_8b.py:25`. Only `scripts/measure_speed_ceiling.py:56` uses 50257.
+>
+> The benches also build a plain `EdgeHVN` with **no ternary quantization and no
+> `use_triton_scan`** (`bench_block_coordinate_vram.py:47-55`), while the training script
+> applies `TernaryLinear` by default and the Triton scan's backward allocates a transient
+> `[N,S,D,D]` fp32 tensor (`hvn/core/deltanet_triton.py:216`) — ~1.0 GiB per layer at the
+> 1B shape. So the benched model is smaller *and* missing two real allocations.
+>
+> **Consequences, re-measured through the real `train_edge_conversational.py` path:**
+>
+> | claim in this doc | reality |
+> |---|---|
+> | `d=1024, 24L` is **268M** | **355,128,593 params** (the extra 87M is the vocab: `2 × (50257−8000) × 1024`) |
+> | `+ckpt` → **4.3 GiB**, "recommended ceiling config" | **5.92 GiB alloc / 6.34 GiB reserved** with the script's default Muon → **spills a 5.9966 GiB card**. The 4.3 GiB figure is the forward/backward peak only and **excludes optimizer state entirely** |
+> | `d=2048, 24L` is **~1.04B** | **1,213,523,217 params** |
+> | `d=2048, 24L` BCD+ckpt → **"✅ 4.6 GiB clean fit"** (line ~96) | **6.17 GiB alloc / 7.28 GiB reserved** — 1.29 GiB *over* the card, silently backed by host RAM, **82 s per micro-batch** |
+>
+> **What actually fits at d=1024/24L** (real vocab, real script, measured at the moment
+> optimizer state materialises — the cliff is visible inside a single run):
+>
+> | optimizer | peak alloc | peak reserved | fits? |
+> |---|---:|---:|:--:|
+> | Muon (script default) | 5.92 GiB | 6.34 GiB | ❌ |
+> | AdamW | 6.86 GiB | 8.31 GiB | ❌ |
+> | AdamW + `--tie-embeddings` | 6.28 GiB | 7.54 GiB | ❌ |
+> | **Muon + `--block-coordinate`** | **3.43 GiB** | **3.91 GiB** | ✅ |
+>
+> So **`--block-coordinate` is mandatory at this size**, not optional — see the gate note
+> in [state.md](state.md) before relying on it, because it has only ever been measured as a
+> VRAM optimisation, never for its effect on model quality.
+>
+> **Do not trust `nvidia-smi` for any of this.** All four failing configs above report a
+> healthy-looking `nvidia-smi` while spilling. Use `torch.cuda.max_memory_allocated()` /
+> `max_memory_reserved()`.
+>
+> The rows below are left as originally measured (they are internally consistent at vocab
+> 8000) but **must not be used to size a real run**. Rows not re-measured above are of
+> unknown accuracy for the real script — assume they understate.
+
+Measured with `python -m eval.vram_envelope` (DeltaNet block, **vocab 8000** — see the
+correction above, B=8, S=128, bf16, fused AdamW; full grid in
+`results/vram_envelope_rtx4050.json`):
 
 | Config | Params | Peak VRAM | s/step | Trains in 6 GB? |
 |---|---:|---:|---:|---|
@@ -46,11 +93,16 @@ fused AdamW; full grid in `results/vram_envelope_rtx4050.json`):
 | d=768, 12L | 83M | 2.5 GiB | 0.49 | ✅ |
 | d=1024, 12L | 143M | 3.6 GiB | 0.52 | ✅ **max without `--grad_checkpoint`** |
 | d=1024, 24L | 268M | 6.9 GiB | 2.28 | ❌ (spills → 4.4× slower) |
-| d=1024, 24L `+ckpt` | 268M | **4.3 GiB** | 1.13 | ✅ **recommended ceiling config** |
+| d=1024, 24L `+ckpt` | 268M | **4.3 GiB** | 1.13 | ⚠️ **NOT a ceiling config — see correction above** (real: 355M, 6.34 GiB reserved, spills) |
 | d=1024, 24L, B=16, S=256 `+ckpt` | 268M | 4.7 GiB | 2.28 | ✅ (ckpt crushes activations) |
 | d=1280, 24L `+ckpt` | 414M | 7.0 GiB | 1.46 | ❌ (fits 8 GB — see #70) |
 | d=1536, 24L `+ckpt` | 592M | 10.0 GiB | 1.95 | ❌ |
 | d=2048, 24L (±ckpt) | ~1B | — | — | ❌ hard OOM at allocation |
+
+> **⚠️ The "~270M honest ceiling" below is wrong for the real script.** At vocab 50257 that
+> config is 355M and needs 6.34 GiB reserved with the default optimizer — it spills. It runs
+> only with `--block-coordinate` (3.91 GiB reserved), validated end-to-end at 4,587 MiB
+> steady. The paragraph is kept for the bytes/param derivation, which still holds.
 
 **Honest ceiling: ~270M params** (d=1024, 24L, bf16 + `--grad_checkpoint`, 4.3 GiB peak) —
 measured **16.8 bytes/param** end-to-end (bf16 weights + grads + fp32 AdamW moments +
@@ -64,6 +116,41 @@ CPU/NVMe offload (not wired).
 > RAM instead of OOM-ing — steps get 4–15× slower (see the 6.9 GiB row) and the run *looks*
 > alive. On Linux the same configs hard-OOM. Treat `peak < 6 GiB` as the envelope, not "it
 > didn't crash"; the >6 GiB rows in the JSON record true allocator demand (for #70).
+
+### Launching a real large run — the flags that matter (2026-08-07, Issue #112)
+
+**Head count is a free 2.4× speedup.** The Triton scan is `O(S·D²)` per program with only
+`N = B·H` programs to fill 20 SMs (`hvn/core/deltanet_triton.py:218,222`), so `d_head`
+dominates and more heads parallelise better. Same size, same memory, only `--n-heads` changed:
+
+| | params | s/micro-batch | peak alloc | reserved |
+|---|---:|---:|---:|---:|
+| `--n-heads 8` (d_head 128) | 355,128,593 | 1.91 | 3.43 GiB | 3.91 GiB |
+| `--n-heads 16` (d_head 64) | 355,325,393 | **0.79** | 3.36 GiB | 3.80 GiB |
+
+This changes the schedule materially: at 16,384 tokens/step, `h=8` gives ~1,082 tok/s
+(**~76 days** for a Chinchilla 7.1B-token budget at 355M), `h=16` gives ~2,580 tok/s
+(**~32 days**). Re-run a short end-to-end gate at `h=16` before committing — the number above
+is a micro-batch measurement, not a full-run one.
+
+**`--fast` is ON BY DEFAULT (#129) and must be turned off for BCD runs.** It forces
+`torch.compile`, which recompiles at every BCD block switch. There is no partial escape:
+`--compile` is a bare `store_true`, so the only way to name it is to enable it. Use
+`--no-fast` and re-add `--precision bf16 --tf32 --triton-scan` by hand.
+
+**Nothing prints until micro-batch 400.** Console output is gated on
+`global_step % log_every_steps` with `log_every_steps` hardcoded to 50
+(`train_edge_conversational.py:1162`, no CLI flag) and `grad_accum` defaulting to 8. Even the
+healthy 83M reference takes 2.3 minutes to reach its first line. Time that before concluding a
+run is stuck — this exact silence was misdiagnosed twice, once as a slow compile and once as a
+driver crash.
+
+**Resume is lossy, and a month-long run will restart.** `load_checkpoint_for_resume()`
+(`:1500-1549`) restores no optimizer state, `_save_edge_checkpoint()` (`:81-104`) saves none,
+`train()` resets the cosine schedule and skips warmup on resume (`:1772-1777`), and
+`BlockCoordinateScheduler` is rebuilt fresh at `:1744` — so **every restart rewinds the BCD
+cycle to block 0**, systematically undertraining later blocks across many restarts. Fix this
+before a multi-week BCD run, not after.
 
 ### Block-coordinate-descent (Issue #99) — the ~270M ceiling above is no longer the whole story
 
@@ -93,13 +180,29 @@ shrinks *activation* memory — independent axes, and they compose almost exactl
 | Config | Params | Vanilla | `--block-coordinate` | `--block-coordinate --grad-checkpoint` |
 |---|---:|---:|---:|---:|
 | d=1024, 24L | 268M | 6.9 GiB | 4.2 GiB (−39%) | — |
-| d=2048, 24L | ~1.04B | ❌ hard OOM (12.6 GiB demand) | 9.0 GiB (spills) | **✅ 4.6 GiB — clean fit** |
-| d=2048, 24L, B=2/S=64 | ~1.04B | — | 7.1 GiB (spills) | **✅ 4.4 GiB — clean fit, more headroom** |
+| d=2048, 24L | ~1.04B | ❌ hard OOM (12.6 GiB demand) | 9.0 GiB (spills) | ~~✅ 4.6 GiB — clean fit~~ ⚠️ **REFUTED: 7.28 GiB reserved, spills** |
+| d=2048, 24L, B=2/S=64 | ~1.04B | — | 7.1 GiB (spills) | ~~✅ 4.4 GiB — clean fit~~ ⚠️ not re-measured; assume understated |
+
+> **⚠️ CORRECTION (2026-08-07).** The two "clean fit" cells are wrong — same vocab-8000 bench
+> problem as the top-of-page correction. Re-measured through the real script at `d=2048, 24L,
+> h=8, B=4, S=128, --grad-checkpoint --block-coordinate`: **1,213,523,217 params** (not 1.04B),
+> **6.17 GiB alloc / 7.28 GiB reserved** on a 5.9966 GiB card. WDDM backed the 1.29 GiB overflow
+> with host RAM rather than OOM-ing, giving **82 s per micro-batch** — and since console output
+> is gated on `global_step % 50` with `grad_accum=8`, the first log line would have appeared
+> **9.2 hours in**. That is the entire explanation for the "1.21B stalls silently" report in
+> [state.md](state.md); nothing was hung. Isolation: same `d_model`/`d_head`/kernel at 6 layers
+> instead of 24 fits (4.40 GiB reserved) and runs at 1.66 s/micro — a **12.4× per-layer
+> slowdown from memory pressure alone**, kernel held constant.
 
 (`results/bcd_ckpt_vram.json`.) **The "1B/10B cannot train on this card" framing above is
 now corrected, not just softened: 1B trains locally today**, measured, no cloud/tuning
 gamble required — a flat ~3× impossibility this morning, a working `--block-coordinate
---grad-checkpoint` combo by this afternoon. 10B (~336 GiB naive) is not re-evaluated here —
+--grad-checkpoint` combo by this afternoon.
+> **⚠️ That claim does not survive the 2026-08-07 re-measurement either.** 1B does **not**
+> train locally at the real vocab — the config above spills. What *is* validated end-to-end
+> (55 steps, real data pipeline, audit passed, checkpoint written, clean exit) is **355M**:
+> `--d-model 1024 --num-layers 24 --n-heads 8 --grad-checkpoint --block-coordinate --no-fast
+> --precision bf16 --tf32 --triton-scan --num-workers 0` → 4,587 MiB steady, 15.14 s/step. 10B (~336 GiB naive) is not re-evaluated here —
 worth a follow-up probe now that both levers are proven, but likely still needs genuinely
 different hardware (see the `2M` floor analysis below — none of the levers on this page
 touch total weight storage).
