@@ -445,6 +445,144 @@ windowed-attention hybrid, same warm-start approach) to whatever size #107 lands
 well-justified next step when picked back up — not a guess, a conclusion from real measurement
 at the smaller scale first.
 
+## #112 — 268M real-recipe validation attempt: a WDDM TDR driver crash, not a slow compile (2026-07-24)
+
+Picking up #107/#112 (scale past 83M): before committing to a multi-hour/day pretrain at
+120–270M, ran a short **300-step validation** of the "recommended ceiling config" from this
+file's VRAM table (d=1024, 24L, ~268M, `--grad-checkpoint`) with the **real** data pipeline
+(SlimPajama/WikiText via the existing `data_cache`, not synthetic) and the real `--fast` stack,
+to get an honest steps/sec + VRAM-peak reading before scoping the full run.
+
+**First finding — the untracked smoke probes already in `pretrain-300m-112` (`logs/probe_143m.log`,
+`probe_300m.log`, `probe_300m_clean.log`, 150 steps each) were not measuring this table's 268M
+config at all.** They used d=1024/19L (~302M, not 24L/268M) and never passed `--grad-checkpoint`,
+so the 300M-class probe hit the documented WDDM VRAM spill (~30s/step, ~13x slower than the
+143M probe's 2.2s/step) — consistent with this file's "spills → 4-15x slower" note, not a new
+finding, just a probe that was missing the one flag that fixes it.
+
+**Second finding — the first real validation launch appeared to hang for 50+ minutes with zero
+step output, but the actual cause was a Windows driver crash, not a slow `torch.compile`.**
+Windows Event Log (System log) shows, ~3 minutes into the run:
+```
+14:38:24  Driver Management has concluded the process to add Service nvlddmkm ... status: 0.
+14:38:25  Driver Management has concluded the process to add Service NVDisplay.ContainerLocalSystem ... status: 0.
+```
+This is the signature of a **WDDM TDR (Timeout Detection & Recovery) reset** — Windows kills
+and reloads the GPU driver if a single kernel launch blocks longer than its watchdog timeout
+(default ~2s). Plausible trigger: first-time `torch.compile` + Triton-scan autotuning for the
+new 268M/24L/seq_len=512 shape (the log's "Not enough SMs to use max_autotune_gemm mode" line
+shows it was mid-autotune-fallback right before the reset). After the reset, the training
+process kept running but was silently stuck on a dead CUDA context for the remaining ~47
+minutes — indistinguishable from "still compiling" until investigated, because **stdout is
+fully buffered when redirected to a file** (the same gotcha recorded for the 83M chinchilla
+pretrain in memory — confirmed again here at a different scale).
+
+**Contributing/latent finding, independent of the TDR crash:** the DataLoader worker
+subprocesses spawned by `--fast`'s default `--num-workers 4` resolved `sys.executable` to
+`C:\Users\komal\Documents\PythonVersions\314\python.exe` — **not** the project's
+`.venv\Scripts\python.exe` — even though the parent process was correctly launched from the
+venv. That `314` interpreter lacks `transformers` (a previously-known gotcha from the 83M
+pretrain). The workers stayed alive without crash-looping in this run (worker `__getitem__`
+only touches pre-tokenized numpy memmaps, no `transformers` import needed at fetch time), so
+this did **not** cause this particular hang — but it's a live risk for any future run that
+relies on multi-worker loading on this machine. Safe workaround used for the retry:
+`--num-workers 0`. Root cause (why spawn resolves the wrong interpreter here) is still
+unexplained and worth a real fix before depending on `--num-workers > 0` for a long pretrain.
+
+**Post-crash GPU state (as of this writing):** `nvidia-smi` fails with "insufficient
+permissions"; `torch.cuda.is_available()` is `False`; Device Manager shows the GPU
+(`PCI\VEN_10DE&DEV_28A1&SUBSYS_8BD4103C&REV_A1\4&3382C3D5&0&0009`) status as `Error`. A
+non-elevated `Disable-PnpDevice`/`Enable-PnpDevice` toggle failed (`Generic failure`, HRESULT
+`0x80041001`) — needs an elevated PowerShell at minimum; **decision: full machine restart**
+rather than chase the elevated-toggle path further.
+
+**TODO after restart:** (1) re-verify `nvidia-smi` + `torch.cuda.is_available()` before
+touching training again; (2) relaunch the same 300-step validation with `python -u` (unbuffered,
+so real progress is visible immediately instead of only after the OS flushes the buffer) and
+`--num-workers 0` (sidesteps the wrong-interpreter spawn risk above); (3) only after a clean
+steps/sec + VRAM-peak reading, decide the full pretrain step budget for #112 and launch it as
+a properly backgrounded, log-tailed run per the project's standing rule for long GPU jobs.
+
+## #112 — pre-training-audit OOM bug fixed; BCD + torch.compile recompile conflict found (2026-07-24, later same day)
+
+After the restart, `nvidia-smi`/CUDA came back healthy. Relaunching the 1.21B validation
+(`d_model=2048, num_layers=24, n_heads=8, batch=4, seq_len=128, --grad-checkpoint
+--block-coordinate --fast --num-workers 0`) hit a **new, real** crash — not the driver TDR —
+immediately after model construction:
+
+```
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 16.00 MiB. ...
+Of the allocated memory 12.31 GiB is allocated by PyTorch...
+```
+
+**Root cause, confirmed directly (not the BCD mechanism itself):**
+`pre_training_audit()` in `train_edge_conversational.py` has always run two checks that build
+a *second full model copy* on GPU before `BlockCoordinateScheduler` ever exists — Check 2
+(`copy.deepcopy(model)`, then a full **un-frozen** forward+backward across every param) and
+Check 3 (rebuilds a second `EdgeHVN` to verify the checkpoint save/load cycle, moved to GPU,
+no backward). Neither check is aware of `--block-coordinate` at all. At 1.21B params fp32,
+real model weights (~4.16 GiB) + audit copy weights (~4.16 GiB) + full un-BCD-frozen
+gradients across the whole audit copy (~4.16 GiB) ≈ 12.3 GiB — matches the crash almost
+exactly. Harmless at 83M/268M (both copies + full grads still fit easily), so it went
+unnoticed until pushing toward 1B. **Fixed**: both checks are now skipped when
+`--block-coordinate` is set, with an explanatory log line (not made "BCD-aware" — that would
+be new, untested logic for a one-off sanity check; real forward/backward problems still
+surface immediately on step 1 of actual training). Also fixed a small, independent latent bug
+found in the same trace: `load_checkpoint_for_resume()` rebuilt `EdgeHVN(...)` without passing
+`grad_checkpoint` at all, so a resumed run silently lost checkpointing regardless of the
+original run's setting — now threaded through, and `_save_edge_checkpoint` persists the key.
+
+**BlockCoordinateScheduler itself, and the blanket `model.to(device)` calls, were confirmed
+NOT the problem** — `_activate()` handles a CPU-resident starting model gracefully via
+idempotent `.to(...)` calls, and the blanket `model.to(device)` is correct as long as
+`offload_inactive_weights` isn't enabled (it isn't, by design — see below). No changes needed
+there.
+
+**After the fix, 1.21B still doesn't practically run.** Both a compiled (`--fast`) and an
+eager-mode (no `--compile`) relaunch of the identical 1.21B config passed the audit and
+reached `STEP 5 — START TRAINING` cleanly, then **stalled silently for 30–90+ minutes with
+zero step output**, no error, and a healthy GPU (`nvidia-smi` clean throughout — not a repeat
+of the TDR crash). The isolated micro-benchmark (`scripts/bench_block_coordinate_vram.py`)
+says this config should fit at ~4.65 GiB, but that number never included the real script's
+full overhead (DataLoader, checkpoint I/O, audit machinery) — almost certainly the documented
+WDDM silent-host-spill behavior, but far worse than the "4–15× slower" already on record, and
+never actually root-caused (would need real profiling, not attempted). **Open, unsolved.**
+
+**Scaled down instead, on the same fixed code path, to get an honest number today.** At
+**355M** (d=1024, 24L — the "268M-class" config, actual param count higher due to
+vocab/embedding overhead), `--grad-checkpoint --block-coordinate`:
+
+| Mode | Total (150 steps) | Avg s/step |
+|---|---|---|
+| Eager (no compile) | 661.4s | **4.41s/step** |
+| `--fast` (compiled) | 1009.3s | **6.73s/step** — *slower*, not faster |
+
+**Real, confirmed finding: `--block-coordinate` and `torch.compile` actively conflict.**
+`BlockCoordinateScheduler` toggles `requires_grad` on a different layer-block every
+`--bcd-steps-per-block` steps (default 100) — that's the entire mechanism behind its VRAM
+saving. `torch.compile` guards its captured graph on `requires_grad`, so every block switch
+invalidates the graph and forces a full recompile. Confirmed directly (not just inferred from
+timing) via `TORCH_LOGS=recompiles`, which printed exactly this at step 100:
+```
+[__recompiles] Recompiling function forward in hvn/edge/model.py:309
+    triggered by ... tensor 'blocks.0.ffn.0.bias' requires_grad mismatch.
+```
+Per-50-step timing breakdown of the compiled run confirms the shape: steps 1–50 (7.43s/step,
+includes the one-time initial compile), 50–100 (5.66s/step, settled), 100–150 (7.10s/step,
+spikes back up right at the block-switch boundary — a second recompile). For a **real, long**
+pretrain with the default `steps_per_block=100` this isn't a one-time cost — it recompiles
+**every 100 steps for the entire run**, not just once.
+
+**Net status:** `--grad-checkpoint --block-coordinate` alone (eager mode) is real and working
+at 355M (4.41s/step). Combining it with `--fast`/`torch.compile` is currently a net loss, not
+a neutral no-op — worth remembering before assuming "just add `--fast`" is free. Three
+possible fixes were identified but **not pursued** (deliberately paused, not blocked): raise
+`--bcd-steps-per-block` much higher to dilute the recompile cost over a real multi-thousand-
+step run, treat `--fast` and `--block-coordinate` as mutually exclusive and document it, or
+investigate `torch._dynamo.config.force_parameter_static_shapes = False` (surfaced directly in
+the recompile diagnostic as a possible lever, unproven). **1.21B remains unresolved** — the
+audit-OOM bug that blocked it is fixed, but the silent stall through the real training script
+is a separate, still-open problem needing real profiling, not a guess.
 ## MoE FFN on DeltaNet — works, but loses to simply scaling the dense model (Issue #123, 2026-08-02)
 
 MoE was scoped as the only remaining lever that attacks FLOPs-per-token rather than memory
