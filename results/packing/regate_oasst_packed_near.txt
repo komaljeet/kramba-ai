@@ -1,0 +1,9 @@
+Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked critical (_ssl.c:1081). Will retry later.
+Loaded checkpoints/regate_oasst_packed/hybrid_a4_step1379.pt (step 1379)
+  [miss] expect='Renvex' got='The Drosist is a type of language that was developed by the German philosopher Friedrich von Raim'
+  [miss] expect='Yurunda' got='The Fimist is a philosophical and philosophical question that emphasizes the nature of the universe, which includes'
+  [miss] expect='Blenorix' got='The Rusta is a language model developed by the Rustia library. It allows for the development of'
+
+Synthetic-recall result over 300 trials (0 distractor facts):
+  exact whole-word accuracy: 3.0%  (9/300)
+  -> NO recall: the model never reproduces the exact invented value.

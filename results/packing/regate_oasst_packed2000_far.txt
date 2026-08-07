@@ -1,0 +1,10 @@
+Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked critical (_ssl.c:1081). Will retry later.
+Loaded checkpoints/regate_oasst_packed_2000/hybrid_a4_step2000.pt (step 2000)
+  window overridden to 128 on 2 attention block(s)
+  [miss] expect='Renvex' got='The Drosist is called Fimini. The Fimini are the Fimini,'
+  [miss] expect='Fenarn' got='The Stannum is called Fenat. The Tiberus was the first deity to be'
+  [miss] expect='Moxilo' got='The Zorock is called Koreth. The Kareby are also named Tiber,'
+
+Synthetic-recall result over 300 trials (16 distractor facts):
+  exact whole-word accuracy: 2.7%  (8/300)
+  -> NO recall: the model never reproduces the exact invented value.

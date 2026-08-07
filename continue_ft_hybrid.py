@@ -276,14 +276,16 @@ def main():
                     help="0-indexed layer positions for the 2 attention blocks")
     ap.add_argument("--attn-window", type=int, default=4096)
     ap.add_argument("--seq-len", type=int, default=512)
-    ap.add_argument("--pack", action="store_true",
-                    help="padding-free sequence packing (Issue #132) -- the grounded-QA "
-                         "corpus is 83%% padding at seq_len=512, so this is a large "
-                         "wall-clock win for the SAME training (same real tokens, ~6 "
-                         "examples per row). Documents are isolated inside a row "
-                         "(DeltaNet state reset + conv taps + attention mask), so it is "
-                         "exact, not an approximation -- but it does change gradient "
-                         "composition per step, so re-gate recall after switching.")
+    ap.add_argument("--pack", action=argparse.BooleanOptionalAction, default=True,
+                    help="padding-free sequence packing (Issue #132), ON BY DEFAULT -- "
+                         "the grounded-QA corpus is 83%% padding at seq_len=512, so this "
+                         "is a large wall-clock win for the SAME training (same real "
+                         "tokens, ~6 examples per row). Documents are isolated inside a "
+                         "row (DeltaNet state reset + conv taps + attention mask), so it "
+                         "is exact, not an approximation. Measured 5.15x faster on "
+                         "grounded-QA and 1.45x on OASST, with held-out loss within 0.4%% "
+                         "of the padded control -- see docs/state.md. Pass --no-pack to "
+                         "restore the old padded path.")
     ap.add_argument("--pack-seed", type=int, default=0,
                     help="seed for the packing shuffle (--pack)")
     ap.add_argument("--pack-strategy", type=str, default="shuffled_first_fit",

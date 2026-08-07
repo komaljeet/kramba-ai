@@ -1,0 +1,26 @@
+[
+  {
+    "label": "A_padded_2000",
+    "checkpoint": "checkpoints/regate_oasst_padded/hybrid_a4_step2000.pt",
+    "step": 2000,
+    "heldout_loss": 4.818547522227729,
+    "heldout_ppl": 123.78516494170128,
+    "real_tokens": 493837
+  },
+  {
+    "label": "B_packed_1379_tokenmatched",
+    "checkpoint": "checkpoints/regate_oasst_packed/hybrid_a4_step1379.pt",
+    "step": 1379,
+    "heldout_loss": 4.822062796814789,
+    "heldout_ppl": 124.22106949950481,
+    "real_tokens": 493837
+  },
+  {
+    "label": "C_packed_2000_equalwallclock",
+    "checkpoint": "checkpoints/regate_oasst_packed_2000/hybrid_a4_step2000.pt",
+    "step": 2000,
+    "heldout_loss": 4.851062226697682,
+    "heldout_ppl": 127.87615119039258,
+    "real_tokens": 493837
+  }
+]
