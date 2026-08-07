@@ -1,0 +1,9 @@
+Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked critical (_ssl.c:1081). Will retry later.
+Loaded checkpoints/slm_selective/final.pt (step 1500)
+  [miss] expect='Renvex' got='Nomali is a fictional town located in the city of São, Portugal. It has a'
+  [miss] expect='Yurunda' got='Yurora is the Fimist.\nThe Fimist is a language model that uses'
+  [HIT] expect='Blenorix' got='Blenorix'
+
+Synthetic-recall result over 300 trials (0 distractor facts):
+  exact whole-word accuracy: 29.7%  (89/300)
+  -> PARTIAL recall: better than a garbled-output baseline, not reliable.

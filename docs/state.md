@@ -2205,3 +2205,68 @@ cost — explicitly deferred, not dropped.
 Artifacts: `scripts/ab_bcd_convergence.sh`, `logs/ab_bcd_convergence.log`,
 `checkpoints/ab_bcd_{control,blockcoord}/val_log.csv`, `scripts/probe_optimizer_vram.py`,
 `results/optimizer_vram_355m.json`.
+## Selective token training (Rho-1) — no gain at 83M (2026-08-07)
+
+**One line: training on only the 60% of tokens the model is most wrong about costs
+0.29 nats of perplexity and buys nothing measurable downstream.**
+
+Tested as a candidate answer to "train on less compute". Rho-1 (arXiv:2404.07965)
+scores every token with a reference model trained on curated data and applies the loss
+only to the top fraction by *excess loss* (target minus reference) — the tokens where
+the model is still much worse than the reference. Reported: up to 10x faster to
+baseline accuracy on math, and +6.8% average across 15 benchmarks for general-domain
+continual pretraining.
+
+**Why this repo could test it faithfully rather than approximately.** The method needs
+a reference that is the same base trained further on curated data.
+`checkpoints/hybrid_chat_v1.pt` **is** `hybrid_a4_v2/hybrid_a4_step8000.pt` fine-tuned
+on the curated OASST + grounded-QA corpora (#108) — the paper's exact relationship, not
+a stand-in. Both arms continue-pretrain from `hybrid_a4_step8000.pt` on identical,
+pre-materialised batches in identical order, 1,500 steps each, differing only in the
+token mask (`scripts/ab_selective_tokens.py`, `scripts/run_slm_ab.sh`).
+
+| | baseline (all tokens) | selective (top 60%) |
+|---|---:|---:|
+| val loss over ALL tokens | **3.9048** | 4.1965 (**+0.2918**) |
+| near-window recall, 300 trials | 27.3% (82/300) | 29.7% (89/300) |
+| tokens kept | 100% | 60.0% |
+
+**Verdict: no gain.** Perplexity is clearly worse; the downstream probe is
+**statistically indistinguishable** (two-proportion z=+0.63, p=0.53). The nominal
++2.4 points is noise at n=300.
+
+**The experiment was built so a false negative was possible to detect, and it still
+came out negative.** Two traps were designed around explicitly:
+- *Validation is scored on ALL tokens for both arms.* Scoring only the selected tokens
+  would rig the metric toward the arm that chose them.
+- *Perplexity alone cannot settle this.* The selective arm trains on a deliberately hard
+  subset, so a worse all-token loss is expected and not disqualifying — the paper's
+  general-domain result was a downstream benchmark gain, **not** a perplexity win. That
+  is why the recall probe was run at all. The observed pattern matches the paper's
+  *direction* (perplexity worse, downstream not worse) but the downstream **gain** is
+  absent.
+
+**Two limits, stated because they bound the claim.** The downstream reading is a single
+probe measuring exact-token recall; the paper used 15 benchmarks, and recall may simply
+not be where selection helps. And this is 83M against Rho-1's 1.1B floor — the same
+order-of-magnitude gap that ruled out multi-token prediction earlier today (worse than
+baseline below ~1B per its own scaling ablation). **This is evidence about this scale and
+this setup, not a refutation of the method.**
+
+**Context — the compute-reduction search, settled for now.** Four candidates were
+examined today for the "train on less compute" goal:
+
+| candidate | outcome |
+|---|---|
+| padding-free packing (#132) | ✅ **1.45-5x, merged, on by default** |
+| block-coordinate descent | ❌ measured 4x worse quality |
+| multi-token prediction | ❌ ruled out from the literature (negative below ~1B) |
+| selective tokens (this entry) | ❌ measured, no gain at 83M |
+
+Packing is the one that worked, and it is already landed. The remaining honest lever at
+this scale is not a training trick — it is spending the fine-tune budget on more and
+better data, which this document has concluded repeatedly.
+
+Artifacts: `results/slm/ab_selective_tokens.json`,
+`results/slm/probe_{baseline,selective}_near.txt`, `logs/slm_ab.log`,
+checkpoints under `checkpoints/slm_{baseline,selective}/`.

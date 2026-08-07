@@ -1,0 +1,81 @@
+{
+  "baseline": {
+    "trajectory": [
+      {
+        "step": 0,
+        "val_loss": 4.466300220825434
+      },
+      {
+        "step": 250,
+        "val_loss": 4.090187971559289
+      },
+      {
+        "step": 500,
+        "val_loss": 4.021392093665912
+      },
+      {
+        "step": 750,
+        "val_loss": 3.982292124529874
+      },
+      {
+        "step": 1000,
+        "val_loss": 3.9521642994740707
+      },
+      {
+        "step": 1250,
+        "val_loss": 3.9234061702123593
+      },
+      {
+        "step": 1500,
+        "val_loss": 3.904755725599315
+      }
+    ],
+    "final_val_loss": 3.904755725599315,
+    "checkpoint": "checkpoints/slm_baseline/final.pt",
+    "mean_kept_frac": 1.0,
+    "minutes": 14.4
+  },
+  "selective": {
+    "trajectory": [
+      {
+        "step": 0,
+        "val_loss": 4.466300220825434
+      },
+      {
+        "step": 250,
+        "val_loss": 4.289573678391787
+      },
+      {
+        "step": 500,
+        "val_loss": 4.254378955938112
+      },
+      {
+        "step": 750,
+        "val_loss": 4.235019667414536
+      },
+      {
+        "step": 1000,
+        "val_loss": 4.208875849475599
+      },
+      {
+        "step": 1250,
+        "val_loss": 4.199984591907718
+      },
+      {
+        "step": 1500,
+        "val_loss": 4.196515728676156
+      }
+    ],
+    "final_val_loss": 4.196515728676156,
+    "checkpoint": "checkpoints/slm_selective/final.pt",
+    "mean_kept_frac": 0.5998042821884155,
+    "minutes": 17.5
+  },
+  "summary": {
+    "baseline_final": 3.904755725599315,
+    "selective_final": 4.196515728676156,
+    "delta_nats": 0.2917600030768406,
+    "select_frac": 0.6,
+    "note": "val loss is over ALL tokens for both arms; the paper's general-domain gain was on downstream benchmarks, not perplexity -- run the recall probe on both checkpoints before concluding"
+  }
+}
