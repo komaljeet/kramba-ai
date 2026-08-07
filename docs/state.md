@@ -1805,3 +1805,89 @@ establish that packing is free at every mix/length distribution -- OASST convers
 (smaller packing ratio, fewer documents per row), so both the win and any risk shrink there, and
 that case was not measured. Artifacts: `results/packing/regate_{padded,packed}_{near,far}.txt`,
 `scripts/regate_packing.sh`, checkpoints under `checkpoints/regate_{padded,packed}/`.
+
+## OASST packing re-gate — the win shrinks to 1.45x and a small loss cost appears (Issue #132, 2026-08-07)
+
+Closes the "not established at every length distribution" caveat directly above. OASST is the
+other end of the distribution from grounded-QA: median 359 tokens with >=10% at the 512 cap,
+so it packs **1.45 examples per row** (3,465 -> 2,395 rows, waste 32.9% -> 3.0%) against
+grounded-QA's 5.18. Both the available win and the gradient-composition perturbation shrink by
+the same factor, which is why this could not be inferred from the grounded result.
+
+**Harness choice that matters.** Both arms ran through `continue_ft_hybrid.py --chat-mix 1.0`,
+not `finetune_edge_conversational.py`. That script only enables the Triton scan under `--pack`,
+so an A/B there would have confounded packing with a change of scan path — the #122 lesson.
+`continue_ft_hybrid.py` has triton+megakernel on unconditionally in both arms, leaving `--pack`
+as the single difference. `--chat-mix 1.0` gives the grounded corpus zero sampling weight, so
+this is effectively pure OASST on the identical harness as the first re-gate. Arms matched on
+**real tokens**: 2000 padded steps vs 1379 packed (= 2000 / 1.45, same passes over the corpus).
+
+| arm | steps | wall-clock | final train loss (last 5 windows) | near-window | far-window (W=128, 16 distr.) |
+|---|---:|---:|---:|---:|---:|
+| padded (control) | 2,000 | **35.7 min** | 2.614 (ppl 13.65) | 1.3% (4/300) | 4.0% (12/300) |
+| packed | 1,379 | **24.7 min** | 2.676 (ppl 14.53) | 3.0% (9/300) | 4.7% (14/300) |
+
+**1.445x end-to-end wall-clock**, against the 1.45x row-reduction ceiling — packing again
+captures essentially all of the available win, and per-step cost is unchanged (1.07-1.08 s/step
+in both arms, so the ~4% flash-`is_causal` penalty measured on grounded-QA does not grow here).
+The scaling law across both re-gates is simply *speedup = packing ratio*; nothing else about the
+step got cheaper or dearer.
+
+**Recall: no detectable difference, but the probe is a weak instrument on this run.** Near
+z=-1.40 (p=0.16), far z=-0.40 (p=0.69) — both non-significant at n=300, and both nominally
+favour the *packed* arm. The honest caveat is that this FT is 100% chat with zero grounded
+replay, so both arms sit at or below the pure-trunk floor (4-5% near / 0.5% far): recall was
+eroded by the chat FT itself, exactly as Stage 1 (#108) predicted, in both arms equally. A
+floored metric can only detect gross damage, so "no difference" is weaker evidence here than
+the same words were in the grounded re-gate. **This is why the loss column was added** — on a
+chat corpus, next-token loss is the metric that actually tracks the thing being trained.
+
+**The new finding: a small, consistent train-loss cost that the grounded re-gate could not have
+seen.** At matched real tokens the packed arm is behind throughout, not just at the end:
+
+| progress (real tokens) | padded | packed | gap |
+|---|---:|---:|---:|
+| 10% | 3.3134 | 3.3440 | +0.031 |
+| 20% | 3.1012 | 3.1259 | +0.025 |
+| 30% | 2.8959 | 2.9305 | +0.035 |
+| 50% | 2.7288 | 2.7863 | +0.058 |
+| 70% | 2.6575 | 2.7061 | +0.049 |
+| 100% | 2.614 | 2.676 | **+0.062** |
+
+A stable ~0.03-0.06 nat offset (**+6.4% ppl** at the end), flat-to-slightly-widening — not a
+divergence, not noise. The loss is comparable across arms by construction:
+`CrossEntropyLoss(ignore_index=-100)` with the default mean reduction is a per-**real**-token
+mean in both, and padding is `-100`, so the packed row's extra real tokens change the variance
+of the estimate, not its expectation.
+
+**Most likely cause, and it is confounded on purpose: 1.45x fewer optimizer updates.** Matching
+on real tokens means the packed arm takes 1379 updates where the control takes 2000, at the same
+peak LR and a cosine schedule over its own (shorter) run. That is *the* thing packing trades away,
+and it is inseparable from packing in this design — which is the correct thing to measure, since
+it is exactly how the flag would be used. What this A/B cannot do is attribute the 0.06 to "fewer
+updates" versus "denser rows are worse steps"; separating those needs a third arm matched on
+*steps* instead of tokens. The grounded re-gate could not have surfaced this at all: its final
+loss was 0.0084 (ppl 1.01, ~30 passes, deep in the overfitting regime), where every arm is
+pinned to the floor.
+
+**Decision: `--pack` stays OPT-IN; do NOT flip it on by default** (the change this branch was
+named for, declined on the measurement). The rule is corpus-shaped, not global:
+
+- **Short-document corpora — use it.** grounded-QA 5.18x, tool-use 2.75x expected from the 63.6%
+  waste. Large win, cost below detection, and these are the corpora on the recall track that
+  `state.md` repeatedly names as the real bottleneck.
+- **OASST-style chat — the case is genuinely marginal.** 1.45x wall-clock for ~6% worse chat ppl
+  is a trade, not a free win, and a default should not silently make chat FTs slightly worse. The
+  #122 scan-default flip is the precedent: broadening a verified-narrow default surfaced two real
+  regressions, and the same caution applies to a flag whose value provably depends on the input
+  distribution.
+
+**The untested option that probably dominates both.** Spend the speedup on *data* instead of
+wall-clock: at equal wall-clock the packed arm affords 1.45x more passes (or 1.45x more corpus)
+at the same update count, which would plausibly more than recover a 0.06-nat gap. That is the
+same "corpus size is the lever" conclusion this document reaches on grounded-QA, tool-use, and
+OASST — and it is the framing under which packing is unambiguously a win at *any* ratio. Not
+measured; the natural next experiment if packing is picked up again.
+
+Artifacts: `results/packing/regate_oasst_{padded,packed}_{near,far}.txt`,
+`scripts/regate_packing_oasst.sh`, checkpoints under `checkpoints/regate_oasst_{padded,packed}/`.
