@@ -615,17 +615,20 @@ def main():
                              "stage (issue #110 / #97 Phase C).")
     parser.add_argument("--tool-use-frac", type=float, default=0.5,
                         help="P(tool-use) when --tool-use-data is set.")
-    parser.add_argument("--pack", action="store_true",
-                        help="Padding-free sequence packing (Issue #132): concatenate "
-                             "several short examples into each seq_len row instead of "
-                             "padding each one out with EOS. The measured corpora are "
-                             "63-83%% padding at seq_len=512, so this is a large "
-                             "wall-clock win for the SAME training (same real tokens, "
-                             "~6 examples per row). Documents are isolated inside a "
-                             "row (DeltaNet state reset + conv taps + attention mask), "
-                             "so it is not an approximation -- but it does change "
-                             "gradient composition per step, so re-gate recall after "
-                             "switching. Requires the Triton scan (the default here).")
+    parser.add_argument("--pack", action=argparse.BooleanOptionalAction, default=True,
+                        help="Padding-free sequence packing (Issue #132), ON BY DEFAULT: "
+                             "concatenate several short examples into each seq_len row "
+                             "instead of padding each one out with EOS. The measured "
+                             "corpora are 63-83%% padding at seq_len=512, so this is a "
+                             "large wall-clock win for the SAME training (same real "
+                             "tokens, ~6 examples per row). Documents are isolated "
+                             "inside a row (DeltaNet state reset + conv taps + attention "
+                             "mask), so it is exact, not an approximation. Measured "
+                             "5.15x faster on grounded-QA and 1.45x on OASST, with "
+                             "held-out loss within 0.4%% of the padded control -- see "
+                             "docs/state.md. Pass --no-pack to restore the old padded "
+                             "path. Enables the Triton scan (required for the exact "
+                             "document-boundary state reset).")
     parser.add_argument("--pack-seed", type=int, default=0,
                         help="Seed for the packing shuffle (--pack), for reproducible rows.")
     parser.add_argument("--pack-strategy", type=str, default="shuffled_first_fit",

@@ -1,0 +1,9 @@
+Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked critical (_ssl.c:1081). Will retry later.
+Loaded checkpoints/regate_oasst_packed_2000/hybrid_a4_step2000.pt (step 2000)
+  [miss] expect='Renvex' got='The Drosist is a fictional character who has been created by the French mathematician Pierre de la France'
+  [miss] expect='Yurunda' got='The Fimist is a philosophical and philosophical concept that emphasizes the nature of the universe, its nature'
+  [miss] expect='Blenorix' got='The Magma is a language model that uses a language model to generate text. The language model consists'
+
+Synthetic-recall result over 300 trials (0 distractor facts):
+  exact whole-word accuracy: 3.0%  (9/300)
+  -> NO recall: the model never reproduces the exact invented value.

@@ -187,11 +187,12 @@ def main():
                     help="always run exactly --max-loops loops (no random k) -- the "
                          "no-early-exit recipe (docs/state.md 'First positive signal'). "
                          "Implies --no-deep-supervise is the natural pairing.")
-    ap.add_argument("--pack", action="store_true",
-                    help="padding-free sequence packing (Issue #132) -- the grounded-QA "
-                         "corpus is 83%% padding at seq_len=512, so this is a large "
-                         "wall-clock win for the same real tokens. Documents are isolated "
-                         "inside a row, so it is exact, not an approximation.")
+    ap.add_argument("--pack", action=argparse.BooleanOptionalAction, default=True,
+                    help="padding-free sequence packing (Issue #132), ON BY DEFAULT -- "
+                         "the grounded-QA corpus is 83%% padding at seq_len=512, so this "
+                         "is a large wall-clock win for the same real tokens. Documents "
+                         "are isolated inside a row, so it is exact, not an "
+                         "approximation. Pass --no-pack to restore the padded path.")
     ap.add_argument("--pack-seed", type=int, default=0,
                     help="seed for the packing shuffle (--pack)")
     ap.add_argument("--pack-strategy", type=str, default="shuffled_first_fit",

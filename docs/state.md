@@ -1870,24 +1870,97 @@ updates" versus "denser rows are worse steps"; separating those needs a third ar
 loss was 0.0084 (ppl 1.01, ~30 passes, deep in the overfitting regime), where every arm is
 pinned to the floor.
 
-**Decision: `--pack` stays OPT-IN; do NOT flip it on by default** (the change this branch was
-named for, declined on the measurement). The rule is corpus-shaped, not global:
+> **⚠️ The decision this section originally reached — "`--pack` stays opt-in, because it costs
+> ~6% chat ppl" — is RETRACTED.** That verdict rested on **train** loss, which in this regime
+> measures how hard each arm memorised its own training set, not model quality. Measured on
+> held-out data the next day, the gap is +0.4% (nothing), and `--pack` is now ON BY DEFAULT.
+> See the correction entry below. The measured facts above stand; only the reading of them was
+> wrong.
 
-- **Short-document corpora — use it.** grounded-QA 5.18x, tool-use 2.75x expected from the 63.6%
-  waste. Large win, cost below detection, and these are the corpora on the recall track that
-  `state.md` repeatedly names as the real bottleneck.
-- **OASST-style chat — the case is genuinely marginal.** 1.45x wall-clock for ~6% worse chat ppl
-  is a trade, not a free win, and a default should not silently make chat FTs slightly worse. The
-  #122 scan-default flip is the precedent: broadening a verified-narrow default surfaced two real
-  regressions, and the same caution applies to a flag whose value provably depends on the input
-  distribution.
+**Original decision (superseded):** keep `--pack` opt-in, on the grounds that 1.45x wall-clock
+for ~6% worse chat ppl is a trade rather than a free win, with the #122 scan-default flip as the
+precedent for not broadening a verified-narrow default.
 
-**The untested option that probably dominates both.** Spend the speedup on *data* instead of
-wall-clock: at equal wall-clock the packed arm affords 1.45x more passes (or 1.45x more corpus)
-at the same update count, which would plausibly more than recover a 0.06-nat gap. That is the
-same "corpus size is the lever" conclusion this document reaches on grounded-QA, tool-use, and
-OASST — and it is the framing under which packing is unambiguously a win at *any* ratio. Not
-measured; the natural next experiment if packing is picked up again.
+**The untested option flagged here as "probably dominates both"** — spend the speedup on passes
+instead of wall-clock — **was tested and does NOT dominate.** It overfits. Also in the correction
+entry below.
 
 Artifacts: `results/packing/regate_oasst_{padded,packed}_{near,far}.txt`,
 `scripts/regate_packing_oasst.sh`, checkpoints under `checkpoints/regate_oasst_{padded,packed}/`.
+
+## CORRECTION — packing is free, `--pack` is now ON BY DEFAULT (Issue #132, 2026-08-07)
+
+**In one line: packing gives the same model in ~2/3 the time. The "6% worse" in the entry above
+was the wrong yardstick.**
+
+Two things were measured today that reverse the decision above.
+
+**1. The equal-wall-clock arm (arm C) — spend the speedup on passes, not on time.** Packed at the
+control's *step* count instead of its *token* count: 2,000 steps, `--pack`, everything else
+identical (`scripts/equal_wallclock_packing_oasst.sh`). Because both runs use cosine over 2,000
+with warmup 60, the LR matches at every logged step, so this is also the **step-matched third arm**
+the entry above said was needed to separate "fewer updates" from "denser rows are worse steps".
+
+**2. Held-out loss on all three arms** (`eval/heldout_grounded_loss.py`,
+`scripts/heldout_loss_three_arms.sh`). Every arm ran `--chat-mix 1.0`, which sets the grounded
+corpus's sampler weight to `1/n_g * (1 - 1.0) = 0` — literally never sampled ("0% grounded" in
+every log) — and the shared trunk is a pure SlimPajama+Wiki pretrain that was never grounded-FT'd,
+with fresh attention layers. So `data/grounded_qa_expanded.jsonl` is **equally unseen by all
+three**, and scoring it is a real generalization measurement. Evaluation is padded and in fixed
+order for every arm, so packing is absent from the measurement side.
+
+| arm | steps | wall-clock | passes | train loss | **held-out loss** | held-out ppl |
+|---|---:|---:|---:|---:|---:|---:|
+| A · padded (control) | 2,000 | 35.7 min | 18.5 | 2.6139 | **4.8185** | 123.79 |
+| B · packed, token-matched | 1,379 | **24.7 min** | 18.4 | 2.6759 (+6.4%) | **4.8221** | 124.22 (+0.4%) |
+| C · packed, equal wall-clock | 2,000 | 35.8 min | 26.7 | **2.4871 (−11.9%)** | **4.8511** | 127.88 (+3.3%) |
+
+**Finding 1 — B's "6% ppl penalty" is not a quality penalty.** On 493,837 held-out tokens B is
++0.4% against the control: nothing. Matching on real tokens gives the packed arm 1,379 updates to
+the control's 2,000, so it fits the *training set* less — which is all the train-loss gap was
+measuring. **Packing at the same real tokens is quality-neutral and 1.45x faster.** That is the
+padded-vs-packed verdict.
+
+**Finding 2 — C's −11.9% train-loss "win" is overfitting, and it inverts on held-out.** Best train
+loss of the three, worst held-out (+3.3%). 26.7 passes over a fixed 3,465-example corpus buys
+memorization, not generalization. **Spending the speedup on more passes over the same data does
+not work** — the direction that would work is more *corpus*, which OASST cannot supply locally.
+The pre-launch caveat ("1.45x more passes over a fixed corpus is not 1.45x more data") is exactly
+what happened.
+
+**Finding 3 — train loss was the wrong instrument for this whole question, in both directions.**
+It made B look worse than it is and C look better than it is. The FT harness logs no validation
+loss and every arm trains on all 3,465 OASST conversations, so there is no OASST val split; the
+held-out grounded corpus is the available substitute. Worth remembering the next time an arm is
+graded on its own training loss in a multi-pass regime.
+
+**Recall probes (300 trials each) are uninformative here and were not used to decide**: near
+1.3% / 3.0% / 3.0%, far 4.0% / 4.7% / 2.7% (A/B/C). This FT is 100% chat with zero grounded
+replay, so every arm sits at or below the pure-trunk floor — a floored metric detects only gross
+damage. Recorded for completeness, not weight.
+
+**A scoring caveat, so the artifacts are not misread.** `heldout_grounded_loss.py` also has an
+answer-span-only mode (the corpus as `GroundedQADataset` masks it, ~14K supervised tokens).
+Those numbers — 10.749 / 10.914 / 10.687 — sit at or *above* `ln(50257) = 10.82`, i.e. at chance:
+none of these checkpoints ever trained the grounded skill. That mode is retained but is
+**uninformative for this comparison**; the `--all-tokens` figures in the table are the ones to
+read.
+
+**Decision: `--pack` defaults to ON** in `finetune_edge_conversational.py`,
+`continue_ft_hybrid.py`, `continue_ft_looped.py` (`argparse.BooleanOptionalAction`; `--no-pack`
+restores the padded path). Free 5.15x on grounded-QA, 1.45x on OASST, no measurable quality cost
+at either end of the length distribution — which was the open question. Class-level defaults on
+`DeltaNetBlock`/`EdgeHVN` remain **unchanged**: the #122 flip's two regressions (compile-fusion
+graph breaks, BCD-offload parity) were about `use_triton_scan`/`use_megakernel_scan` as *class*
+defaults, and none of these three scripts uses `--block-coordinate`, so that risk does not reach
+them. `tests/test_packing.py` 27/27, `test_continue_ft_hybrid` + `test_hybrid_forward` +
+`test_looped_early_exit` 22/22 after the flip.
+
+**Limits, stated plainly.** One training seed per arm, so the 0.4% has no error bar — it is "too
+small to see", not "proven zero". The held-out corpus measures transfer in the same chat template
+rather than OASST fluency itself. Both cut against over-claiming a *quality* win; neither
+threatens the actual claim, which is that packing is quality-**neutral** and faster.
+
+Artifacts: `results/packing/heldout_alltokens.json`, `heldout_answerspan.json`,
+`regate_oasst_packed2000_{near,far}.txt`, `logs/equal_wallclock_oasst.log`, checkpoints under
+`checkpoints/regate_oasst_packed_2000/`.
