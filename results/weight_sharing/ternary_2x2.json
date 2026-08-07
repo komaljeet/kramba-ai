@@ -1,0 +1,338 @@
+{
+  "dataset": "wikitext103",
+  "dataset_stats": {
+    "tokenizer": "bpe",
+    "vocab_size": 8000,
+    "train_chars": 60000000,
+    "eval_chars": 1140678,
+    "train_tokens": 14937312,
+    "eval_tokens": 279570
+  },
+  "hyperparameters": {
+    "d_models": [
+      512
+    ],
+    "n_layers": 12,
+    "token_budget": 5000000,
+    "eval_interval_tokens": 500000,
+    "batch_size": 16,
+    "seq_len": 128,
+    "lr": 0.0003,
+    "precision": "bf16",
+    "tokenizer": "bpe",
+    "bpe_vocab": 8000,
+    "compile": false,
+    "use_deltanet": false
+  },
+  "models": [
+    {
+      "name": "EdgeHVN-DeltaNet",
+      "params": 39756656,
+      "final_eval_ppl": 119.39576332464948,
+      "total_time_s": 552.2220938205719,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 402.97446126272337,
+          "train_loss": 5.9673542976379395,
+          "time_s": 56.314371824264526
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 258.82949484801367,
+          "train_loss": 5.533111572265625,
+          "time_s": 111.94659471511841
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 198.56694236488775,
+          "train_loss": 5.244292259216309,
+          "time_s": 167.40978455543518
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 166.21201366720283,
+          "train_loss": 5.239193916320801,
+          "time_s": 222.5208215713501
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 147.76436053571547,
+          "train_loss": 4.946349620819092,
+          "time_s": 277.5138614177704
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 135.61768262712056,
+          "train_loss": 5.013708591461182,
+          "time_s": 332.4972941875458
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 126.68207793333696,
+          "train_loss": 4.842263221740723,
+          "time_s": 387.40492606163025
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 121.95030802550426,
+          "train_loss": 4.73023796081543,
+          "time_s": 442.4618589878082
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 119.75637317620698,
+          "train_loss": 4.730014801025391,
+          "time_s": 497.47175002098083
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 119.39576332464948,
+          "train_loss": 4.540511131286621,
+          "time_s": 552.2220048904419
+        }
+      ],
+      "saturation_tokens": 4501504,
+      "skipped_steps": 0,
+      "d_model": 512,
+      "n_layers": 12
+    },
+    {
+      "name": "EdgeHVN-DeltaNet-Shared",
+      "params": 10830684,
+      "final_eval_ppl": 154.05841279825677,
+      "total_time_s": 510.7639262676239,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 468.83997483635767,
+          "train_loss": 6.097011089324951,
+          "time_s": 51.014071226119995
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 308.79220808791814,
+          "train_loss": 5.79401159286499,
+          "time_s": 101.59161472320557
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 241.01859112004735,
+          "train_loss": 5.4405837059021,
+          "time_s": 152.04165768623352
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 206.14138717816707,
+          "train_loss": 5.304923057556152,
+          "time_s": 202.5415325164795
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 183.75104800536468,
+          "train_loss": 5.2067694664001465,
+          "time_s": 253.74217557907104
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 170.82016878674986,
+          "train_loss": 5.211548328399658,
+          "time_s": 305.1482946872711
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 161.32391108833005,
+          "train_loss": 5.108251571655273,
+          "time_s": 358.3557949066162
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 156.65848853151428,
+          "train_loss": 5.160693168640137,
+          "time_s": 409.4196081161499
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 154.45180693410575,
+          "train_loss": 5.0109453201293945,
+          "time_s": 460.0480408668518
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 154.05841279825677,
+          "train_loss": 5.1378583908081055,
+          "time_s": 510.7638041973114
+        }
+      ],
+      "saturation_tokens": 4501504,
+      "skipped_steps": 0,
+      "d_model": 512,
+      "n_layers": 12
+    },
+    {
+      "name": "EdgeHVN-DeltaNet-Ternary",
+      "params": 39756656,
+      "final_eval_ppl": 143.24913790287502,
+      "total_time_s": 615.3928172588348,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 456.74630678531616,
+          "train_loss": 6.326722145080566,
+          "time_s": 59.86525774002075
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 294.44992717837454,
+          "train_loss": 5.876491546630859,
+          "time_s": 119.62342381477356
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 231.530503468218,
+          "train_loss": 5.471907615661621,
+          "time_s": 179.33350086212158
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 194.996755941736,
+          "train_loss": 5.270118713378906,
+          "time_s": 239.12609434127808
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 173.56412855882283,
+          "train_loss": 5.211152076721191,
+          "time_s": 298.7442524433136
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 159.23331116060973,
+          "train_loss": 5.105051040649414,
+          "time_s": 358.13059997558594
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 150.67524873043303,
+          "train_loss": 5.031366348266602,
+          "time_s": 421.9704096317291
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 146.17926082235368,
+          "train_loss": 5.030905723571777,
+          "time_s": 485.0607135295868
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 143.63601227214315,
+          "train_loss": 5.173135280609131,
+          "time_s": 549.2089538574219
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 143.24913790287502,
+          "train_loss": 4.9877238273620605,
+          "time_s": 615.3926782608032
+        }
+      ],
+      "saturation_tokens": 4501504,
+      "skipped_steps": 0,
+      "d_model": 512,
+      "n_layers": 12
+    },
+    {
+      "name": "EdgeHVN-DeltaNet-Shared-Ternary",
+      "params": 10830684,
+      "final_eval_ppl": 183.80745430164828,
+      "total_time_s": 586.7163801193237,
+      "tokens_seen": 4999168,
+      "trajectory": [
+        {
+          "tokens_seen": 501760,
+          "eval_ppl": 517.3700282696761,
+          "train_loss": 6.310607433319092,
+          "time_s": 60.90687656402588
+        },
+        {
+          "tokens_seen": 1001472,
+          "eval_ppl": 360.1380762993678,
+          "train_loss": 6.076007843017578,
+          "time_s": 117.26188635826111
+        },
+        {
+          "tokens_seen": 1501184,
+          "eval_ppl": 286.9443369881984,
+          "train_loss": 5.684297561645508,
+          "time_s": 174.47371244430542
+        },
+        {
+          "tokens_seen": 2000896,
+          "eval_ppl": 245.81672654844579,
+          "train_loss": 5.423917770385742,
+          "time_s": 236.86014914512634
+        },
+        {
+          "tokens_seen": 2500608,
+          "eval_ppl": 223.08183199668895,
+          "train_loss": 5.462378025054932,
+          "time_s": 294.7499511241913
+        },
+        {
+          "tokens_seen": 3000320,
+          "eval_ppl": 205.7589152935768,
+          "train_loss": 5.585112571716309,
+          "time_s": 353.66088938713074
+        },
+        {
+          "tokens_seen": 3500032,
+          "eval_ppl": 194.4260322355352,
+          "train_loss": 5.376020431518555,
+          "time_s": 409.9234094619751
+        },
+        {
+          "tokens_seen": 4001792,
+          "eval_ppl": 188.47721181896145,
+          "train_loss": 5.321447372436523,
+          "time_s": 470.81295251846313
+        },
+        {
+          "tokens_seen": 4501504,
+          "eval_ppl": 184.77033905062638,
+          "train_loss": 5.241017818450928,
+          "time_s": 528.0410928726196
+        },
+        {
+          "tokens_seen": 4999168,
+          "eval_ppl": 183.80745430164828,
+          "train_loss": 5.141700744628906,
+          "time_s": 586.7163009643555
+        }
+      ],
+      "saturation_tokens": 4501504,
+      "skipped_steps": 0,
+      "d_model": 512,
+      "n_layers": 12
+    }
+  ],
+  "analysis": {
+    "summary_lines": [
+      "",
+      "Saturation (token budget where eval PPL stops improving):",
+      "  EdgeHVN-DeltaNet d=512 : 4,501,504 tok",
+      "  EdgeHVN-DeltaNet-Shared d=512 : 4,501,504 tok",
+      "  EdgeHVN-DeltaNet-Shared-Ternary d=512 : 4,501,504 tok",
+      "  EdgeHVN-DeltaNet-Ternary d=512 : 4,501,504 tok"
+    ],
+    "power_laws": {
+      "EdgeHVN-DeltaNet": null,
+      "EdgeHVN-DeltaNet-Shared": null,
+      "EdgeHVN-DeltaNet-Shared-Ternary": null,
+      "EdgeHVN-DeltaNet-Ternary": null
+    },
+    "crossover_d_model": null
+  }
+}

@@ -26,6 +26,7 @@ kramba-ai/
 │   ├── hf_model.py                # HVNConfig, HVNForCausalLM (HuggingFace wrapper)
 │   └── edge/                      # edge-devices branch: full Issue #32 compression suite
 ├── docs/                          # ISSUE_30_PLAN.md, dashboard.html (compendium → reorganized here)
+├── ghost/                         # GHOST training-acceleration research (epic #124): detector, extrapolator, harness
 ├── eval/                          # run_eval, scaling_laws, long_context, datasets, curriculum, coding, instruction, multimodal
 ├── tests/                         # test_*.py standalone test scripts (run from root: python tests/test_issueNN.py)
 ├── demos/                         # demo*.py showcase scripts (run from root: python demos/demo.py)
@@ -123,3 +124,34 @@ numbers and the retraction). The corrected picture:
 **Decision:** the 83M R&D probe **passes** — go-signal for the next staged milestone (README's
 "The Dream": ~20B-class native ternary-hybrid), not a reason to invoke the capacity/scale-up
 fallback (#84 GaLore was the fallback for a *failed* gate; the gate passed).
+## Mixture-of-Experts FFN (Issue #123, 2026-08-02) — implemented, opt-in, default off
+
+`hvn/core/moe.py::MoEFFN` routes a DeltaNet block's **feed-forward sub-layer** through `E`
+experts with top-`k` token routing plus a Switch-style load-balancing auxiliary loss. Wired
+into `DeltaNetBlock(moe_experts=..., moe_top_k=...)` and `EdgeHVN(...)`; `moe_experts=1` is the
+default and leaves the dense path byte-identical.
+
+**Scope: the FFN only (~40% of block FLOPs).** From the code, the block is ~10d² per layer —
+`q/k/v` 3d², `alpha/gate/out_proj` 3d², FFN 4d². The recurrence is deliberately left dense.
+
+**Why the recurrence is NOT routed.** The DeltaNet state accumulates k/v from *every* token:
+
+    S_t = diag(α_t) S_{t-1} + β_t (v_t − S_{t-1} k_t) k_tᵀ
+
+If token A writes through expert-1's `v_proj` and token B through expert-3's, the state mixes
+representations from different learned subspaces, and the next token reads all of it back
+through a single query. **Transformers do not have this failure mode** — attention is stateless
+per layer, so per-token expert routing is safe there. It is not obviously safe inside a
+recurrent state. Treated as an open research question, not an extension.
+
+**Measured (d=512, E=8, top-2):** 3.79× stored params at 1.40× active compute → 2.71× better
+params-per-FLOP. **But the quality A/B failed its bar** — see docs/state.md: MoE beat dense by
+11.8% where the bar (what the same compute buys by simply scaling dense, via the measured
+−0.504 exponent) was 19%. The code is landed and tested; the lever is not currently recommended.
+
+**Known-answer property.** `num_experts=1, top_k=1` is numerically identical to the dense FFN in
+**both forward and backward** — the E=1 path skips the router entirely, because a softmax over a
+single logit would match in forward while adding a router gradient path the dense FFN lacks.
+`tests/test_moe_deltanet.py` asserts the router receives no gradient at E=1. This is the
+configuration-with-a-known-answer that this project now requires in any new measurement harness
+(see the #122 retraction in docs/state.md for what its absence cost).

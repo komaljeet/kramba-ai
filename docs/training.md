@@ -268,15 +268,203 @@ not a hard OOM).
 
 **Practical implication**: with this extended fix, model size is no longer VRAM-bounded on
 this card at all in any range worth targeting — it is bounded by (a) CPU RAM for fp32
-storage and (b) per-step training time, which degrades steeply with depth under the
-current "evict immediately after every use" offload policy (every block is refetched from
-CPU on every touch, with no caching). The natural next lever, not yet built: an **LRU-style
-VRAM-budget cache** for offloaded blocks (keep recently-used blocks resident, sized to use
-most of the available VRAM, instead of always evicting immediately) — this would eliminate
-the *redundant* refetch of a block for its checkpoint recompute right after its initial
-forward use (currently fetched twice per step for every block downstream of the active
-one), directly attacking the speed-vs-depth degradation without touching VRAM ceiling at
-all. Real engineering, not yet started.
+storage and (b) per-step training time.
+
+### LRU residency cache (Issue #103) — landed, closes the "not yet built" lever above
+
+`GPUBufferPool` now keeps a checkpointed block's buffers resident across its two per-step
+invocations (call #1 forward, call #2 backward recompute) instead of evicting immediately,
+sized via `offload_cache_blocks` (LRU eviction beyond that capacity). Verified correct
+(gradient parity, cache-hit + no-pileup regression tests, 174/174 suite) and effective at
+the practical ~1.5–2B sweet spot. **Honest limit found, not a bug**: on a 95-layer, ~4B
+stress config, raising `cache_blocks` 8→32 did *not* help — backward recomputes in reverse
+order, so a block must stay resident through nearly the whole stack to get reused, which no
+affordable cache size reaches at that depth; bigger cache there only added VRAM pressure
+(2.4→6.25 GiB) without a proportional hit-rate gain. Landed with #101/#102 in MR !90.
+
+CPU-side fp32 storage for parked blocks and per-step transfer overlap remain open — see
+issues #113 (bf16 parking), #114 (fp8 spike, gated on a real convergence check), and #115
+(prefetch/double-buffer the next block's transfer against current compute).
+
+### P0 correctness bug found and fixed (Issue #117) — read before trusting any prior multi-cycle BCD+offload run
+
+`GPUBufferPool.register_cpu_home()`'s register-if-absent dedup meant a block's CPU-resident
+"home" tensor was captured once ever (its untrained init value) and never refreshed on later
+deactivations — every block silently reset to its pristine pre-training value the instant it
+went inactive, and retrained the identical trajectory every cycle. **Zero cross-cycle
+learning was actually happening under `offload_inactive_weights=True`** before this fix,
+confirmed via a direct repro (a tracked weight's diff-from-init reset to exactly 0.000000 on
+every deactivation, bit-identical trajectory every subsequent cycle). The VRAM/step-time
+numbers measured for #101/#102/#103 above are unaffected (single/few-step memory
+benchmarks, not multi-cycle convergence runs) — but this means no real training run using
+offload across multiple BCD cycles, before this fix, actually accumulated learning beyond
+whichever block was in its first active cycle. Fixed via a `force` param on
+`register_cpu_home`; new regression test
+`test_deactivated_block_retains_training_across_cycles` checks a specific block's value
+survives a deactivate→reactivate round trip directly (the gap the existing
+`test_training_converges_with_offload` had — it only checks aggregate early-vs-late loss,
+which still trended down under this bug). Landed in MR !99.
+
+### bf16 parking for inactive blocks (Issue #113) — landed, real measured win on both axes
+
+Parks INACTIVE (BCD-frozen) blocks' weights in bf16 on CPU instead of their native dtype
+(fp32 by default), via `offload_park_dtype=torch.bfloat16` on `BlockCoordinateScheduler`. The
+ACTIVE block is always restored to its native dtype the instant it's reactivated (`
+GPUBufferPool.native_dtype_for`) — the optimizer's tiny per-step updates need full native
+precision to be representable; only already-frozen weights get stored coarser.
+
+**Measured** (`scripts/bench_offload_bf16_park.py`, `results/offload_bf16_park.json`):
+
+| Config | Parked CPU MB (fp32 → bf16) | Peak reserved VRAM | sec/step |
+|---|---:|---:|---:|
+| 268M | 984.3 → **492.2** (exactly halved) | 488 → 380 MiB | 0.938 → **0.823** (−12%) |
+| 1.04B | 3808.6 → **1904.3** (exactly halved) | 1290 → 1058 MiB | 1.552 → **1.158** (−25%) |
+
+Both predictions from the issue confirmed directly, not just reasoned: CPU RAM exactly
+halves (as expected — bf16 is literally half the bytes of fp32), and step time drops
+meaningfully too (the offload mechanism is bandwidth-bound, so moving half the bytes per
+block-swap over PCIe genuinely speeds up training, not just shrinks memory) — the win
+compounds with depth (−12% at 268M vs −25% at 1.04B).
+
+**One real caveat found and fixed, not just anticipated**: forwarding through a bf16-parked
+(frozen) block alongside an fp32-active block mixes dtypes, which PyTorch ops like `Conv1d`
+reject outside autocast with a cryptic low-level error ("Input type and bias type should be
+the same"). Confirmed directly (crashes several frames deep inside
+`torch.nn.modules.conv` without autocast). Fixed with a fail-fast guard in `EdgeHVN.forward()`
+that raises a clear, actionable `RuntimeError` if `offload_park_dtype` is set without an
+active `torch.is_autocast_enabled()` context — this project's training scripts already wrap
+forward+loss in `torch.amp.autocast("cuda", dtype=torch.bfloat16)` (e.g.
+`scripts/bench_offload_vram.py`), so this is a documented requirement, not a blocker.
+
+`offload_park_dtype` is opt-in (default `None`, byte-identical to pre-#113 behavior). 12/12
+`tests/test_block_coordinate_offload.py` + 7/7 `tests/test_block_coordinate.py` pass.
+
+### Prefetch/double-buffer transfer overlap (Issue #115) — landed, on by default, real ~25% win
+
+Overlaps the NEXT offloadable segment's CPU→GPU transfer (on a dedicated side CUDA stream,
+with pinned CPU home memory + event-based sync) with the CURRENT segment's compute, instead
+of paying each block's transfer serially when its own turn comes. `GPUBufferPool.prefetch()`
+mirrors `load()`'s buffer-acquisition path but issues the copy on `_prefetch_stream` and
+records a completion event; `load()` waits on that event (a GPU-side stream dependency, not
+a host-blocking sync) if the block was prefetched but not yet consumed. Wired into
+`EdgeHVN.forward()`'s layer loop: right after processing block `i`, prefetches `i+1` (or the
+tail, `final_norm+decoder`, on the last layer) — issued *after*, not before, block `i`'s own
+`load()` call, since GPU-level concurrency across streams doesn't depend on Python-side
+call order, and issuing it before would let a `cache_blocks=1` pool evict block `i`'s
+just-loaded buffer out from under its own in-flight compute.
+
+**Measured** (`scripts/bench_offload_prefetch.py`, `results/offload_prefetch.json`, A/B
+against `offload_prefetch=False`):
+
+| Config | serial → prefetch (sec/step) | Δ | Peak reserved VRAM |
+|---|---:|---:|---:|
+| 268M | 0.825 → **0.625** | −24% | 488 MiB (unchanged) |
+| 1.04B | 1.420 → **1.047** | −26% | 1290 MiB (unchanged) |
+| 1.54B | 2.198 → **1.604** | −27% | 1338 MiB (unchanged) |
+
+A consistent ~25% step-time win at every depth tested, at **zero VRAM cost** — confirms this
+is a pure speed lever (hiding transfer latency behind already-happening compute), not a
+memory/speed tradeoff. `offload_prefetch` defaults to `True` (unlike #113/#114, no precision
+risk to opt into — it's a scheduling change only, and the existing gradient-parity test
+already exercises this path since it's on by default). Set `offload_prefetch=False` to fall
+back to the fully serial pre-#115 behavior.
+
+**One real correctness hazard found and fixed while building this, not just anticipated**:
+`GPUBufferPool`'s existing capacity-overflow eviction path (inside `_acquire_buffers`, used
+by both `load()` and the new `prefetch()`) could evict a block whose prefetch copy was
+*still in flight* on the side stream, handing its buffer to `_free_buffers` for reuse by a
+different block while the old async copy was still writing into it — a genuine data race,
+not just staleness. Fixed by synchronizing on any pending event before releasing a buffer,
+in `evict()`, `evict_all()`, and `_acquire_buffers`'s own overflow-eviction loop (the last of
+which the first two callers alone didn't cover).
+
+14/14 `tests/test_block_coordinate_offload.py` + 7/7 `tests/test_block_coordinate.py` pass.
+
+### P1 bug found and fixed at real depth (Issue #118) — pinned host memory grew unbounded with layer count
+
+#115's `prefetch()`, as originally landed, pinned each block's ACTUAL CPU home tensor
+directly and left it pinned indefinitely — only replaced (and un-pinned) the next time that
+specific block completed a full BCD activate/deactivate cycle. Undetected by #115's own
+tests (3-4 layer toy models) and benchmarks (24-36 layers, never enough cumulative pinning to
+hit a ceiling). **Confirmed via a real 4.02B run (d=2048, 95 layers)**: crashed partway
+through the very first forward pass, from inside `pin_memory()` itself, with a CUDA
+out-of-memory error — traced and confirmed this was neither GPU VRAM (peak reserved was 64
+MiB at the point of failure) nor regular CPU RAM (the model's bf16 CPU footprint is ~8 GiB,
+well under this machine's ~15.3 GiB), but specifically the OS/driver's **pinned (page-locked)
+memory ceiling**, far tighter than either — a single forward pass prefetches every layer in
+sequence, not just the BCD-active one, so nothing released a block's pinning within one
+forward pass; by ~95 layers, cumulative pinning approached ~8 GiB.
+
+**Fix**: `GPUBufferPool` no longer pins home tensors directly. `_PinnedStagingPool` maintains
+a small, bounded pool of reusable pinned staging buffers keyed by shape signature (this
+project's blocks are shape-homogeneous per layer type, so the number of distinct shapes is
+small and depth-independent). `prefetch()` copies a block's home data into a staging buffer
+(a fast plain host memcpy, not PCIe-bound) before issuing the actual async H2D copy from it;
+the staging buffer returns to the pool once its copy is confirmed complete via a **host-side**
+`event.synchronize()` (not just the stream-level `wait_event()` used to make the GPU buffer
+itself safe for compute — a plain host memcpy reusing the staging buffer needs a true host
+block, not just a GPU-side dependency, or it could overwrite memory an in-flight async copy
+was still reading from).
+
+**Re-measured after the fix**: the same 4.02B config that crashed now completes cleanly —
+**938 MiB peak allocated, 1102 MiB peak reserved, 4.25 sec/step**
+(`scripts/bench_offload_4b_8b.py`, `results/offload_4b_8b.json`). An **8.01B** config
+(d=2048, 190 layers) was also attempted at the same time — it fails, but at a different,
+already-known, unrelated stage: real (non-meta) fp32 CPU construction of an 8B-param model
+needs ~32 GiB, exceeding this machine's ~15.3 GiB RAM (the same pre-existing construction-time
+ceiling documented in #102's extended finding for the 4.65 GiB config, just further out) —
+confirmed directly, not assumed (`torch.device("meta")` gives an accurate param count without
+allocating; the real, non-meta construction segfaults on its own, before the offload/GPU
+machinery is ever reached). Not a regression from #118 or anything this session touched — a
+separate, pre-existing hardware ceiling.
+
+New regression test `test_prefetch_pinned_memory_bounded_at_depth`: exercises the actual root
+cause (pinned-allocation count scaling with layer count) cheaply, via 30 tiny layers rather
+than a slow multi-GB real-depth run — asserts the number of distinct pinned buffers ever
+allocated stays bounded by (num shapes × max_per_shape), not by the 30-layer count. 15/15
+`tests/test_block_coordinate_offload.py` + 7/7 `tests/test_block_coordinate.py` pass.
+
+**Follow-up measurement: the real ceiling on this hardware is closer to ~6B than 4B, and the
+8B block is specifically CPU-RAM-at-construction, not VRAM.** Bisected directly rather than
+assumed:
+
+| Params | fp32 construction RAM needed | Real construction result |
+|---|---:|---|
+| 4.02B | 16.1 GiB | ✅ works (~21s) |
+| **5.995B** | 24.0 GiB | ✅ **works** (~33s — visibly slower, likely some page-file swap, but completes, not a crash) |
+| 8.01B | 32.0 GiB | ❌ segfaults (hard OOM, not a slow degradation) |
+
+**5.995B (d=2048, 142 layers) trains cleanly** with the full offload+bf16-park+prefetch
+stack: 985 MiB peak alloc, 1168 MiB peak reserved, 6.92 sec/step at batch_size=2; **batch_size=8
+also fits comfortably** (1612 MiB alloc, 1950 MiB reserved, 8.83 sec/step) — both far under
+the 6 GiB card. VRAM stays small regardless of param count under this offload scheme (it's
+governed by activation memory + the bounded per-block buffer/staging pools, not total
+weights); the real ceiling for *this* hardware is CPU RAM at construction time, and bf16-park
+being CPU RAM only bounds it via `torch.bfloat16` parked weights only in aggregate.
+
+**Batch-size ceiling, measured at 4.02B** (`d_model` swept, `seq_len=128`):
+
+| batch_size | peak_alloc | peak_reserved | sec/step |
+|---:|---:|---:|---:|
+| 2 | 938 MB | 1102 MB | 4.35 |
+| 4 | 1076 MB | 1142 MB | 4.31 |
+| 8 | 1424 MB | 1566 MB | 5.44 |
+| 16 | 2128 MB | 2600 MB | 9.22 |
+| 32 | 3536 MB | 4946 MB | 18.89 |
+| 48 | — | — | stalled >300s (consistent with WDDM spill-over past ~6 GiB, not a hard OOM) |
+
+**`offload_cache_blocks` (round-trip reduction) at 95-layer depth confirms the #103
+structural limit directly, not just extrapolated**: raising it from 1→32 costs +2.8 GiB VRAM
+for only ~8% faster steps (4.34s→4.00s) — a poor trade at this depth, because backward
+recomputes in reverse layer order, so a block must survive resident nearly the entire stack
+to get reused, which no practical cache size reaches at 95 layers. Not recommended past the
+default at this scale; #103 already documented this working well at the shallower ~1.5-2B
+sweet spot instead.
+
+`scripts/bench_offload_4b_8b.py` gained an `offload_cache_blocks` passthrough (was silently
+not wired to the probe config in the version committed with #118 -- caught while running this
+sweep, not by any test, since the bug just made every `cache_blocks` value produce identical
+results rather than erroring).
 
 ### RTX 4060 (8 GB) envelope — measured demand, projected fit (Issue #70)
 
@@ -304,6 +492,99 @@ bigger comfortable config and more bf16 width headroom (#44), **not a categorica
 > **"RTX 4060" caveat:** laptop and desktop 4060 are 8 GB, but the desktop **4060 Ti** ships
 > in 8 GB *or 16 GB* variants. A 16 GB Ti roughly doubles this envelope — still far short of
 > training 1B comfortably or 10B at all.
+
+## Pretrain data readiness (Issues #119/#120) — memory/speed alone does not solve capability
+
+A data-readiness audit (2026-07-26, prompted by the 4-6B ceiling above becoming trainable)
+found the pretrain data pipeline had its own, separate bottleneck — solving VRAM/RAM/speed
+doesn't solve data volume; this project's own `docs/roadmap.md` epic #78 closing note already
+said as much in writing before this was investigated further.
+
+**Chinchilla-optimal token targets** (20 tokens/param, this project's convention, per issue
+#112): 4B params → 80B tokens; 6B params → 120B tokens.
+
+### #119 — the mix silently caps total token budget, same mechanism as the old OASST bug
+
+`MixedLocalDataset`'s `max_repeat` bind on whichever mix source is smallest relative to its
+target share caps the *entire* dataset's token budget, not just that source's own
+contribution — this is exactly what capped the 83M pretrain at ~135M tokens via OASST
+(§ "EdgeHVN 83M" above). The same mechanism recurs with WikiText-103 (a fixed ~119M-token
+corpus, nothing more to download) at its usual 15% pretrain share: confirmed directly, this
+caps total achievable tokens around **~2.4B** with `max_repeat=3` — ~2-3% of the 80-120B
+floor for 4-6B params.
+
+**Fix**: rather than force a single "right" default (WikiText is fine at small scale, e.g.
+the 83M/300M runs — the problem only bites once a run targets real Chinchilla volume),
+`MixedLocalDataset` now prints a loud, correct warning every time, naming which of two
+genuinely different cases applies:
+- **MIX-RATIO bind** (`total_cap < sum(avail)`): a source's `max_repeat` is the active
+  constraint — names the binding source, fixable by changing the mix.
+- **DATA-VOLUME limit** (`sum(avail) <= total_cap`): every available window is already used,
+  no source's repeat cap is binding — fixable only by downloading more data.
+
+Caught a real bug in the first draft of this fix: it always blamed whichever source's
+repeat-cap term was numerically smallest, even when that term wasn't the ACTIVE constraint.
+Verified against this project's real cached `data_cache` (not synthetic): with only ~1.32B
+SlimPajama tokens currently cached, the default 0.85/0.0/0.15 mix is presently
+DATA-VOLUME-limited, not MIX-RATIO-limited by WikiText — though WikiText IS confirmed (via a
+`max_repeat=1` test against the same real data) to become the binding mix-ratio constraint
+once more data is downloaded, matching the original audit finding. `tests/test_issue119_mix_cap_warning.py`, 3/3 pass.
+
+### #120 — switched pretrain data acquisition to FineWeb-Edu
+
+SlimPajama's reupload mirror (`gmongaras/SlimPajama-627B_Reupload`) is impractical at
+Chinchilla-optimal volume on this machine: ~6 GB/shard parquet, would need >1 TB disk
+(exceeds the ~642 GB free) and ~13-18 hours at this connection's ~22.7 MB/s. **FineWeb-Edu**
+(`HuggingFaceFW/fineweb-edu`) — already this project's own intended source per
+`docs/FRONTIER_TRAINING_PLAN.md`, never executed until now — is strictly better on every
+axis measured:
+
+| | SlimPajama reupload | FineWeb-Edu |
+|---|---|---|
+| Quality | dedup-only cleaning | LLM-classifier-filtered for educational value |
+| File granularity | ~6 GB/shard, 250 total | ~2.15 GB/file, pre-sized `sample-10BT`/`100BT`/`350BT` configs |
+| Tokens per GB | ~0.44B tok / 1.72GB text-extracted | ~1.84 GB per 1B tokens (measured, `sample-350BT`: 300 files) |
+| Auth | hit an unrelated expired-token issue (see below) | none needed, confirmed |
+| 120B-token (6B-param) cost | doesn't fit in free disk | ~103 files, ~221 GB, ~2.7 hours (measured bandwidth) |
+
+**Two real environment blockers found and fixed to get this far, unrelated to the data
+question itself:**
+- **SSL**: all HTTPS on this machine failed (`CERTIFICATE_VERIFY_FAILED: Basic Constraints of
+  CA cert not marked critical`) — traced to Avast Antivirus's HTTPS-scanning root cert,
+  malformed per strict X.509 rules (in the Windows trust store, which browsers use, but not
+  Python's `certifi` bundle — and adding it to certifi wasn't sufficient, since the cert
+  itself is structurally non-compliant, not just untrusted). Worked around with SSL
+  verification disabled scoped specifically to `huggingface_hub`'s own HTTP client
+  (`set_client_factory`), not system-wide.
+- **Auth**: the cached HF token (825 bytes — far too large for a normal ~40-char token) is
+  malformed/expired, causing `401 OAuth token signature verification failed`. Both
+  SlimPajama's reupload and FineWeb-Edu work fine anonymously (`token=False`) for public
+  files — no token needed at all.
+
+**Integration**: `MixedLocalDataset`'s mix generalized from a 3-tuple (SlimPajama, OASST,
+WikiText) to a 4-tuple (+ FineWeb-Edu). New `_load_fineweb_edu()` extracts text from locally
+downloaded parquet files (`scripts/download_fineweb_edu.py` handles acquisition separately —
+a 100+ file pull can take hours and shouldn't block a training script's startup) into its
+OWN `.bin` cache, not merged into SlimPajama's — `_tokenize_text_to_bin`'s cache is keyed
+only on the output `.bin` existing, so silently appending more text to SlimPajama's existing
+1.32B-token cache would never get picked up without invalidating already-tokenized work.
+
+**Real bug found and fixed while integrating this**: unlike the other 3 sources (all under
+~5 GB, so preparing them unconditionally regardless of mix share is cheap, the existing
+pattern), FineWeb-Edu can be hundreds of GB — an early version loaded/tokenized it
+unconditionally, which caused genuinely slow test runs and, worse, a real file collision
+(`PermissionError` on `fineweb_edu.bin.tmp`) between a stale unconditional-load test process
+and a concurrent real download, that also silently wrote a runaway 66 GB extraction from a
+still-in-progress download. Fixed: FineWeb-Edu is only loaded/tokenized when its mix share is
+actually > 0. A nonzero share with nothing downloaded yet fails with a clear
+`FileNotFoundError` pointing at `scripts/download_fineweb_edu.py`, rather than silently
+renormalizing the other sources to quietly cover the gap.
+
+`tests/test_issue120_fineweb_edu.py`, 5/5 pass (real parquet extraction, real end-to-end
+`MixedLocalDataset` construction with FineWeb-Edu as the sole source — not mocked).
+
+Recommended mix for 4B+ pretrain runs: `--pretrain-mix 0.0,0.0,0.0,1.0` (FineWeb-Edu only) —
+sidesteps WikiText's #119 mix-ratio cap by construction rather than needing to tune shares.
 
 ## Key Training Flags
 
@@ -344,6 +625,63 @@ a one-line banner listing what it turned on (`[A]`/`[B]` tags). **Measured:** st
 **1.58× faster** (5.53 → 3.51 s/epoch, d=256/3L/seq128/B32); Category-A primitives proven
 exact (`tests/test_issue50.py`). Explicit flags always win.
 
+### `--fast` — the EdgeHVN equivalent, and what every real run here actually used
+
+`train.py`'s `--full` has a counterpart in `train_edge_conversational.py`: **`--fast`**, which
+expands to **bf16 + TF32 + `torch.compile` + Triton scan + async DataLoader (4 workers)**.
+Explicitly-passed levers override the preset (e.g. `--fast --precision fp32`).
+
+**Use `--fast` for every real training run.** This is not a suggestion added after the fact —
+it is what the project already does. `logs/chinchilla20k_pretrain.log`,
+`logs/chinchilla83m_pretrain.log` and `logs/hybrid_a4_2attn_102k.log` all open with the
+`[--fast]` banner. Until now the flag appeared **only in `--help`** and nowhere in `docs/` or
+the README, so a reader following the documentation would have run ~5x slower than every
+result in this file was produced at. (Measured directly while setting up the #129 A/B:
+0.2 steps/s without it vs the ~0.8 steps/s the speed-ceiling work records with it, at
+d=512/12L, batch 4, seq 512.)
+
+**Do NOT use it for a controlled fp32 A/B.** The bare defaults (fp32, `num_workers=0`, no
+compile) exist deliberately so both arms of a parity test are bit-comparable; `--fast`'s
+bf16/TF32 change precision. The bit-identical levers (compile / Triton scan / workers) never
+change the model, so an A/B that only needs *speed* parity can keep those.
+
+**Known, expected noise under `--fast`:** `torch.compile` logs
+`Not enough SMs to use max_autotune_gemm mode` on this card and falls back — documented in the
+speed-ceiling investigation, not an error. `reduce-overhead`/CUDA-graph modes do crash on
+`nn.Embedding` here; plain `torch.compile` (what `--fast` uses) is the supported configuration.
+
+### Muon is the default optimizer (Issue #129) — confirmed with ternary ON
+
+#86 measured Muon beating AdamW but ran `--no-ternary`, and every real run here trains with
+ternary ON. #129 repeated the A/B in the production configuration: ternary on, `--fast`,
+identical seed (init + data order), d=512/12L/8H, batch 4 x seq 512, 1,000 from-scratch steps,
+only `--optimizer` differing.
+
+| step | AdamW | Muon | Muon's lead |
+|---:|---:|---:|---:|
+| 100 | 8.8440 | 9.2837 | −0.44 |
+| 200 | 7.5055 | **7.1158** | +0.39 |
+| 300 | 7.0104 | **6.5695** | +0.44 |
+| 500 | 6.5427 | **6.1374** | +0.41 |
+| 700 | 6.3065 | **5.9200** | +0.39 |
+| 1000 | 6.0969 | **5.7021** | **+0.395** |
+
+**Steps to reach AdamW's own 1,000-step val loss (6.0969): AdamW 1,000, Muon ~570 — 1.75x
+fewer.** Muon also passes 6.0, which AdamW never reaches in the whole run. Muon starts *behind*
+(step 100) and overtakes by step 200, so a short smoke test can read the wrong way.
+
+**Wall-clock, which #86 did not report: Muon runs at 0.7 steps/s vs AdamW's 0.8 — ~12% slower
+per step.** The honest end-to-end win is therefore **~1.54x**, not 1.75x (1,250 s for AdamW's
+1,000 steps vs ~814 s for Muon's 570).
+
+**Ternary does not change Muon's relative advantage.** Final gap here (ternary on) is 0.395;
+#86's (ternary off) was 0.406. Near-identical — though these are two separate runs, not a
+controlled 2x2, so treat it as consistent rather than proven.
+
+**Caveat, stated because it bounds the claim:** 1,000 from-scratch steps is 1% of a real
+pretrain. No run in this project has taken Muon past that. Watch early val on a long run;
+`--optimizer adamw` is one flag away.
+
 ## Precision Guide
 
 | Precision | Speed | Memory | Stability | Notes |
@@ -371,3 +709,63 @@ python generate.py --prompt "Hamiltonian " --tokens 300 --temp 0.5 --top_k 5
 More/real data (bundled sample is only ~34K chars), 50–100+ epochs on small data, larger
 model (`--d_model 256 --num_layers 4 --bond_dim 64`), longer sequences (`--seq_len 128+`),
 BPE tokenizer for real projects, always `--precision bf16` + `--compile` on RTX 40-series.
+## The compute wall — why "fits in VRAM" was never the binding constraint (2026-08-02)
+
+Everything above this section is memory engineering: BCD (#99), grad checkpointing (#100), CPU
+offload (#101), the reserved-memory fix (#102), LRU residency (#103), bf16 parking (#113),
+prefetch (#115), bounded pinning (#118). It worked — this 6 GB card went from "1B is
+impossible" to a **measured ~6B forward+backward at ~1 GiB peak**.
+
+**Then the wall moved, and it is worth writing down exactly where it went.** Decomposing the
+measured gap between the two real throughput points on this hardware:
+
+| | measured |
+|---|---|
+| 142M, fits in VRAM | **9,102 tok/s** → Chinchilla (2.85B tok) in **3.6 days** |
+| 6B, offloaded | **116 tok/s** (1024 tok / 8.83 s) → Chinchilla (120B tok) in **~33 years** |
+
+That is a 3,300× gap. It decomposes as:
+
+| factor | multiplier | fixable? |
+|---|---:|---|
+| 42× more params (FLOPs per token) | 42× | only by changing architecture |
+| 42× more tokens (Chinchilla scales D with N) | 42× | only by accepting undertraining |
+| **offload / PCIe inefficiency** | **~2×** | yes — and it is the SMALLEST term |
+
+**Making PCIe transfer free would take 33 years to 16 years.** The memory engineering was real
+and necessary to *fit* the model, but it was never where the training cost lived. Training cost
+is `~6 · params · tokens`, and because Chinchilla scales tokens with params, it grows as **N²**.
+No memory technique touches that.
+
+**Why 8.83 s/step specifically.** At 6B the weights do not live on the GPU — every block is
+streamed from CPU RAM over PCIe each step, ~12 GB of bf16 weights moved per step, twice
+(forward + checkpoint recompute). It is data movement, not arithmetic. The corroborating
+evidence is in this doc already: #113 cut step time 1.55 s → 1.16 s purely by **halving the
+bytes moved**, which would do nothing if compute were the bottleneck.
+
+**Levers that actually attack N², with measured or estimated multipliers:**
+
+| lever | gain | status |
+|---|---:|---|
+| MoE / sparse activation | ~3–6× *predicted* | ❌ **measured worse than scaling dense** — see docs/state.md #123 |
+| Data quality (FineWeb-Edu, dedup) | 2–5× | ✅ #120 |
+| Muon optimizer | 1.6× | ✅ #86 |
+| Accept undertraining (< 20 tok/param) | 2–5× | free, costs quality |
+
+With MoE removed (it lost its A/B), the realistic stack is ~5–8×, which puts **~1B trainable
+locally in 6–8 months** and leaves **6B out of reach by roughly 30×**.
+
+**Practical ceilings on this hardware, stated plainly:**
+
+| target | local time | verdict |
+|---|---|---|
+| **142M** | **3.6 days** | ✅ the honest local ceiling |
+| 300M | ~129 days (measured, #112) | ❌ |
+| 1B | 6–8 months | ❌ |
+| 6B | 2.5–33 years | ❌ by ~30× |
+
+**A note for future planning.** "It fits in VRAM" and "it can be trained" are different claims,
+and this project spent considerable effort on the first while believing it was progress toward
+the second. The 6B-at-1-GiB result is a genuine engineering achievement and simultaneously not
+a training capability. Any future size decision should start from `6 · N · D ÷ throughput`, not
+from whether the model loads.

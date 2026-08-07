@@ -26,6 +26,14 @@ source of truth; these files are the reorganized, linkable view.
 | [issues.md](issues.md) | §11 Issue History & Related Work |
 | [ai_rules.md](ai_rules.md) | §12 Project Context, Delivery Workflow, Maintainer note, GPU requirement |
 
+> **Start here if you are planning a training run:** [`training.md`](training.md) §
+> "The compute wall — why *fits in VRAM* was never the binding constraint" (2026-08-02).
+> Training cost grows as **N²** (`6·params·tokens`, Chinchilla scaling tokens with params),
+> and this project's memory work — impressive as it is — addresses only ~2× of the gap.
+> The honest local ceiling on the 6 GB card is **~142M** (3.6 days to Chinchilla); 6B is
+> out of reach by ~30×. Size decisions should start from `6·N·D ÷ throughput`, never from
+> whether the model fits.
+
 ## 1. Overview
 
 HVN is a novel, untrained language model architecture that achieves **long-range

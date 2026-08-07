@@ -172,8 +172,9 @@ class InstructionDataset(Dataset):
     """
 
     def __init__(self, tokenizer, conversations: list[list[tuple[str, str]]],
-                 seq_len: int = 512):
+                 seq_len: int = 512, pad: bool = True):
         self.seq_len = seq_len
+        self.pad = pad
         self.examples: list[tuple[np.ndarray, np.ndarray]] = []
 
         user_pref_ids = tokenizer.encode(USER_PREFIX)
@@ -204,11 +205,13 @@ class InstructionDataset(Dataset):
                 n_masked_only += 1
                 continue
 
-            # Pad to seq_len + 1.
-            pad = (seq_len + 1) - len(ids)
-            if pad > 0:
-                ids.extend([EOS_ID] * pad)
-                labels.extend([-100] * pad)
+            # Pad to seq_len + 1 — unless packing (Issue #132), which keeps
+            # examples variable-length so PackedDataset can concatenate them.
+            if self.pad:
+                pad = (seq_len + 1) - len(ids)
+                if pad > 0:
+                    ids.extend([EOS_ID] * pad)
+                    labels.extend([-100] * pad)
 
             self.examples.append((
                 np.asarray(ids, dtype=np.int64),
@@ -222,6 +225,13 @@ class InstructionDataset(Dataset):
         return len(self.examples)
 
     def __getitem__(self, idx):
+        if not self.pad:
+            raise RuntimeError(
+                f"{type(self).__name__} was built with pad=False (variable-length "
+                "examples for Issue #132 packing) and cannot be iterated directly "
+                "-- the default collate would fail on ragged rows. Wrap it: "
+                "PackedDataset(ds.examples, seq_len=...)."
+            )
         ids, labels = self.examples[idx]
         # Causal shift: predict token t+1 from tokens ≤ t.
         x = torch.from_numpy(ids[:-1])
@@ -262,8 +272,10 @@ class GroundedQADataset(Dataset):
     ``eval/grounded_qa.py`` verbatim (same USER/ASSISTANT markers + instruction).
     """
 
-    def __init__(self, tokenizer, records: list[dict], seq_len: int = 512):
+    def __init__(self, tokenizer, records: list[dict], seq_len: int = 512,
+                 pad: bool = True):
         self.seq_len = seq_len
+        self.pad = pad
         self.examples: list[tuple[np.ndarray, np.ndarray]] = []
 
         user_pref_ids = tokenizer.encode(USER_PREFIX)
@@ -292,11 +304,12 @@ class GroundedQADataset(Dataset):
                 labels = labels[-(seq_len + 1):]
                 n_truncated += 1
 
-            # Pad to seq_len + 1 with EOS (label -100).
-            pad = (seq_len + 1) - len(ids)
-            if pad > 0:
-                ids.extend([EOS_ID] * pad)
-                labels.extend([-100] * pad)
+            # Pad to seq_len + 1 with EOS (label -100) — skipped when packing.
+            if self.pad:
+                pad = (seq_len + 1) - len(ids)
+                if pad > 0:
+                    ids.extend([EOS_ID] * pad)
+                    labels.extend([-100] * pad)
 
             self.examples.append((
                 np.asarray(ids, dtype=np.int64),
@@ -310,6 +323,13 @@ class GroundedQADataset(Dataset):
         return len(self.examples)
 
     def __getitem__(self, idx):
+        if not self.pad:
+            raise RuntimeError(
+                f"{type(self).__name__} was built with pad=False (variable-length "
+                "examples for Issue #132 packing) and cannot be iterated directly "
+                "-- the default collate would fail on ragged rows. Wrap it: "
+                "PackedDataset(ds.examples, seq_len=...)."
+            )
         ids, labels = self.examples[idx]
         # Causal shift: predict token t+1 from tokens ≤ t.
         x = torch.from_numpy(ids[:-1])
@@ -350,11 +370,13 @@ class ToolUseDataset(Dataset):
       - the final answer + EOS -- **learned** (use the tool result to answer)
     """
 
-    def __init__(self, tokenizer, records: list[dict], seq_len: int = 512):
+    def __init__(self, tokenizer, records: list[dict], seq_len: int = 512,
+                 pad: bool = True):
         from hvn.tools import TOOL_TOKENS
         import json as _json
 
         self.seq_len = seq_len
+        self.pad = pad
         self.examples: list[tuple[np.ndarray, np.ndarray]] = []
 
         user_pref_ids = tokenizer.encode(USER_PREFIX)
@@ -396,10 +418,11 @@ class ToolUseDataset(Dataset):
                 labels = labels[-(seq_len + 1):]
                 n_truncated += 1
 
-            pad = (seq_len + 1) - len(ids)
-            if pad > 0:
-                ids.extend([EOS_ID] * pad)
-                labels.extend([-100] * pad)
+            if self.pad:
+                pad = (seq_len + 1) - len(ids)
+                if pad > 0:
+                    ids.extend([EOS_ID] * pad)
+                    labels.extend([-100] * pad)
 
             self.examples.append((
                 np.asarray(ids, dtype=np.int64),
@@ -413,6 +436,13 @@ class ToolUseDataset(Dataset):
         return len(self.examples)
 
     def __getitem__(self, idx):
+        if not self.pad:
+            raise RuntimeError(
+                f"{type(self).__name__} was built with pad=False (variable-length "
+                "examples for Issue #132 packing) and cannot be iterated directly "
+                "-- the default collate would fail on ragged rows. Wrap it: "
+                "PackedDataset(ds.examples, seq_len=...)."
+            )
         ids, labels = self.examples[idx]
         x = torch.from_numpy(ids[:-1])
         y = torch.from_numpy(labels[1:])
@@ -474,11 +504,19 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
 
     for epoch in range(epochs):
         micro = 0
-        for x, y in dataloader:
+        for batch in dataloader:
+            # Packed rows (Issue #132) carry a third element, doc_ids; padded
+            # rows are the original 2-tuple.
+            if len(batch) == 3:
+                x, y, doc_ids = batch
+                doc_ids = doc_ids.to(device, non_blocking=True)
+            else:
+                x, y = batch
+                doc_ids = None
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-                logits = model(x)
+                logits = model(x) if doc_ids is None else model(x, doc_ids=doc_ids)
                 loss = criterion(logits.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1))
                 loss = loss / grad_accum
             loss.backward()
@@ -577,6 +615,25 @@ def main():
                              "stage (issue #110 / #97 Phase C).")
     parser.add_argument("--tool-use-frac", type=float, default=0.5,
                         help="P(tool-use) when --tool-use-data is set.")
+    parser.add_argument("--pack", action="store_true",
+                        help="Padding-free sequence packing (Issue #132): concatenate "
+                             "several short examples into each seq_len row instead of "
+                             "padding each one out with EOS. The measured corpora are "
+                             "63-83%% padding at seq_len=512, so this is a large "
+                             "wall-clock win for the SAME training (same real tokens, "
+                             "~6 examples per row). Documents are isolated inside a "
+                             "row (DeltaNet state reset + conv taps + attention mask), "
+                             "so it is not an approximation -- but it does change "
+                             "gradient composition per step, so re-gate recall after "
+                             "switching. Requires the Triton scan (the default here).")
+    parser.add_argument("--pack-seed", type=int, default=0,
+                        help="Seed for the packing shuffle (--pack), for reproducible rows.")
+    parser.add_argument("--pack-strategy", type=str, default="shuffled_first_fit",
+                        choices=["shuffled_first_fit", "first_fit_decreasing"],
+                        help="Bin-packing policy. The default shuffles first so example "
+                             "length is uncorrelated with batch composition; "
+                             "first_fit_decreasing wastes fewer tokens but sorts long "
+                             "examples to the front.")
     parser.add_argument("--hf-cache-dir", type=str, default=None)
     parser.add_argument("--smoke", action="store_true",
                         help="Tiny subset, 1 epoch — pipeline validation")
@@ -598,7 +655,8 @@ def main():
     print("=" * 70)
     max_conv = 200 if args.smoke else args.max_conversations
     conversations = build_oasst_conversations(max_conversations=max_conv)
-    chat_ds = InstructionDataset(tokenizer, conversations, seq_len=args.seq_len)
+    chat_ds = InstructionDataset(tokenizer, conversations, seq_len=args.seq_len,
+                                 pad=not args.pack)
 
     import json
 
@@ -611,17 +669,40 @@ def main():
     if args.grounded_replay:
         records = [json.loads(line) for line in
                    open(args.grounded_replay, encoding="utf-8")]
-        grounded_ds = GroundedQADataset(tokenizer, records, seq_len=args.seq_len)
+        grounded_ds = GroundedQADataset(tokenizer, records, seq_len=args.seq_len,
+                                        pad=not args.pack)
         print(f"  Grounded-QA replay: {len(grounded_ds)} records from "
               f"{args.grounded_replay} (target fraction={args.grounded_replay_frac})")
         extra.append((grounded_ds, args.grounded_replay_frac, "grounded"))
     if args.tool_use_data:
         records = [json.loads(line) for line in
                    open(args.tool_use_data, encoding="utf-8")]
-        tool_ds = ToolUseDataset(tokenizer, records, seq_len=args.seq_len)
+        tool_ds = ToolUseDataset(tokenizer, records, seq_len=args.seq_len,
+                                 pad=not args.pack)
         print(f"  Tool-use data: {len(tool_ds)} records from "
               f"{args.tool_use_data} (target fraction={args.tool_use_frac})")
         extra.append((tool_ds, args.tool_use_frac, "tool-use"))
+
+    if args.pack:
+        # Issue #132: pack each corpus INDEPENDENTLY, then mix as before. A row
+        # therefore only ever holds documents from one corpus, which keeps the
+        # WeightedRandomSampler mix interpretable (a sampled row is still
+        # unambiguously "a grounded row" or "a chat row"); mixing corpora inside
+        # a row would make the requested fractions mean something subtly
+        # different from what the flags say.
+        from hvn.core.packing import PackedDataset
+        print("\n  Packing (Issue #132) — padding-free rows:")
+        print("    chat:", end=" ")
+        chat_ds = PackedDataset(chat_ds.examples, seq_len=args.seq_len,
+                                pad_id=EOS_ID, seed=args.pack_seed, strategy=args.pack_strategy)
+        packed_extra = []
+        for ds, frac, label in extra:
+            print(f"    {label}:", end=" ")
+            packed_extra.append(
+                (PackedDataset(ds.examples, seq_len=args.seq_len, pad_id=EOS_ID,
+                               seed=args.pack_seed, strategy=args.pack_strategy), frac, label)
+            )
+        extra = packed_extra
 
     if extra:
         extra_frac_total = sum(f for _, f, _ in extra)
@@ -661,6 +742,29 @@ def main():
         sys.exit(1)
     model, base_step, _ = load_checkpoint_for_resume(args.base_checkpoint, device)
     print(f"  Loaded {args.base_checkpoint} (pre-trained to step {base_step})")
+
+    if args.pack:
+        # Issue #132: the boundary reset is expressed as alpha=0, which only the
+        # sequential-over-S scans represent exactly. The Triton kernel is one
+        # (direct `state = state * a_t` multiply, fp32, no reparameterization);
+        # the eager chunked scan folds alpha into a cumprod/log-space form that
+        # clamps at 1e-6 and would leak state across documents, so DeltaNetBlock
+        # refuses it. Unlike continue_ft_hybrid.py / continue_ft_looped.py, this
+        # script does not otherwise set the scan flags, so set them here.
+        # (enable_scan_flags lives in continue_ft_hybrid.py, which imports the
+        # datasets FROM this module -- importing it back would cycle.)
+        n_set = 0
+        for blk in (model.blocks or []):
+            if hasattr(blk, "use_triton_scan"):
+                if device.type == "cuda":
+                    blk.use_triton_scan = True
+                    blk.use_megakernel_scan = True
+                else:
+                    blk.train_chunk = 0     # CPU: exact sequential scan
+                n_set += 1
+        which = "triton + megakernel scan" if device.type == "cuda" else "sequential scan"
+        print(f"  [--pack] enabled {which} on {n_set} DeltaNet blocks "
+              f"(required for the exact document-boundary state reset)")
 
     # --- Fine-tune ---
     epochs = 1 if args.smoke else args.epochs

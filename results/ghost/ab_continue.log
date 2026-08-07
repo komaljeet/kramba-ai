@@ -1,0 +1,112 @@
+[ghost] anchor 10000; averaging [9000, 9500, 10000]
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[ghost] materialised 1000 identical batches for all arms
+[ghost] --- arm 'latest' start loss 4.18270
+[ghost]     latest     step 100   probe loss 4.17284 (1.6 min)
+[ghost]     latest     step 200   probe loss 4.08988 (3.2 min)
+[ghost]     latest     step 300   probe loss 4.05935 (4.3 min)
+[ghost]     latest     step 400   probe loss 4.04027 (5.3 min)
+[ghost]     latest     step 500   probe loss 3.95263 (6.4 min)
+[ghost]     latest     step 600   probe loss 3.94042 (7.5 min)
+[ghost]     latest     step 700   probe loss 3.89700 (8.5 min)
+[ghost]     latest     step 800   probe loss 3.88874 (9.6 min)
+[ghost]     latest     step 900   probe loss 3.85313 (10.6 min)
+[ghost]     latest     step 1000  probe loss 3.85241 (11.7 min)
+[ghost] --- arm 'averaged' start loss 4.12614
+[ghost]     averaged   step 100   probe loss 4.14134 (1.1 min)
+[ghost]     averaged   step 200   probe loss 4.06539 (2.1 min)
+[ghost]     averaged   step 300   probe loss 4.03319 (3.2 min)
+[ghost]     averaged   step 400   probe loss 4.02326 (4.3 min)
+[ghost]     averaged   step 500   probe loss 3.92361 (5.3 min)
+[ghost]     averaged   step 600   probe loss 3.92296 (6.4 min)
+[ghost]     averaged   step 700   probe loss 3.86775 (7.4 min)
+[ghost]     averaged   step 800   probe loss 3.87724 (8.5 min)
+[ghost]     averaged   step 900   probe loss 3.84030 (9.5 min)
+[ghost]     averaged   step 1000  probe loss 3.82978 (10.6 min)
+[ghost] --- arm 'perturbed' start loss 4.32291
+[ghost]     perturbed  step 100   probe loss 4.23373 (1.1 min)
+[ghost]     perturbed  step 200   probe loss 4.13684 (2.1 min)
+[ghost]     perturbed  step 300   probe loss 4.09903 (3.2 min)
+[ghost]     perturbed  step 400   probe loss 4.07602 (4.2 min)
+[ghost]     perturbed  step 500   probe loss 3.96371 (5.3 min)
+[ghost]     perturbed  step 600   probe loss 3.94326 (6.4 min)
+[ghost]     perturbed  step 700   probe loss 3.90928 (7.4 min)
+[ghost]     perturbed  step 800   probe loss 3.91000 (8.5 min)
+[ghost]     perturbed  step 900   probe loss 3.87482 (9.5 min)
+[ghost]     perturbed  step 1000  probe loss 3.86580 (10.6 min)
+
+[ghost] === A/B: does the averaging advantage survive training? ===
+[ghost]   step     latest   averaged  perturbed   avg-latest
+[ghost]      0    4.18270    4.12614    4.32291     +0.05656
+[ghost]    100    4.17284    4.14134    4.23373     +0.03149
+[ghost]    200    4.08988    4.06539    4.13684     +0.02449
+[ghost]    300    4.05935    4.03319    4.09903     +0.02616
+[ghost]    400    4.04027    4.02326    4.07602     +0.01700
+[ghost]    500    3.95263    3.92361    3.96371     +0.02902
+[ghost]    600    3.94042    3.92296    3.94326     +0.01747
+[ghost]    700    3.89700    3.86775    3.90928     +0.02925
+[ghost]    800    3.88874    3.87724    3.91000     +0.01150
+[ghost]    900    3.85313    3.84030    3.87482     +0.01282
+[ghost]   1000    3.85241    3.82978    3.86580     +0.02263
+
+[ghost] advantage at start +0.05656 -> at step 1000 +0.02263 (40% retained)
+[ghost] VERDICT: averaging advantage SURVIVES continued training
+[ghost] control: perturbed loses to latest -> gain is specifically from averaging
+[ghost] wrote results/ghost/ab_continue.json

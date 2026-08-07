@@ -65,6 +65,9 @@ if _PROJECT_ROOT not in sys.path:
 
 from benchmark import TransformerLM, SimpleSSMLM, count_parameters  # noqa: E402
 from hvn.core import HamiltonianVortexNetwork  # noqa: E402
+from hvn.core.moe import collect_moe_aux_loss  # noqa: E402
+from hvn.edge.model import EdgeHVN  # noqa: E402
+from hvn.edge.ternary import apply_ternary_to_model  # noqa: E402
 from train import CharTokenizer, TextDataset  # noqa: E402
 from .datasets import DATASET_REGISTRY  # noqa: E402
 
@@ -227,6 +230,10 @@ def train_compute_matched(
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
             logits = model(batch_x)
             loss = criterion(logits.reshape(-1, model.vocab_size), batch_y.reshape(-1))
+            # Issue #123: MoE needs its load-balancing term in the objective or
+            # routing collapses onto a handful of experts and the remaining
+            # capacity is dead weight. Exactly zero for non-MoE models.
+            loss = loss + collect_moe_aux_loss(model)
 
         optimizer.zero_grad()
         if scaler is not None:
@@ -412,6 +419,63 @@ def run_scaling_laws(
                 bond_dimension=bond_dim, chunk_size=64, dropout=0.1,
                 use_deltanet=True, weightless=True, grad_checkpoint=grad_checkpoint,
             )
+        # --- Issue #123 2x2: {dense, shared} x {dense FFN, MoE FFN} ---------
+        # Sharing cuts stored params (~3.67x at d=512/12L); MoE buys capacity at
+        # sub-linear compute (3.79x params at 1.40x FLOPs). Neither has been run
+        # with the other. All four arms are EdgeHVN+DeltaNet so the only
+        # variables are the two levers.
+        _edge_arms = {
+            "EdgeHVN-DeltaNet":            dict(shared_weights=False, moe_experts=1),
+            "EdgeHVN-DeltaNet-Shared":     dict(shared_weights=True,  moe_experts=1),
+            "EdgeHVN-DeltaNet-MoE":        dict(shared_weights=False, moe_experts=8),
+            "EdgeHVN-DeltaNet-Shared-MoE": dict(shared_weights=True,  moe_experts=8),
+        }
+        for _arm, _cfg in _edge_arms.items():
+            if _arm in models:
+                model_specs[_arm] = EdgeHVN(
+                    vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
+                    n_heads=4, dropout=0.1, use_deltanet=True,
+                    grad_checkpoint=grad_checkpoint, moe_top_k=2, **_cfg,
+                )
+
+        # --- Ternary (BitNet b1.58) arms, incl. composed with sharing ---
+        # Sharing and ternary are ORTHOGONAL levers: sharing cuts the NUMBER of
+        # weights (~3.67x at d=512/12L), ternary cuts BYTES PER weight (fp32 ->
+        # 1.58 bits, ~20x). Their storage benefits multiply. Never previously
+        # combined anywhere in this repo -- these arms test whether their QUALITY
+        # costs also compose cleanly, or compound worse than the product.
+        #
+        # Reason to suspect worse: a shared block's weights are reused at every
+        # one of the 12 virtual layers, so quantization error in that single block
+        # is applied 12 times rather than once. That is a real mechanism for
+        # super-additive damage, and it is the point of measuring rather than
+        # assuming.
+        #
+        # NOTE on param counts: TernaryLinear keeps a full-precision shadow weight
+        # for the STE gradient during training, so `param_count` is UNCHANGED for
+        # these arms -- the storage win only materialises after `.freeze()`. Read
+        # the ternary arms' size benefit as arithmetic (1.58/32 bits), and read
+        # these runs for QUALITY cost only.
+        _ternary_arms = {
+            "EdgeHVN-DeltaNet-Ternary": False,
+            "EdgeHVN-DeltaNet-Shared-Ternary": True,
+        }
+        for _arm, _shared in _ternary_arms.items():
+            if _arm in models:
+                _m = EdgeHVN(
+                    vocab_size=vocab_size, d_model=d_model, num_layers=n_layers,
+                    n_heads=4, dropout=0.1, use_deltanet=True, shared_weights=_shared,
+                    grad_checkpoint=grad_checkpoint,
+                )
+                # Same exclusion set the trained checkpoints use
+                # (train_edge_conversational.load_checkpoint_for_resume): the tiny
+                # gate projections and the output decoder stay full precision.
+                _excl = ("beta_proj", "alpha_proj", "decoder")
+                _targets = [n for n, mod in _m.named_modules()
+                            if isinstance(mod, nn.Linear) and not any(p in n for p in _excl)]
+                apply_ternary_to_model(_m, target_names=_targets)
+                model_specs[_arm] = _m
+
         if "Transformer" in models:
             model_specs["Transformer"] = TransformerLM(
                 vocab_size=vocab_size, d_model=d_model, n_layers=n_layers, n_heads=4,
@@ -684,10 +748,17 @@ def main() -> None:
     parser.add_argument("--compile", action="store_true", help="Use torch.compile.")
     parser.add_argument("--models", type=str, nargs="+", default=None,
                         choices=["HVN", "HVN-DeltaNet", "HVN-DeltaNet-Weightless",
+                                 "EdgeHVN-DeltaNet", "EdgeHVN-DeltaNet-Shared",
+                                 "EdgeHVN-DeltaNet-MoE", "EdgeHVN-DeltaNet-Shared-MoE",
+                                 "EdgeHVN-DeltaNet-Ternary",
+                                 "EdgeHVN-DeltaNet-Shared-Ternary",
                                  "Transformer", "SSM"],
                         help="Which models to compare (default: HVN, Transformer, SSM). "
                              "Add 'HVN-DeltaNet' to sweep the Issue #34 block (Issue #39); "
-                             "'HVN-DeltaNet-Weightless' for the Issue #40 hybrid.")
+                             "'HVN-DeltaNet-Weightless' for the Issue #40 hybrid; "
+                             "'EdgeHVN-DeltaNet' + 'EdgeHVN-DeltaNet-Shared' for the "
+                             "ALBERT-style weight-sharing A/B (same class, sharing is the "
+                             "only variable -- the fewer-params-same-quality test).")
     parser.add_argument("--precision", type=str, default="fp32",
                         choices=["fp32", "fp16", "bf16"])
     parser.add_argument("--tokenizer", type=str, default="char", choices=["char", "bpe"],

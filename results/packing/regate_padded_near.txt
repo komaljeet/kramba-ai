@@ -1,0 +1,9 @@
+Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked critical (_ssl.c:1081). Will retry later.
+Loaded checkpoints/regate_padded/hybrid_a4_step5000.pt (step 5000)
+  [miss] expect='Renvex' got='Drosist'
+  [miss] expect='Yurunda' got='Fimist'
+  [miss] expect='Blenorix' got='Rendorix'
+
+Synthetic-recall result over 300 trials (0 distractor facts):
+  exact whole-word accuracy: 7.3%  (22/300)
+  -> PARTIAL recall: better than a garbled-output baseline, not reliable.

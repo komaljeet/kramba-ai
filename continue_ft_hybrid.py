@@ -190,17 +190,25 @@ def continue_ft(model, dataloader, sampler, device, *, lr, max_steps, grad_accum
 
     while global_step < max_steps:
         try:
-            x, y = next(data_iter)
+            batch = next(data_iter)
         except StopIteration:
             # Epoch boundary: re-create the iterator. WeightedRandomSampler
             # reshuffles fresh each iter() call, so the next epoch is a new mix.
             data_iter = iter(dataloader)
-            x, y = next(data_iter)
+            batch = next(data_iter)
+
+        # Packed rows (Issue #132) carry a third element, doc_ids.
+        if len(batch) == 3:
+            x, y, doc_ids = batch
+            doc_ids = doc_ids.to(device, non_blocking=True)
+        else:
+            x, y = batch
+            doc_ids = None
 
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-            logits = model(x)
+            logits = model(x) if doc_ids is None else model(x, doc_ids=doc_ids)
             loss = criterion(logits.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1))
             loss = loss / grad_accum
         loss.backward()
@@ -268,6 +276,19 @@ def main():
                     help="0-indexed layer positions for the 2 attention blocks")
     ap.add_argument("--attn-window", type=int, default=4096)
     ap.add_argument("--seq-len", type=int, default=512)
+    ap.add_argument("--pack", action="store_true",
+                    help="padding-free sequence packing (Issue #132) -- the grounded-QA "
+                         "corpus is 83%% padding at seq_len=512, so this is a large "
+                         "wall-clock win for the SAME training (same real tokens, ~6 "
+                         "examples per row). Documents are isolated inside a row "
+                         "(DeltaNet state reset + conv taps + attention mask), so it is "
+                         "exact, not an approximation -- but it does change gradient "
+                         "composition per step, so re-gate recall after switching.")
+    ap.add_argument("--pack-seed", type=int, default=0,
+                    help="seed for the packing shuffle (--pack)")
+    ap.add_argument("--pack-strategy", type=str, default="shuffled_first_fit",
+                    choices=["shuffled_first_fit", "first_fit_decreasing"],
+                    help="bin-packing policy for --pack")
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--grad-accum", type=int, default=8)
     ap.add_argument("--lr", type=float, default=2e-5)
@@ -288,15 +309,27 @@ def main():
     if sys.platform == "win32":
         os.system("chcp 65001 >nul 2>&1")
 
+    # triton-scan + megakernel-scan are unconditionally on (2026-08-01): both are
+    # validated identity-preserving vs the exact sequential scan (tests/test_issue83.py
+    # 7/7, rel-diff < 2e-3; megakernel backward "bit-identical loss", grad diff ~5e-8,
+    # scripts/ab_megakernel.py) AND, contrary to earlier assumption, MORE numerically
+    # reliable than the default eager `_scan_chunked` path they replace -- that path's
+    # own docstring documents it can be "silently wrong on decayed channels at large
+    # chunks / hard decay" (see docs/state.md, Issue #122). There is no real accuracy
+    # tradeoff to justify gating this behind an opt-in flag; only real known caveat is
+    # requiring a Triton-capable CUDA GPU (gracefully falls back via _HAS_TRITON_SCAN
+    # if unavailable). --fast now controls ONLY torch.compile, a genuinely separate
+    # tradeoff (compile-time warmup cost, less proven interaction with the loop-aware
+    # training path in continue_ft_looped.py).
     use_fast = args.fast
-    triton_scan = use_fast
-    megakernel_scan = use_fast
+    triton_scan = True
+    megakernel_scan = True
     compile_model = use_fast
 
     if use_fast and torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        print("[--fast] bf16 + TF32 + torch.compile + triton-scan + megakernel-scan")
+        print("[--fast] bf16 + TF32 + torch.compile (triton-scan + megakernel-scan are always on)")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"  device: {device}")
@@ -313,19 +346,36 @@ def main():
     import json
     records = [json.loads(line) for line in open(args.grounded_data, encoding="utf-8")]
     print(f"  Grounded-QA: {len(records)} records from {args.grounded_data}")
-    grounded_ds = GroundedQADataset(tokenizer, records, seq_len=args.seq_len)
+    grounded_ds = GroundedQADataset(tokenizer, records, seq_len=args.seq_len,
+                                    pad=not args.pack)
 
     chat_ds = None
     if args.chat_mix > 0:
         try:
             max_conv = 200 if args.smoke else args.max_conversations
             convos = build_oasst_conversations(max_conversations=max_conv)
-            chat_ds = InstructionDataset(tokenizer, convos, seq_len=args.seq_len)
+            chat_ds = InstructionDataset(tokenizer, convos, seq_len=args.seq_len,
+                                         pad=not args.pack)
             print(f"  Chat mix: {len(chat_ds)} OASST examples (target chat fraction={args.chat_mix})")
         except Exception as e:
             print(f"  Chat mix DISABLED (OASST cache unavailable: {e})")
             print(f"  -> running pure grounded-QA. Set --chat-mix 0 to silence this.")
             chat_ds = None
+
+    if args.pack:
+        # Issue #132: pack each corpus independently so a row never mixes
+        # corpora -- that keeps the chat_mix fraction meaning what the flag says.
+        from hvn.core.packing import PackedDataset
+        print("\n  Packing (Issue #132) — padding-free rows:")
+        print("    grounded:", end=" ")
+        grounded_ds = PackedDataset(grounded_ds.examples, seq_len=args.seq_len,
+                                    pad_id=EOS_ID, seed=args.pack_seed,
+                                    strategy=args.pack_strategy)
+        if chat_ds is not None:
+            print("    chat:", end=" ")
+            chat_ds = PackedDataset(chat_ds.examples, seq_len=args.seq_len,
+                                    pad_id=EOS_ID, seed=args.pack_seed,
+                                    strategy=args.pack_strategy)
 
     # Combine via a WeightedRandomSampler so P(chat)=chat_mix when chat_ds exists.
     if chat_ds is not None and args.chat_mix > 0:

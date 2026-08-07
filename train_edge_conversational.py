@@ -375,6 +375,91 @@ def _download_language_foundation(max_bytes: int, cache_dir: str, slimpajama_dir
     return out_path
 
 
+def _load_fineweb_edu(
+    cache_dir: str,
+    fineweb_edu_dir: str | None = None,
+    max_bytes: int | None = None,
+) -> str | None:
+    """Extract text from locally-downloaded FineWeb-Edu parquet files
+    (Issue #120) into a flat .txt file, mirroring
+    `_download_language_foundation`'s pattern for SlimPajama.
+
+    Does NOT download anything itself -- acquisition is a separate,
+    explicit step (`scripts/download_fineweb_edu.py`, resumable, chosen
+    over inline download here because a 100-300+ file pull can take
+    hours and shouldn't silently block a training script that's supposed
+    to start training). Returns `None` (not an error) if no parquet
+    files are found, so callers can treat FineWeb-Edu as an optional
+    source -- e.g. a `--pretrain-mix` config that includes a nonzero
+    FineWeb-Edu share on a machine that hasn't run the download script
+    yet should fail with a clear error at the mix-building step, not an
+    obscure one here.
+
+    Why a SEPARATE source/bin from SlimPajama, not just more SlimPajama
+    text: `_tokenize_text_to_bin`'s cache is keyed only on whether the
+    output .bin already exists -- appending more raw text to SlimPajama's
+    existing 1.32B-token cache wouldn't be picked up without also
+    invalidating that cache (discarding already-tokenized work). A
+    distinct fineweb_edu.bin avoids that risk entirely and keeps
+    FineWeb-Edu's higher curation quality separately identifiable in the
+    mix (see docs/training.md's Issue #120 section for the quality
+    rationale), rather than blending two differently-sourced corpora
+    silently.
+
+    Parameters
+    ----------
+    max_bytes : int or None
+        Cap on total bytes extracted (None = use everything downloaded).
+    fineweb_edu_dir : str or None
+        Directory to scan recursively for `*.parquet` files. Defaults to
+        `<cache_dir>/fineweb_edu` (where `scripts/download_fineweb_edu.py`
+        places them, under `sample/<config>/`).
+    """
+    out_path = os.path.join(cache_dir, "fineweb_edu_en.txt")
+    if os.path.exists(out_path):
+        size = os.path.getsize(out_path)
+        print(f"    FineWeb-Edu cached: {out_path} ({size / 1024**2:.1f} MB)")
+        return out_path
+
+    parquet_dir = fineweb_edu_dir or os.path.join(cache_dir, "fineweb_edu")
+    if not os.path.exists(parquet_dir):
+        print(f"    FineWeb-Edu not found at {parquet_dir} -- skipping "
+              f"(run scripts/download_fineweb_edu.py first to use this source)")
+        return None
+
+    parquet_files = sorted(
+        os.path.join(root, f)
+        for root, _dirs, files in os.walk(parquet_dir)
+        for f in files
+        if f.endswith(".parquet")
+    )
+    if not parquet_files:
+        print(f"    FineWeb-Edu directory {parquet_dir} exists but has no "
+              f".parquet files -- skipping")
+        return None
+
+    import pandas as pd
+    print(f"    Found {len(parquet_files)} FineWeb-Edu parquet files in {parquet_dir}")
+    bytes_seen = 0
+    with open(out_path, "w", encoding="utf-8") as f:
+        for pf in parquet_files:
+            if max_bytes is not None and bytes_seen >= max_bytes:
+                break
+            print(f"    Reading {os.path.basename(pf)}...")
+            df = pd.read_parquet(pf, columns=["text"])
+            for text in df["text"]:
+                if max_bytes is not None and bytes_seen >= max_bytes:
+                    break
+                if not text or not text.strip():
+                    continue
+                f.write(text)
+                f.write("\n")
+                bytes_seen += len(text.encode("utf-8"))
+            print(f"      {bytes_seen / 1024**3:.2f} GB extracted so far...")
+    print(f"    FineWeb-Edu saved: {out_path} ({os.path.getsize(out_path) / 1024**2:.1f} MB)")
+    return out_path
+
+
 def _download_oasst(cache_dir: str) -> str:
     """Download OpenAssistant Conversations (oasst1) to a local text file.
 
@@ -529,8 +614,10 @@ class MixedLocalDataset(Dataset):
         slimpajama_dir: str | None = None,
         slimpajama_max_bytes: int = 5 * 1024**3,
         slimpajama_token_bytes: int = 500 * 1024**2,
+        fineweb_edu_dir: str | None = None,
+        fineweb_edu_token_bytes: int | None = None,
         max_repeat: int = 3,
-        mix: tuple[float, float, float] | None = None,
+        mix: tuple[float, float, float, float] | None = None,
         val_fraction: float = 0.0,
     ):
         """Build the mixed dataset from on-disk memory-mapped token files.
@@ -541,19 +628,29 @@ class MixedLocalDataset(Dataset):
         from disk, so RAM stays flat no matter how large the corpus is.
 
         `slimpajama_token_bytes` caps how much SlimPajama text is tokenized (the
-        full .txt may be much larger; we only need a slice). `max_repeat` bounds
-        how many times any single source may repeat to satisfy the 50/35/15 mix,
-        preventing tiny OpenAssistant (~12M tokens) from being duplicated ~40x
-        against multi-GB SlimPajama.
+        full .txt may be much larger; we only need a slice). `fineweb_edu_token_bytes`
+        does the same for FineWeb-Edu (Issue #120) — `None` means use everything
+        that's been downloaded via `scripts/download_fineweb_edu.py`. `max_repeat`
+        bounds how many times any single source may repeat to satisfy the mix,
+        preventing a small source (e.g. OASST) from being duplicated dozens of
+        times against a multi-GB source — see Issue #119: this doesn't just
+        affect that one source, it caps the WHOLE dataset's token budget, so
+        `build_dataset`/`MixedLocalDataset` prints a clear warning identifying
+        whether the actual constraint is a mix-ratio bind or a real data-volume
+        limit.
         """
         self.seq_len = seq_len
-        # Pretrain source mix (SlimPajama, OpenAssistant, WikiText-103). Default is
-        # the original conversational mix (0.50/0.35/0.15). A knowledge-heavy mix
-        # e.g. (0.85/0.0/0.15) DROPS OpenAssistant from PRETRAIN (it belongs in the
-        # chat fine-tune stage) so the tiny ~16M-token OASST source stops capping
-        # the dataset via the max_repeat bind (see total_cap below). Zero-fraction
-        # sources are excluded from the train index entirely.
-        self.mix = mix if mix is not None else (0.50, 0.35, 0.15)
+        # Pretrain source mix (SlimPajama, OpenAssistant, WikiText-103,
+        # FineWeb-Edu — Issue #120 added the 4th). Default is the original
+        # conversational mix (0.50/0.35/0.15/0.0, i.e. FineWeb-Edu off unless
+        # explicitly requested — it requires running
+        # scripts/download_fineweb_edu.py first). A knowledge-heavy mix e.g.
+        # (0.85/0.0/0.15/0.0) DROPS OpenAssistant from PRETRAIN (it belongs in
+        # the chat fine-tune stage) so the tiny ~16M-token OASST source stops
+        # capping the dataset via the max_repeat bind (see total_cap below,
+        # and Issue #119's warning). Zero-fraction sources are excluded from
+        # the train index entirely.
+        self.mix = mix if mix is not None else (0.50, 0.35, 0.15, 0.0)
         os.makedirs(cache_dir, exist_ok=True)
         tok_dir = os.path.join(cache_dir, "tokenized")
 
@@ -593,17 +690,60 @@ class MixedLocalDataset(Dataset):
         else:
             print(f"    WikiText-103 not found locally, skipping")
 
+        # 4. FineWeb-Edu (Issue #120) — curated, quality-filtered web corpus,
+        # replacing/supplementing SlimPajama as the primary knowledge source
+        # for larger (4B+) pretrain runs. Acquisition is a separate, explicit
+        # step (scripts/download_fineweb_edu.py) since a full target pull can
+        # take hours; _load_fineweb_edu gracefully returns None (not an
+        # error) if nothing's been downloaded yet, same pattern as WikiText's
+        # local-file check above. A DISTINCT .bin from SlimPajama's — see
+        # _load_fineweb_edu's docstring for why merging into SlimPajama's
+        # cache would silently discard it (cache is keyed on the .bin
+        # existing, not on how much source text backs it).
+        # Unlike the other three sources (all well under ~5 GB, so preparing
+        # them unconditionally regardless of mix share is cheap and matches
+        # the codebase's existing pattern), FineWeb-Edu can be hundreds of
+        # GB once fully downloaded -- scanning/extracting/tokenizing it
+        # unconditionally would make every dataset build pay that cost even
+        # when its mix share is 0. Only attempt it when actually wanted.
+        slim_r, oasst_r, wt_r, fineweb_r = self.mix
+        fineweb_bin = None
+        if fineweb_r > 0:
+            fineweb_path = _load_fineweb_edu(cache_dir, fineweb_edu_dir, max_bytes=fineweb_edu_token_bytes)
+            if fineweb_path is not None:
+                print(f"    Tokenizing FineWeb-Edu...")
+                fineweb_bin = os.path.join(tok_dir, "fineweb_edu.bin")
+                _tokenize_text_to_bin(fineweb_path, fineweb_bin, enc, max_bytes=fineweb_edu_token_bytes)
+
         # --- Memory-map each tokenized source (read-only, paged on demand) ---
-        # Source mix (SlimPajama, OpenAssistant, WikiText-103). Zero-fraction
-        # sources are excluded from the train index, so dropping OASST (0.0) stops
-        # the tiny ~16M-token source from capping the dataset via the max_repeat
-        # bind. Source IDs are reassigned densely over the included sources only.
-        slim_r, oasst_r, wt_r = self.mix
+        # Source mix (SlimPajama, OpenAssistant, WikiText-103, FineWeb-Edu).
+        # Zero-fraction sources are excluded from the train index, so dropping
+        # OASST (0.0) stops the tiny ~16M-token source from capping the
+        # dataset via the max_repeat bind. Source IDs are reassigned densely
+        # over the included sources only.
         candidates = [("SlimPajama", slim_bin, slim_r),
                       ("OpenAssistant", oasst_bin, oasst_r),
-                      ("WikiText-103", wt_bin, wt_r)]
+                      ("WikiText-103", wt_bin, wt_r),
+                      ("FineWeb-Edu", fineweb_bin, fineweb_r)]
         source_paths, ratios, self.source_names = [], [], []
         for _name, _path, _r in candidates:
+            if _r > 0 and _path is None:
+                # A nonzero share was requested but no data exists for this
+                # source -- fail loudly and specifically here, not silently
+                # (which would renormalise the OTHER sources to cover the
+                # gap, quietly changing the mix the caller actually asked
+                # for). WikiText's local-file check is exempt: it has always
+                # silently skipped when absent (pre-existing behavior, not
+                # changed here), but FineWeb-Edu is new and its most likely
+                # failure mode (forgot to run the download script) deserves
+                # a clear error, per Issue #120.
+                if _name == "FineWeb-Edu":
+                    raise FileNotFoundError(
+                        f"--pretrain-mix requested a nonzero FineWeb-Edu share "
+                        f"({_r}) but no FineWeb-Edu data has been downloaded. "
+                        f"Run scripts/download_fineweb_edu.py first, or set "
+                        f"FineWeb-Edu's share to 0."
+                    )
             if _r > 0 and _path is not None:
                 source_paths.append(_path)
                 ratios.append(_r)
@@ -633,6 +773,67 @@ class MixedLocalDataset(Dataset):
             for n, r in zip(avail, ratios) if n > 0 and r > 0
         )
         total_chunks = int(min(sum(avail), total_cap))
+
+        # Issue #119: the max_repeat bind on whichever mix source is smallest
+        # (relative to its target share) silently caps the ENTIRE dataset's
+        # total token budget -- this already happened once (OASST capped the
+        # old 83M pretrain at ~135M tokens, undetected for a while) and would
+        # recur with WikiText-103 (a fixed ~119M-token corpus, nothing more
+        # to download) the moment a run targets Chinchilla-optimal volume for
+        # a bigger model (e.g. ~80-120B tokens for 4-6B params) -- the cap
+        # lands around ~2.4B tokens with WikiText still in the mix at 15%,
+        # ~2-3% of that floor, and training would look normal (loss
+        # decreasing) while silently never reaching enough fresh data. Print
+        # this loudly, always, rather than let it stay silent until someone
+        # does the arithmetic by hand after the fact.
+        self.total_chunks = total_chunks  # exposed for callers/tests, e.g. #119's cap warning
+        effective_tokens = total_chunks * self.seq_len
+        equiv_params_m = effective_tokens / 20 / 1e6  # 20 tokens/param, this project's Chinchilla convention
+        if total_cap < sum(avail):
+            # A source's max_repeat bind is the ACTIVE constraint: there is
+            # MORE raw data available than this mix could ever use at its
+            # current share, because the smallest-relative-to-share source
+            # would have to repeat past max_repeat to keep up. This is the
+            # #119/OASST failure mode -- fixable by changing the MIX (drop/
+            # reduce that source's share, or raise --max-repeat).
+            binding_idx = min(
+                range(len(avail)),
+                key=lambda i: (max_repeat * avail[i]) / ratios[i] if avail[i] > 0 and ratios[i] > 0 else float("inf"),
+            )
+            print(
+                f"[data mix] total pretrain budget capped at {effective_tokens:,} tokens "
+                f"({effective_tokens / 1e9:.2f}B) by a MIX-RATIO bind -- binding source: "
+                f"{self.source_names[binding_idx]!r} (share={ratios[binding_idx]:.2f}, "
+                f"max_repeat={max_repeat}) would need to repeat past max_repeat to keep "
+                f"up with the other source(s), even though more of THEM is available. "
+                f"At the 20 tokens/param Chinchilla convention this project uses, that's "
+                f"enough for a ~{equiv_params_m:.0f}M-param model -- if you're targeting "
+                f"something bigger, THIS MIX will silently under-serve it regardless of "
+                f"how much more data you download. Fix: drop/reduce the binding source's "
+                f"share, or raise --max-repeat (weighing the overfitting risk of "
+                f"repeating a small source that many times)."
+            )
+        else:
+            # No source's repeat cap is actually binding -- every available
+            # window from every source is being used, and the limit is
+            # simply TOTAL DATA VOLUME across all sources combined, not the
+            # mix ratio. Downloading more of any source (proportionate to
+            # its share) raises this ceiling directly -- changing shares
+            # will NOT help until raw volume grows past the point where one
+            # source's max_repeat bind becomes the active constraint instead
+            # (see the branch above).
+            print(
+                f"[data mix] total pretrain budget capped at {effective_tokens:,} tokens "
+                f"({effective_tokens / 1e9:.2f}B) by DATA VOLUME, not the mix ratio -- every "
+                f"available window from every source is already being used "
+                f"({sum(avail):,} total), none of them hit their max_repeat={max_repeat} "
+                f"limit. At the 20 tokens/param Chinchilla convention this project uses, "
+                f"that's enough for a ~{equiv_params_m:.0f}M-param model -- if you're "
+                f"targeting something bigger, download more data (proportionate to the "
+                f"current mix shares); adjusting the mix ratio alone will not raise this "
+                f"ceiling until raw volume grows enough for a source's repeat limit to "
+                f"become the active constraint instead."
+            )
 
         # Hold out the last `val_fraction` of each source's UNIQUE windows as a
         # token-disjoint validation set: those offsets never enter the train
@@ -767,9 +968,11 @@ def build_dataset_pipeline(
     smoke: bool = False,
     data_dir: str = "data_cache",
     slimpajama_dir: str | None = None,
+    fineweb_edu_dir: str | None = None,
+    fineweb_edu_token_bytes: int | None = None,
     val_fraction: float = 0.0,
     num_workers: int = 0,
-    mix: tuple[float, float, float] | None = None,
+    mix: tuple[float, float, float, float] | None = None,
     slimpajama_token_bytes: int = 500 * 1024**2,
     max_repeat: int = 3,
 ) -> tuple[DataLoader, "DataLoader | None", dict]:
@@ -785,6 +988,9 @@ def build_dataset_pipeline(
     slimpajama_dir : str or None
         Directory containing SlimPajama parquet files. If None, defaults
         to <data_dir>/slimpajama/data.
+    fineweb_edu_dir : str or None
+        Directory containing FineWeb-Edu parquet files (Issue #120). If
+        None, defaults to <data_dir>/fineweb_edu.
 
     Returns (dataloader, stats_dict).
     """
@@ -792,8 +998,9 @@ def build_dataset_pipeline(
     print("STEP 2 — DATASET PIPELINE")
     print("=" * 70)
 
-    eff_mix = mix if mix is not None else (0.50, 0.35, 0.15)
-    mix_ratio = {"SlimPajama": eff_mix[0], "OpenAssistant": eff_mix[1], "WikiText-103": eff_mix[2]}
+    eff_mix = mix if mix is not None else (0.50, 0.35, 0.15, 0.0)
+    mix_ratio = {"SlimPajama": eff_mix[0], "OpenAssistant": eff_mix[1],
+                 "WikiText-103": eff_mix[2], "FineWeb-Edu": eff_mix[3]}
     print(f"\nMix ratio: {mix_ratio}")
     print(f"Sequence length: {seq_len}")
     print(f"Batch size: {batch_size}")
@@ -820,6 +1027,8 @@ def build_dataset_pipeline(
             slimpajama_dir=slimpajama_dir,
             slimpajama_max_bytes=5 * 1024**3,
             slimpajama_token_bytes=slimpajama_token_bytes,
+            fineweb_edu_dir=fineweb_edu_dir,
+            fineweb_edu_token_bytes=fineweb_edu_token_bytes,
             max_repeat=max_repeat,
             mix=mix,
             val_fraction=val_fraction,
@@ -896,6 +1105,9 @@ def build_model_and_config(
     attn_window: int | None = None,
     grad_checkpoint: bool = False,
     tie_embeddings: bool = False,
+    optimizer: str = "muon",
+    precision: str = "bf16",
+    lr: float = 3e-4,
 ) -> tuple[EdgeHVN, dict]:
     """Build the EdgeHVN model with DeltaNet (or transformer baseline) + config.
 
@@ -924,15 +1136,25 @@ def build_model_and_config(
         "arch": arch,
         "ternary": apply_ternary,
         "use_deltanet": arch == "hvn",
-        "precision": "bf16",  # overridden by caller via config["precision"]
+        # Real values from the CLI. These used to be hardcoded here and only
+        # overwritten by main() AFTER this function printed its banner, so the
+        # banner reported "bf16" and "3e-4" whatever was actually passed --
+        # the same defect that made the optimizer line always say "AdamW".
+        "precision": precision,
         "batch_size": settings["batch_size"],
         "grad_accum": settings["grad_accum"],
         "seq_len": settings["seq_len"],
         "d_model": settings["d_model"],
         "num_layers": settings["num_layers"],
         "n_heads": settings["n_heads"],
-        "optimizer": "AdamW",
-        "lr": 3e-4,
+        # Real optimizer name, passed in from the CLI. Was hardcoded "AdamW"
+        # while main() only wrote args.optimizer into config AFTER this
+        # function printed its banner -- so every log this project has ever
+        # produced reported "AdamW" no matter what actually ran. That stale
+        # banner caused a real misreading of the chinchilla20k/83m logs
+        # (both of which in fact ran Muon) during #129.
+        "optimizer": optimizer,
+        "lr": lr,
         "weight_decay": 0.01,
         "warmup_steps": 500,
         "cosine_schedule": True,
@@ -1854,15 +2076,27 @@ def main():
                         default=None,
                         help="Directory containing SlimPajama parquet files (downloaded via hf CLI). "
                              "If not set, defaults to <data-dir>/slimpajama/data")
+    parser.add_argument("--fineweb-edu-dir", type=str, default=None,
+                        help="Directory containing FineWeb-Edu parquet files (Issue #120, "
+                             "downloaded via scripts/download_fineweb_edu.py). If not set, "
+                             "defaults to <data-dir>/fineweb_edu")
+    parser.add_argument("--fineweb-edu-token-bytes", type=int, default=None,
+                        help="Cap on FineWeb-Edu text tokenized, in UTF-8 bytes. Default "
+                             "None = use everything that's been downloaded.")
     parser.add_argument("--pretrain-mix", type=str, default=None,
-                        help="Pretrain source mix as 'slim,oasst,wiki' fractions "
-                             "(e.g. '0.85,0.0,0.15' = knowledge-heavy mix that DROPS "
-                             "OpenAssistant from pretrain). Default None = 0.50,0.35,"
-                             "0.15 (the original conversational mix). Zero-fraction "
+                        help="Pretrain source mix as 'slim,oasst,wiki,fineweb_edu' fractions "
+                             "(e.g. '0.85,0.0,0.15,0.0' = knowledge-heavy mix that DROPS "
+                             "OpenAssistant from pretrain; '0.0,0.0,0.0,1.0' = FineWeb-Edu "
+                             "only, Issue #120's recommended mix for 4B+ runs, sidesteps "
+                             "WikiText's Issue #119 mix-ratio cap by construction). Default "
+                             "None = 0.50,0.35,0.15,0.0 (the original conversational mix, "
+                             "FineWeb-Edu off unless explicitly requested). Zero-fraction "
                              "sources are excluded from the train index, so dropping the "
                              "tiny ~16M-token OASST source stops it capping the dataset "
-                             "via the max_repeat bind (see build_dataset). OASST still "
-                             "goes into the separate chat fine-tune stage.")
+                             "via the max_repeat bind (see build_dataset, and the #119/#120 "
+                             "mix-cap warning it prints). OASST still goes into the separate "
+                             "chat fine-tune stage. A nonzero FineWeb-Edu share requires "
+                             "having run scripts/download_fineweb_edu.py first.")
     parser.add_argument("--slimpajama-token-bytes", type=int, default=500 * 1024**2,
                         help="Cap on bytes of SlimPajama text to tokenize (default "
                              "500MB ~ 129M tokens). Set large (e.g. 6e9) to tokenize "
@@ -1956,9 +2190,20 @@ def main():
                              "2-4 recommended for real training — overlaps data loading "
                              "with GPU compute. Identity-preserving (same data, same order "
                              "with fixed seed).")
-    parser.add_argument("--optimizer", type=str, default="adamw",
+    parser.add_argument("--optimizer", type=str, default="muon",
                         choices=["adamw", "muon", "lion", "galore", "adafactor"],
-                        help="Optimizer (Issue #86). 'muon' orthogonalises 2-D "
+                        help="Optimizer. DEFAULT 'muon' since #129: with ternary "
+                             "ON (the config this project actually trains with) "
+                             "and --fast, Muon reaches AdamW's 1000-step val loss "
+                             "in ~570 steps (1.75x fewer) and keeps a ~0.4 nat "
+                             "lead throughout; it also passes 6.0, which AdamW "
+                             "never reaches in 1000 steps. Muon's steps are ~12 pct "
+                             "slower, so the honest wall-clock win is ~1.6x. "
+                             "CAVEAT: measured over 1000 from-scratch steps; no "
+                             "run in this project has taken Muon past that, so "
+                             "watch early val on a long pretrain and fall back "
+                             "with --optimizer adamw if the curve misbehaves. "
+                             "'muon' orthogonalises 2-D "
                              "weight-matrix updates (faster convergence); 'lion' "
                              "is sign-momentum; 'galore' (Issue #84) projects "
                              "gradients into a low-rank subspace so Adam's "
@@ -2013,8 +2258,18 @@ def main():
                              "(not just memory bookkeeping) -- verified via CPU parity/"
                              "convergence checks (tests/test_tied_embeddings.py), but "
                              "still opt-in. Default: off (existing checkpoints unaffected).")
-    parser.add_argument("--fast", action="store_true",
-                        help="Meta-flag: enable the full recommended fast-training "
+    fast_group = parser.add_mutually_exclusive_group()
+    fast_group.add_argument("--no-fast", dest="fast", action="store_false",
+                            help="Disable the --fast preset and train from the bare "
+                                 "defaults (fp32, no compile, no Triton scan, "
+                                 "num_workers=0). Use for a controlled fp32 A/B or "
+                                 "parity test, where both arms must be bit-comparable "
+                                 "-- bf16/TF32 change precision, so --fast is not "
+                                 "appropriate there. This is the escape hatch for the "
+                                 "#129 default flip; before that, bare defaults were "
+                                 "what you got by saying nothing.")
+    fast_group.add_argument("--fast", dest="fast", action="store_true", default=True,
+                        help="Meta-flag, ON BY DEFAULT since #129: enable the full recommended fast-training "
                              "stack in one switch — bf16 + TF32 + torch.compile + "
                              "Triton scan + async DataLoader (4 workers). The bit-"
                              "identical levers (compile/triton/workers) never change "
@@ -2048,11 +2303,15 @@ def main():
             args.num_workers = 4; fast_enabled.append("num-workers=4")
         print(f"[--fast] Enabled recommended training stack: {', '.join(fast_enabled)}")
 
-    # --- Issue #93: parse --pretrain-mix 'slim,oasst,wiki' -> float tuple (or None) ---
+    # --- Issue #93/#120: parse --pretrain-mix 'slim,oasst,wiki,fineweb_edu' -> float tuple (or None) ---
     if args.pretrain_mix is not None:
         parts = [float(x) for x in args.pretrain_mix.split(",")]
-        if len(parts) != 3:
-            parser.error("--pretrain-mix must be three comma-separated fractions 'slim,oasst,wiki'")
+        if len(parts) != 4:
+            parser.error(
+                "--pretrain-mix must be four comma-separated fractions "
+                "'slim,oasst,wiki,fineweb_edu' (Issue #120 added the 4th; a "
+                "3-value mix from before this change needs a trailing ',0.0' added)"
+            )
         if sum(parts) <= 0:
             parser.error("--pretrain-mix fractions must sum to > 0")
         args.pretrain_mix = tuple(parts)
@@ -2134,6 +2393,8 @@ def main():
         smoke=args.smoke,
         data_dir=args.data_dir,
         slimpajama_dir=args.slimpajama_dir,
+        fineweb_edu_dir=args.fineweb_edu_dir,
+        fineweb_edu_token_bytes=args.fineweb_edu_token_bytes,
         val_fraction=args.val_fraction,
         num_workers=args.num_workers,
         mix=args.pretrain_mix,
@@ -2156,6 +2417,9 @@ def main():
         attn_window=args.attn_window,
         grad_checkpoint=args.grad_checkpoint,
         tie_embeddings=args.tie_embeddings,
+        optimizer=args.optimizer,
+        precision=args.precision,
+        lr=args.lr,
     )
     config["lr"] = args.lr
     config["precision"] = args.precision

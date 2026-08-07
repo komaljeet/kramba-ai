@@ -295,6 +295,176 @@ else:
             f"{loss.item():.6f} vs {loss_base.item():.6f}"
         )
 
+    def test_prefetch_is_invoked_and_preserves_gradient_parity():
+        """Issue #115: offload_prefetch=True (the default) overlaps the
+        NEXT offloadable segment's CPU->GPU transfer with the CURRENT
+        segment's compute, via a side CUDA stream + event. Verified two
+        ways, mirroring #103's LRU-cache test pattern: (a) directly, by
+        patching GPUBufferPool.prefetch to count real invocations (proving
+        the forward-loop wiring actually calls it, not just that nothing
+        crashes); (b) gradient parity against offload_prefetch=False --
+        this must be a pure scheduling/timing change, not a numerical one.
+        """
+        from hvn.core.block_coordinate import GPUBufferPool
+
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=4, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=2,
+            offload_inactive_weights=True, device=device,
+            # offload_prefetch defaults to True -- explicit here for clarity.
+            offload_prefetch=True,
+        )
+
+        pool = sched.buffer_pool
+        calls = {"n": 0}
+        orig_prefetch = GPUBufferPool.prefetch
+
+        def _counting_prefetch(self, key, params):
+            calls["n"] += 1
+            orig_prefetch(self, key, params)
+
+        pool.prefetch = _counting_prefetch.__get__(pool, GPUBufferPool)
+
+        torch.manual_seed(42)
+        ids = torch.randint(0, 64, (2, 16), device=device)
+        logits = model(ids)
+        loss = F.cross_entropy(logits.reshape(-1, 64), ids.reshape(-1))
+        opt.zero_grad()
+        loss.backward()
+
+        assert calls["n"] > 0, (
+            "offload_prefetch=True but GPUBufferPool.prefetch was never "
+            "called during a real forward pass -- the forward-loop wiring "
+            "is not actually invoking it"
+        )
+
+        # Gradient parity against offload_prefetch=False.
+        torch.manual_seed(0)
+        model_np = _tiny_model(num_layers=4, grad_checkpoint=True).to(device)
+        opt_np = torch.optim.AdamW(model_np.parameters(), lr=1e-2)
+        sched_np = BlockCoordinateScheduler(
+            model_np, opt_np, steps_per_block=2,
+            offload_inactive_weights=True, device=device,
+            offload_prefetch=False,
+        )
+        assert sched_np.active_block_name == sched.active_block_name
+        torch.manual_seed(42)
+        ids2 = torch.randint(0, 64, (2, 16), device=device)
+        logits_np = model_np(ids2)
+        loss_np = F.cross_entropy(logits_np.reshape(-1, 64), ids2.reshape(-1))
+        opt_np.zero_grad()
+        loss_np.backward()
+
+        assert torch.allclose(loss, loss_np, atol=1e-6), (
+            f"loss diverged between offload_prefetch=True and False: "
+            f"{loss.item():.6f} vs {loss_np.item():.6f} -- prefetch must be "
+            f"a pure scheduling change"
+        )
+
+    def test_prefetch_pinned_memory_bounded_at_depth():
+        """Issue #118: GPUBufferPool.prefetch() used to pin each block's
+        ACTUAL CPU home tensor directly and leave it pinned until that
+        block's next BCD activate/deactivate cycle -- since one forward
+        pass prefetches EVERY block (not just the BCD-active one), pinned
+        allocations grew with total LAYER COUNT, OOMing the OS/driver's
+        pinned-memory ceiling at real depth (confirmed: ~8 GiB pinned
+        partway through one forward pass at 95 layers / ~4B params -- see
+        the issue for the full repro). This test targets the actual root
+        cause directly and fast: many (30) TINY layers, so the bug (pinned
+        allocation count scaling with layer count) is exercised without
+        needing gigabytes -- a real depth stress test would be too slow
+        for routine test runs, this isolates the same mechanism cheaply.
+
+        Asserts the number of DISTINCT pinned buffers ever allocated stays
+        bounded by (num_distinct_shapes x max_per_shape), not by layer
+        count -- the old bug would have shown one pinned allocation per
+        layer (30), scaling linearly with depth.
+        """
+        from hvn.core.block_coordinate import _PinnedStagingPool
+
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=30, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=2,
+            offload_inactive_weights=True, device=device,
+        )
+
+        pool = sched.buffer_pool
+        real_allocs = {"n": 0}
+        orig_pin_acquire = _PinnedStagingPool.acquire
+
+        def _counting_acquire(self, shape, dtype):
+            sig = (tuple(shape), dtype)
+            free = self._free.get(sig)
+            if not free:
+                in_use = self._in_use.get(sig, [])
+                if len(in_use) < self.max_per_shape:
+                    real_allocs["n"] += 1  # about to hit the torch.empty(...).pin_memory() branch
+            return orig_pin_acquire(self, shape, dtype)
+
+        pool._pinned_pool.acquire = _counting_acquire.__get__(pool._pinned_pool, _PinnedStagingPool)
+
+        ids = torch.randint(0, 64, (2, 16), device=device)
+        logits = model(ids)
+        loss = F.cross_entropy(logits.reshape(-1, 64), ids.reshape(-1))
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+
+        num_shapes = len({sig for _, params in sched.blocks for sig in [pool._signature(params)]})
+        # A block partitions into several params of a FEW distinct shapes
+        # shared across all 30 layers -- bound is small and flat, not 30x.
+        max_expected = num_shapes * pool._pinned_pool.max_per_shape * 4  # generous slack, still << 30
+        assert real_allocs["n"] > 0, "no pinned buffers were ever allocated -- prefetch may not be firing"
+        assert real_allocs["n"] < 30, (
+            f"pinned allocation count ({real_allocs['n']}) scales with layer count (30) -- "
+            f"this is the #118 bug: pinning isn't bounded, it's growing with depth"
+        )
+        assert real_allocs["n"] <= max_expected, (
+            f"pinned allocation count ({real_allocs['n']}) exceeds the expected bounded "
+            f"ceiling ({max_expected}) for {num_shapes} distinct shapes"
+        )
+
+    def test_prefetch_training_converges():
+        """Issue #115: a full multi-cycle training loop with the default
+        offload_prefetch=True must still converge, and must still retain
+        cross-cycle training correctly (the #117 gate), not just avoid
+        crashing."""
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=3, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=5e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=3,
+            offload_inactive_weights=True, device=device,
+        )
+
+        torch.manual_seed(1)
+        ids = torch.randint(0, 64, (2, 8), device=device)
+
+        losses = []
+        n_steps = sched.num_blocks * 3 * 3
+        for _ in range(n_steps):
+            logits = model(ids)
+            loss = F.cross_entropy(logits.reshape(-1, 64), ids.reshape(-1))
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            sched.step()
+            losses.append(loss.item())
+
+        early_mean = sum(losses[:10]) / 10
+        late_mean = sum(losses[-10:]) / 10
+        assert late_mean < early_mean, (
+            f"loss did not decrease with prefetch enabled (default): "
+            f"early={early_mean:.4f} late={late_mean:.4f}"
+        )
+
     def test_cache_reconciled_on_block_switch():
         """Issue #103: BlockCoordinateScheduler._activate's evict_all() call
         must flush the LRU cache before its own per-switch CPU-move loop --
@@ -333,6 +503,186 @@ else:
                     f"block {name!r} (active={active_name!r}) on {p.device} "
                     f"after a block switch with caching enabled, expected {expected}"
                 )
+
+    def test_deactivated_block_retains_training_across_cycles():
+        """Issue #117 (P0): a block's trained values must survive a
+        deactivate -> reactivate round trip, not reset to their pristine
+        pre-training value. `test_training_converges_with_offload` (below)
+        only checks aggregate early-vs-late loss over a run, which still
+        trends down even under the bug this test targets (the *currently*
+        active block always shows real local descent within its own window,
+        every cycle, restarting from the same discarded point) -- so this
+        test checks a SPECIFIC block's parameter value directly across two
+        full cycles instead of relying on the aggregate loss trend.
+
+        Root cause this guards against: `GPUBufferPool.register_cpu_home`'s
+        register-if-absent dedup meant a block's `_cpu_home` entry was
+        captured once ever (its untrained init value) and never refreshed
+        on later deactivations, so every subsequent `load()` (used to fetch
+        an inactive block for a forward pass) fetched stale, untrained
+        weights -- silently discarding all training. Fixed via
+        `register_cpu_home(params, force=True)` in the deactivation loop.
+        """
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=3, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=5e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=3,
+            offload_inactive_weights=True, device=device,
+        )
+
+        torch.manual_seed(1)
+        ids = torch.randint(0, 64, (2, 8), device=device)
+
+        target_name, target_params = sched.blocks[1]  # "blocks.0"
+        assert target_name == "blocks.0"
+        p0 = target_params[4]  # a real (d, d) weight matrix, not a norm gain
+        init_value = p0.data.detach().clone().cpu()
+
+        def value_diff() -> float:
+            return (p0.data.detach().cpu() - init_value).abs().max().item()
+
+        diffs_after_each_cycle = []
+        n_steps = sched.num_blocks * 3 * 2  # 2 full cycles
+        for step in range(n_steps):
+            logits = model(ids)
+            loss = F.cross_entropy(logits.reshape(-1, 64), ids.reshape(-1))
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            sched.step()
+            # Sample right after blocks.0's own active window ends each cycle
+            # (steps 5 and 5 + num_blocks*3, i.e. the step right after its
+            # 3rd active step, once it has gone back to being inactive).
+            if step in (5, 5 + sched.num_blocks * 3):
+                diffs_after_each_cycle.append(value_diff())
+
+        assert len(diffs_after_each_cycle) == 2
+        cycle1_diff, cycle2_diff = diffs_after_each_cycle
+        assert cycle1_diff > 1e-6, (
+            "blocks.0 shows no change from its initial value after its own "
+            "active window -- training isn't happening at all, a different "
+            "bug than #117."
+        )
+        assert cycle2_diff > cycle1_diff - 1e-9, (
+            f"blocks.0's value did not accumulate further training in cycle "
+            f"2 (cycle1_diff={cycle1_diff:.6f}, cycle2_diff={cycle2_diff:.6f}) "
+            f"-- this is the #117 bug: the block reset to its pre-training "
+            f"value on deactivation instead of retaining cycle 1's training."
+        )
+
+    def test_bf16_parking_shrinks_inactive_blocks_and_restores_native_dtype_when_active():
+        """Issue #113: offload_park_dtype=torch.bfloat16 stores INACTIVE
+        blocks' weights in bf16 on CPU (halving CPU RAM / PCIe transfer vs
+        fp32), while the ACTIVE block is always restored to its native
+        dtype (fp32 here) before training resumes on it -- the optimizer's
+        precision must be unaffected, only frozen weights get coarser."""
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=3, grad_checkpoint=True).to(device)
+        assert all(p.dtype == torch.float32 for p in model.parameters()), (
+            "test assumes fp32-native params (matches docs/training.md's "
+            "measured EdgeHVN default) -- if this ever changes, this test's "
+            "premise (bf16 parking actually shrinks storage) needs revisiting"
+        )
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=2,
+            offload_inactive_weights=True, device=device,
+            offload_park_dtype=torch.bfloat16,
+        )
+
+        for name, params in sched.blocks:
+            expected = torch.float32 if name == sched.active_block_name else torch.bfloat16
+            for p in params:
+                assert p.dtype == expected, (
+                    f"block {name!r} (active={sched.active_block_name!r}) is "
+                    f"{p.dtype}, expected {expected}"
+                )
+
+        # Cycle through every block once; each must come back to fp32 the
+        # instant it's active, and go back to bf16 the instant it parks.
+        for _ in range(sched.num_blocks):
+            sched.step()
+            for name, params in sched.blocks:
+                expected = torch.float32 if name == sched.active_block_name else torch.bfloat16
+                for p in params:
+                    assert p.dtype == expected, (
+                        f"after a switch, block {name!r} "
+                        f"(active={sched.active_block_name!r}) is {p.dtype}, "
+                        f"expected {expected}"
+                    )
+
+    def test_bf16_parking_requires_autocast():
+        """Issue #113: forwarding through a bf16-parked block alongside an
+        fp32-active block mixes dtypes -- PyTorch ops like Conv1d reject
+        this outside autocast with a cryptic low-level error ('Input type
+        and bias type should be the same'). Confirmed directly: the same
+        forward call that raises this RuntimeError's fail-fast message
+        below, with the guard removed, instead crashes several frames deep
+        inside torch.nn.modules.conv. Must fail fast with a clear message
+        instead, before backward, not mid-conv."""
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=3, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        BlockCoordinateScheduler(
+            model, opt, steps_per_block=2,
+            offload_inactive_weights=True, device=device,
+            offload_park_dtype=torch.bfloat16,
+        )
+        ids = torch.randint(0, 64, (2, 16), device=device)
+        try:
+            model(ids)
+            raise AssertionError("expected RuntimeError: missing autocast")
+        except RuntimeError as e:
+            assert "Issue #113" in str(e), f"wrong/unclear error raised: {e}"
+
+        # With autocast, the same call must succeed.
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            logits = model(ids)
+        assert logits.shape == (2, 16, 64)
+
+    def test_training_converges_with_bf16_parking():
+        """Issue #113: a full multi-cycle training loop with bf16 parking
+        enabled (under autocast, as required) must still converge -- not
+        just avoid crashing. Companion to
+        test_deactivated_block_retains_training_across_cycles (which
+        proves cross-cycle retention at the default park_dtype=None) --
+        this confirms retention ALSO holds when parked weights are
+        actually downcast, not just device-moved."""
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=3, grad_checkpoint=True).to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=5e-2)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=3,
+            offload_inactive_weights=True, device=device,
+            offload_park_dtype=torch.bfloat16,
+        )
+
+        torch.manual_seed(1)
+        ids = torch.randint(0, 64, (2, 8), device=device)
+
+        losses = []
+        n_steps = sched.num_blocks * 3 * 3
+        for _ in range(n_steps):
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                logits = model(ids)
+                loss = F.cross_entropy(logits.reshape(-1, 64), ids.reshape(-1))
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            sched.step()
+            losses.append(loss.item())
+
+        early_mean = sum(losses[:10]) / 10
+        late_mean = sum(losses[-10:]) / 10
+        assert late_mean < early_mean, (
+            f"loss did not decrease with bf16 parking enabled: "
+            f"early={early_mean:.4f} late={late_mean:.4f}"
+        )
 
     def test_training_converges_with_offload():
         torch.manual_seed(0)

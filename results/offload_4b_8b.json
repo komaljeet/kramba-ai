@@ -1,0 +1,24 @@
+[
+  {
+    "d_model": 2048,
+    "num_layers": 95,
+    "batch_size": 2,
+    "seq_len": 128,
+    "steps_per_block": 2,
+    "label": "4.02B",
+    "params": 4021260856,
+    "verdict": "ok",
+    "peak_alloc_mb": 938,
+    "peak_reserved_mb": 1102,
+    "sec_per_step": 4.246
+  },
+  {
+    "d_model": 2048,
+    "num_layers": 190,
+    "batch_size": 2,
+    "seq_len": 128,
+    "steps_per_block": 2,
+    "label": "8.01B",
+    "verdict": "subprocess-failed"
+  }
+]

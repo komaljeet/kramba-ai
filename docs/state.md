@@ -583,3 +583,1363 @@ investigate `torch._dynamo.config.force_parameter_static_shapes = False` (surfac
 the recompile diagnostic as a possible lever, unproven). **1.21B remains unresolved** — the
 audit-OOM bug that blocked it is fixed, but the silent stall through the real training script
 is a separate, still-open problem needing real profiling, not a guess.
+## MoE FFN on DeltaNet — works, but loses to simply scaling the dense model (Issue #123, 2026-08-02)
+
+MoE was scoped as the only remaining lever that attacks FLOPs-per-token rather than memory
+(the offload work turned out to be only ~2x of the 3,300x 6B-vs-142M gap; params and tokens
+are the other 42x each). Implemented as `hvn/core/moe.py::MoEFFN` — E experts, top-k routing,
+Switch-style load-balancing aux loss — routing **only the FFN** (~40% of block FLOPs). The
+recurrence is deliberately left dense; see the module docstring for why routing q/k/v risks
+mixing incompatible subspaces inside a single recurrent state, a failure mode transformers do
+not have.
+
+2x2 at d=512, 12 layers, 5M-token budget, E=8/top-2 (`results/moe/moe_2x2.json`):
+
+| arm | params | eval PPL | wall-clock |
+|---|---:|---:|---:|
+| dense | 39,756,656 | 119.657 | 556.6s |
+| shared | 10,830,684 | 156.424 | 510.2s |
+| MoE | 128,015,216 | 105.544 | 1062.3s |
+| shared + MoE | 18,185,564 | 131.344 | 930.4s |
+
+Harness consistency check passed: the dense arm reproduces the ternary 2x2's 119.396 at 119.657
+(0.2%), and shared reproduces 154.1/156.1 at 156.424.
+
+**The bar, set before the numbers landed.** MoE is better than dense in absolute terms (−11.8%),
+but that is the wrong comparison. The question is whether it beats what the *same compute* buys
+by simply scaling the dense model up. Using this repo's measured −0.504 exponent, 1.40× params
+(MoE's theoretical FLOP cost) is worth **19%**; the *measured* wall-clock cost was **1.91×**,
+which raises the bar to **~39%**.
+
+| comparison | gain | bar | verdict |
+|---|---:|---:|:---:|
+| dense → MoE | −11.8% | 19% / 39% | ❌ |
+| shared → shared+MoE | −16.0% | 19% / 39% | ❌ |
+
+**Verdict: at this budget, 3.2× the parameters bought less quality than 1.4× the compute would
+have.** Scaling the dense model is the better use of the same FLOPs. The failure is consistent
+across both the dense and shared baselines, so it is not an artifact of one configuration.
+
+**The levers do compose.** MoE helps the shared model (−16.0%) at least as much as it helps the
+dense one (−11.8%), so sharing and MoE are not fighting each other — MoE simply is not worth
+its compute in either. This closes acceptance criteria 4 and 5 of #123 with a negative result.
+
+**Two caveats, neither of which rescues the result:**
+- **The 1.91× vs 1.40× gap is partly implementation.** `MoEFFN` loops over experts in Python
+  rather than batching them; a tuned kernel would narrow the wall-clock penalty. But the
+  FLOP-based 19% bar is missed regardless, so optimisation changes the margin, not the verdict.
+- **5M tokens is very undertrained, and MoE has an extra thing to learn.** Routing — which
+  expert for which token — is a harder learning problem than a dense FFN's, and may simply not
+  have had the data to specialise. **This is the single strongest reason not to treat this as
+  final**, and it is untested. If MoE is revisited, the first thing to check is whether the gain
+  grows with token budget; a fixed ~12-16% that does not grow means the routing never learned
+  anything useful.
+
+**One result worth keeping regardless of the compute verdict.** shared+MoE reaches PPL 131.3 at
+**18.19M stored params**, against dense needing **39.76M** for 119.7 — **2.2× fewer stored
+parameters for 10% worse PPL**. That is a deployment-size story, not a training-compute one, and
+it stacks with ternary's ~20x bits (measured to compose cleanly earlier today). For the
+edge-inference thesis this project is actually built around, that combination matters more than
+the training-FLOP comparison MoE just lost.
+
+## Looped early exit — no-retrain hyperparameter search FAILS the gate (Issue #122, 2026-08-01)
+
+Wrapped `EdgeHVN.forward_step` (`hvn/edge/looped.py`) so the block stack can re-run up to N
+times per token, exiting once normalized softmax entropy drops below threshold T — a
+"looped transformer" style weight-tied refinement, entropy-only exit signal (a trainable
+confidence-MLP was considered and dropped: with no retraining allowed, its weights would be
+random and its "confidence" scores meaningless). Contract preserved exactly — `forward_step`/
+`init_state`/`chat_step` signatures unchanged, `ChatSession` needs zero code changes
+(`tests/test_looped_early_exit.py`, 6/6 CPU parity/correctness tests, incl. a proof that a
+discarded loop's candidate state never leaks into the next loop's attempt).
+
+**Full grid N ∈ {2,4,8,16} × T ∈ {0.1,0.3,0.5,0.7} on `checkpoints/hybrid_a4_v2/
+hybrid_a4_step8000.pt`** (the checkpoint the 35.5%/8.5% recall baseline was originally measured
+on — `hybrid_tooluse_v1.pt`, named in the original task spec, does not exist in this working
+tree or any worktree). Measured via a dedicated `forward_step`-based generation harness
+(`scripts/sweep_looped_early_exit.py`), not `eval/synthetic_recall_probe.py`'s own `generate()`
+— that uses full `forward()`, which uses `_scan_chunked` and diverges numerically from
+`forward_step`'s `_scan_sequential` on a trained checkpoint (see the #97 incremental-decode
+entry above); reusing it would have silently never exercised the loop wrapper at all.
+
+**Result: every one of the 16 combinations fails.** The pattern is a clean binary, not a
+tunable middle ground:
+
+| T | Behavior (all N) |
+|---|---|
+| 0.1 / 0.3 | avg loops ≈ N (always maxes out) → recall = **0%**, near AND far, every time |
+| 0.5 | mixed loop counts, recall still **0%** near AND far |
+| 0.7 | avg loops ≈ **1.0–1.07** (almost never actually loops) → recall reverts to ~baseline |
+
+There is no hyperparameter point where the model loops *and* stays useful. **Root cause: the
+block stack was never trained to refine its own output** — a second pass through untrained
+weights pushes the hidden state off the distribution it was trained on, and exact-token recall
+collapses almost immediately. This was flagged as the key risk before implementation (an
+untrained "confidence" mechanism can't be assumed quality-neutral) and the sweep confirms it
+directly rather than just plausibly.
+
+**Closest candidate, N=4/T=0.7, re-run at the full 300-trial validation gate** (vs. a
+300-trial-measured N=1 baseline, not the old doc numbers — see harness note above):
+
+| Metric | Baseline | N=4,T=0.7 | Target | Result |
+|---|---:|---:|---|:---:|
+| Near-window recall | 33.67% | 28.67% | ≥30% | ❌ |
+| Far-window recall | 6.33% | 7.0% | ≥7% | ✅ (exactly on the line) |
+| Avg loops, easy tokens | — | 1.0 | ≤2 | ✅ |
+| Avg loops, hard tokens | — | 1.024 | ≥N/2 | ❌ |
+| Tokens/sec | 27.82 | 54.34 | improves | ✅ (see caveat) |
+
+**Overall FAIL**, and the two nominal passes don't rescue it: avg-loops-hard ≈ avg-loops-easy ≈
+1.0 means the mechanism isn't discriminating hard from easy tokens at all — at T=0.7 it's
+functionally inert, not "using" loops. The 2× tokens/sec figure is inconsistent with a loop
+count barely above 1.0 and is almost certainly single-run GPU/system measurement noise (one
+40-token generation per combo), not a real architectural speedup.
+
+**Decision: untrained looped early exit does not work on this checkpoint at any tested (N,T).**
+This is a real, informative negative result for the no-retrain phase of #122, not a bug —
+correctness was independently verified via the parity tests above. The next step, if this
+capability is still wanted, is a loop-aware **continued fine-tune** (train with randomized loop
+counts so the block learns to be a genuine refiner of its own output), reusing this checkpoint's
+existing pretrain/FT investment — not a from-scratch retrain, and not further hyperparameter
+search on the frozen checkpoint. Full sweep data: `results/looped_early_exit/sweep_results.json`,
+`results/looped_early_exit/validation_gate_N4_T0.7.json`.
+
+## Loop-aware continued-FT: recipe check + a scan-kernel default flip (Issue #122, 2026-08-01)
+
+**Stage 1 — cheap ~780K-param sandbox** (`scripts/train_looped_sandbox.py`, char-level,
+from-scratch, trains in minutes): tests the loop-aware training recipe itself (random loop
+count `k ~ Uniform[1,max_loops]` per step, loss averaged across EVERY loop's prediction —
+"deep supervision" — not just the final one, so the model is actually taught that an early
+loop's output alone should be usable). Result **ambiguous, not conclusive**: held-out loss got
+worse with more loops in both an initial (flawed, out-of-distribution held-out set) and a
+corrected (in-distribution train/val split) run. Root confound: the tiny repeated training
+corpus (583 chars × 200) is fully solvable at k=1 alone, so there's no training pressure for
+extra loops to do anything — the sandbox can't distinguish "recipe doesn't work" from "task was
+too easy to need it." Recorded in `results/looped_early_exit/sandbox_1m_results.json`.
+
+**Stage 2 — the real test** (`continue_ft_looped.py`): a genuine **continued fine-tune**, not a
+retrain — warm-starts directly from `checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt` (same
+checkpoint the #122 sweep above ran on) and continues training with the loop-aware objective on
+`data/grounded_qa_expanded.jsonl` (5,240 real, non-repeated examples — the sandbox's
+memorization confound doesn't apply). In progress; loss descending cleanly (0.87 → 0.46 by
+step 560/2000).
+
+**A real bug caught mid-run, and a genuine finding underneath it.** The first launch measured
+**41.88s/step** and was wrongly attributed to VRAM/WDDM spill-over (a documented failure mode
+elsewhere in this doc) — cutting `--batch-size` 4→2 didn't change `nvidia-smi`'s reported usage
+at all, which should have been the tell. The real cause, found by diffing against the working
+reference script (`continue_ft_hybrid.py`) rather than continuing to guess: that script's
+`--fast` enables the fused Triton scan + megakernel backward (#83/#96) on the DeltaNet blocks;
+`continue_ft_looped.py` had never wired them in at all, so it ran DeltaNet's slow default eager
+scan, uncompiled. Wiring them in: **~1s/step, a ~42x speedup**, confirmed with real
+`torch.cuda.max_memory_allocated()` instrumentation (4.6 GiB peak) in place of `nvidia-smi`
+guessing.
+
+**Default flipped: triton-scan + megakernel-scan are now unconditionally on in both
+`continue_ft_hybrid.py` and `continue_ft_looped.py`** (no `--fast` needed for this part
+anymore). This was checked thoroughly before flipping, not assumed:
+- `tests/test_issue83.py` + `tests/test_issue83_stacking.py` (7/7, re-run fresh) confirm the
+  Triton forward/backward/full-block match the exact sequential reference to rel-diff < 2e-3.
+- `scripts/ab_megakernel.py` documents the megakernel backward as loss-bit-identical, grad
+  diff ~5e-8.
+- **The direction of the risk is the opposite of what was first assumed.** The Triton kernel
+  implements the same safe log-space formulation as `_scan_chunked_stable`
+  (`hvn/core/deltanet_triton.py`: "never forms `1/P`"). The path it replaces — the *default*,
+  no-flag eager `_scan_chunked` — is the one with a real, code-documented correctness caveat:
+  its own docstring says it can be "silently wrong on decayed channels at large chunks / hard
+  decay," and the #44 `P`-floor fix only bounds the catastrophic Inf/NaN case, not full
+  accuracy. So enabling triton-scan isn't a speed-for-accuracy trade — it's strictly better on
+  both axes.
+
+**Scope of the flip, deliberately narrow.** Only `continue_ft_hybrid.py`/`continue_ft_looped.py`
+were changed. NOT touched: `DeltaNetBlock`'s own constructor default (`use_triton_scan=False`),
+`EdgeHVN`'s own default (also `False`, and it doesn't expose `use_megakernel_scan` as a
+constructor arg at all — only settable post-construction), or `train_edge_conversational.py`'s
+own more elaborate `--fast`/`--triton-scan` machinery (which already conditionally enables
+triton-scan under `--fast` for `--arch hvn`, gated by logic not fully audited here). Those are
+wider-reaching, separately-scoped changes — affecting the main pretraining script, past
+benchmark reproducibility assumptions, and other callers — not something to flip as a
+side-effect of an #122 stage-2 script fix.
+
+**Follow-up — attempted the broader flip too, and the caution above was justified.** Tried
+flipping `DeltaNetBlock`/`EdgeHVN`'s own class-level `use_triton_scan`/`use_megakernel_scan`
+constructor defaults to `True` (the true single source of truth every caller inherits from).
+Two real, previously-undiscovered caveats surfaced from actually running the broader test suite
+rather than assuming the earlier scoped verification generalized:
+
+- **`use_megakernel_scan=True` by default breaks `torch.compile` fusion**:
+  `tests/test_issue83_stacking.py::test_zero_graph_breaks` failed — 2 graph breaks instead of 0.
+  Correctness is unaffected (all parity tests still passed), but it's a real compile-fusion
+  regression, not just noise. Reverted this one back to `False` at the class level.
+- **`use_triton_scan=True` by default breaks `BlockCoordinateScheduler` weight-offload
+  parity** — a real, non-trivial loss divergence (0.297 vs 0.010 for the eager scan, not
+  floating-point noise) specifically in
+  `tests/test_block_coordinate_offload.py::test_lru_cache_hit_avoids_reload_and_preserves_parity`.
+  Isolated with a standalone repro to confirm it's the scan flag and not something else, and
+  confirmed `grad_checkpoint` alone (no BCD/offload) is unaffected
+  (`tests/test_edgehvn_grad_checkpoint.py` 5/5) — narrow to the offload buffer-caching
+  mechanism specifically, not root-caused, so also reverted to `False` at the class level.
+
+**Net decision: class-level defaults (`DeltaNetBlock`, `EdgeHVN`) stay `False`.** Only
+`continue_ft_hybrid.py`/`continue_ft_looped.py` have it on (verified safe there — neither uses
+BCD/offload or `torch.compile` alongside the loop-aware path). This also answers why
+`train_edge_conversational.py`'s own `--fast`/`--triton-scan` wiring was left untouched: that
+script supports `--block-coordinate`, so the same BCD-offload interaction risk applies there
+too — extending the flip to it would need the same root-cause work this pass didn't do.
+`use_megakernel_scan` is now explicitly threaded through `EdgeHVN`'s constructor (previously
+only settable post-construction) even though its default stays `False` — harmless plumbing
+improvement, kept regardless of the revert.
+
+## Stage 2 result — loop-aware continued-FT does NOT fix the recall collapse (Issue #122, 2026-08-01)
+
+`continue_ft_looped.py` completed: 2000 steps (115.3 min, `--fast`, batch_size=2, grad_accum=16,
+max_loops=3, warm-started from `checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt` on
+`data/grounded_qa_expanded.jsonl`), final train loss 0.2507 (ppl 1.28), clean convergence.
+
+**Validation (`scripts/validate_looped_ft.py`)** — fixed loop counts N=1,2,4
+(`entropy_threshold=-1.0` forces exactly N loops every time, isolating "does looping still
+corrupt recall" from any entropy-threshold question), 20 trials/N, near-window synthetic
+recall, FT checkpoint vs the frozen baseline it was warm-started from:
+
+| N | FT checkpoint (2000 steps) | Frozen baseline |
+|---|---:|---:|
+| 1 | 30.0% (6/20) | 45.0% (9/20) |
+| 2 | **0.0%** (0/20) | **0.0%** (0/20) |
+| 4 | **0.0%** (0/20) | **0.0%** (0/20) |
+
+**Verdict: the loop-aware continued-FT does not fix the collapse.** Identical pattern on both
+checkpoints — recall craters to exactly 0% the instant looping actually happens (N>1), and the
+FT checkpoint is even slightly *worse* at plain single-pass (N=1) recall than the frozen
+baseline it started from (30% vs 45%) — a real cost with zero offsetting benefit at N>1.
+Real, non-repeated training data (`data/grounded_qa_expanded.jsonl`, 5,240 examples) rules out
+the memorization confound that made the stage-1 sandbox result ambiguous — this is a clean
+negative result, not an artifact of insufficient data variety.
+
+**Working hypothesis for why, not yet tested:** the deep-supervision recipe (loss averaged
+across every sampled loop's prediction, `hvn.edge.looped.looped_forward_train`) has a
+structural gap. The same weights are trained to satisfy "loop 1 alone should already answer
+correctly" and "loop 2 — which further transforms loop 1's now-correct hidden state — should
+*also* answer correctly," with nothing in the objective rewarding "leave the answer alone once
+it's already right." Real looped-transformer/universal-transformer designs typically need an
+explicit mechanism for that (step embeddings, learned halting, or a residual-style update that
+lets later iterations be small perturbations rather than full re-transformations) — a plain
+re-application of the full block stack has no such pressure built in. More training steps on
+the same recipe would not obviously fix a structural gap like this; it would need a different
+training design, not more of the same one.
+
+**Status: Issue #122's Looped Early Exit, as implemented (weight-tied loop over the
+already-full-depth 12-layer hybrid + naive deep supervision), does not deliver a working
+mechanism — neither without retraining (the original N×T sweep) nor with a real continued-FT
+(this stage). Parking here rather than continuing to iterate on this specific recipe.** If
+picked up again, the honest next steps are (a) a genuinely weight-shared/looped architecture
+(this repo already has `EdgeHVN(shared_weights=True)` infrastructure for that — the original
+issue's own "reuse a single weight-shared block" framing, never actually used by this work,
+which instead looped the full already-deep hybrid) or (b) a training objective with an explicit
+settle/halt mechanism, not just randomized-depth deep supervision. Full results:
+`results/looped_early_exit/validate_looped_ft.json`,
+`checkpoints/hybrid_looped_ft/hybrid_looped_step2000.pt`.
+
+## Gated-loop fix attempt — tested cheaply, makes things worse when opened (Issue #122, 2026-08-02)
+
+Tried the (b) option above directly: `scripts/train_looped_sandbox_gated.py` adds a learned
+per-token gate so loop 2+ blends the block stack's raw output with the previous hidden state
+(`h <- h + sigmoid(loop_gate(h)) * (Blocks(h) - h)`) instead of overwriting it outright — loop 1
+stays the full ungated pass. Same disposable ~780K-param, from-scratch, char-level sandbox as
+stage 1 (not a fine-tune — deliberately tiny so this is a fast, cheap mechanism check before
+touching the real 83M checkpoint again).
+
+**v1** (gate bias init -3, `sigmoid(-3)~=0.047`, near-closed at start), 3000 steps: partial
+win. Loss still degrades with more loops but ~3x less than the ungated recipe (+0.09 k1->k4 vs
+ungated's +0.27). Gate barely moved during training (0.047 -> 0.049).
+
+**v2** (gate bias init -1, `sigmoid(-1)~=0.27`, more open at start, hypothesis: v1's gate was
+gradient-starved by starting too saturated), 5000 steps: **hypothesis was wrong, and the result
+is worse on every axis** — both overall single-pass quality (k=1 loss 5.80 vs v1's 4.56) and
+the loop-degradation amount (+0.19 k1->k4 vs v1's +0.09). The gate spent the whole run trying
+to close itself back down (0.27 -> 0.257) and never got back to where v1 started.
+
+**Reading:** starting the gate MORE open made things worse, not better -- the correct amount of
+gate openness is "as closed as possible," and v1's conservative init was already closer to
+right. This rules out the "gradient-starved gate" explanation and points to a cleaner, stronger
+conclusion: **any exposure to the block stack's repeated (loop 2+) transformation hurts,
+independent of how the gate is tuned** -- not a fixable hyperparameter/init issue. The gate
+mechanism works as designed (it lets the model suppress harmful extra loops), but there's
+nothing useful in the block stack's second-pass output for it to let through. This is now the
+second training-side fix attempted (deep supervision alone, then deep supervision + gating) that
+fails to make looping productive on this architecture -- reinforces the (a) option above
+(a genuinely weight-shared, deliberately-smaller-and-looped architecture) as the more promising
+remaining direction over further training-recipe tweaks on the current already-full-depth
+hybrid. Full results: `results/looped_early_exit/sandbox_1m_gated_results.json` (v1),
+`results/looped_early_exit/sandbox_1m_gated_v2_results.json` (v2). Not attempted on the real
+83M checkpoint -- the cheap sandbox check is exactly what caught this before that spend.
+
+## First positive signal — looping WITHOUT early exit modestly helps (Issue #122, 2026-08-02)
+
+Every attempt above trained with deep supervision (every sampled loop count's prediction
+graded independently), because that's what entropy-gated early exit requires (loop 1 alone
+must already be a usable answer). That requirement was never separated from "does repeated
+computation help at all" until this check. `scripts/train_looped_sandbox_fixed.py` drops early
+exit entirely: fixed N loops every step (no random k), loss on ONLY the final loop's
+prediction -- the standard way weight-tied/looped depth is normally trained in the literature.
+Same disposable ~780K-param sandbox, N=1 (plain single-pass baseline) vs N=4, same 3000
+training steps, held-out loss:
+
+| N | held-out loss |
+|---|---:|
+| 1 (single pass) | 5.0050 |
+| 4 (always 4 loops, final-loop-only supervision) | **4.9621** |
+
+**N=4 beats N=1** — modest (~0.9% relative) but real and the first improving result in this
+entire investigation. Confirms the hypothesis from the gated-fix section above: deep
+supervision's requirement that loop 1 already be independently correct was actively
+suppressing the model's ability to use loop 2+ productively. Remove that requirement and
+repeated computation *is* mildly useful at this toy scale.
+
+**This cleanly separates two previously-conflated questions.** "Does looping help at all"
+(this result: yes, mildly, when not required to also support early exit) is now distinct from
+"does early exit specifically work" (still no — every early-exit-compatible training attempt,
+deep-supervised or gated, failed). A **fixed-depth looped model with no early exit** is a
+plausible, still-open direction; **early exit** (the original #122 ask — cheap tokens skip
+loops, hard tokens get more) remains unproven and every attempt at it so far has failed.
+Whether a fixed-depth loop is worth the N× inference cost without the early-exit savings is a
+separate cost/benefit question, not yet evaluated. Full results:
+`results/looped_early_exit/sandbox_1m_fixed_N1.json`, `sandbox_1m_fixed_N4.json`.
+
+## Real-scale check of the fixed-N recipe — sandbox signal did NOT transfer (Issue #122, 2026-08-02)
+
+Ran the sandbox's winning recipe (fixed N=4 loops, final-loop-only supervision, no early exit)
+as a real continued-FT on the 83M checkpoint (`continue_ft_looped.py --fixed-n
+--no-deep-supervise`, 2000 steps, 196.3 min, final train loss 0.30). Validated at N=1/2/4 on
+both the step-500 (25% through) and step-2000 (final) checkpoints:
+
+| N | Fixed-N FT, step 500 (early) | Fixed-N FT, step 2000 (final) | Frozen baseline |
+|---|---:|---:|---:|
+| 1 | 26.7% | 30.0% | 45.0% |
+| 2 | — | **0.0%** | **0.0%** |
+| 4 | **0.0%** | **0.0%** | **0.0%** |
+
+**The sandbox's positive signal did not transfer.** Same collapse pattern as every prior
+attempt, identical at both the early and final checkpoint — more training didn't help within
+this run's budget either. The toy-scale result (N=4 beating N=1 by ~0.9% in held-out *loss*)
+was a real, measured effect, but it didn't translate into the *recall* metric that actually
+matters here — a small general next-token-prediction improvement is not the same thing as
+fixing long-range associative recall, which apparently needs a qualitatively different fix, not
+just "let the model use more compute if it wants to." This is the reason the real-scale check
+mattered rather than treating the sandbox result as sufficient evidence on its own.
+
+**This exhausts the training-recipe angle for Issue #122.** Three distinct training approaches
+tried on the current (already-full-depth, 12-layer) hybrid architecture, all fail on the recall
+metric:
+1. Deep supervision (every sampled loop graded independently) — fails, recall collapses to 0%.
+2. Deep supervision + a learned per-token gate — fails; opening the gate further made both
+   overall quality and the collapse *worse*, not better.
+3. Fixed-N, final-loop-only supervision (no early exit at all) — showed a small, real
+   toy-scale loss improvement, but recall still collapses to 0% at real scale.
+
+**Final status: parking Issue #122 as far as training-recipe iteration on this architecture
+goes.** The only genuinely untested direction left is architectural — a real weight-shared,
+deliberately-smaller-and-looped model (`EdgeHVN(shared_weights=True)` already exists in this
+repo for that), which this entire investigation never actually tried; everything above looped
+the already-full-depth 12-layer hybrid instead. That's a materially different, larger
+commitment (its own from-scratch-vs-pretrain decision) and a separate piece of work if picked
+up again, not a variation on anything tried here. Full results:
+`results/looped_early_exit/validate_looped_ft_fixed_step500.json`,
+`results/looped_early_exit/validate_looped_ft_fixed_step2000.json`,
+`checkpoints/hybrid_looped_ft_fixed/hybrid_looped_step2000.pt`.
+
+## Mechanism diagnostic — the input-injection/skip-attention hypothesis is REFUTED (2026-08-02)
+
+All four training recipes above failed identically (recall → 0% the instant N>1, general loss
+fine) — a pattern consistent with looping destroying information exact recall depends on,
+rather than a trainable deficiency. Two mechanism-level fixes were proposed and tested directly
+on the **frozen** checkpoint (`scripts/diagnose_loop_recall_collapse.py`, zero training, ~20 min
+GPU): (A) re-add the original token embedding every loop (`h ← Blocks(h + x0)`, standard in
+Universal Transformer / Looped Transformer, absent from this implementation), and (B) run the 2
+windowed-attention layers only once (loop 1) and loop only the 10 DeltaNet layers, on the theory
+that attention specifically needs an un-smeared input to copy exactly.
+
+**Neither rescues recall, alone or combined** — all four variants (current / A / B / A+B)
+collapse to exactly 0% at N=4, N=1 sanity-checked at 45% matching the known baseline. This
+refutes the specific hypothesis: it is not simply "attention loses its token anchor across
+loops" (A alone would have fixed that) and not simply "re-running attention on an already-
+transformed hidden state corrupts the copy" (B alone would have fixed that, and did not — even
+with attention frozen after loop 1, recall still died).
+
+**Revised hypothesis, not yet tested:** the destructive mechanism more likely sits in the
+**DeltaNet recurrence itself**, not attention. DeltaNet's update is an overwrite —
+`S ← diag(α)S + β(v − Sk)kᵀ` — keyed on k/q computed from whatever hidden state is fed in. On
+loop 2+, k/q are computed from an already-transformed hidden state rather than the original
+token, so the overwrite plausibly replaces loop 1's correctly-keyed association with a
+differently-keyed one instead of refining it. Testing this needs inspecting the actual
+recurrent state matrix across loop iterations (real mechanistic-interpretability work), not
+another architectural toggle — a materially larger investigation than anything tried in this
+doc so far, and not started. Full results: `results/looped_early_exit/diagnose_loop_recall_collapse.json`.
+
+**Status: parking here.** Five real experiments now agree (4 training recipes + this
+no-training mechanism probe) that looping this architecture's block stack, in every form
+tried, destroys exact recall. The training-recipe angle and the two most obvious
+architecture-level bypasses are exhausted. Remaining open directions, neither started:
+(a) genuine weight-shared smaller-and-looped architecture (see above), (b) direct inspection of
+the DeltaNet state matrix across loops to confirm or refute the overwrite hypothesis.
+
+## ⚠️ RETRACTION — every #122 result above was measuring a one-line bug (2026-08-02)
+
+**All of the negative conclusions in the six #122 sections above are invalid.** They do not
+show that looping this architecture destroys recall; they show that
+*looping-with-corrupted-memory* destroys recall. The bug was in the first file written for
+this issue and silently confounded everything downstream.
+
+**The bug.** `hvn/edge/looped.py` committed the **last** loop's recurrent state as the state
+carried to the next token. Only loop 1 runs the blocks on the real token embedding — loops 2+
+run them on an already-transformed hidden state, so their k/v are not derived from this token
+at all. For DeltaNet the state *is* the memory (`S ← diag(α)S + β(v − Sk)kᵀ`), so committing a
+later loop's state writes an association keyed on noise, once per extra loop — N writes per
+token instead of one — corrupting precisely what the next token must read back.
+
+**How it was found: by looking at the failure instead of scoring it.** Five experiments had all
+measured the same binary (did the answer contain the target word) and none had inspected the
+behaviour. Doing so (`scripts/observe_loop_failure.py`) showed the N=4 output is raw HTML/web
+markup — this doc's own documented signature for the *base pretrain model* — meaning looping
+knocked the model out of its instruction-following distribution rather than merely degrading
+the answer. It also measured the residual stream growing 351 → 2560 (7.3×) over 8 loops at a
+near-constant +315/loop, with argmax locking onto token 3467 (`' \'`) from loop 2 onward.
+
+The decisive isolation came from a **failed sanity check**. That script's α-sweep included
+α=0, which leaves `h` at loop 1's value so the logits are provably identical to N=1 and it
+*must* reproduce ~45%. It returned 0/20. That invalidated the α curve, but with the logits held
+identical the only remaining difference from N=1 was which state got committed. A 2×2 then
+separated the two candidate mechanisms (`scripts/test_state_commit_hypothesis.py`, frozen
+checkpoint, 20 trials/cell):
+
+| | state ← loop 1 | state ← loop 4 |
+|---|---:|---:|
+| **logits ← loop 1** | 40.0% (N=1 baseline ✓) | **0.0%** |
+| **logits ← loop 4** | **35.0%** | 0.0% (old behaviour) |
+
+Cell (c) is decisive: loop-4 logits over a clean loop-1 state hold at 35%, statistically
+indistinguishable from the 40% baseline. **The residual-stream drift is real but survivable —
+it is not the cause.** The single fatal mechanism is the state commit.
+
+**Fix:** commit loop 1's state unconditionally, regardless of which loop the exit fires on.
+Extra loops refine the *prediction*; they do not rewrite *memory*. One line.
+`tests/test_looped_early_exit.py` had asserted the loop-2 state and so locked the bug in —
+rewritten to assert loop 1's, plus a guard that the two states genuinely differ so it cannot
+silently pass again (6/6).
+
+**Post-fix re-validation** (frozen checkpoint, fixed N, early exit disabled, two independent
+runs of the same checkpoint so their spread calibrates the noise floor):
+
+| N | run A | run B | pooled |
+|---:|---:|---:|---:|
+| 1 | 40.0% | 45.0% | 42.5% |
+| 2 | 35.0% | 45.0% | 40.0% |
+| 4 | 35.0% | 35.0% | 35.0% |
+| 8 | 30.0% | 25.0% | 27.5% |
+
+Recall **holds at every N**, versus exactly 0.0% at every N>1 before the fix. A pooled
+monotonic decline (42.5% → 27.5%) is visible and directionally consistent with the measured
+drift, but at ~2 standard errors it is suggestive rather than established — ±2 hits at n=20 is
+ordinary noise here, as the two identical-checkpoint runs demonstrate.
+
+**What is now known vs still open.** Looping is non-destructive — that is settled. The original
+#122 ask (entropy-gated early exit buying a speedup at maintained quality) is **untested**: the
+above used fixed N with the exit disabled. The N×T sweep must be re-run from scratch, because
+entropy was previously computed on garbage logits, so the threshold behaviour that drove the
+original sweep's conclusions ("low T always maxes out loops, high T never loops") was itself a
+symptom of the bug. Likewise the four training runs are re-opened: they trained against
+corrupted memory, so their failures carry no information about the training recipes themselves.
+
+**Process note worth keeping.** The α=0 sanity check that exposed this was added on the fifth
+experiment. Had a "this configuration must reproduce the known baseline" assertion been built
+into the very first sweep, the four training runs (~6 h GPU) would never have been spent. Every
+scoring harness in this project should carry a cell whose correct answer is already known.
+
+## Post-fix N×T sweep — mechanism works, early exit's PREMISE does not (2026-08-02)
+
+Re-ran the sweep the retraction above invalidated, on the frozen checkpoint with the
+state-commit fix in place, 20 trials/cell. The harness now carries a **known-answer cell**
+(`max_loops=8, T=1.1`: the loop machinery is engaged but the threshold is trivially
+satisfiable, so it must exit at loop 1 and equal the N=1 baseline by construction). It
+passed at 45.0% vs 45.0%, delta 0.0pp — the check that would have caught the original bug,
+which an N=1-only baseline could not, since N=1 never loops.
+
+| cell | near% | avg loops | easy | hard | **hard−easy** |
+|---|---:|---:|---:|---:|---:|
+| baseline (N=1) | 45.0 | 1.00 | 1.00 | 1.00 | 0.00 |
+| sanity (N=8, T=1.1) | 45.0 | 1.00 | 1.00 | 1.00 | 0.00 |
+| N=2 T=0.1 | 40.0 | 1.97 | 1.96 | 1.97 | +0.01 |
+| N=2 T=0.3 | 35.0 | 1.64 | 1.75 | 1.60 | −0.15 |
+| N=2 T=0.5 | 40.0 | 1.24 | 1.27 | 1.23 | −0.05 |
+| N=2 T=0.7 | 35.0 | 1.02 | 1.00 | 1.02 | +0.02 |
+| N=4 T=0.1 | 40.0 | 3.91 | 3.94 | 3.90 | −0.04 |
+| N=4 T=0.3 | 35.0 | 2.86 | 3.23 | 2.73 | **−0.50** |
+| N=4 T=0.5 | 40.0 | 1.71 | 1.80 | 1.67 | −0.13 |
+| N=4 T=0.7 | 50.0 | 1.04 | 1.00 | 1.06 | +0.06 |
+| N=8 T=0.1 | 25.0 | 7.79 | 7.81 | 7.78 | −0.02 |
+| N=8 T=0.3 | 25.0 | 5.25 | 5.96 | 5.07 | **−0.89** |
+| N=8 T=0.5 | 15.0 | 2.55 | 2.47 | 2.57 | +0.10 |
+| N=8 T=0.7 | 35.0 | 1.10 | 1.00 | 1.13 | +0.13 |
+
+The N=16 row and N=8's remaining cells were killed deliberately — the conclusion was already
+determined and the sign is consistent across N=2/4/8 (`sweep_after_fix_partial.json`).
+
+**1. The mechanism works.** Recall holds 35–50% at N=2 and N=4 versus **exactly 0.0% at every
+N>1** pre-fix, and the loop count is genuinely tunable (T=0.3 → 1.64, T=0.5 → 1.24). The
+pre-fix finding that there was no usable middle range — "low T always maxes out, high T never
+loops" — is **superseded**: that was a symptom of entropy being computed on corrupted logits.
+
+**2. Early exit's premise fails, and it fails backwards.** The whole idea is that hard tokens
+earn more compute. Measured, hard tokens get *less*: seven of twelve looping cells are
+negative, and — the part that matters — **every large effect is negative** (−0.89, −0.50,
+−0.15) while every positive is trivial (≤ +0.13, all in cells that barely loop at all).
+Wherever looping actually happens, the gate spends compute on the wrong tokens.
+
+Mechanistically this is coherent, not anomalous. "Hard" here means the model's previous greedy
+prediction missed. The entropy gating the exit is over the **next** token. After a surprising
+token the model often lands somewhere formulaic and commits confidently → exits early. After a
+predictable token it can sit at a genuine branch point with many plausible continuations →
+high entropy, keeps looping. **Entropy over the next token measures branchiness, not difficulty
+of the current one**, and those are different quantities. No threshold repairs that, and it is
+scale-independent.
+
+**3. Heavy looping costs recall.** N=8 reads 25% / 25% / 15% against the 45% baseline —
+consistent with the residual-stream drift measured earlier (‖h‖ 351→2560, 7.3× over 8 loops).
+Looping is roughly neutral at N=2–4 and actively harmful beyond. Combined with (2), there is no
+configuration that both loops meaningfully and helps.
+
+**4. Throughput numbers here are unusable.** N=4/T=0.3 reads 10.80 tok/s on *fewer* loops than
+N=4/T=0.1's 17.02 — physically impossible, so single-generation timing is noise-dominated. The
+apparent 1.7× at N=2/T=0.7 comes from averaging 1.02 loops, i.e. from not looping, not from
+smart gating. Any real throughput claim needs repeated timed runs.
+
+**Verdict, and how it differs from the retracted one.** Entropy-gated early exit does not work
+on this model — but this time for a *measured property of the model*, on a mechanism proven
+sound by a known-answer cell, rather than as the shadow of a bug. Distinguish this from the
+retraction above: same shape of answer, entirely different epistemic standing.
+
+**Still genuinely open:** the four training runs (deep supervision, gated, fixed-N) all trained
+against corrupted memory, so their failures carry no information about the recipes themselves.
+Anything re-run there should carry a known-answer cell in its own harness before GPU is spent.
+
+## ALBERT weight sharing — fewer params AND better quality, measured (2026-08-02)
+
+The "small model, big-model quality" question this project is actually built around had never
+been tested. Issue #122's looping work looped a *full-depth* model, which saves zero params;
+issue #32 Phase 2.4 shipped `SharedWeightHVN` and measured a 3.62× param reduction but never
+paired it with a quality number. This closes that gap.
+
+**Setup.** `eval/scaling_laws.py` gains two arms — `EdgeHVN-DeltaNet` (dense) and
+`EdgeHVN-DeltaNet-Shared` (`shared_weights=True`). Same class, same blocks, sharing is the only
+variable. WikiText-103, BPE-8000, 5M-token compute-matched budget, **12 layers**, bf16.
+`param_count` uses `sum(p.numel())`, which counts a shared block once, so reported params are
+the real storage footprint.
+
+| d_model | arm | params | eval PPL |
+|---:|---|---:|---:|
+| 256 | dense | 12,018,032 | 194.8 |
+| 256 | **shared** | **4,763,996** | 251.6 |
+| 512 | dense | 39,756,656 | 120.7 |
+| 512 | **shared** | **10,830,684** | 156.1 |
+
+**Headline, and it needs no extrapolation — two real measured configs:**
+
+    shared d=512 : 10.83M params, PPL 156.1
+    dense  d=256 : 12.02M params, PPL 194.8
+
+**The shared model has ~10% FEWER parameters and ~20% BETTER perplexity than the dense one.**
+That is the goal stated in the README's "The Dream" — small footprint, quality of something
+bigger — demonstrated directly rather than argued.
+
+**Why it works.** The PPL cost of sharing is **+29% at both widths** (194.8→251.6 and
+120.7→156.1), strikingly stable. But the param saving **grows** with width: 2.52× at d=256,
+3.67× at d=512. A fixed quality cost against a growing param saving means **the trade improves
+as the model scales** — the opposite of the compounding-loss worry. Against an equal-param
+dense model (via this repo's own −0.504 exponent): shared is ~19% better at d=256 and ~33%
+better at d=512.
+
+**This also corrects a live misconception.** HVN is not "much worse than a Transformer" —
+§8.12 has HVN-DeltaNet at 159.4 vs Transformer 172.0 at d=512, and 129.4 vs 150.8 at d=768,
+with a steeper exponent (−0.504 vs −0.406). Sharing therefore compounds *onto a winning
+baseline*, not a deficit. The variant that genuinely loses to a Transformer is the pre-#34
+default HVN block (194.3 vs 150.8 at d=768).
+
+**A design error caught cheaply, worth recording.** The first sweep was configured at 2 layers
+(copying the documented width-sweep configs) and showed only a 7% param saving — sharing scales
+with **depth**, not width, and at 2 layers there is barely anything to share, with the
+8000-vocab embedding dominating the model anyway. A 90-second smoke test exposed it before any
+real GPU was spent. The known-answer check here was **param arithmetic** — dense at d=512 was
+predicted at ~39.7M and measured 39,756,656 — which is exactly the check that would have caught
+the 2-layer flaw upfront had it been done first.
+
+**Caveats.** 5M tokens is undertrained, so the absolute PPLs are high and only the *comparison*
+carries signal. Two width points, single seed, one depth. Whether the +29% constant and the
+growing param saving hold at a full training budget or at 1B+ scale is **untested** — but the
+direction is now measured rather than assumed, and it favors sharing.
+
+**Next, if pursued:** compose sharing with ternary (BitNet b1.58, `hvn/edge/ternary.py`) — 3.67×
+from sharing on top of ~10× from ternary is the actual path to the README's ~2 GB 10B-class
+target, and neither multiplier has been measured in combination with the other.
+
+## Sharing × ternary compose cleanly — ~70× storage for +54% PPL (2026-08-02)
+
+Sharing and ternary had never been combined anywhere in this repo. They are orthogonal
+levers — sharing cuts the NUMBER of weights (3.67× at d=512/12L), ternary cuts BYTES PER
+weight (fp32 → 1.58 bits, ~20×) — so their storage benefits multiply arithmetically. The
+open question was whether their *quality* costs also compose, or compound worse.
+
+Reason to expect compounding: a shared block's weights are reused at all 12 virtual layers,
+so quantization error in that one block is applied 12 times rather than once.
+
+2×2 at d=512, 12 layers, 5M-token budget, WikiText-103/BPE-8000
+(`results/weight_sharing/ternary_2x2.json`):
+
+| arm | PPL | vs dense-fp |
+|---|---:|---:|
+| dense fp | 119.4 | — |
+| shared fp | 154.1 | ×1.290 |
+| dense ternary | 143.2 | ×1.200 |
+| **shared + ternary** | **183.8** | ×1.540 |
+
+**Clean composition predicted 119.4 × 1.290 × 1.200 = 184.8; measured 183.8 — within 0.6%.**
+The prediction was recorded before the final arm completed, so this is a real test rather
+than a post-hoc fit. **The costs compose multiplicatively with no compounding penalty** — the
+12×-reuse mechanism does not bite.
+
+**Consequence: ~70× storage reduction (3.67× params × ~20× bits) for +54% PPL.** That is the
+concrete path to the README's edge target, with both multipliers now individually measured
+and their combination verified rather than assumed.
+
+Harness consistency check passed: this run's dense-fp (119.4) and shared-fp (154.1) reproduce
+the previous run's 120.7 / 156.1 at the same config, within ~1.5%.
+
+**Caveats.** 5M tokens is undertrained and likely *understates* ternary specifically, since
+QAT normally needs longer to converge — the +20% ternary cost is probably a pessimistic
+bound. Param counts are unchanged for the ternary arms (fp32 shadow weights are retained for
+the STE gradient during training); the storage win is arithmetic, realised post-`.freeze()`.
+Single seed, one width, one depth.
+
+**A mid-run misread worth recording:** at the 3M-token mark dense-ternary was reported as
+tracking *better* than dense-fp (159.2 vs 170.8), which would have been suspicious — ternary
+should not beat full precision. It was an artifact of comparing mid-trajectory points across
+arms that converge at different rates; the final numbers (143.2 vs 119.4) show ternary
+behaving normally. Do not compare arms mid-run.
+
+## Issue #109 re-examined — the trunk, not the 3rd attention layer, was the larger factor (2026-08-02)
+
+Issue #109 attributed a 3-attn recall regression to "an architecture question (layer
+count/placement)" and closed without merging. Re-checking the code showed the comparison was
+**confounded**: it measured **3-attn on the 102K trunk** against **2-attn on the 51K trunk**,
+changing two variables. The writeup noticed the trunks differed ("stronger trunk + lower loss,
+worse recall") but read the stronger trunk as making the regression more *surprising* rather
+than as a candidate *cause*.
+
+**The control already existed on disk and had never been probed** —
+`checkpoints/hybrid_a4_2attn_102k/` is 2-attn on the 102K trunk, i.e. the PASS architecture
+with the regression's trunk. All three arms, `eval/synthetic_recall_probe.py`, 200 trials each:
+
+| arm | near-window recall |
+|---|---:|
+| 2-attn / 51K trunk (PASS baseline) | **37.0%** (74/200) |
+| 2-attn / 102K trunk ← *the missing control* | **25.0%** (50/200) |
+| 3-attn / 102K trunk | **15.5%** (31/200) |
+
+The baseline reproduces the documented 35.5% at 37.0%, so the harness is sound.
+
+- **Trunk effect** (holding attn=2): 37.0 → 25.0 = **−12.0pp**
+- **Layer effect** (holding trunk=102K): 25.0 → 15.5 = **−9.5pp**
+- Both significant at n=200 (~2.6 SE and ~2.4 SE)
+
+**Verdict: right decision, incomplete root cause.** A 3rd attention layer does genuinely hurt
+(15.5% vs 25.0% on the same trunk), so reverting to 2-attn was correct. But #109 assigned the
+entire −21.5pp drop to layer count when the trunk accounted for more of it than layer count
+did. Its stated root cause is incomplete, not wrong.
+
+**The larger finding, and it was never documented at all: doubling pretraining made
+recall-after-FT WORSE.** 51K trunk → 37.0%, 102K trunk → 25.0%, architecture identical. A
+more-converged recurrence-only trunk appears harder to bolt fresh attention onto — consistent
+with reduced plasticity in a further-converged model, though the mechanism is not established
+here. Five `hybrid_a4_2attn_102k` variants (base, chatmix, chatmix5k, hilr, noternary) were
+run and none were written up; `grep "102k" docs/` returned nothing before this entry, which is
+why it sat undiscovered.
+
+**Consequence for scaling plans.** This is direct evidence against "pretrain recurrence-heavy,
+fine-tune windowed attention in later" as a large-scale recipe: more pretraining can degrade
+the attention-insertion step. The trunk-length/recall relationship should be characterised at
+small scale before any large pretrain commits to that ordering — a cheap sweep (probe several
+trunk checkpoints through the same short A4 FT) would settle it.
+
+**Process note.** Both this and the #122 state-commit bug were found the same way: checking
+whether a comparison changed one variable or two. That question is cheaper than any of the GPU
+time it recovered.
+
+## GHOST Phase 1 — the detector works; the documented 6K-7.5K "phase transition" does not exist (Issue #125, 2026-08-03)
+
+`ghost/detector.py` (epic #124, method by Rambarun Komaljeet) reads a training-loss CSV,
+smooths it, differentiates it, and flags stretches where the gradient sits `k` sigma below its
+trailing-window mean — sustained acceleration, i.e. a phase transition. Phase 1's gate was:
+correctly identify the transition this file documents at **steps 6000-7500**.
+
+**The gate FAILS, and the detector is not the reason. The ground truth is.**
+
+At the spec defaults (window=50 samples, k=2.0) the detector finds **0 transitions across all
+102,000 steps** of `checkpoints/edge_chinchilla83m/training_log.csv`, while correctly finding a
+planted transition in synthetic data and correctly reporting 0 on a smooth-decay control.
+The 80-point sensitivity sweep (`results/ghost/detected_transitions.json`) is what makes this
+conclusive rather than a tuning argument:
+
+| setting | detections on the real log | hits 6K-7.5K | detections on a **pure-noise** control |
+|---|---:|:---:|---:|
+| window=20, k=1.5, open_run=1 | 92 | yes | **90** |
+| window=35, k=2.0, open_run=1 | 35 | yes | **37** |
+| window=100, k=1.5, open_run=1 | 71 | yes | **77** |
+| window=35, k=1.5, open_run=5 | **1** (at 42550-42800, 2.17 sigma) | no | **0** |
+
+**Every setting that "detects" the 6K-7.5K transition finds just as many transitions in a
+smooth synthetic curve that has none.** The hit is noise, not signal. The one setting with a
+real signal-to-noise separation finds a single weak candidate at ~42.5K and nothing at 6K-7.5K.
+
+**Independent corroboration from held-out val loss** (`val_log.csv`), which needs no detector at
+all — the improvement rate is *decelerating* monotonically straight through the claimed window:
+
+| val step | 2000 | 4000 | 6000 | 8000 | 10000 | 12000 |
+|---|---:|---:|---:|---:|---:|---:|
+| val loss | 5.204 | 4.893 | 4.738 | 4.634 | 4.563 | 4.504 |
+| delta per 1k steps | — | −0.156 | −0.077 | −0.052 | −0.036 | −0.029 |
+
+A phase transition is an *acceleration*. Across 4K→8K the rate roughly halves at every
+checkpoint. Nothing accelerates.
+
+**Correction to this document.** The "EdgeHVN 83M — the measured PPL picture" section above
+states the run had "a mid-run flat patch ~step 3K-5.5K that then **broke through and
+accelerated** ~step 6K-7.5K — a phase transition, the opposite of a ceiling." That reading is
+**retracted**. There is a mild flat patch (nearer ~3.3K-4.3K in a 500-step rolling mean), but
+the descent that follows it is slower than the descent that preceded it, not faster. The
+underlying conclusion that section drew — *undertrained, not capacity-limited* — is unaffected
+and still stands on the val-PPL trajectory (110 → 63.45). Only the "phase transition"
+characterisation was wrong: it was a narrative read of a noisy train-loss trace whose
+sample-to-sample sigma (~0.15 nats) is larger than the entire descent it rides on (~0.1 nats
+per 1,000 steps by step 6K).
+
+**What this means for GHOST (#124).** The method's premise is that training consists of
+predictable stretches punctuated by phase transitions that must be computed for real. This
+project's only long training run contains **no detectable phase transition at all** at a
+threshold that doesn't also fire on noise. That is not a refutation of GHOST — it is arguably
+the *best possible* case for the extrapolator (a curve with no transitions is entirely
+predictable stretch), and it removes the detector from the critical path. But it does mean the
+detector cannot be validated against this repo's data, and Phase 3's "disable the extrapolator
+near a transition" branch would never fire on a run like this one. Decide at #124 whether to
+gate Phase 2 on a different (deliberately transition-rich) run or proceed straight to the
+extrapolator. **The `2 sigma above rolling mean` rule itself is sound and reusable** — with the
+persistence requirement (`open_run`) added, without which a bare k-sigma test produces
+`n * Phi(-k)` false positives by construction (28 on a 1,200-sample noise curve, measured).
+
+## GHOST Phase 2 — weight-delta extrapolation is measurably worse than doing nothing (Issue #126, 2026-08-03)
+
+`ghost/extrapolator.py` (epic #124, method by Rambarun Komaljeet) takes three consecutive
+checkpoints, measures each weight tensor's delta consistency, and predicts the weights N steps
+later so those N steps need not be computed. Phase 2's gate: predicted weights at **N=10**
+within **5%** of the real trained weights' loss at the same step.
+
+**The spec's gate PASSES. The binding gate — beating the null control — FAILS at every N.**
+
+The measurement needed a checkpoint series this repo did not have: its own checkpoints are
+spaced 500 steps apart, far coarser than the N=10..500 jumps in question, so
+`ghost/harness.py --make-series` continued `edge_chinchilla20k/step10000` for 800 steps
+(AdamW, constant LR, batch 4 x seq 512, 1.59 steps/s, 8.4 min) and snapshotted the 11 steps the
+analysis actually reads. Anchor at step 10200 (200 steps of warmup so any data-mix transient
+has settled), extrapolator inputs at 10180/10190/10200, all arms scored on **one fixed
+16-batch held-out probe set**.
+
+| N | real loss | predicted | frozen (null control) | pred err | frozen err |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 4.14036 | 4.22853 | 4.13901 | +2.13% | **+0.03%** |
+| 50 | 4.10952 | 5.36871 | 4.13901 | +30.64% | **+0.72%** |
+| 100 | 4.10046 | 7.43693 | 4.13901 | +81.37% | **+0.94%** |
+| 500 | 3.98804 | 25.75799 | 4.13901 | +545.88% | **+3.79%** |
+
+At N=10 the prediction is within 5% of real — and **doing nothing is ~70x more accurate**
+(0.03% vs 2.13%). This is precisely the failure mode the null control was added to catch: a
++/-5% band is satisfiable by any method that barely moves, because over 10 steps the weights
+barely move. By N=500 the extrapolated model is destroyed (loss 25.8 vs 4.0).
+
+**One genuinely useful positive finding: the trajectory is real, but only at short range.**
+Median cosine between consecutive weight deltas, measured at four spacings from the same
+anchor:
+
+| delta spacing | median cos(D1, D2) | params passing the consistency gate |
+|---:|---:|---:|
+| 10 steps | **+0.474** | 99.67% |
+| 20 steps | +0.251 | 66.13% |
+| 50 steps | +0.063 | 31.03% |
+| 100 steps | +0.026 | 0.06% |
+| 500 steps (repo's own checkpoints) | −0.012 | 0.11% |
+
+Weight motion IS directionally coherent at 10-step spacing and decorrelates to noise by ~100
+steps. An earlier reading of this project's native 500-step checkpoints (median cos −0.012)
+was simply the wrong measurement scale — worth recording, because it would have supported the
+right conclusion for the wrong reason.
+
+**Why coherent deltas still do not buy a jump.** cos ~ 0.47 means the observed delta is roughly
+half signal, half noise. Extrapolation multiplies that delta by `f = N/gap`, so injected noise
+grows linearly in N while the true drift it is trying to capture is tiny — over 10 real steps
+the probe loss moves by 0.001. There is no horizon where the trade wins: short N has no signal
+worth capturing, long N has no valid linear trajectory.
+
+**The obvious repairs were tried and the failure is monotone, not a bad configuration.**
+
+| gate | params extrapolated | N=10 error | vs frozen |
+|---|---:|---:|---|
+| cos>=0.30 + quadratic | 99.67% | +2.13% | loses |
+| cos>=0.30, linear only | 99.67% | +2.13% | loses |
+| cos>=0.70, linear only | 31.03% | +0.83% | loses |
+| cos>=0.90, linear only | 0.06% | +0.03% | ties — it *is* frozen |
+
+Prediction error is monotone increasing in how much gets extrapolated, and the limit of
+tightening the gate is the frozen baseline itself. **Shrinkage/damping needs no separate
+experiment: damping is equivalent to reducing effective coverage, and this table shows the
+optimum coverage is zero.** The extrapolator either injects noise or does nothing.
+
+**Optimizer-state policy (recorded per #126):** this codebase's `_save_edge_checkpoint` never
+stores AdamW moments, so every resume — and therefore every GHOST jump — already starts with
+cold moment estimates. Nothing is extrapolated for them. This is a real per-jump cost that
+would compound in Phase 3, on top of the weight error above.
+
+**Caveats, stated so the result is not oversold.** One anchor, one model (83M ternary EdgeHVN),
+one optimizer, constant LR. A different regime — early training with large coherent drift, or
+a much smaller LR — could in principle behave differently. But the mechanism that fails here
+(noise amplified by `f` against a drift too small to matter) is not specific to this
+configuration, and the 5%-gate-passes-while-losing-to-frozen result would repeat wherever the
+loss curve is as flat as it is at step 10200.
+
+**Verdict: Phase 2 fails its binding gate.** Building Phase 3's training loop (#127) on this
+mechanism would wrap a control loop around a step that is measurably worse than not taking it.
+Artifacts: `results/ghost/extrapolation_scores.json`, `results/ghost/scores_{nopoly,cos07,cos09}.json`.
+
+### Oracle upper bound — an adaptive/learned GHOST cannot work either (#126 follow-up)
+
+The natural next proposal is to make GHOST *adaptive*: train normally, watch how wrong the
+predictions are, fit the prediction function, repeat until it is good enough. That hypothesis
+is testable without building it, by computing the **oracle**: for each tensor, the scalar
+`alpha` in `W_pred = W3 + alpha * f * D2` chosen by least squares **using the true future
+weights**. No adaptive, fitted, meta-learned or scheduled variant can beat a coefficient
+selected with knowledge of the answer, so this is an upper bound on the entire family.
+
+| N | oracle (cheats) | frozen | real | oracle err | median fitted alpha |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 4.17811 | **4.13901** | 4.14036 | +0.91% | **+0.465** |
+| 50 | 4.26663 | **4.13901** | 4.10952 | +3.82% | **+0.120** |
+| 100 | 4.28950 | **4.13901** | 4.10046 | +4.61% | **+0.058** |
+| 500 | 4.19223 | **4.13901** | 3.98804 | +5.12% | **+0.012** |
+
+**The oracle loses to doing nothing at every horizon.** Two consequences:
+
+1. **The optimal adaptive coefficient collapses toward zero as the jump grows** (0.465 -> 0.012).
+   A self-tuning GHOST converges on "predict almost nothing" — the frozen baseline — and it
+   does so *faster* the further ahead it tries to jump. The intuition that a fitted function
+   improves with horizon is exactly inverted by the measurement.
+2. **Even at its best (alpha 0.465 at N=10, which is essentially the measured delta correlation
+   of 0.474) it is still worse in loss than freezing.** The oracle minimises *weight-space*
+   distance to the true future weights and still loses in *loss space*: the component of the
+   update that past deltas can predict is not the component that reduces loss. The predictable
+   part is drift the optimizer's own momentum already applies; the part that constitutes
+   learning comes from gradients of data the model has not seen yet, and that information is
+   not present in past weights at any fitting budget.
+
+This closes the "make it adaptive" branch analytically rather than by exhaustion: the ceiling
+is measured, and it is below the do-nothing floor. `results/ghost/oracle_scores.json`.
+
+### Two corrections to the Phase 2 method, both raised by the maintainer — verdict survives both (#126)
+
+The Phase 2 result above was measured with **10-step delta spacing** at an anchor (step 10200)
+where the loss curve is nearly flat. Both choices were wrong, and both were challenged:
+
+1. **"It needs to be PER STEP."** Correct, and it mattered. Weight-delta coherence measured at
+   1-step spacing is **median cos +0.890**, against +0.463 at the 10-step spacing originally
+   used. The block measurement was discarding roughly half the available signal. Full ladder
+   (flat anchor): gap 1 **+0.890**, gap 2 +0.864, gap 5 +0.675, gap 10 +0.463, gap 20 +0.219.
+2. **"At a flat curve we do not need GHOST."** Also correct, and more serious: where the loss
+   barely moves, the frozen null control is a near-perfect predictor for free, so it wins for
+   reasons unrelated to the method. That made the original test unfair and the verdict
+   unearned. Re-anchored at **step 600**, where the curve drops ~10x faster (−0.7 to −1.2 loss
+   per 1k steps vs ~−0.1 at step 10200) and where real training gains **0.48 loss over 500
+   steps** while freezing falls **9.55%** behind — i.e. the null control now has real ground
+   to lose.
+
+**Per-step deltas, early steep anchor (step 600) — the fair test:**
+
+| N | real | frozen (null) | GHOST | oracle (cheats) | oracle alpha |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 5.49893 | **5.49368** | 5.50430 | 5.50324 | +0.892 |
+| 2 | 5.49948 | **5.49368** | 5.52232 | 5.51626 | +0.830 |
+| 5 | 5.49323 | **5.49368** | 5.61955 | 5.56444 | +0.700 |
+| 10 | 5.47345 | **5.49368** | 6.03026 | 5.63838 | +0.526 |
+| 50 | 5.40985 | **5.49368** | 128.8 | 5.91104 | +0.143 |
+| 100 | 5.33866 | **5.49368** | 425.3 | 6.17017 | +0.074 |
+| 500 | 5.01457 | **5.49368** | 9023.1 | 7.71704 | +0.020 |
+
+**GHOST and the cheating oracle both lose to doing nothing at every horizon, in the regime
+where GHOST is supposed to earn its keep, at the granularity that maximises the signal.** The
+N=10 gate now fails the spec's own 5% band too (+10.17%), not just the null control.
+
+**Why 90%-coherent motion still cannot be ridden.** Direction is highly predictable; magnitude
+and curvature are not. Extrapolation scales the last delta by `f = N/gap`, so at gap 1 an N=500
+jump applies 500x a single step along a direction that is only locally valid — the true path
+curves away. The oracle's fitted coefficient shows this directly: it shrinks 0.892 -> 0.020 as
+N grows, i.e. the best possible use of the observed direction is to follow it less and less,
+converging on the frozen baseline. And even at N=1 with alpha 0.892 the oracle is still
+marginally worse than freezing: the reliably predictable component of an update is the
+momentum the optimizer already applies, while the component that actually reduces loss comes
+from gradients of data not yet seen, which no function of past weights contains.
+
+**Verdict unchanged, now earned rather than assumed.** The negative result stands at the
+correct granularity and in the correct regime. Artifacts:
+`results/ghost/scores_perstep_flat.json`, `results/ghost/scores_perstep_early.json`.
+
+### Weight averaging — the positive result that came out of the GHOST work (#126 follow-up)
+
+GHOST's premise was that the weight trajectory is coherent. #126 measured that it is (median
+cos **+0.890** at 1-step spacing) but that *extrapolating* along it amplifies the delta's noise
+by `f = N/gap` and loses to doing nothing at every horizon. **Averaging is the same observation
+with the opposite arithmetic: it cancels the noise instead of amplifying it, keeping the shared
+drift.** It skips no training step, so it does not violate the rule the extrapolation result
+established — it asks only whether the weights already paid for are being used well.
+
+Measured on the EXISTING `edge_chinchilla20k` checkpoints (500-step spacing, no new training),
+same fixed 16-batch probe set, three independent anchors:
+
+| anchor | latest | avg k=2 | avg k=3 | avg k=5 | avg k=10 | worth (real steps) |
+|---:|---:|---:|---:|---:|---:|---|
+| 8,000 | 4.30812 | **4.24677** | **4.26304** | **4.25888** | — | < 500 |
+| 10,000 | 4.18270 | **4.14715** | **4.12614** | **4.12857** | 4.20883 (worse) | ~500-1000 |
+| 14,000 | 4.01125 | **3.98420** | **3.98165** | **3.99291** | — | ~1000 |
+
+**9 of 9 (anchor x k in 2,3,5) improve on the latest checkpoint**, gains 0.018-0.061 nats, for
+the cost of loading a few checkpoints and averaging them. `k=10` (a 4,500-step window) is
+*worse* than the latest — the averaging window has to be short relative to the drift, otherwise
+it mixes in weights from a materially different model.
+
+Because the gain is roughly constant in loss terms while real training slows down, **the gain
+is worth more steps the later it is applied**: <500 steps at anchor 8K, ~1,000 steps at 14K.
+
+**The important caveat — this is an evaluation-time gain, not yet a proven training speedup.**
+Every number above evaluates an averaged model. The untested question is whether training
+*continued from* the averaged weights stays ahead, or whether the advantage washes out within a
+few hundred steps. That is the difference between "free better checkpoint" (certain, measured)
+and "free training steps" (plausible, unmeasured), and it is the one experiment that decides
+whether this is worth wiring into the training loop.
+
+Artifacts: `results/ghost/weight_averaging.json`, `weight_averaging_{8000,14000}.json`.
+
+#### A/B: the averaging advantage SURVIVES continued training (#128)
+
+The open question above — free better checkpoint, or free training steps? — resolved by a
+three-arm A/B from anchor step 10,000. All arms replay a byte-identical, pre-materialised
+1,000-batch sequence from a freshly constructed optimizer, so the ONLY difference is the
+starting weights. Third arm is a matched-norm control: the anchor plus Gaussian noise scaled
+per tensor to the exact displacement averaging applied.
+
+| step | latest | averaged | perturbed (control) | averaged's lead |
+|---:|---:|---:|---:|---:|
+| 0 | 4.18270 | **4.12614** | 4.32291 | +0.0566 |
+| 200 | 4.08988 | **4.06539** | 4.13684 | +0.0245 |
+| 500 | 3.95263 | **3.92361** | 3.96371 | +0.0290 |
+| 700 | 3.89700 | **3.86775** | 3.90928 | +0.0293 |
+| 1000 | 3.85241 | **3.82978** | 3.86580 | +0.0226 |
+
+**Averaged leads at all 11 evaluation points; the perturbed control trails at all 11.** The
+control is what makes this interpretable: an identical-magnitude *random* displacement makes
+the model worse immediately (4.183 -> 4.323) and never recovers the gap, so the gain comes from
+the direction averaging selects, not from perturbation acting as noise injection.
+
+**It is a real head start that partially decays, not a compounding multiplier.** 40% of the
+initial advantage is retained at 1,000 steps. In training-step terms: the averaged arm starts
+~500 steps ahead and is still ~100-150 steps ahead after 1,000 steps of training (using the
+latest arm's local rate of ~0.018 nats/100 steps at that point).
+
+**Practical read:**
+- **Certain:** applying it once at the end of any run gives a strictly better final model for
+  seconds of arithmetic. There is no reason not to do this.
+- **Measured:** it is also a genuine, if modest, training speedup — the head start does not
+  wash out within 1,000 steps.
+- **Unknown:** whether applying it repeatedly during a run compounds, or whether each
+  application just re-buys the same decaying ~0.05 and the run converges to the same place. That
+  is the question that decides whether it belongs *inside* the training loop or only at the end.
+
+**Caveats:** one anchor, one seed, one A/B. The absolute gaps (~0.02-0.06 nats) are small,
+though the sign is consistent across 11/11 paired evaluations on an identical probe set, and
+the control separates cleanly in the opposite direction. `results/ghost/ab_continue.json`.
+
+#### Periodic in-loop averaging does NOT compound — keep it at the end of the run (#128)
+
+Two arms from step 10,000, 2,000 steps each, identical pre-materialised batch sequence.
+``baseline`` trains plainly; ``periodic`` replaces its live weights with the mean of the last 3
+snapshots every 250 steps and continues from there. The reference that matters is the third
+number, free from the baseline arm: its own last-3 snapshots averaged at the end — the
+already-proven one-shot application.
+
+| arm | loss @ 2,000 steps | vs baseline |
+|---|---:|---:|
+| baseline, no averaging | 3.70874 | — |
+| **baseline + end-of-run average** | **3.66057** | **−0.04817** |
+| periodic averaging in-loop | 3.72787 | **+0.01914 (worse)** |
+
+**Periodic averaging is worse than not averaging at all**, and 0.0673 worse than applying it
+once at the end.
+
+**The mechanism, which is the interesting part.** Every injection helped, and the gains did not
+diminish: **+0.0243, +0.0405, +0.1401, +0.0732, +0.0615, +0.0646**. The averaged point is
+genuinely better each time. But immediately BEFORE each injection the periodic arm was behind
+the baseline — by 0.035 (step 1000), 0.056 (1250), 0.061 (1500), 0.054 (1750). Training onward
+from an averaged point descends more slowly than training from the raw trajectory, and the
+injections spend their gains repairing a deficit they created. The largest single gain (+0.1401)
+came where the trajectory had bounced upward, confirming these injections act mainly as
+volatility damping, not as progress.
+
+This is the same 40%-decay observed in the #128 A/B, seen from the inside: averaging buys a
+better point *now* at the cost of a slower descent afterwards. One application at the end
+collects the benefit and pays none of the cost, which is exactly why the end-of-run form wins.
+
+**Method flaw found mid-run and fixed, disclosed rather than buried.** The arms were seeded once
+before the data loader rather than once per arm. The model has dropout, so the second arm drew a
+different mask sequence and drifted from the first *before any injection*: 0.0036 apart at step
+250, 0.0041 at step 500. Both gaps above (0.019 and 0.067) are 5x and 17x that drift, so the
+verdict is unaffected — but `torch.manual_seed` is now called per arm in both `repeat_average`
+and `ab_continue`. **The #128 A/B reported earlier carries the same flaw**; its margins
+(0.011-0.057, averaged ahead 11/11, control behind 11/11) also exceed the drift, so its verdict
+stands, but it should be re-run under per-arm seeding to remove the asterisk.
+
+**Settled recommendation: average the last 2-5 checkpoints once, at the end of a run.** Do not
+put it in the training loop. `results/ghost/repeat_average.json`.
+
+### 3 parallel networks + weight averaging loses to one network at 3x batch (#130)
+
+Maintainer proposal: train K networks side by side, average their weights periodically, and
+hand the average back to each perturbed (`avg+d`, `avg`, `avg-d`) so they stay diverse. This is
+a real family of methods — Federated Averaging / Local SGD for the averaging, Population-Based
+Training for the perturbation — but its benefit is normally *parallelism across devices*. The
+question here is whether it helps on ONE card, where 3 networks each get a third of the
+throughput.
+
+The honest comparison holds **total tokens constant**: 3 nets at batch 4 vs 1 net at batch 12,
+same 1.8M tokens, byte-identical batch sequence (900 batches of 4 materialised once; the single
+arm concatenates each group of 3). Averaging every 10 rounds, ensemble scored on its **averaged**
+weights, per-arm seeding, same fixed 16-batch probe set used throughout #126/#128.
+
+| round | `single` (1 net, batch 12) | `avg3` (3 nets, batch 4) | gap |
+|---:|---:|---:|---:|
+| 50 | **4.08878** | 4.13034 | 0.042 |
+| 100 | **4.02920** | 4.08133 | 0.052 |
+| 150 | **3.95435** | 4.02212 | 0.068 |
+| 200 | **3.91598** | 3.98804 | **0.072** |
+
+**The single network wins at every checkpoint and the gap widens monotonically.** Run stopped at
+round 200 of 300 on a pre-declared trigger (stop if the gap widens again at 200), not after
+seeing a result that suited a conclusion.
+
+**Interpretation.** Averaging K models trained from a common point on different batches
+approximates one model trained on the K-times-larger batch — so `avg3` should have tracked
+`single` closely. It does not: it falls steadily behind. The three networks diverge between
+averaging points by more than the averaging recovers, and 10 rounds of independent drift is
+already too much at this scale.
+
+**One prediction of mine that the data refuted.** I expected the ensemble to lose badly on
+wall-clock (3x as many forward/backward passes, plus 20 averaging operations copying 3 x 332 MB
+state dicts). It did not: 12.7 min vs 13.0 min at round 200 — **near parity, marginally
+faster**. Batch 12 at seq 512 is evidently bandwidth-bound on this card, so three batch-4 passes
+cost about what one batch-12 pass costs. The verdict rests entirely on quality; the compute
+overhead I predicted would dominate does not exist here.
+
+**`avg3_delta` (the +/-d variant) was deliberately NOT measured.** It is `avg3` plus a
+perturbation, so it would have to beat `avg3` *and* then close a 0.072 gap that was still
+widening — against the strictly more favourable of the two variants. #128's matched-norm
+perturbation control is the relevant prior: perturbing averaged weights cost 0.14 and never
+recovered. Recorded as a stated decision, not an omission; the harness supports it
+(`--parallel-ensemble`) if it is ever worth 20 minutes.
+
+**Where this DOES apply: multiple GPUs.** With 3 cards the arithmetic inverts — the ensemble
+arms run concurrently instead of sequentially, and this becomes standard data-parallel training,
+which this repo already has (#65 DDP/FSDP). Nothing here argues against that; it argues against
+paying 3x the memory for it on one card.
+
+### Window fit — averaging the direction makes it WORSE, and that closes #124 (#126 follow-up, 2026-08-05)
+
+The one objection #126 never answered. Its oracle proved that no method can win by choosing
+*how far* to travel along the last delta — but it never left that direction. The maintainer's
+challenge was the right one: fit the *function* of the motion from a window of observed steps
+rather than extrapolating a single noisy delta, and do it where the premise holds (settled
+training, not the huge-PPL beginning). A window fit averages the per-step deltas, and averaging
+is the arithmetic that CANCELS their noise rather than amplifying it — the mechanism behind the
+one positive result in this epic (#128). If a denoised direction were usable, the whole family
+would reopen.
+
+`ghost/window_fit.py` streams a least-squares polynomial fit of each weight tensor against step
+number. The window is never stored: the normal equations need only the scalar moments `sum(u^p)`
+and tensor accumulators `sum(u^p * W_u)`, so a K-step window costs `degree+1` tensors instead of
+K checkpoints, and one accumulator set serves every degree. Accumulation runs on `W - W_ref`,
+never raw weights — per-step motion is ~1e-5 of a weight's magnitude, close enough to fp32
+epsilon that summing raw weights would grind away part of the signal being fitted. Verified
+against synthetic linear/quadratic trajectories: prediction error 4-7 orders below the motion,
+Gram solve in float64 (cond 4.6e2 at K=20/d=1 to 1.0e7 at K=50/d=2).
+
+Measured at the **settled anchor step 10,200** — #126's primary anchor, `--warmup-steps 200`
+from `edge_chinchilla20k/step10000`, AdamW constant LR 3e-4, batch 4 x seq 512, same fixed
+16-batch probe set. Windows K in {20, 50}, degrees {1, 2}, two prediction modes
+(`locked` = real anchor + fitted displacement; `fiteval` = the fit's own value, whose N=0 is a
+smoothed anchor), plus `last_delta` (#126 at gap 1) and a per-arm oracle that rescales the
+FITTED direction using the true future weights. 13 arms x 8 horizons.
+
+**The test was fair: real training gains 0.236 nats over the 500-step horizon (4.11941 ->
+3.88303), so the null control had real ground to lose.**
+
+**Not one arm beats frozen at any horizon.** Best result anywhere is `oracle_w50_d1` at N=1,
+4.12019 vs frozen 4.11941 — and that arm is allowed to see the answer.
+
+**The finding, which inverts the hypothesis.** Averaging did not denoise the direction; it
+destroyed it. Median cosine between predicted and true displacement at N=1:
+
+| arm | velocity estimate | median cos |
+|---|---|---:|
+| `last_delta` | 1 step | **+0.890** |
+| `w20_d2` | quadratic slope at the anchor | +0.628 |
+| `w20_d1` | mean over 20 steps | +0.433 |
+| `w50_d2` | quadratic over 50 | +0.340 |
+| `w50_d1` | mean over 50 steps | **+0.166** |
+
+Monotone in how much history is mixed in: **the more steps averaged, the worse the direction
+points.** The noise that averaging cancels is not separable from the only locally-valid part of
+the direction. A window mean estimates where the weights HAVE been going, which is not where
+they are ABOUT to go.
+
+**Why the window fit still beat `last_delta` in loss at large N — it moves less, not better.**
+At N=500 `w50_d1` travels 3.3x the true distance and `last_delta` 7.5x (loss 15.9 vs 13,661).
+That is a smaller wrong step. The repair for over-travel is exactly what the oracle does, and
+its fitted coefficient collapses toward zero on the same signature as #126:
+
+| N | oracle alpha (w50_d1) | oracle alpha (w20_d1) |
+|---:|---:|---:|
+| 1 | +0.293 | +0.561 |
+| 10 | +0.164 | +0.349 |
+| 100 | +0.014 | +0.038 |
+| 500 | +0.006 | +0.010 |
+
+**Secondary result — the averaging gain has a lower bound too.** The `fiteval` arm at N=0 is a
+smoothed anchor over 20-50 steps, and it LOSES to the raw anchor (4.12430 vs 4.11941), where
+#128's averaging over checkpoints 500 steps apart WON. #128 established the window must be short
+relative to the drift; this adds the other side — tens of steps is too short to cancel anything
+worth cancelling, and only lags the anchor. One anchor, recorded as an observation rather than a
+theory.
+
+**Verdict: #124 is closed, on mechanism rather than exhaustion.** #126 showed the step length
+cannot be fixed; this shows the direction cannot be improved either, and that the best available
+direction is the most recent delta — which is ridable for about one step. The part of weight
+motion recoverable from weight history is drift the optimizer's momentum already applies; the
+part that constitutes learning comes from gradients of unseen data. No fitting budget, window
+length, polynomial degree or adaptive schedule changes that.
+
+Artifacts: `results/ghost/window_fit.json`, `results/ghost/window_fit.log`. The 2.2 GB of target
+checkpoints under `results/ghost/series_windowfit/` were deleted after scoring; the run is
+reproducible in ~15 min via `python -m ghost.harness --window-fit`.
+
+## EdgeHVN decode ran at half speed — ternary weights re-derived every token (Issue #131, 2026-08-05)
+
+Opened to scope a MatMul-free integration (Zhu et al. 2024) into EdgeHVN's projection layers.
+The **bounding profile that was meant to decide whether to build it found a 2x speedup already
+sitting in the existing code**, and retired the original plan on the way.
+
+**The mechanism.** `TernaryLinear.forward` called `ternary_quantize_ste(self.weight)` on every
+invocation — `abs -> mean -> div -> round -> clamp -> mul -> sub -> add` across the **entire
+weight matrix**. In training that cost amortizes over `batch x seq` (4 x 512 = 2,048 tokens per
+forward). In incremental decode a forward pass **is one token**, so the same O(d^2) cost is paid
+per token, against a matvec that is also O(d^2) — the same order as the work it feeds. The
+weights are frozen at inference, so all of it was redundant.
+
+**Evidence** (`scripts/profile_decode_projections.py`, 64 tokens, profiling `forward_step` and
+NOT `forward` — the latter dispatches to `_scan_chunked`, a path serving never takes):
+
+| signal | value |
+|---|---|
+| projection calls (102 modules x 64 tokens) | 6,528 |
+| `aten::mean` calls | **6,656** |
+| `aten::div` calls | **6,656** |
+
+One absmean reduction and one divide per projection per token — 1:1, which is the diagnosis.
+Op-level device time: `aten::addmm` (the actual GEMM) **66 ms** vs ~**395 ms** for the
+quantization chain.
+
+**A flaw in that profile, disclosed rather than buried.** Its `projection_share_pct` (70.1%) and
+`PROCEED` verdict are **not trustworthy**: `key_averages()` returns both op-level (`aten::abs`)
+and kernel-level (`_ZN2at6native...AbsFunctor...`) entries carrying the *same* device time — they
+agree to the last decimal at 54,794.628 us — so summing across all events double-counts. The call
+*counts* are unaffected, and the A/B below needs no attribution at all, which is why the verdict
+rests on those instead.
+
+**The fix, measured.** Cache the dequantized weight under `eval()` + `no_grad`. Paired
+within-process A/B, run in **both arm orders**, because the baseline always running first would
+let GPU clock ramp inflate the second arm:
+
+| arm order | pre-#131 | cached | speedup |
+|---|---:|---:|---:|
+| legacy first | 22.30 | 43.21 | **1.94x** |
+| cached first | 48.40 | 21.45 | **2.26x** |
+
+Two earlier runs against a monkeypatched prototype read 2.02x and 1.99x. **Honest claim: ~2x**,
+consistent across four measurements and both orders.
+
+**Known-answer cell** (what the #122 retraction requires of every harness): caching a
+deterministic function of frozen weights is mathematically a no-op, so the cached arm MUST give
+bit-identical logits. `max|dlogits| = 0.000e+00` in all four runs. **No recall regression is
+possible by construction** — identical numbers, so no probe re-run is needed to clear it.
+
+**Do NOT quote the absolute tok/s.** The same arm read 21.45/22.30 (legacy) and
+40.56/43.21/48.40/53.65/81.05 (cached, across runs) — a ~1.5x spread on identical code, matching
+this repo's documented GPU-contention variance ("re-ran identical `main()` twice = 0.7 steps/s").
+Only the within-process paired ratio is meaningful on this machine.
+
+**Scope: serving only; no training win was available.** Training stays uncached — the STE needs
+the live shadow weight in the autograd graph and the weight moves every step. Nothing here
+touches the compute wall or the ~142M local ceiling. What changes: every EdgeHVN checkpoint
+*served* (Docker chat app, `EdgeToolCallingSession`, any `forward_step` eval) decodes ~2x faster
+with identical output.
+
+**Staleness is the real hazard, and it is guarded.** A weight cache has the exact failure shape
+of #117 (register-if-absent dedup silently served untrained weights while aggregate loss still
+trended down; no test caught it). So invalidation is aggressive rather than clever: on **any**
+mode transition (`train()` is the single entry point for both `.train()` and `.eval()`), on
+`_load_from_state_dict`, on `freeze()`, and on any dtype/device mismatch.
+`tests/test_issue131_ternary_cache.py` (9/9) asserts a specific weight's update survives a
+train->eval round trip **directly**, not via aggregate behaviour. One boundary is documented, not
+hidden: mutating a weight in place while *staying* in eval mode is unobservable to any hook and
+needs an explicit `invalidate_cache()` — a test pins that boundary so changing it is deliberate.
+
+**Consequence for the original MatMul-free plan.** It proposed replacing the projection GEMMs
+with ternary accumulation — the ~66 ms slice; the ~395 ms slice was redundant work that simply
+should not run. Also established while scoping: **ternarization is already shipped**
+(`apply_ternary_to_model` converts every `nn.Linear`; per #129 every real run trains ternary ON),
+and **no training-VRAM win is possible** from ternary QAT because the fp32 shadow weights stay
+resident — so the original spec's training-VRAM and memory gates were unachievable by
+construction. A fused ternary *kernel* remains open, but decode is launch-bound here (2,815
+kernel launches/token, CPU/device self-time ratio 0.91), so a future attempt should target launch
+count per the #43 precedent, not multiply count.
+
+**Untested:** batch>1 / the `generate_served` concurrent path, bf16 (this checkpoint decodes in
+fp32), and whether the win holds after `freeze()` (which replaces the 8-op chain with a cast+mul,
+already cheaper — expect a smaller ratio). Artifacts:
+`results/matmul_free/decode_profile.json`, `ternary_cache_ab{,_reversed,_landed,_landed_rev}.json`.
+
+## Padding-free sequence packing — 5.17x cheaper per real token (Issue #132, 2026-08-06)
+
+The fine-tune datasets padded every example to `seq_len+1` with EOS and `-100` labels. Padding
+tokens contribute nothing to the gradient, so that compute was pure waste. Measured on the real
+corpora with the real GPT-2 tokenizer at `seq_len=512`:
+
+| corpus | n | median | p90 | max | padding waste |
+|---|---:|---:|---:|---:|---:|
+| `data/grounded_qa_expanded.jsonl` | 5,240 | 86 | 115 | 205 | **83.0%** |
+| `data/tool_use_train.jsonl` | 600 | 180 | 340 | 340 | **63.6%** |
+
+The grounded-QA corpus is the one behind the whole recall track — `hybrid_a4_v2` (161.6 min), the
+#122 deep-supervised (115.3 min) and fixed-N (196.3 min) FTs all paid the 83%.
+
+**This is not "fewer tokens needed to learn."** Same real tokens, same epochs — packing puts ~5.2
+real examples in the row that held one, so the corpus costs 5.18x fewer rows.
+
+**Measured A/B** (`scripts/ab_packing.py`, real 83M hybrid config — 12 layers / 2 windowed-attn /
+d=512 / ternary / triton+megakernel scan — on the real corpus, `results/packing/ab_packing.json`):
+
+| arm | s/step | real (non-`-100`) tokens/step | us/real token | peak VRAM |
+|---|---:|---:|---:|---:|
+| padded | 0.330 | 5 | 61,147 | 2.08 GiB |
+| packed | 0.344 | 29 | 11,816 | 2.15 GiB |
+
+**5.17x cheaper per real token**, against a 5.18x row-reduction ceiling — i.e. packing captures
+essentially all of the available win. Corpus packing: 5,240 examples -> 1,012 rows, waste
+81.4% -> 3.9%. The predicted cost of losing the flash `is_causal` fast path on the 2 attention
+layers turned out to be **~4%** (0.330 -> 0.344 s/step), and VRAM is flat.
+
+**Why the boundary reset is exact rather than an epsilon — the finding that made this cheap.**
+Document isolation needs the DeltaNet recurrent state cut at each document's first token, which is
+expressible as forcing the decay gate `alpha_t = 0` there. `alpha` is a plain tensor passed *as
+data* into every scan, so **no kernel changed**. And `hvn/core/deltanet_triton.py`'s scan is
+sequential over S with a direct `state = state * a_t` multiply ("fp32 throughout -- no
+reparameterization, so stable at any alpha"), so `alpha=0` is a mathematically exact reset there —
+measured 4.8e-7 packed-vs-separate max abs diff, against 0.60 for the leakage it removes. The
+eager `_scan_chunked`/`_scan_chunked_stable` paths fold alpha into a cumprod/log-space form that
+clamps at 1e-6 and *cannot* represent a hard zero; rather than ship a silently-approximate path,
+`DeltaNetBlock.forward` **raises** when asked to pack under them. The FT scripts already default
+to the Triton scan (2026-08-01 flip), so this costs nothing in practice.
+
+**Three sequence-axis carries, all cut** (`hvn/core/packing.py` + the blocks):
+1. **Recurrent state** — `alpha=0` at document starts.
+2. **The depthwise causal conv** — its `K-1`(=3) backward taps read across a boundary. Fixed with
+   a segment-safe conv (K masked shifted multiplies instead of one `conv1d`), only on the packed
+   path. This one is easy to miss and would have leaked 3 tokens per boundary silently.
+3. **Attention** — block-diagonal document mask AND-ed into the existing explicit-mask branch.
+
+RoPE needed nothing (it is relative, and cross-document keys are masked anyway). A fourth issue
+surfaced while building: the **causal shift** means the last token of document A would be trained
+to predict document B's *first* token. The current corpora mask their first token anyway (the
+prompt is `-100`), so it is a no-op on them — but `PackedDataset` cuts it explicitly so the class
+is not silently corpus-dependent.
+
+**Verification.** `tests/test_packing.py` 27/27, including per-document parity vs
+`_scan_sequential`, an explicit cross-document isolation proof on EdgeHVN logits, a
+non-vacuousness check (doc_ids must actually *change* the result), the conv-boundary test, the
+grad-checkpoint recompute path, and GPU parity for both the triton and megakernel scans. Full
+suite 309 passed (`tests/test_issue33.py` syntax error and 6 `ckpt_path`-fixture errors in
+`test_issue51/65/67` are pre-existing on `main` — verified by stashing).
+
+**Scope, deliberately narrow.** `--pack` is opt-in on `finetune_edge_conversational.py`,
+`continue_ft_hybrid.py`, `continue_ft_looped.py`. Class-level defaults on `DeltaNetBlock`/`EdgeHVN`
+are **unchanged** — the same lesson as the #122 scan-default flip, which surfaced two real
+regressions when broadened. Each corpus packs independently so a row never mixes corpora, which
+keeps the `WeightedRandomSampler` mix fractions meaning what the flags say. `HVNBlock` and
+`shared_weights=True` raise `NotImplementedError` rather than leak.
+
+**NOT yet done — the remaining acceptance criterion.** A real packed-vs-padded FT run re-gated on
+`eval/synthetic_recall_probe.py` at the 300-trial bar (against the 35.5% near / 8.5% far
+baseline). Packing changes gradient composition per step — ~5 examples per row instead of 1 — so
+it is **not** a "same result, faster" change on paper, and a speedup that moves recall is not a
+win. The isolation is proven exact; what is unproven is whether the denser step is as good a step.
+
+## Packing recall re-gate — PASSES: 5.15x faster, no detectable recall cost (Issue #132, 2026-08-06)
+
+The remaining acceptance criterion from the entry above. Two FT arms, identical except `--pack`,
+matched on **real tokens** (same passes over the corpus, so the packed arm takes 5.18x fewer
+optimizer steps -- which is exactly the risk being measured, not a flaw in the design), then
+`eval/synthetic_recall_probe.py` at the 300-trial bar on both.
+
+| arm | steps | wall-clock | near-window | far-window (W=128, 16 distractors) |
+|---|---:|---:|---:|---:|
+| padded (control) | 5,000 | **89.1 min** | 7.3% (22/300) | 3.7% (11/300) |
+| packed | 965 | **17.3 min** | 6.0% (18/300) | 3.3% (10/300) |
+
+**5.15x end-to-end wall-clock speedup** — confirming the 5.17x/real-token microbenchmark
+(`scripts/ab_packing.py`) on a real 90-minute training run rather than a 30-step timing loop.
+
+**Recall difference is not statistically detectable.** Two-proportion tests: near z=+0.65
+(p=0.51), far z=+0.22 (p=0.82). Neither is close to significance at n=300 per cell. Packing costs
+5.18x fewer optimizer updates and the model does not measurably care.
+
+**PASS.** The concern going in was that packing is not a "same result, faster" change on paper --
+~5 examples per row instead of 1 changes gradient composition, and 5x fewer updates at the same LR
+schedule is less optimization. Measured: neither shows up above noise.
+
+**Three caveats, stated because the absolute numbers look wrong next to this doc's other entries:**
+- **The trunk differs.** `edge_conversational_step51000.pt` (what `hybrid_a4_v2` used) is not in
+  this checkout, so both arms warm-started from `step101000`. Absolute numbers are therefore NOT
+  comparable to the historical 35.5% near / 8.5% far -- which is precisely why **both** arms were
+  measured fresh rather than one against the doc. The same mistake #122 had to correct.
+- **`--chat-mix 0`** (pure grounded-QA, both arms) to keep the packing ratio exactly 5.18x and drop
+  the OASST cache dependency. a4_v2 used a 30% chat mix.
+- **Deep in the overfitting regime**: 5,000 steps x 32 rows over 5,240 examples is ~30 passes;
+  final train loss 0.0084 (ppl 1.01). This depresses both arms equally and explains why 7.3% sits
+  so far below 35.5%. The probe scores **invented** pseudo-words never in training, so it still
+  measures the general recall skill rather than memorized pairs -- but a less-overfit run would be
+  a better absolute measurement. The A/B remains controlled either way.
+
+**What this licenses and what it does not.** It licenses using `--pack` on a grounded-QA-style FT
+at this scale: the speedup is real and the quality cost is below detection. It does **not**
+establish that packing is free at every mix/length distribution -- OASST conversations are longer
+(smaller packing ratio, fewer documents per row), so both the win and any risk shrink there, and
+that case was not measured. Artifacts: `results/packing/regate_{padded,packed}_{near,far}.txt`,
+`scripts/regate_packing.sh`, checkpoints under `checkpoints/regate_{padded,packed}/`.

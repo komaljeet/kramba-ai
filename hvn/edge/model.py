@@ -70,10 +70,13 @@ class EdgeHVN(nn.Module):
         deltanet_conv_kernel: int = 4,
         block_type: Optional[str] = None,
         use_triton_scan: bool = False,
+        use_megakernel_scan: bool = False,
         block_plan: Optional[list[str]] = None,
         attn_window: Optional[int] = None,
         grad_checkpoint: bool = False,
         tie_embeddings: bool = False,
+        moe_experts: int = 1,
+        moe_top_k: int = 2,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -132,10 +135,15 @@ class EdgeHVN(nn.Module):
                     window=attn_window,
                 )
             if t == "deltanet":
+                # Issue #123: moe_experts>1 routes this block's FFN through a
+                # Mixture-of-Experts (capacity at sub-linear compute). Default
+                # 1 = dense, byte-identical to the pre-#123 path.
                 return DeltaNetBlock(
                     d_model=d_model, n_heads=n_heads, dropout=dropout,
                     conv_kernel=deltanet_conv_kernel,
                     use_triton_scan=use_triton_scan,
+                    moe_experts=moe_experts, moe_top_k=moe_top_k,
+                    use_megakernel_scan=use_megakernel_scan,
                 )
             if t == "hvn":
                 return HVNBlock(
@@ -231,7 +239,8 @@ class EdgeHVN(nn.Module):
             self._offload_pool.evict(name)
         return out
 
-    def _offload_wrap_checkpointed(self, name: str, block: nn.Module, x_in, position_ids):
+    def _offload_wrap_checkpointed(self, name: str, block: nn.Module, x_in, position_ids,
+                                   doc_ids=None):
         """Offload wrapper for a checkpointed LAYER block (Issue #101).
 
         Unlike `_offload_wrap_plain`, a checkpointed segment gets invoked
@@ -280,8 +289,18 @@ class EdgeHVN(nn.Module):
         (or cache-hit) weights; see the `_self_loading_forward` closure
         below.
         """
+        # doc_ids (Issue #132) is a non-differentiable int tensor, so it is
+        # captured by the closure rather than passed as a checkpoint arg --
+        # checkpoint only needs to track tensors that carry grad. Kept out of
+        # the kwargs entirely when unset, so the unpacked path is unchanged.
+        _kw = {} if doc_ids is None else {"doc_ids": doc_ids}
         if name == self._offload_active_name:
-            return checkpoint(block, x_in, position_ids, use_reentrant=False)
+            if doc_ids is None:
+                return checkpoint(block, x_in, position_ids, use_reentrant=False)
+
+            def _active_forward(x_arg, pos_arg):
+                return block(x_arg, position_ids=pos_arg, **_kw)
+            return checkpoint(_active_forward, x_in, position_ids, use_reentrant=False)
 
         pool = self._offload_pool
         params = list(block.parameters())
@@ -292,7 +311,7 @@ class EdgeHVN(nn.Module):
             # is a cheap no-op (Issue #103), a miss re-copies into a reused
             # buffer (Issue #101). Either way, safe to call unconditionally.
             pool.load(name, params)
-            return block(x_arg, position_ids=pos_arg)
+            return block(x_arg, position_ids=pos_arg, **_kw)
 
         pool.load(name, params)  # ensure call #1 itself has weights present
         out = checkpoint(_self_loading_forward, x_in, position_ids, use_reentrant=False)
@@ -306,10 +325,43 @@ class EdgeHVN(nn.Module):
             pool.evict(name)  # no call #2 coming -- free the slot now
         return out
 
-    def forward(self, input_ids: torch.Tensor, position_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, input_ids: torch.Tensor, position_ids: Optional[torch.Tensor] = None,
+                doc_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Forward the full stack.
+
+        ``doc_ids`` ([B, S], Issue #132) marks which packed document each
+        position belongs to, so blocks can cut their sequence-axis carries at
+        document boundaries (DeltaNet: conv taps + recurrent state; attention:
+        a block-diagonal mask). ``None`` (the default) is the unpacked path and
+        is byte-identical to before.
+        """
         B, S = input_ids.shape
         if position_ids is None:
             position_ids = torch.arange(S, device=input_ids.device).unsqueeze(0).expand(B, -1)
+        if doc_ids is not None:
+            if doc_ids.shape != input_ids.shape:
+                raise ValueError(
+                    f"doc_ids shape {tuple(doc_ids.shape)} must match input_ids "
+                    f"{tuple(input_ids.shape)}"
+                )
+            # HVNBlock carries its own Hamiltonian state along the sequence and
+            # has no boundary-reset mechanism, so a packed row would leak across
+            # documents there. Only the deltanet+transformer hybrid (the FT
+            # target) supports packing.
+            unsupported = sorted({t for t in self.block_plan if t == "hvn"})
+            if unsupported or self.shared_block is not None:
+                raise NotImplementedError(
+                    "Packed training (doc_ids) supports 'deltanet' and "
+                    "'transformer' blocks only; this model's block_plan is "
+                    f"{self.block_plan}"
+                    + (" with shared_weights=True" if self.shared_block is not None else "")
+                    + ". The hybrid FT configuration (deltanet + windowed "
+                    "attention) is the supported path."
+                )
+        # Only forward doc_ids when packing is actually in use, so the unpacked
+        # path stays byte-identical and block types that never take the kwarg
+        # (HVNBlock, SharedWeightHVN) are unaffected.
+        blk_kw = {} if doc_ids is None else {"doc_ids": doc_ids}
 
         offload = (getattr(self, "_offload_active_name", None) is not None
                    and self.training and torch.is_grad_enabled())
@@ -319,6 +371,24 @@ class EdgeHVN(nn.Module):
                 "eviction timing is tied to each block's checkpoint recompute "
                 "window, which does not exist without checkpointing."
             )
+        if offload:
+            park_dtype = getattr(getattr(self, "_offload_pool", None), "park_dtype", None)
+            if park_dtype is not None and not torch.is_autocast_enabled():
+                raise RuntimeError(
+                    "offload_park_dtype (Issue #113) parks inactive blocks at a "
+                    "coarser dtype (e.g. bf16) than the active block's native "
+                    "dtype (typically fp32) -- forwarding through a frozen "
+                    "parked block now mixes dtypes with the active block's "
+                    "activations, which PyTorch ops like Conv1d reject outside "
+                    "autocast ('Input type and bias type should be the same'). "
+                    "Wrap the forward+loss computation in "
+                    "`torch.amp.autocast('cuda', dtype=torch.bfloat16)` (already "
+                    "this project's standard training pattern, e.g. "
+                    "scripts/bench_offload_vram.py) -- autocast reconciles the "
+                    "mixed dtypes automatically. Confirmed via a direct repro: "
+                    "without autocast this raises deep inside conv1d; with it, "
+                    "training runs and converges normally."
+                )
 
         if offload:
             x = self._offload_wrap_plain(
@@ -329,6 +399,7 @@ class EdgeHVN(nn.Module):
             x = self.token_embedding(input_ids)
 
         if self.shared_block is not None:
+            # doc_ids is rejected above for the shared path, so blk_kw is empty here.
             x = self.shared_block(x, position_ids=position_ids)
         else:
             use_ckpt = self.grad_checkpoint and self.training and torch.is_grad_enabled()
@@ -338,11 +409,48 @@ class EdgeHVN(nn.Module):
                 if offload:
                     # offload requires grad_checkpoint=True (enforced above),
                     # so use_ckpt is guaranteed True here.
-                    x = self._offload_wrap_checkpointed(name, block, x_in, position_ids)
+                    x = self._offload_wrap_checkpointed(name, block, x_in, position_ids,
+                                                        doc_ids=doc_ids)
+                    # Issue #115: kick off the NEXT offloadable segment's
+                    # H2D transfer now, on a side stream -- issued AFTER
+                    # this block's own load()/compute above (not before),
+                    # so the LRU cache has already registered block i as
+                    # just-used before block i+1 potentially competes for
+                    # the same slot (cache_blocks=1 by default -- prefetching
+                    # i+1 BEFORE touching block i's own residency would
+                    # evict block i's buffer out from under its own
+                    # in-flight compute). GPU-level overlap doesn't depend
+                    # on this Python-side ordering -- both this block's
+                    # compute (already enqueued on the main stream above)
+                    # and the next block's copy (enqueued on the side
+                    # stream below) run concurrently regardless of which
+                    # line issues first, since neither call blocks the
+                    # host thread. Covers both the next layer block and,
+                    # on the last layer, the tail (final_norm+decoder) --
+                    # both go through the same pool.load()/_offload_wrap_*
+                    # path, so a prefetch here is transparently consumed
+                    # there either way.
+                    if getattr(self, "_offload_prefetch", True):
+                        if i + 1 < len(self.blocks):
+                            next_name = f"blocks.{i + 1}"
+                            next_params = list(self.blocks[i + 1].parameters())
+                        else:
+                            next_name = "final_norm+decoder"
+                            next_params = list(self.final_norm.parameters()) + list(self.decoder.parameters())
+                        if next_name != self._offload_active_name:
+                            self._offload_pool.prefetch(next_name, next_params)
                 elif use_ckpt:
-                    x = checkpoint(block, x_in, position_ids, use_reentrant=False)
+                    if doc_ids is None:
+                        x = checkpoint(block, x_in, position_ids, use_reentrant=False)
+                    else:
+                        # doc_ids is non-differentiable; capture it in a closure
+                        # rather than adding a positional checkpoint arg.
+                        def _ckpt_forward(x_arg, pos_arg, _b=block, _d=doc_ids):
+                            return _b(x_arg, position_ids=pos_arg, doc_ids=_d)
+                        x = checkpoint(_ckpt_forward, x_in, position_ids,
+                                       use_reentrant=False)
                 else:
-                    x = block(x_in, position_ids=position_ids)
+                    x = block(x_in, position_ids=position_ids, **blk_kw)
 
         if offload:
             return self._offload_wrap_plain(

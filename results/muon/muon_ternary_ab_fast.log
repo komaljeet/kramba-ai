@@ -1,0 +1,473 @@
+########## ARM: adamw ##########
+[--fast] Enabled recommended training stack: precision=bf16, tf32, compile, triton-scan, num-workers=4
+TF32 matmul enabled (Issue #81): fp32 matmuls use TF32 on Ampere+ tensor cores.
+Seeded all RNGs with 1234 (reproducible init + shuffling).
+======================================================================
+STEP 1 — HARDWARE SCAN
+======================================================================
+
+--- nvidia-smi ---
+Mon Aug  3 18:30:14 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 610.74                 KMD Version: 610.74        CUDA UMD Version: 13.3     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                  Driver-Model | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 4050 ...  WDDM  |   00000000:01:00.0 Off |                  N/A |
+| N/A   39C    P8              1W /   80W |     388MiB /   6141MiB |     12%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A            8876    C+G   ...2txyewy\CrossDeviceResume.exe      N/A      |
+|    0   N/A  N/A           11668    C+G   ...0.4078.105\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           11912    C+G   ...Free Download Manager\fdm.exe      N/A      |
+|    0   N/A  N/A           14024    C+G   ..._pzs8sxrjxfjjc\app\claude.exe      N/A      |
+|    0   N/A  N/A           15708    C+G   ..._cw5n1h2txyewy\SearchHost.exe      N/A      |
+|    0   N/A  N/A           15716    C+G   ...y\StartMenuExperienceHost.exe      N/A      |
+|    0   N/A  N/A           18264    C+G   ...0.4078.105\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           18508    C+G   ...ms\Microsoft VS Code\Code.exe      N/A      |
+|    0   N/A  N/A           20684    C+G   ...0.4078.105\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           25328    C+G   ..._pzs8sxrjxfjjc\app\claude.exe      N/A      |
++-----------------------------------------------------------------------------------------+
+
+--- System RAM ---
+  Total RAM: 15.29 GB
+  Free RAM:  7.94 GB
+
+--- Torch Device Checks ---
+  GPU:              NVIDIA GeForce RTX 4050 Laptop GPU
+  VRAM total:       6.00 GB
+  VRAM free:        4.96 GB
+  bf16 supported:   True
+  Torch version:    2.12.1+cu126
+
+--- Chosen Settings (with reasoning) ---
+  d_model:       512  (reference dimension from README)
+  num_layers:    12  (depth for language understanding)
+  n_heads:       8  (standard head count for d=512)
+  batch_size:    4  (fits in VRAM with ternary compression)
+  seq_len:       512  (good context for conversational training)
+  grad_accum:    8  (effective batch = 32)
+  precision:     bf16  (RTX 4050 supports bf16)
+  Est. peak VRAM: ~3.3 GB (safe within 5.0 GB free)
+  Effective batch size: 32
+
+✓ Step 1 complete.
+
+  Loading GPT-2 tokenizer...
+  GPT-2 tokenizer loaded: vocab_size = 50257
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (26,053 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+  Held-out val: 26,053 samples
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      True
+  precision:         bf16
+  batch_size:        4
+  grad_accum:        8 (effective batch = 32)
+  seq_len:           512
+  d_model:           512
+  num_layers:        12
+  n_heads:           8
+  optimizer:         AdamW (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_adamw/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_adamw/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn)...
+  Architecture: hvn  |  total params: 83,094,705
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 84 nn.Linear layers with TernaryLinear (STE)
+  Excluded 25 gate/decoder layers
+
+  Weight storage (dense fp32):  316.98 MB
+  Weight storage (ternary):     214.33 MB
+  Compression ratio:            1.48x
+
+✓ Step 3 complete.
+
+======================================================================
+STEP 4 — PRE-TRAINING AUDIT
+======================================================================
+
+  [Check 1] DataLoader token shapes...
+    batch_src (source IDs): tensor([1, 1, 0, 1])
+    batch_x shape: torch.Size([4, 512]) (expected (4, 512))
+    batch_y shape: torch.Size([4, 512]) (expected (4, 512))
+    batch_x dtype: torch.int64 (expected torch.long)
+    batch_x range: [1, 49895]
+    ✓ Shapes correct
+
+  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...
+    Input shape:  torch.Size([4, 512])
+    Output shape: torch.Size([4, 512, 50257]) (expected [4, 512, 50257])
+    ✓ Forward pass correct
+    ✓ Backward pass correct (loss = 10.9301)
+    ✓ Ternary weight gradients present (STE working)
+
+  [Check 3] Checkpoint save/load cycle...
+    ✓ Save: C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_adamw\audit_test_checkpoint.pt
+    ✓ Load: keys = ['model_state_dict', 'vocab_size', 'd_model', 'num_layers', 'n_heads', 'n_threads', 'chunk_size', 'use_deltanet', 'deltanet_conv_kernel', 'block_type', 'block_plan', 'attn_window', 'ternary', 'weightless', 'weightless_seed', 'is_edge', 'shared_weights', 'tie_embeddings', 'global_step']
+    ✓ n_heads in checkpoint: 8
+    ✓ State dict loads into rebuilt model
+    ✓ Cleaned up test checkpoint
+
+  ✓ All audit checks passed!
+✓ Step 4 complete.
+
+  Fused Triton scan enabled on 12 DeltaNet block(s) (#83).
+
+  Compiling model with torch.compile (first steps will be slow)...
+
+======================================================================
+STEP 5 — START TRAINING
+======================================================================
+
+  Model parameter count:     83,094,705
+  Ternary compression ratio: 1.48x
+  Dense fp32 weight size:     316.98 MB
+  Ternary weight size:        214.33 MB
+  Optimizer: AdamW (lr=0.0003, wd=0.01, fused=True)
+  Mixed-precision: BF16 (Issue #80)
+
+  Training for up to 1000 steps (effective batch = 32)
+  Logging every 50 steps | Checkpoint every 500 steps
+----------------------------------------------------------------------
+W0803 18:30:48.672000 23236 Lib\site-packages\torch\_inductor\utils.py:1717] [0/0] Not enough SMs to use max_autotune_gemm mode
+  Step     50 (epoch 0)  |  Loss: 10.4763  |  PPL: 35464.11  |  LR: 0.000029  |  0.4 steps/s
+    Per-source: SlimPajama: 10.7528 (n=935)  |  OpenAssistant: 10.8091 (n=665)
+  ⏱ Estimated 2.60s/step | ~1299s per checkpoint interval
+  Step    100 (epoch 0)  |  Loss: 8.7863  |  PPL: 6543.94  |  LR: 0.000059  |  0.8 steps/s
+    Per-source: SlimPajama: 9.5897 (n=931)  |  OpenAssistant: 9.5893 (n=669)
+    ↳ VAL step 100: loss 8.8440 | ppl 6932.94 | Slim 8.8450  OA 8.7987  Wiki nan
+  Step    150 (epoch 0)  |  Loss: 7.7654  |  PPL: 2357.60  |  LR: 0.000089  |  0.6 steps/s
+    Per-source: SlimPajama: 8.2436 (n=907)  |  OpenAssistant: 8.0113 (n=693)
+  Step    200 (epoch 0)  |  Loss: 7.2405  |  PPL: 1394.74  |  LR: 0.000119  |  0.8 steps/s
+    Per-source: SlimPajama: 7.6070 (n=944)  |  OpenAssistant: 6.9157 (n=656)
+    ↳ VAL step 200: loss 7.5055 | ppl 1817.98 | Slim 7.5347  OA 6.0717  Wiki nan
+  Step    250 (epoch 0)  |  Loss: 6.2921  |  PPL: 540.27  |  LR: 0.000149  |  0.7 steps/s
+    Per-source: SlimPajama: 7.4068 (n=930)  |  OpenAssistant: 6.1799 (n=670)
+  Step    300 (epoch 0)  |  Loss: 6.2554  |  PPL: 520.79  |  LR: 0.000179  |  0.8 steps/s
+    Per-source: SlimPajama: 7.1432 (n=931)  |  OpenAssistant: 5.8350 (n=669)
+    ↳ VAL step 300: loss 7.0104 | ppl 1108.06 | Slim 7.0499  OA 5.0719  Wiki nan
+  Step    350 (epoch 0)  |  Loss: 6.2369  |  PPL: 511.28  |  LR: 0.000209  |  0.7 steps/s
+    Per-source: SlimPajama: 6.9360 (n=910)  |  OpenAssistant: 5.4365 (n=690)
+  Step    400 (epoch 0)  |  Loss: 5.7946  |  PPL: 328.52  |  LR: 0.000239  |  0.8 steps/s
+    Per-source: SlimPajama: 6.7618 (n=939)  |  OpenAssistant: 5.1284 (n=661)
+    ↳ VAL step 400: loss 6.7354 | ppl 841.65 | Slim 6.7788  OA 4.6053  Wiki nan
+  Step    450 (epoch 0)  |  Loss: 5.3494  |  PPL: 210.47  |  LR: 0.000269  |  0.7 steps/s
+    Per-source: SlimPajama: 6.7155 (n=911)  |  OpenAssistant: 5.1097 (n=689)
+  Step    500 (epoch 0)  |  Loss: 5.6827  |  PPL: 293.73  |  LR: 0.000299  |  0.8 steps/s
+    Per-source: SlimPajama: 6.6408 (n=955)  |  OpenAssistant: 4.8914 (n=645)
+    ↳ VAL step 500: loss 6.5427 | ppl 694.16 | Slim 6.5897  OA 4.2413  Wiki nan
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_adamw\edge_conversational_step500.pt
+  Step    550 (epoch 0)  |  Loss: 5.8520  |  PPL: 347.92  |  LR: 0.000297  |  0.7 steps/s
+    Per-source: SlimPajama: 6.5292 (n=949)  |  OpenAssistant: 4.6452 (n=651)
+  Step    600 (epoch 0)  |  Loss: 5.9842  |  PPL: 397.09  |  LR: 0.000292  |  0.8 steps/s
+    Per-source: SlimPajama: 6.3961 (n=955)  |  OpenAssistant: 4.8129 (n=645)
+    ↳ VAL step 600: loss 6.4069 | ppl 606.04 | Slim 6.4547  OA 4.0645  Wiki nan
+  Step    650 (epoch 0)  |  Loss: 6.0637  |  PPL: 429.98  |  LR: 0.000283  |  0.7 steps/s
+    Per-source: SlimPajama: 6.3891 (n=935)  |  OpenAssistant: 4.6026 (n=665)
+  Step    700 (epoch 0)  |  Loss: 5.7341  |  PPL: 309.22  |  LR: 0.000271  |  0.8 steps/s
+    Per-source: SlimPajama: 6.3665 (n=952)  |  OpenAssistant: 4.4821 (n=648)
+    ↳ VAL step 700: loss 6.3065 | ppl 548.12 | Slim 6.3555  OA 3.9033  Wiki nan
+  Step    750 (epoch 0)  |  Loss: 5.6797  |  PPL: 292.86  |  LR: 0.000255  |  0.7 steps/s
+    Per-source: SlimPajama: 6.2848 (n=954)  |  OpenAssistant: 4.4045 (n=646)
+  Step    800 (epoch 0)  |  Loss: 5.3442  |  PPL: 209.40  |  LR: 0.000237  |  0.8 steps/s
+    Per-source: SlimPajama: 6.2503 (n=947)  |  OpenAssistant: 4.3836 (n=653)
+    ↳ VAL step 800: loss 6.2134 | ppl 499.42 | Slim 6.2631  OA 3.7815  Wiki nan
+  Step    850 (epoch 0)  |  Loss: 5.4688  |  PPL: 237.17  |  LR: 0.000217  |  0.7 steps/s
+    Per-source: SlimPajama: 6.1789 (n=960)  |  OpenAssistant: 4.2278 (n=640)
+  Step    900 (epoch 0)  |  Loss: 5.7068  |  PPL: 300.91  |  LR: 0.000196  |  0.8 steps/s
+    Per-source: SlimPajama: 6.1470 (n=937)  |  OpenAssistant: 4.2645 (n=663)
+    ↳ VAL step 900: loss 6.1469 | ppl 467.26 | Slim 6.1964  OA 3.7190  Wiki nan
+  Step    950 (epoch 0)  |  Loss: 5.4532  |  PPL: 233.50  |  LR: 0.000173  |  0.7 steps/s
+    Per-source: SlimPajama: 6.1197 (n=934)  |  OpenAssistant: 4.1293 (n=666)
+  Step   1000 (epoch 0)  |  Loss: 5.3310  |  PPL: 206.64  |  LR: 0.000149  |  0.8 steps/s
+    Per-source: SlimPajama: 6.1080 (n=979)  |  OpenAssistant: 4.1690 (n=621)
+    ↳ VAL step 1000: loss 6.0969 | ppl 444.46 | Slim 6.1468  OA 3.6514  Wiki nan
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_adamw\edge_conversational_step1000.pt
+
+======================================================================
+TRAINING COMPLETE
+======================================================================
+  Total steps:     1000
+  Total time:       1381.4s (23.0 min)
+  Avg time/step:    1.381s
+  Final checkpoint: C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_adamw\edge_conversational.pt
+  Training log:     C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_adamw\training_log.csv
+✓ Step 5 complete.
+########## ARM: muon ##########
+[--fast] Enabled recommended training stack: precision=bf16, tf32, compile, triton-scan, num-workers=4
+TF32 matmul enabled (Issue #81): fp32 matmuls use TF32 on Ampere+ tensor cores.
+Seeded all RNGs with 1234 (reproducible init + shuffling).
+======================================================================
+STEP 1 — HARDWARE SCAN
+======================================================================
+
+--- nvidia-smi ---
+Mon Aug  3 18:53:36 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 610.74                 KMD Version: 610.74        CUDA UMD Version: 13.3     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                  Driver-Model | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 4050 ...  WDDM  |   00000000:01:00.0 Off |                  N/A |
+| N/A   46C    P4              8W /   80W |     386MiB /   6141MiB |      2%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A            8876    C+G   ...2txyewy\CrossDeviceResume.exe      N/A      |
+|    0   N/A  N/A           11668    C+G   ...0.4078.105\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           11912    C+G   ...Free Download Manager\fdm.exe      N/A      |
+|    0   N/A  N/A           14024    C+G   ..._pzs8sxrjxfjjc\app\claude.exe      N/A      |
+|    0   N/A  N/A           15708    C+G   ..._cw5n1h2txyewy\SearchHost.exe      N/A      |
+|    0   N/A  N/A           15716    C+G   ...y\StartMenuExperienceHost.exe      N/A      |
+|    0   N/A  N/A           18264    C+G   ...0.4078.105\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           18508    C+G   ...ms\Microsoft VS Code\Code.exe      N/A      |
+|    0   N/A  N/A           20684    C+G   ...0.4078.105\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           25328    C+G   ..._pzs8sxrjxfjjc\app\claude.exe      N/A      |
++-----------------------------------------------------------------------------------------+
+
+--- System RAM ---
+  Total RAM: 15.29 GB
+  Free RAM:  6.95 GB
+
+--- Torch Device Checks ---
+  GPU:              NVIDIA GeForce RTX 4050 Laptop GPU
+  VRAM total:       6.00 GB
+  VRAM free:        4.96 GB
+  bf16 supported:   True
+  Torch version:    2.12.1+cu126
+
+--- Chosen Settings (with reasoning) ---
+  d_model:       512  (reference dimension from README)
+  num_layers:    12  (depth for language understanding)
+  n_heads:       8  (standard head count for d=512)
+  batch_size:    4  (fits in VRAM with ternary compression)
+  seq_len:       512  (good context for conversational training)
+  grad_accum:    8  (effective batch = 32)
+  precision:     bf16  (RTX 4050 supports bf16)
+  Est. peak VRAM: ~3.3 GB (safe within 5.0 GB free)
+  Effective batch size: 32
+
+✓ Step 1 complete.
+
+  Loading GPT-2 tokenizer...
+  GPT-2 tokenizer loaded: vocab_size = 50257
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (26,053 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+  Held-out val: 26,053 samples
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      True
+  precision:         bf16
+  batch_size:        4
+  grad_accum:        8 (effective batch = 32)
+  seq_len:           512
+  d_model:           512
+  num_layers:        12
+  n_heads:           8
+  optimizer:         AdamW (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_muon/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_muon/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn)...
+  Architecture: hvn  |  total params: 83,094,705
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 84 nn.Linear layers with TernaryLinear (STE)
+  Excluded 25 gate/decoder layers
+
+  Weight storage (dense fp32):  316.98 MB
+  Weight storage (ternary):     214.33 MB
+  Compression ratio:            1.48x
+
+✓ Step 3 complete.
+
+======================================================================
+STEP 4 — PRE-TRAINING AUDIT
+======================================================================
+
+  [Check 1] DataLoader token shapes...
+    batch_src (source IDs): tensor([1, 1, 0, 1])
+    batch_x shape: torch.Size([4, 512]) (expected (4, 512))
+    batch_y shape: torch.Size([4, 512]) (expected (4, 512))
+    batch_x dtype: torch.int64 (expected torch.long)
+    batch_x range: [1, 49895]
+    ✓ Shapes correct
+
+  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...
+    Input shape:  torch.Size([4, 512])
+    Output shape: torch.Size([4, 512, 50257]) (expected [4, 512, 50257])
+    ✓ Forward pass correct
+    ✓ Backward pass correct (loss = 10.9301)
+    ✓ Ternary weight gradients present (STE working)
+
+  [Check 3] Checkpoint save/load cycle...
+    ✓ Save: C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_muon\audit_test_checkpoint.pt
+    ✓ Load: keys = ['model_state_dict', 'vocab_size', 'd_model', 'num_layers', 'n_heads', 'n_threads', 'chunk_size', 'use_deltanet', 'deltanet_conv_kernel', 'block_type', 'block_plan', 'attn_window', 'ternary', 'weightless', 'weightless_seed', 'is_edge', 'shared_weights', 'tie_embeddings', 'global_step']
+    ✓ n_heads in checkpoint: 8
+    ✓ State dict loads into rebuilt model
+    ✓ Cleaned up test checkpoint
+
+  ✓ All audit checks passed!
+✓ Step 4 complete.
+
+  Fused Triton scan enabled on 12 DeltaNet block(s) (#83).
+
+  Compiling model with torch.compile (first steps will be slow)...
+
+======================================================================
+STEP 5 — START TRAINING
+======================================================================
+
+  Model parameter count:     83,094,705
+  Ternary compression ratio: 1.48x
+  Dense fp32 weight size:     316.98 MB
+  Ternary weight size:        214.33 MB
+  Optimizer: Muon (muon_lr=0.02 on 108 matrices / 31,506,432 params; AdamW aux lr=0.0003 / 51,588,273 params)
+  Mixed-precision: BF16 (Issue #80)
+
+  Training for up to 1000 steps (effective batch = 32)
+  Logging every 50 steps | Checkpoint every 500 steps
+----------------------------------------------------------------------
+  Step     50 (epoch 0)  |  Loss: 10.5904  |  PPL: 39750.58  |  LR: 0.001960  |  0.6 steps/s
+    Per-source: SlimPajama: 10.8296 (n=935)  |  OpenAssistant: 10.8164 (n=665)
+  ⏱ Estimated 1.62s/step | ~811s per checkpoint interval
+  Step    100 (epoch 0)  |  Loss: 9.1932  |  PPL: 9830.16  |  LR: 0.003960  |  0.7 steps/s
+    Per-source: SlimPajama: 10.0319 (n=931)  |  OpenAssistant: 9.6670 (n=669)
+    ↳ VAL step 100: loss 9.2837 | ppl 10761.43 | Slim 9.2974  OA 8.6128  Wiki nan
+  Step    150 (epoch 0)  |  Loss: 7.5167  |  PPL: 1838.50  |  LR: 0.005960  |  0.7 steps/s
+    Per-source: SlimPajama: 8.4070 (n=907)  |  OpenAssistant: 7.8303 (n=693)
+  Step    200 (epoch 0)  |  Loss: 6.7267  |  PPL: 834.41  |  LR: 0.007960  |  0.7 steps/s
+    Per-source: SlimPajama: 7.3446 (n=944)  |  OpenAssistant: 6.2899 (n=656)
+    ↳ VAL step 200: loss 7.1158 | ppl 1231.24 | Slim 7.1531  OA 5.2874  Wiki nan
+  Step    250 (epoch 0)  |  Loss: 5.7141  |  PPL: 303.10  |  LR: 0.009960  |  0.7 steps/s
+    Per-source: SlimPajama: 6.9958 (n=930)  |  OpenAssistant: 5.4353 (n=670)
+  Step    300 (epoch 0)  |  Loss: 5.6961  |  PPL: 297.70  |  LR: 0.011960  |  0.7 steps/s
+    Per-source: SlimPajama: 6.7306 (n=931)  |  OpenAssistant: 5.0854 (n=669)
+    ↳ VAL step 300: loss 6.5695 | ppl 713.03 | Slim 6.6165  OA 4.2672  Wiki nan
+  Step    350 (epoch 0)  |  Loss: 5.7104  |  PPL: 301.98  |  LR: 0.013960  |  0.7 steps/s
+    Per-source: SlimPajama: 6.4939 (n=910)  |  OpenAssistant: 4.7022 (n=690)
+  Step    400 (epoch 0)  |  Loss: 5.2005  |  PPL: 181.37  |  LR: 0.015960  |  0.7 steps/s
+    Per-source: SlimPajama: 6.3389 (n=939)  |  OpenAssistant: 4.4673 (n=661)
+    ↳ VAL step 400: loss 6.2951 | ppl 541.88 | Slim 6.3439  OA 3.9024  Wiki nan
+  Step    450 (epoch 0)  |  Loss: 4.8219  |  PPL: 124.20  |  LR: 0.017960  |  0.7 steps/s
+    Per-source: SlimPajama: 6.2854 (n=911)  |  OpenAssistant: 4.4705 (n=689)
+  Step    500 (epoch 0)  |  Loss: 5.2479  |  PPL: 190.16  |  LR: 0.019960  |  0.7 steps/s
+    Per-source: SlimPajama: 6.2326 (n=955)  |  OpenAssistant: 4.3130 (n=645)
+    ↳ VAL step 500: loss 6.1374 | ppl 462.86 | Slim 6.1872  OA 3.6991  Wiki nan
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_muon\edge_conversational_step500.pt
+  Step    550 (epoch 0)  |  Loss: 5.4471  |  PPL: 232.08  |  LR: 0.019832  |  0.7 steps/s
+    Per-source: SlimPajama: 6.1234 (n=949)  |  OpenAssistant: 4.1425 (n=651)
+  Step    600 (epoch 0)  |  Loss: 5.5266  |  PPL: 251.28  |  LR: 0.019462  |  0.7 steps/s
+    Per-source: SlimPajama: 5.9952 (n=955)  |  OpenAssistant: 4.3154 (n=645)
+    ↳ VAL step 600: loss 6.0101 | ppl 407.52 | Slim 6.0599  OA 3.5720  Wiki nan
+  Step    650 (epoch 0)  |  Loss: 5.6644  |  PPL: 288.43  |  LR: 0.018858  |  0.7 steps/s
+    Per-source: SlimPajama: 6.0013 (n=935)  |  OpenAssistant: 4.1396 (n=665)
+  Step    700 (epoch 0)  |  Loss: 5.3207  |  PPL: 204.53  |  LR: 0.018036  |  0.7 steps/s
+    Per-source: SlimPajama: 5.9869 (n=952)  |  OpenAssistant: 4.0352 (n=648)
+    ↳ VAL step 700: loss 5.9200 | ppl 372.43 | Slim 5.9701  OA 3.4652  Wiki nan
+  Step    750 (epoch 0)  |  Loss: 5.3029  |  PPL: 200.91  |  LR: 0.017015  |  0.7 steps/s
+    Per-source: SlimPajama: 5.9083 (n=954)  |  OpenAssistant: 3.9791 (n=646)
+  Step    800 (epoch 0)  |  Loss: 4.9725  |  PPL: 144.39  |  LR: 0.015821  |  0.7 steps/s
+    Per-source: SlimPajama: 5.8766 (n=947)  |  OpenAssistant: 3.9488 (n=653)
+    ↳ VAL step 800: loss 5.8309 | ppl 340.67 | Slim 5.8814  OA 3.3579  Wiki nan
+  Step    850 (epoch 0)  |  Loss: 5.0570  |  PPL: 157.12  |  LR: 0.014483  |  0.7 steps/s
+    Per-source: SlimPajama: 5.8024 (n=960)  |  OpenAssistant: 3.8219 (n=640)
+  Step    900 (epoch 0)  |  Loss: 5.3166  |  PPL: 203.70  |  LR: 0.013034  |  0.7 steps/s
+    Per-source: SlimPajama: 5.7642 (n=937)  |  OpenAssistant: 3.8399 (n=663)
+    ↳ VAL step 900: loss 5.7627 | ppl 318.20 | Slim 5.8129  OA 3.3013  Wiki nan
+  Step    950 (epoch 0)  |  Loss: 5.0525  |  PPL: 156.42  |  LR: 0.011510  |  0.7 steps/s
+    Per-source: SlimPajama: 5.7372 (n=934)  |  OpenAssistant: 3.7109 (n=666)
+  Step   1000 (epoch 0)  |  Loss: 4.8925  |  PPL: 133.29  |  LR: 0.009949  |  0.7 steps/s
+    Per-source: SlimPajama: 5.7104 (n=979)  |  OpenAssistant: 3.7457 (n=621)
+    ↳ VAL step 1000: loss 5.7021 | ppl 299.50 | Slim 5.7527  OA 3.2206  Wiki nan
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_muon\edge_conversational_step1000.pt
+
+======================================================================
+TRAINING COMPLETE
+======================================================================
+  Total steps:     1000
+  Total time:       1421.0s (23.7 min)
+  Avg time/step:    1.421s
+  Final checkpoint: C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_muon\edge_conversational.pt
+  Training log:     C:/Users/komal/Documents/Codes/kramba-ai/checkpoints/muon_ab_muon\training_log.csv
+✓ Step 5 complete.
