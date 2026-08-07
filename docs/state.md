@@ -2102,3 +2102,106 @@ threatens the actual claim, which is that packing is quality-**neutral** and fas
 Artifacts: `results/packing/heldout_alltokens.json`, `heldout_answerspan.json`,
 `regate_oasst_packed2000_{near,far}.txt`, `logs/equal_wallclock_oasst.log`, checkpoints under
 `checkpoints/regate_oasst_packed_2000/`.
+
+## The 355M scale-up is STOPPED — measured, not abandoned (Issue #112, 2026-08-07)
+
+**One line: the scale-up costs a month of GPU time for a 2-4x parameter jump, and the
+setting it depends on makes the model 4x worse. Stopped on the numbers.**
+
+This entry closes out a day of #112 pre-launch work. Nothing here was a guess; each item
+replaced a documented belief with a measurement, and three of the four beliefs were wrong.
+
+### 1. The VRAM envelopes measured a different model (see the correction in training.md)
+
+Every number in `docs/training.md` traces to a bench hardcoding `VOCAB = 8000` against the
+real pretrain's 50,257, with no ternary and no Triton scan. `d=1024, 24L` is **355,128,593
+params, not 268M**, and it **spills** (6.34-6.75 GiB reserved on a 5.9966 GiB card) rather
+than being the "recommended ceiling config, 4.3 GiB". The 4.3 figure was the forward/backward
+peak with optimizer state excluded entirely.
+
+### 2. The "1.21B silent stall" was never a stall
+
+Output is gated on `global_step % 50` with `grad_accum=8`, so nothing prints until micro-batch
+400; at 1.21B each micro-batch took 82 s because `reserved` exceeded the card by 1.29 GiB and
+WDDM backed the overflow with host RAM. First log line was **9.2 hours away**. The recorded
+TDR/driver-crash hypothesis for the earlier 268M failure is **refuted**: the Triton scan has no
+autotuning (`grep -c triton.autotune` = 0), the `"Not enough SMs"` line prints on every compile
+on a 20-SM card, no kernel is within 36x of the 2 s watchdog, and the Windows System log has
+**zero Event ID 4101** across its entire retained history. The GPU did end up faulted and that
+remains unexplained — but it is not what caused the "hang".
+
+### 3. `--block-coordinate` costs ~4x quality — the load-bearing assumption nobody had tested
+
+BCD is documented purely as a VRAM optimisation (#99), yet it is mandatory at 355M, and only
+1 of 14 blocks trains at a time with the outgoing block's optimizer state deleted on every
+switch. A/B through the real training script (`scripts/ab_bcd_convergence.sh`, d=512/12L so the
+control fits without BCD, 4,200 steps = 3 full rotations, identical seed/data/steps, `--no-fast`
+in both arms so `torch.compile` recompiles at block switches cannot confound it):
+
+| step | full model | `--block-coordinate` | gap |
+|---|---:|---:|---:|
+| 1,000 | 5.53 | 8.79 | 3.27 |
+| 2,000 | 5.18 | 6.46 | 1.28 |
+| 3,000 | 4.97 | 6.26 | 1.29 |
+| 4,000 | 4.85 | 6.20 | 1.35 |
+| **4,200 (final)** | **4.83** (ppl 125) | **6.19** (ppl 487) | **1.36** |
+
+The early gap is cycle warmup — one full rotation completes at step 1,400, before which most
+of the model has never trained. What remains after that is flat and real: **~3.9x worse
+perplexity at matched steps**. Limits: 74M/14 blocks rather than 355M/26, and one seed.
+
+### 4. Adafactor fits without BCD — and had been built but never measured
+
+`scripts/probe_optimizer_vram.py`, real 355M config, built through `build_model_and_config` +
+ternary + Triton scan (**not** a standalone `EdgeHVN`, deliberately — repeating the bench's
+mistake would produce another wrong envelope), reporting `max_memory_reserved` rather than
+`nvidia-smi`:
+
+| optimizer | peak alloc | peak reserved | s/micro | fits (5.9966 GiB card) |
+|---|---:|---:|---:|:--:|
+| Muon (script default) | 5.67 GiB | 6.75 GiB | 22.82 | ❌ spills |
+| **Adafactor** | **3.97 GiB** | **5.08 GiB** | **1.82** | ✅ **0.92 GiB headroom** |
+| AdamW | 6.61 GiB | 7.47 GiB | 29.11 | ❌ spills |
+
+The s/micro column is the spill penalty, not optimizer speed — the two that fit nothing run
+12-16x slower because of host-RAM backing. **`--optimizer adafactor` removes the need for BCD
+at 355M entirely**, at the same step time as the BCD config, without the 4x handicap. It has
+been wired since #85; that issue's own closing note records its VRAM benchmark being deferred
+"since the GPU is currently busy", and it was closed without the benchmark ever running.
+
+**Adafactor's own quality is still unmeasured** (Muon beat AdamW in #86; Adafactor vs Muon has
+never been run) and it saves memory by approximating — a row+column summary per matrix instead
+of the full second moment. The arm that would settle it is ~2.3 h against the control above.
+
+### 5. Why the track is stopped anyway — it is time-bound, not memory-bound
+
+At the measured Adafactor throughput, with Chinchilla-optimal tokens (20/param):
+
+| config | real params | tokens needed | days (h=8) | days (h=16 projected) |
+|---|---:|---:|---:|---:|
+| d=1024, 24L | 355M | 7.1B | 73 | **30** |
+| d=768, 16L | 172M | 3.4B | 17 | 7 |
+| d=2048, 24L | 1.21B | 24.2B | **31 years** | ~2 years even if it fit |
+
+**1B was never trainable here**, and "1B trains locally today" (this file, 2026-07-12) is
+withdrawn — it fit only in the vocab-8000 bench, and even a corrected fit is ~2 years of wall
+clock. `docs/index.md` already warned that size decisions must start from
+`6·N·D ÷ throughput` and never from whether the model fits; the 1B claim did precisely what
+that warning forbids.
+
+**And the existing 83M is already complete** — 102,000 steps x 16,384 = **1.65B tokens against
+a 1.66B Chinchilla floor**. It is not undertrained any more. A 5-hour from-scratch run at any
+size lands at 0.7-6.6% of its required tokens, i.e. strictly worse than the model already on
+disk. There is no short version of a pretrain.
+
+**Decision: stop the scale-up.** The goal is a model trained on *less* compute; a 30-day run
+for a 4x parameter jump is the opposite, and 172M/7 days buys a 2x jump that this project's own
+capacity analysis says will not close the contextual-reasoning gap regardless. The cheap
+remaining wins are fine-tuning (1-3 h, now 1.45-5x faster with #132 packing on by default),
+which is where this document has repeatedly concluded the lever actually is. The next
+compute-root direction is multi-token prediction — attacking the one-token-per-forward-pass
+cost — explicitly deferred, not dropped.
+
+Artifacts: `scripts/ab_bcd_convergence.sh`, `logs/ab_bcd_convergence.log`,
+`checkpoints/ab_bcd_{control,blockcoord}/val_log.csv`, `scripts/probe_optimizer_vram.py`,
+`results/optimizer_vram_355m.json`.
