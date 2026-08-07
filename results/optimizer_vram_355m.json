@@ -1,0 +1,41 @@
+[
+  {
+    "optimizer": "muon",
+    "desc": "Muon (muon_lr=0.02 on 216 matrices / 251,854,848 params; AdamW aux lr=0.0003 / 103,273,745 params)",
+    "grad_checkpoint": true,
+    "block_coordinate": false,
+    "params": 355128593,
+    "peak_alloc_gib": 5.672,
+    "peak_reserved_gib": 6.746,
+    "card_total_gib": 5.9966,
+    "fits": false,
+    "s_per_micro": 22.815,
+    "s_per_micro_first": 2.595
+  },
+  {
+    "optimizer": "adafactor",
+    "desc": "Adafactor (lr=0.0003, factored second moment, native torch)",
+    "grad_checkpoint": true,
+    "block_coordinate": false,
+    "params": 355128593,
+    "peak_alloc_gib": 3.967,
+    "peak_reserved_gib": 5.076,
+    "card_total_gib": 5.9966,
+    "fits": true,
+    "s_per_micro": 1.822,
+    "s_per_micro_first": 2.308
+  },
+  {
+    "optimizer": "adamw",
+    "desc": "AdamW (lr=0.0003, wd=0.01, fused=False)",
+    "grad_checkpoint": true,
+    "block_coordinate": false,
+    "params": 355128593,
+    "peak_alloc_gib": 6.609,
+    "peak_reserved_gib": 7.473,
+    "card_total_gib": 5.9966,
+    "fits": false,
+    "s_per_micro": 29.11,
+    "s_per_micro_first": 2.594
+  }
+]

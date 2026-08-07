@@ -104,6 +104,89 @@ def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
     }
     torch.save(ckpt, save_path)
 
+
+# Rolling resume-state file (Issue #112). Deliberately NOT part of the model
+# checkpoint: optimizer state is ~1.4 GiB for Muon at 355M (~2.8 GiB for AdamW),
+# and archiving that alongside every `--save-every` checkpoint would fill the disk
+# over a multi-week run. One file per checkpoint_dir, overwritten each save, holding
+# only what is needed to continue the *optimization* rather than reproduce history.
+RESUME_STATE_FILENAME = "resume_state.pt"
+
+
+def _save_resume_state(checkpoint_dir: str, global_step: int, optimizer,
+                       bcd_scheduler=None) -> None:
+    """Persist optimizer + BCD-cycle state so a restart continues rather than restarts.
+
+    Written atomically (temp file + os.replace) because this file is overwritten in
+    place — a crash mid-write would otherwise corrupt the only copy, and surviving
+    crashes is the entire point of it.
+    """
+    state = {
+        "global_step": global_step,
+        "optimizer_state_dict": optimizer.state_dict(),
+        "bcd_state_dict": bcd_scheduler.state_dict() if bcd_scheduler is not None else None,
+    }
+    path = os.path.join(checkpoint_dir, RESUME_STATE_FILENAME)
+    tmp = path + ".tmp"
+    torch.save(state, tmp)
+    os.replace(tmp, path)
+
+
+def build_cosine_scheduler(optimizer, total_steps: int, resume_step: int = 0):
+    """Cosine schedule that CONTINUES across a resume instead of restarting (Issue #112).
+
+    The old behaviour built a fresh cosine over the *remaining* steps, so every
+    restart snapped the LR back to peak — a sawtooth for any run restarted more than
+    once, and the 355M pretrain is expected to restart many times.
+
+    Advancing by calling ``step()`` ``resume_step`` times looks crude next to passing
+    ``last_epoch=resume_step-1``, and that was the first attempt — it does not work.
+    ``CosineAnnealingLR.get_lr()`` is *recursive*: it derives the next LR from the
+    group's current LR rather than closed-form from ``last_epoch``, so constructing
+    with ``last_epoch`` leaves the LR sitting at its peak (caught by
+    ``tests/test_resume_state.py``). Replaying the recursion is what actually
+    reproduces the uninterrupted trajectory, and ~100K cheap iterations is nothing
+    against a multi-week run.
+    """
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
+    if resume_step > 0:
+        import warnings
+        with warnings.catch_warnings():
+            # Replaying the schedule before any optimizer.step() trips PyTorch's
+            # ordering warning; it is spurious here — we are fast-forwarding, not
+            # training.
+            warnings.simplefilter("ignore", UserWarning)
+            for _ in range(min(resume_step, total_steps)):
+                scheduler.step()
+    return scheduler
+
+
+def _load_resume_state(checkpoint_dir: str, expected_step: int) -> dict | None:
+    """Load the rolling resume state, but only if it matches the checkpoint.
+
+    Returns None (explaining why) when the file is absent, stale, or unreadable.
+    A mismatch is normal — e.g. resuming from an older archived checkpoint than the
+    last rolling save — and must degrade to a fresh optimizer rather than silently
+    pair one step's weights with another step's momentum.
+    """
+    path = os.path.join(checkpoint_dir, RESUME_STATE_FILENAME)
+    if not os.path.exists(path):
+        print(f"  [resume] no {RESUME_STATE_FILENAME} — optimizer/BCD state starts fresh")
+        return None
+    try:
+        state = torch.load(path, map_location="cpu", weights_only=False)
+    except Exception as e:
+        print(f"  [resume] {RESUME_STATE_FILENAME} unreadable ({e}) — optimizer starts fresh")
+        return None
+    saved_step = state.get("global_step", -1)
+    if saved_step != expected_step:
+        print(f"  [resume] {RESUME_STATE_FILENAME} is at step {saved_step} but the checkpoint "
+              f"is at {expected_step} — ignoring it, optimizer starts fresh (pairing "
+              f"mismatched weights and momentum would be worse than restarting)")
+        return None
+    return state
+
+
 # ---------------------------------------------------------------------------
 # Step 1 — Hardware Scan
 # ---------------------------------------------------------------------------
@@ -1676,6 +1759,7 @@ def train(
     max_steps: int | None = None,
     resume_step: int = 0,
     val_loader=None,
+    resume_state: dict | None = None,
 ) -> None:
     """Run the training loop with all configured settings.
 
@@ -1748,12 +1832,45 @@ def train(
               f"{bcd_scheduler.steps_per_block} steps/block, "
               f"active={bcd_scheduler.active_block_name!r}")
 
+    # --- Restore optimizer + BCD cycle position (Issue #112) ---
+    # Without this, every restart of a long run threw away Muon/AdamW momentum AND
+    # rewound the BCD round-robin to block 0. Over a multi-week run with many
+    # restarts that systematically undertrains the later blocks: block 0 gets
+    # retrained after every crash while block 13 only ever advances in the
+    # uninterrupted stretches. BCD is mandatory at 355M (docs/training.md), so this
+    # is a correctness issue for the run, not a convenience.
+    if resume_state is not None:
+        try:
+            optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+            print(f"  [resume] optimizer state restored ({type(optimizer).__name__})")
+        except Exception as e:
+            # A changed --optimizer or param-group layout lands here. Continuing with
+            # a fresh optimizer is correct-but-slower; silently proceeding as if the
+            # state had loaded would not be.
+            print(f"  [resume] WARNING optimizer state NOT restored ({e}) — "
+                  f"continuing with fresh optimizer state")
+        bcd_sd = resume_state.get("bcd_state_dict")
+        if bcd_sd is not None and bcd_scheduler is not None:
+            if bcd_sd.get("steps_per_block") != bcd_scheduler.steps_per_block:
+                print(f"  [resume] WARNING --bcd-steps-per-block changed "
+                      f"({bcd_sd.get('steps_per_block')} -> {bcd_scheduler.steps_per_block}); "
+                      f"restoring the saved cycle position anyway, which is what keeps "
+                      f"block coverage even")
+            bcd_scheduler.load_state_dict(bcd_sd)
+            print(f"  [resume] BCD cycle restored: block {bcd_scheduler._cycle_pos}, "
+                  f"{bcd_scheduler._step_in_block} steps into it, "
+                  f"active={bcd_scheduler.active_block_name!r}")
+        elif bcd_sd is not None and bcd_scheduler is None:
+            print("  [resume] saved BCD state ignored — this run has no --block-coordinate")
+        elif bcd_sd is None and bcd_scheduler is not None:
+            print("  [resume] no saved BCD state — cycle starts at block 0")
+
     # --- Cosine LR schedule with warmup ---
     total_steps = max_steps if max_steps is not None else 10_000
-    # When resuming, the cosine schedule is reset — T_max should be the
-    # remaining steps so the decay reaches ~0 at the end of training.
-    scheduler_t_max = total_steps - resume_step if resume_step > 0 else total_steps
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=scheduler_t_max)
+    scheduler = build_cosine_scheduler(optimizer, total_steps, resume_step)
+    if resume_step > 0:
+        print(f"  [resume] cosine schedule continued at step {resume_step}/{total_steps} "
+              f"(lr {optimizer.param_groups[0]['lr']:.3e}), not restarted")
 
     # Warmup: linearly increase LR for the first warmup_steps, then let the
     # cosine scheduler take over. During warmup we override the LR manually;
@@ -1769,12 +1886,11 @@ def train(
     global_step = resume_step
     if global_step > 0:
         print(f"  Resuming from step {global_step}")
-        # When resuming with a potentially different LR, reset the cosine
-        # schedule to start fresh from the checkpoint (don't advance the
-        # scheduler to the old step position). The model weights are carried
-        # forward; the optimizer and schedule are fresh.
-        print(f"  Resetting cosine schedule (fresh from checkpoint)")
-        warmup_done = True  # skip warmup on resume — model is already trained
+        # Warmup is skipped on resume: the model is already trained, and (since
+        # Issue #112) the optimizer's momentum is restored too, so there is no
+        # cold-start to ease into. The cosine schedule is CONTINUED, not reset —
+        # see the scheduler construction above.
+        warmup_done = True
     else:
         warmup_done = False
 
@@ -2012,6 +2128,7 @@ def train(
             if global_step % config["save_every_steps"] == 0:
                 ckpt_path = os.path.join(checkpoint_dir, f"edge_conversational_step{global_step}.pt")
                 _save_edge_checkpoint(model, ckpt_path, global_step=global_step)
+                _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler)
                 print(f"  ✓ Checkpoint saved: {ckpt_path}")
 
             loss_accum_t.zero_()
@@ -2019,6 +2136,7 @@ def train(
     # --- Final checkpoint ---
     final_ckpt_path = os.path.join(checkpoint_dir, "edge_conversational.pt")
     _save_edge_checkpoint(model, final_ckpt_path, global_step=global_step)
+    _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler)
 
     csv_file.close()
     if val_file is not None:
@@ -2453,11 +2571,15 @@ def main():
     # Check for existing checkpoint to resume from
     resume_ckpt = find_latest_checkpoint(args.checkpoint_dir)
     resume_step = 0
+    resume_state = None
     if resume_ckpt:
         print(f"\n  Found existing checkpoint: {resume_ckpt}")
         print(f"  Resuming training from this checkpoint...")
         model, resume_step, _ = load_checkpoint_for_resume(resume_ckpt, device)
         print(f"  Resumed at step {resume_step}")
+        # Optimizer momentum + BCD cycle position (Issue #112) live in a separate
+        # rolling file, not in the archived checkpoint — see _save_resume_state.
+        resume_state = _load_resume_state(args.checkpoint_dir, resume_step)
     elif args.hybrid_trunk_init:
         # First run of a hybrid continue-FT: warm-start the DeltaNet trunk from a
         # pure-HVN checkpoint, leaving the fresh attention layers at init. Later
@@ -2541,6 +2663,7 @@ def main():
                 max_steps=args.max_steps,
                 resume_step=resume_step,
                 val_loader=val_loader,
+                resume_state=resume_state,
             )
         finally:
             # Render BEFORE __exit__: the schedule clears events at cycle end, so
@@ -2563,6 +2686,7 @@ def main():
             max_steps=args.max_steps,
             resume_step=resume_step,
             val_loader=val_loader,
+            resume_state=resume_state,
         )
 
     # HuggingFace `datasets` streaming leaves background download threads that
