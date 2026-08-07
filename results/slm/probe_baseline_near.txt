@@ -1,0 +1,9 @@
+Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked critical (_ssl.c:1081). Will retry later.
+Loaded checkpoints/slm_baseline/final.pt (step 1500)
+  [miss] expect='Renvex' got='The Drosist is a fictional character who can be seen as a young woman, and her husband'
+  [miss] expect='Yurunda' got='Yursa is a Russian language spoken by the Russian language. It was written in the late 19'
+  [HIT] expect='Blenorix' got='Blenorix.com: Thearora is a group of scientists who are responsible for the'
+
+Synthetic-recall result over 300 trials (0 distractor facts):
+  exact whole-word accuracy: 27.3%  (82/300)
+  -> PARTIAL recall: better than a garbled-output baseline, not reliable.
