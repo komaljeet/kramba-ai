@@ -198,13 +198,38 @@ class TransformerBlock(nn.Module):
     # ------------------------------------------------------------------
 
     def init_state(self, batch_size: int, device=None, dtype=None) -> dict:
-        """Empty KV cache for incremental decode. Matches DeltaNetBlock.init_state's
-        signature so EdgeHVN can dispatch either block type identically."""
+        """KV cache for incremental decode. Matches DeltaNetBlock.init_state's
+        signature so EdgeHVN can dispatch either block type identically.
+
+        Issue #138: when ``window`` is set, this pre-allocates the FULL
+        ``[B, H, window, d]`` buffer once and ``forward_step`` writes into it in
+        place, instead of the previous ``torch.cat``-and-slice which allocated a
+        fresh cache every token. At window 4096 that ``cat`` copied ~4 MB per
+        tensor per layer per token in order to append ~4 KB — and, because every
+        token produced new tensors at new addresses with a growing shape, it made
+        CUDA-graph capture of the decode step impossible.
+
+        The pre-allocation is also what makes the "VRAM-flat" claim literally
+        true: peak cache memory is now the same on token 1 as on token 100,000,
+        rather than climbing to it.
+
+        ``written`` is a plain Python int; ``hvn/chat.py``'s state-tree codec
+        passes non-tensor scalars through unchanged, so this still round-trips.
+        """
         device = device if device is not None else next(self.parameters()).device
         dtype = dtype if dtype is not None else next(self.parameters()).dtype
-        empty = torch.zeros(batch_size, self.n_heads, 0, self.d_head,
-                            device=device, dtype=dtype)
-        return {"k_cache": empty, "v_cache": empty.clone()}
+        if self.window is None:
+            # Unbounded attention keeps the growing cache: there is no fixed size
+            # to pre-allocate, and this path is not the one serving takes.
+            empty = torch.zeros(batch_size, self.n_heads, 0, self.d_head,
+                                device=device, dtype=dtype)
+            return {"k_cache": empty, "v_cache": empty.clone()}
+        shape = (batch_size, self.n_heads, self.window, self.d_head)
+        return {
+            "k_cache": torch.zeros(shape, device=device, dtype=dtype),
+            "v_cache": torch.zeros(shape, device=device, dtype=dtype),
+            "written": 0,
+        }
 
     def forward_step(self, x_t: torch.Tensor, state: dict,
                      position_idx: int = 0) -> tuple[torch.Tensor, dict]:
@@ -232,16 +257,53 @@ class TransformerBlock(nn.Module):
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
 
-        k_cache = torch.cat([state["k_cache"], k], dim=2)  # [B,H,L+1,d]
-        v_cache = torch.cat([state["v_cache"], v], dim=2)
-        if self.window is not None and k_cache.shape[2] > self.window:
-            k_cache = k_cache[:, :, -self.window:, :]
-            v_cache = v_cache[:, :, -self.window:, :]
+        if "written" in state:
+            # --- Issue #138: fixed-size ring buffer, written in place ---------
+            # No allocation and no copy of the existing cache per token. Order
+            # inside the ring does not matter: RoPE is already baked into the
+            # cached keys, and attention is a softmax over a SET of positions,
+            # so a rotated ring attends to exactly the same tokens.
+            #
+            # It is mathematically equal but NOT bit-identical once wrapped: the
+            # rotation changes the order of the attention reduction, and float
+            # addition is not associative. Measured ~2.4e-07, against the ~3e-6
+            # machine-precision bar #97 set for this path. Before the first wrap
+            # the order is unchanged and the output IS bit-identical; both are
+            # pinned in tests/test_kv_ring_buffer.py.
+            k_cache, v_cache = state["k_cache"], state["v_cache"]
+            written = state["written"]
+            W = k_cache.shape[2]
+            slot = written % W
+            k_cache[:, :, slot:slot + 1, :] = k
+            v_cache[:, :, slot:slot + 1, :] = v
+            n_valid = min(written + 1, W)
+            if n_valid < W:
+                # Not yet wrapped: slots [0, n_valid) hold real tokens and the
+                # rest are zeros. Slice rather than mask — attending over 4096
+                # mostly-zero keys to serve 20 real ones would cost ~200x the
+                # attention FLOPs. Dynamic shape here is fine: this branch is the
+                # warm-up, and a future CUDA-graph capture targets the wrapped
+                # steady state below, which has a fixed shape.
+                k_att, v_att = k_cache[:, :, :n_valid, :], v_cache[:, :, :n_valid, :]
+            else:
+                k_att, v_att = k_cache, v_cache
+            new_state = {"k_cache": k_cache, "v_cache": v_cache,
+                         "written": written + 1}
+        else:
+            # Legacy growing cache: unbounded attention, and any state dict
+            # saved before #138 (StateCheckpoint files on disk predate it).
+            k_cache = torch.cat([state["k_cache"], k], dim=2)  # [B,H,L+1,d]
+            v_cache = torch.cat([state["v_cache"], v], dim=2)
+            if self.window is not None and k_cache.shape[2] > self.window:
+                k_cache = k_cache[:, :, -self.window:, :]
+                v_cache = v_cache[:, :, -self.window:, :]
+            k_att, v_att = k_cache, v_cache
+            new_state = {"k_cache": k_cache, "v_cache": v_cache}
 
-        o = F.scaled_dot_product_attention(q, k_cache, v_cache, is_causal=False)
+        o = F.scaled_dot_product_attention(q, k_att, v_att, is_causal=False)
         o = o.transpose(1, 2).reshape(B, 1, D)
         attn_out = self.out_proj(o)
 
         ffn_out = self.ffn(x_norm)
         out = x_t + self.dropout(attn_out) + ffn_out
-        return out, {"k_cache": k_cache, "v_cache": v_cache}
+        return out, new_state
