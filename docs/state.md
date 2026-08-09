@@ -2271,6 +2271,148 @@ Artifacts: `results/slm/ab_selective_tokens.json`,
 `results/slm/probe_{baseline,selective}_near.txt`, `logs/slm_ab.log`,
 checkpoints under `checkpoints/slm_{baseline,selective}/`.
 
+## Dynamic phase-aware LR — wins by 0.30 nats, but the win is "the LR was 10x too high" (Issue #133, 2026-08-09)
+
+**One line: the scheduler beat fixed cosine by 0.30 nats held-out, and then the log showed
+why — it spent 94% of the run pinned to its own lower bound, so what it discovered is that
+the base learning rate was wrong, not that phase-aware scheduling works.**
+
+`ghost/dynamic_lr.py` watches the live loss curve and emits a global LR multiplier applied on
+top of the warmup+cosine schedule (`--dynamic-lr`, default OFF). Muon is untouched: every
+param group is scaled by the same factor, so its matrix-group / aux-group LR ratio is exact.
+Applied as a context manager around `optimizer.step()` and removed before `scheduler.step()`,
+because `CosineAnnealingLR.get_lr()` is recursive and would otherwise fold the multiplier into
+the cosine permanently (`tests/test_dynamic_lr.py`, 20/20, includes that specific check).
+
+### The A/B
+
+5,000 steps from `checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt`, Muon, identical
+pre-materialised batch sequence, per-arm re-seeding, graded on a fixed 16-batch **held-out**
+probe set (never on train loss — the #132 retraction). `scripts/ab_dynamic_lr.py`.
+
+| arm | final held-out | final train | wall-clock | mean multiplier |
+|---|---:|---:|---:|---:|
+| fixed cosine | 4.3374 | 4.3589 | 26.9 min | 1.000 |
+| **dynamic** | **4.0372** | 4.0989 | 26.2 min | **0.126** |
+
+**Gap 0.3002 nats, against a measured identical-run noise floor of sd 0.0046 — ~65x, not
+noise.** Both arms started at 4.2945; **only the dynamic arm ever beat its own starting
+point.** The cosine arm ended *worse* than the checkpoint it began from, after 5,000 steps.
+
+### What actually fired, which is the whole result
+
+| phase | count |
+|---|---:|
+| spike (cut, x0.5) | **89** |
+| dropping_fast (x1.05) | 36 |
+| normal (x1.0) | 25 |
+| plateau (x1.5) | **2** |
+| transition (x1.25) | **0** |
+
+The multiplier reached its 0.1 floor at **step 294** and never left it for the remaining 4,706
+steps. So ~94% of the "dynamic" arm was, mechanically, a constant-0.1x run. The 152 later
+adjustments are visible in `results/dynamic_lr/curves.png` as a dense picket of vertical lines
+against a completely flat multiplier — the detector firing continuously and changing nothing,
+because it was already clamped.
+
+**Both "raise the LR" rules in the spec are dead on this workload.** Plateau fired twice in
+5,000 steps; the 2-sigma phase-transition rule fired zero times. Every adjustment that mattered
+was a cut.
+
+**And most cuts were not reacting to real events.** At the moment of adjustment the median
+`|loss - rolling mean| / sigma` was **0.74**, with only 53/152 outside 1 sigma — i.e. the
+majority of triggers were within-noise excursions. That is the question the plot was built to
+answer, and the answer is unflattering.
+
+### Verdict
+
+**The 0.30 win is real and reproducible, and it is not evidence for phase-aware scheduling.**
+It is evidence that **Muon at `muon_lr=0.02` is roughly 10x too high for continued training
+from this checkpoint** — the loss climbs 4.29 -> 4.75 over the first 1,000 steps under the
+fixed schedule and never recovers within the run. The scheduler's contribution was noticing
+that inside 300 steps and dividing by ten.
+
+**The control arm that would settle this by measurement rather than inference — constant 0.1x,
+no detection — was launched and then stopped by the maintainer before completion.** So the
+attribution above rests on the multiplier trace (flat at the floor for 94% of the run) and the
+phase counts, which are strong but are not the same thing as the arm. Recorded as a known gap,
+not glossed: if anyone later wants to claim the detector itself helps, that arm is the bar, and
+it is one 27-minute run.
+
+**Recommendation: do NOT make `--dynamic-lr` default.**
+
+### MEASURED — the sane-LR arm beats the scheduler, and that settles it
+
+The third arm, run after the correction below: plain fixed cosine at a 10x lower base LR
+(`--lr 2e-5 --muon-lr 0.002`), same harness, same batches, same seed, `--deterministic`.
+
+| arm | base LR | final held-out | vs dynamic |
+|---|---|---:|---:|
+| cosine | muon 0.02 | 4.3374 | +0.300 |
+| dynamic | muon 0.02, auto-cut to ~0.002 | 4.0372 | — |
+| **cosine** | **muon 0.002** | **3.9288** | **-0.108** |
+
+**Plain cosine at a sane LR beats the dynamic scheduler by 0.108 nats — 23x the noise floor.**
+The scheduler's entire advantage was recovering from a mis-set learning rate; not making the
+mistake is better than detecting it, because the dynamic arm still spends its first ~300 steps
+at the wrong LR being knocked off the checkpoint before the cuts land. That damage is never
+fully recovered inside 5,000 steps.
+
+**Final verdict on #133: the method does not work.** It is a recovery mechanism for a
+misconfiguration, and it is beaten by not having the misconfiguration. `--dynamic-lr` stays
+non-default. What the exercise actually produced, and what makes it worth keeping: the
+determinism fix below, and issue #134 (parameter-free LR), which attacks the real problem —
+that a human has to pick this number at all.
+
+### CORRECTION — the baseline was a strawman, and the "10x too high" is narrower than stated
+
+This entry first claimed the LR finding "affects every fine-tune in this repo". **It does
+not.** Checked directly after writing that: `continue_ft_hybrid.py:296`,
+`finetune_edge_conversational.py:600` and `continue_ft_looped.py:181` all default to
+**`--lr 2e-5`**. The repo's fine-tune scripts already encode the right answer.
+
+The `muon_lr=0.02` used above came from `scripts/ab_dynamic_lr.py` copying
+`train_edge_conversational.py`'s defaults, which are **pretraining** values — correct for a
+freshly initialised model that needs large steps, wrong for a checkpoint already 8,000 steps
+into training. New harness, inherited default, nobody had previously run a continue-training
+job at pretrain LR.
+
+**So the honest reading is weaker than the table suggests: the cosine arm is a badly-tuned
+control, not a fair one.** The 0.30 nats measures how much damage a 10x-too-high LR does and
+how quickly a cut rule undoes it — not that dynamic scheduling beats a competently configured
+cosine. A cosine baseline at a sane LR would very likely beat both arms here, and that run has
+not been done.
+
+What survives the correction: the scheduler's *cut* path demonstrably works and rescued a
+mis-set LR inside 300 steps; the raise rules are dead (2 and 0 firings); and the noise-floor /
+determinism finding below is independent of any of this.
+
+### A real bug found on the way: the A/B was not reproducible at all
+
+Two arms with identical code paths landed 0.0046 nats apart (sd over 8 runs), **with the sign
+of the gap flipping run to run**. Root cause: this torch build has no flash-attention, so the
+2 `TransformerBlock`s' `F.scaled_dot_product_attention` falls back to the mem-efficient CUTLASS
+kernel, whose backward accumulates `grad_q` with atomics — nondeterministic by PyTorch's own
+warning. Isolated three ways: a 15-line standalone repro (`dq` differs, `dk`/`dv` bit-identical);
+the in-model signature (in block 10 only `q_proj` and `norm` move, while `k_proj`/`v_proj`/
+`out_proj` are bit-identical, and all 10 DeltaNet blocks are clean); and by flag
+(`torch.use_deterministic_algorithms(True)` + `CUBLAS_WORKSPACE_CONFIG=:4096:8` makes 40-step
+arms bit-identical across 3 repeats). Muon amplifies it — Newton-Schulz normalises the update,
+so a ~2e-3 relative gradient perturbation becomes a full-size step in a different direction.
+
+**That floor sat inside the 0.01-0.05 nat band this experiment was built to measure**, so the
+A/B could not have detected its own target effect. `--deterministic` is now ON by default in
+`scripts/ab_dynamic_lr.py` (~9% wall-clock). Worth carrying to any future A/B in this repo that
+touches the hybrid's attention layers.
+
+**One consequence worth its own line:** at 300 steps, two *identical* runs made **7 and 8**
+adjustments respectively — the numerical noise flipped a detector threshold and the LR
+trajectories diverged from there (final losses 0.0168 apart). A loss-reactive scheduler
+amplifies numerical noise into a different training trajectory rather than rejecting it.
+
+Artifacts: `results/dynamic_lr/ab_dynamic_lr.json`, `lr_log.json`, `curves.png`,
+`logs/ab_dynamic_lr.log`.
+
 ## Parameter-free LR (Prodigy) — wins fine-tuning outright, loses pretraining (Issue #134, 2026-08-09)
 
 **One line: with no learning rate given at all, Prodigy beats hand-tuned Muon by 0.18 nats on a

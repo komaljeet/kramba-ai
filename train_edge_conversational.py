@@ -24,6 +24,7 @@ is exactly what EdgeHVN produces (no KV cache, fixed-size Hamiltonian).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import csv
 import json
@@ -1872,6 +1873,28 @@ def train(
         print(f"  [resume] cosine schedule continued at step {resume_step}/{total_steps} "
               f"(lr {optimizer.param_groups[0]['lr']:.3e}), not restarted")
 
+    # --- Dynamic phase-aware LR multiplier (Issue #133) ---
+    # A GLOBAL multiplier layered on top of the warmup+cosine LR above, chosen
+    # from the shape of the live loss curve. Muon's per-parameter logic is not
+    # touched: the multiplier scales every param group by the same factor, so
+    # Muon's matrix-group / aux-group LR ratio is preserved exactly.
+    #
+    # It is applied around optimizer.step() and removed again before
+    # scheduler.step(), because CosineAnnealingLR.get_lr() is recursive (see
+    # build_cosine_scheduler) — a multiplier left in param_group["lr"] across a
+    # scheduler.step() would be compounded into the cosine itself.
+    dyn_lr = None
+    if config.get("dynamic_lr", False):
+        from ghost.dynamic_lr import DynamicLRScheduler
+        dyn_lr = DynamicLRScheduler(
+            log_path=config.get("dynamic_lr_log", "results/dynamic_lr/lr_log.json"),
+            run_name=os.path.basename(checkpoint_dir),
+        )
+        print(f"  Dynamic LR: ON — phase detection every {dyn_lr.cfg.check_every} "
+              f"steps over a {dyn_lr.cfg.window}-step window, multiplier in "
+              f"[{dyn_lr.cfg.min_mult}, {dyn_lr.cfg.max_mult}]")
+        print(f"              log -> {dyn_lr.log_path}")
+
     # Warmup: linearly increase LR for the first warmup_steps, then let the
     # cosine scheduler take over. During warmup we override the LR manually;
     # after warmup we call scheduler.step() every optimizer step so the cosine
@@ -2043,11 +2066,24 @@ def train(
                 if global_step + 1 >= warmup_steps:
                     warmup_done = True
 
-            if scaler is not None:
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                optimizer.step()
+            # Issue #133: feed this step's mean loss to the dynamic scheduler and
+            # apply its multiplier for the duration of this one optimizer step.
+            # loss_accum_t is the sum of grad_accum micro-losses each already
+            # divided by grad_accum, and it is zeroed at the end of every step,
+            # so it IS this step's mean loss. The .item() is a host sync, which
+            # is why it is inside the flag guard: with --dynamic-lr off, this
+            # path is byte-identical to before.
+            if dyn_lr is not None:
+                dyn_lr.observe(global_step, loss_accum_t.item())
+
+            with contextlib.ExitStack() as _lr_stack:
+                if dyn_lr is not None:
+                    _lr_stack.enter_context(dyn_lr.applied(optimizer))
+                if scaler is not None:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
             optimizer.zero_grad()
             micro_step = 0
             global_step += 1
@@ -2079,9 +2115,16 @@ def train(
                 steps_per_sec = config["log_every_steps"] / max(elapsed, 0.001)
                 step_start_time = time.time()
 
+                # With --dynamic-lr the LR that was actually used is the
+                # schedule's value times the multiplier; report that, not the
+                # schedule value alone, or the log misrepresents the run.
+                dyn_str = ""
+                if dyn_lr is not None:
+                    dyn_str = (f"  |  xLR: {dyn_lr.multiplier:.2f} "
+                               f"(eff {current_lr * dyn_lr.multiplier:.6f})")
                 print(f"  Step {global_step:>6d} (epoch {epoch})  |  "
                       f"Loss: {step_loss:.4f}  |  PPL: {step_ppl:.2f}  |  "
-                      f"LR: {current_lr:.6f}  |  "
+                      f"LR: {current_lr:.6f}{dyn_str}  |  "
                       f"{steps_per_sec:.1f} steps/s")
 
                 # Per-source loss reporting
@@ -2137,6 +2180,12 @@ def train(
     final_ckpt_path = os.path.join(checkpoint_dir, "edge_conversational.pt")
     _save_edge_checkpoint(model, final_ckpt_path, global_step=global_step)
     _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler)
+
+    if dyn_lr is not None:
+        dyn_lr.close()
+        print(f"  Dynamic LR: {len(dyn_lr.adjustments)} adjustments, "
+              f"final multiplier {dyn_lr.multiplier:.3f}, "
+              f"phases {dyn_lr._phase_counts} -> {dyn_lr.log_path}")
 
     csv_file.close()
     if val_file is not None:
@@ -2349,6 +2398,19 @@ def main():
     parser.add_argument("--muon-lr", type=float, default=0.02,
                         help="Muon LR for 2-D hidden matrices (default 0.02; "
                              "only used with --optimizer muon).")
+    parser.add_argument("--dynamic-lr", action="store_true",
+                        help="Issue #133: phase-aware GLOBAL LR multiplier layered "
+                             "on top of the warmup+cosine schedule. Watches the "
+                             "live loss curve and raises the LR on plateaus and "
+                             "phase transitions, cuts it on spikes. Multiplier is "
+                             "clamped to [0.1, 3.0] and to 0.5-1.5x per adjustment. "
+                             "Does NOT change the optimizer: every param group is "
+                             "scaled equally, so Muon's group LR ratio is preserved. "
+                             "Default OFF — the flag costs one host sync per "
+                             "optimizer step to read the loss.")
+    parser.add_argument("--dynamic-lr-log", default="results/dynamic_lr/lr_log.json",
+                        help="Where --dynamic-lr writes its adjustment log "
+                             "(default results/dynamic_lr/lr_log.json).")
     parser.add_argument("--block-coordinate", action="store_true",
                         help="BAdam-style block-coordinate-descent (Issue #99): train "
                              "one layer-block at a time (round-robin), explicitly "
@@ -2549,6 +2611,8 @@ def main():
     config["galore_scale"] = args.galore_scale
     config["block_coordinate"] = args.block_coordinate
     config["bcd_steps_per_block"] = args.bcd_steps_per_block
+    config["dynamic_lr"] = args.dynamic_lr
+    config["dynamic_lr_log"] = args.dynamic_lr_log
     if args.val_every is not None:
         config["val_every_steps"] = args.val_every
 
