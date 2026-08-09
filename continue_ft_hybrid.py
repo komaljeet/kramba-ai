@@ -253,7 +253,11 @@ def continue_ft(model, dataloader, sampler, device, *, lr, max_steps, grad_accum
                 mean_loss = float(accum_loss_t.item()) / max(1, n_steps_accum)
                 accum_loss_t.zero_()
                 n_steps_accum = 0
-                cur_lr = optimizer.param_groups[0]["lr"]
+                # For Prodigy, param_groups["lr"] is the pinned 1.0 multiplier,
+                # not the step size actually used — log the estimate instead or
+                # the CSV records a constant and tells you nothing.
+                cur_lr = (optimizer.effective_lr if is_prodigy
+                          else optimizer.param_groups[0]["lr"])
                 ppl = math.exp(min(mean_loss, 20))
                 print(f"  Step {global_step:5d}/{max_steps} | loss {mean_loss:.4f} | "
                       f"ppl {ppl:.2f} | lr {cur_lr:.2e} | "
