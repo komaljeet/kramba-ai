@@ -100,6 +100,10 @@ def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
         "is_edge": True,
         "shared_weights": getattr(model, 'shared_weights', False),
         "tie_embeddings": getattr(model, 'tie_embeddings', False),
+        # Issue #139: persisted so a resumed run rebuilds the SAME vocab. Read
+        # from the model rather than a constant, and defaulted on load, so every
+        # checkpoint written before this key existed still loads as 50257.
+        "vocab_size": getattr(model, 'vocab_size', GPT2_VOCAB_SIZE),
         "grad_checkpoint": getattr(model, 'grad_checkpoint', False),
         "global_step": global_step,
     }
@@ -1192,6 +1196,7 @@ def build_model_and_config(
     optimizer: str = "muon",
     precision: str = "bf16",
     lr: float = 3e-4,
+    vocab_size: int = GPT2_VOCAB_SIZE,
 ) -> tuple[EdgeHVN, dict]:
     """Build the EdgeHVN model with DeltaNet (or transformer baseline) + config.
 
@@ -1219,6 +1224,7 @@ def build_model_and_config(
     config = {
         "arch": arch,
         "ternary": apply_ternary,
+        "vocab_size": vocab_size,
         "use_deltanet": arch == "hvn",
         # Real values from the CLI. These used to be hardcoded here and only
         # overwritten by main() AFTER this function printed its banner, so the
@@ -1283,7 +1289,11 @@ def build_model_and_config(
         config["attn_window"] = attn_window
         print(f"  Hybrid block_plan: {block_plan} (window={attn_window})")
     model = EdgeHVN(
-        vocab_size=GPT2_VOCAB_SIZE,
+        # Issue #139: no longer hardcoded. At d_model=512 the two vocab tables
+        # are 62% of an "83M" model, so this number is a first-class size knob,
+        # not a constant. Defaults to GPT-2's 50257 so every existing caller and
+        # every checkpoint on disk is unchanged.
+        vocab_size=vocab_size,
         d_model=settings["d_model"],
         num_layers=settings["num_layers"],
         n_heads=settings["n_heads"],
