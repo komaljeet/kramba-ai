@@ -25,6 +25,7 @@ source of truth; these files are the reorganized, linkable view.
 | [execution_plan.md](execution_plan.md) | §10 Execution Plan (Issues #32 & #33) |
 | [issues.md](issues.md) | §11 Issue History & Related Work |
 | [ai_rules.md](ai_rules.md) | §12 Project Context, Delivery Workflow, Maintainer note, GPU requirement |
+| [vscode.md](vscode.md) | Using EdgeHVN from VS Code — OpenAI-compatible local server, Continue setup, RAG |
 
 > **Start here if you are planning a training run:** [`training.md`](training.md) §
 > "The compute wall — why *fits in VRAM* was never the binding constraint" (2026-08-02).
