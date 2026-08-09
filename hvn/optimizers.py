@@ -42,6 +42,8 @@ Use :func:`build_optimizer` to construct any of ``adamw`` / ``muon`` / ``lion``
 
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import Tensor
 
@@ -370,6 +372,204 @@ def _is_galore_param(name: str, param: Tensor, rank: int) -> bool:
     return min(param.shape) > rank
 
 
+# ---------------------------------------------------------------------------
+# Prodigy — parameter-free learning rate (Issue #134)
+# ---------------------------------------------------------------------------
+class Prodigy(torch.optim.Optimizer):
+    """Prodigy (Mishchenko & Defazio, arXiv:2306.06101) — no LR to choose.
+
+    Written by: Rambarun Komaljeet
+
+    ``lr`` is passed as **1.0** and left there. The optimizer estimates the step
+    size itself from observed gradients and keeps re-estimating as training
+    proceeds, so the same invocation is correct for a from-scratch pretrain and
+    for continuing from a trained checkpoint — the two regimes #133 showed need
+    learning rates an order of magnitude apart.
+
+    The estimate ``d`` approximates the distance from the initial point to the
+    solution, which is the quantity a well-chosen learning rate is really
+    standing in for. Per step:
+
+        d_num <- beta3 * d_num + (d/d0) * dlr * <grad, p0 - p>
+        s     <- beta3 * s     + (d/d0) * dlr * grad
+        d_hat  = d_coef * d_num / sum|s|
+        d     <- min(max(d_max, d_hat), d * growth_rate)
+
+    ``d`` is monotone non-decreasing by construction (it tracks ``d_max``), so it
+    ramps up from a deliberately tiny ``d0`` rather than starting somewhere
+    arbitrary and having to come back down. **That ramp is the warmup** — a
+    separate warmup schedule is not needed and would fight it.
+
+    Two variants share this estimator, selected by ``use_muon`` on a param group:
+
+    ``use_muon=False``
+        The published Adam-family update. This is the reference implementation
+        and the control: if it misbehaves, the estimator is at fault rather than
+        the coupling below.
+
+    ``use_muon=True``
+        Muon's momentum + Newton-Schulz orthogonalised **direction**, with ``d``
+        setting the **step size** in place of a hand-tuned ``muon_lr``. The two
+        mechanisms are separable — Prodigy decides how far, Muon decides which
+        way — and this repo measured Muon's direction as worth ~0.40 nats over
+        Adam's (#86, #129), so replacing Muon wholesale to gain auto-tuning
+        would trade away a known win.
+
+        **This coupling is not in the paper and its convergence guarantees do
+        not transfer.** Stated plainly because it is the standing risk in #134.
+        The argument that it is even plausible: both updates are
+        magnitude-normalised before ``dlr`` is applied — Adam's by ``sqrt(v)``,
+        Muon's by Newton-Schulz orthogonalisation — so both consume a step size
+        on roughly the same scale. The estimator is driven by the raw gradient
+        in both variants, since ``d`` is a property of the loss landscape (how
+        far away the solution is), not of how the step is formed.
+
+    ``d`` is shared across ALL param groups, exactly as in the reference
+    implementation: it is one global distance estimate, not a per-group one.
+    """
+
+    def __init__(self, param_groups, *, lr: float = 1.0, betas=(0.9, 0.999),
+                 beta3: float | None = None, eps: float = 1e-8,
+                 weight_decay: float = 0.0, d0: float = 1e-6, d_coef: float = 1.0,
+                 growth_rate: float = float("inf"), safeguard_warmup: bool = False,
+                 use_bias_correction: bool = True,
+                 momentum: float = 0.95, nesterov: bool = True, ns_steps: int = 5):
+        if lr <= 0.0:
+            raise ValueError(
+                f"Prodigy lr must be > 0 — it is a multiplier on the ESTIMATED "
+                f"step, not a learning rate, and 1.0 is the intended value; "
+                f"got {lr}")
+        defaults = dict(
+            lr=lr, betas=betas, beta3=beta3, eps=eps, weight_decay=weight_decay,
+            d=d0, d0=d0, d_max=d0, d_hat=d0, d_numerator=0.0, d_denom=0.0,
+            d_coef=d_coef, growth_rate=growth_rate,
+            safeguard_warmup=safeguard_warmup,
+            use_bias_correction=use_bias_correction, k=0,
+            momentum=momentum, nesterov=nesterov, ns_steps=ns_steps,
+            use_muon=False,
+        )
+        super().__init__(param_groups, defaults)
+
+    @property
+    def d(self) -> float:
+        """The current distance estimate — the number a human would have tuned."""
+        return self.param_groups[0]["d"]
+
+    @property
+    def effective_lr(self) -> float:
+        """``d * lr``: what a hand-set step size would have had to be."""
+        g = self.param_groups[0]
+        return g["d"] * g["lr"]
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        g0 = self.param_groups[0]
+        beta1, beta2 = g0["betas"]
+        beta3 = g0["beta3"] if g0["beta3"] is not None else math.sqrt(beta2)
+        k = g0["k"]
+        d, d_max, d0 = g0["d"], g0["d_max"], g0["d0"]
+        # One shared step size across groups, so no group can be silently scaled
+        # relative to another the way a hand-set per-group LR can be.
+        lr = max(pg["lr"] for pg in self.param_groups)
+
+        if g0["use_bias_correction"]:
+            bias_correction = ((1 - beta2 ** (k + 1)) ** 0.5) / (1 - beta1 ** (k + 1))
+        else:
+            bias_correction = 1.0
+        dlr = d * lr * bias_correction
+
+        d_numerator = g0["d_numerator"] * beta3
+        d_denom = 0.0
+
+        # --- pass 1: accumulate the estimator -----------------------------
+        for group in self.param_groups:
+            safeguard = group["safeguard_warmup"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                if "s" not in state:
+                    state["s"] = torch.zeros_like(p)
+                    state["p0"] = p.detach().clone()
+                    state["exp_avg"] = torch.zeros_like(p)
+                    state["exp_avg_sq"] = torch.zeros_like(p)
+                    if group.get("use_muon", False):
+                        state["momentum_buffer"] = torch.zeros_like(p)
+                s, p0 = state["s"], state["p0"]
+
+                # d/d0 rather than d alone keeps the accumulators off denormals
+                # in the early steps, where d is still ~1e-6.
+                d_numerator += (d / d0) * dlr * float(
+                    torch.dot(grad.flatten().float(), (p0 - p).flatten().float()))
+
+                state["exp_avg"].mul_(beta1).add_(grad, alpha=d * (1 - beta1))
+                state["exp_avg_sq"].mul_(beta2).addcmul_(
+                    grad, grad, value=d * d * (1 - beta2))
+
+                s.mul_(beta3).add_(grad, alpha=((d / d0) * d) if safeguard
+                                   else ((d / d0) * dlr))
+                d_denom += float(s.abs().sum())
+
+        if d_denom == 0.0:
+            # Every gradient was zero. Dividing here would produce a nan that
+            # silently poisons d for the rest of the run, and d is global.
+            for group in self.param_groups:
+                group["k"] = k + 1
+            return loss
+
+        d_hat = g0["d_coef"] * d_numerator / d_denom
+        if d == d0:
+            d = max(d, d_hat)
+        d_max = max(d_max, d_hat)
+        d = min(d_max, d * g0["growth_rate"])
+
+        # --- pass 2: apply the update -------------------------------------
+        for group in self.param_groups:
+            group["d"] = d
+            group["d_max"] = d_max
+            group["d_hat"] = d_hat
+            group["d_numerator"] = d_numerator
+            group["d_denom"] = d_denom
+            group["k"] = k + 1
+
+            wd = group["weight_decay"]
+            eps = group["eps"]
+            if group.get("use_muon", False):
+                momentum = group["momentum"]
+                nesterov = group["nesterov"]
+                ns_steps = group["ns_steps"]
+                for p in group["params"]:
+                    if p.grad is None:
+                        continue
+                    state = self.state[p]
+                    buf = state["momentum_buffer"]
+                    buf.mul_(momentum).add_(p.grad)
+                    update = p.grad.add(buf, alpha=momentum) if nesterov else buf
+                    update = zeropower_via_newtonschulz5(update, steps=ns_steps)
+                    # The same shape-aware scale Muon uses, so the two differ
+                    # ONLY in where the step size comes from.
+                    scale = max(1.0, p.size(0) / p.size(1)) ** 0.5
+                    if wd != 0:
+                        p.mul_(1 - dlr * wd)
+                    p.add_(update.to(p.dtype), alpha=-dlr * scale)
+            else:
+                for p in group["params"]:
+                    if p.grad is None:
+                        continue
+                    state = self.state[p]
+                    denom = state["exp_avg_sq"].sqrt().add_(d * eps)
+                    if wd != 0:
+                        p.add_(p, alpha=-wd * dlr)
+                    p.addcdiv_(state["exp_avg"], denom, value=-dlr)
+        return loss
+
+
 def build_optimizer(model, name: str, *, lr: float, weight_decay: float,
                     betas=(0.9, 0.95), eps: float = 1e-8, fused: bool = False,
                     muon_lr: float | None = None, muon_momentum: float = 0.95,
@@ -438,6 +638,47 @@ def build_optimizer(model, name: str, *, lr: float, weight_decay: float,
         n_aux = sum(p.numel() for p in aux_decay + aux_no_decay)
         desc = (f"Muon (muon_lr={muon_lr:g} on {len(muon_params)} matrices / "
                 f"{n_muon:,} params; AdamW aux lr={adamw_aux_lr:g} / {n_aux:,} params)")
+        return opt, desc
+
+    if name in ("prodigy", "muon-prodigy", "muon_prodigy"):
+        # Issue #134: no learning rate is chosen here. `lr` is deliberately
+        # pinned to 1.0 and ignored as a tuning knob — Prodigy's own estimate
+        # `d` supplies the step size. Passing a tuned lr would defeat the point,
+        # so it is not threaded through.
+        use_muon_dir = name != "prodigy"
+        if use_muon_dir:
+            muon_params, aux_decay, aux_no_decay = [], [], []
+            for n, p in model.named_parameters():
+                if not p.requires_grad:
+                    continue
+                if _is_muon_param(n, p):
+                    muon_params.append(p)
+                elif p.ndim <= 1 or "norm" in n.lower() or n.lower().endswith(".bias"):
+                    aux_no_decay.append(p)
+                else:
+                    aux_decay.append(p)
+            groups = [
+                {"params": muon_params, "use_muon": True,
+                 "weight_decay": weight_decay},
+                {"params": aux_decay, "use_muon": False,
+                 "weight_decay": weight_decay},
+                {"params": aux_no_decay, "use_muon": False, "weight_decay": 0.0},
+            ]
+            n_muon = sum(p.numel() for p in muon_params)
+            n_aux = sum(p.numel() for p in aux_decay + aux_no_decay)
+            desc = (f"Muon-Prodigy (NO tuned LR; Muon direction on "
+                    f"{len(muon_params)} matrices / {n_muon:,} params, Adam "
+                    f"direction on {n_aux:,}; step size estimated)")
+        else:
+            groups = [
+                {"params": decay, "use_muon": False, "weight_decay": weight_decay},
+                {"params": no_decay, "use_muon": False, "weight_decay": 0.0},
+            ]
+            n_all = sum(p.numel() for p in decay + no_decay)
+            desc = (f"Prodigy (NO tuned LR; Adam direction on {n_all:,} params; "
+                    f"step size estimated)")
+        opt = Prodigy(groups, lr=1.0, weight_decay=weight_decay, eps=eps,
+                      momentum=muon_momentum)
         return opt, desc
 
     if name == "galore":

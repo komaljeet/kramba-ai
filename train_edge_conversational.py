@@ -2358,7 +2358,8 @@ def main():
                              "with GPU compute. Identity-preserving (same data, same order "
                              "with fixed seed).")
     parser.add_argument("--optimizer", type=str, default="muon",
-                        choices=["adamw", "muon", "lion", "galore", "adafactor"],
+                        choices=["adamw", "muon", "lion", "galore", "adafactor",
+                                 "prodigy", "muon-prodigy"],
                         help="Optimizer. DEFAULT 'muon' since #129: with ternary "
                              "ON (the config this project actually trains with) "
                              "and --fast, Muon reaches AdamW's 1000-step val loss "

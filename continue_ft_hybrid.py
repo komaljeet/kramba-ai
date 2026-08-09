@@ -156,7 +156,8 @@ def enable_scan_flags(model: EdgeHVN, *, triton_scan: bool, megakernel_scan: boo
 # ---------------------------------------------------------------------------
 
 def continue_ft(model, dataloader, sampler, device, *, lr, max_steps, grad_accum,
-                save_every, checkpoint_dir, log_path, warmup_frac=0.03):
+                save_every, checkpoint_dir, log_path, warmup_frac=0.03,
+                optimizer_name="adamw"):
     print("\n" + "=" * 70)
     print("A4 — HYBRID GROUNDED CONTINUE-FT")
     print("=" * 70)
@@ -164,13 +165,28 @@ def continue_ft(model, dataloader, sampler, device, *, lr, max_steps, grad_accum
     print(f"  Params: {param_count:,} | max_steps: {max_steps} | lr: {lr} | "
           f"grad_accum: {grad_accum}")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01,
-                                  fused=(device.type == "cuda"))
+    # Issue #134: the parameter-free path. Prodigy beat a hand-tuned LR by 0.18
+    # nats on exactly this kind of continue-FT, at a step size 30x smaller than
+    # the hand-set one — and every FT in this repo, including the one that
+    # produced the 35.5% recall number, ran at the hand-set value.
+    is_prodigy = optimizer_name in ("prodigy", "muon-prodigy")
+    if is_prodigy:
+        from hvn.optimizers import build_optimizer
+        optimizer, desc = build_optimizer(model, optimizer_name, lr=1.0,
+                                          weight_decay=0.01)
+        # No warmup, no cosine: Prodigy's d-ramp IS the warmup, and a decay
+        # schedule fights an estimator that is monotone by construction.
+        warmup_steps = 0
+        scheduler = None
+        print(f"  Optimizer: {desc}")
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01,
+                                      fused=(device.type == "cuda"))
+        warmup_steps = max(1, int(max_steps * warmup_frac))
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(1, max_steps - warmup_steps))
+        print(f"  Optimizer: AdamW, warmup {warmup_steps}, cosine over {max_steps}")
     criterion = nn.CrossEntropyLoss(ignore_index=-100)
-    warmup_steps = max(1, int(max_steps * warmup_frac))
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=max(1, max_steps - warmup_steps))
-    print(f"  Optimizer: AdamW, warmup {warmup_steps}, cosine over {max_steps}")
 
     os.makedirs(checkpoint_dir, exist_ok=True)
     csv_file = open(log_path, "a", newline="", encoding="utf-8")
@@ -222,7 +238,7 @@ def continue_ft(model, dataloader, sampler, device, *, lr, max_steps, grad_accum
                 for pg in optimizer.param_groups:
                     pg["lr"] = lr * scale
             optimizer.step()
-            if global_step >= warmup_steps:
+            if scheduler is not None and global_step >= warmup_steps:
                 scheduler.step()
             optimizer.zero_grad()
             global_step += 1
@@ -237,7 +253,11 @@ def continue_ft(model, dataloader, sampler, device, *, lr, max_steps, grad_accum
                 mean_loss = float(accum_loss_t.item()) / max(1, n_steps_accum)
                 accum_loss_t.zero_()
                 n_steps_accum = 0
-                cur_lr = optimizer.param_groups[0]["lr"]
+                # For Prodigy, param_groups["lr"] is the pinned 1.0 multiplier,
+                # not the step size actually used — log the estimate instead or
+                # the CSV records a constant and tells you nothing.
+                cur_lr = (optimizer.effective_lr if is_prodigy
+                          else optimizer.param_groups[0]["lr"])
                 ppl = math.exp(min(mean_loss, 20))
                 print(f"  Step {global_step:5d}/{max_steps} | loss {mean_loss:.4f} | "
                       f"ppl {ppl:.2f} | lr {cur_lr:.2e} | "
@@ -293,7 +313,15 @@ def main():
                     help="bin-packing policy for --pack")
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--grad-accum", type=int, default=8)
-    ap.add_argument("--lr", type=float, default=2e-5)
+    ap.add_argument("--lr", type=float, default=2e-5,
+                    help="Only used by --optimizer adamw. The prodigy variants "
+                         "ignore it entirely — that is the point (#134).")
+    ap.add_argument("--optimizer", type=str, default="adamw",
+                    choices=["adamw", "prodigy", "muon-prodigy"],
+                    help="Issue #134: 'prodigy' takes NO learning rate and beat "
+                         "a hand-tuned one by 0.18 nats on a 5,000-step "
+                         "continue-FT, at a step size 30x smaller. Default stays "
+                         "adamw so existing invocations are unchanged.")
     ap.add_argument("--max-steps", type=int, default=8000)
     ap.add_argument("--save-every", type=int, default=1000)
     ap.add_argument("--checkpoint-dir", type=str, default="checkpoints/hybrid_a4")
@@ -422,7 +450,7 @@ def main():
     continue_ft(model, dataloader, sampler, device,
                 lr=args.lr, max_steps=max_steps, grad_accum=args.grad_accum,
                 save_every=args.save_every, checkpoint_dir=args.checkpoint_dir,
-                log_path=log_path)
+                log_path=log_path, optimizer_name=args.optimizer)
 
     sys.stdout.flush()
     sys.stderr.flush()

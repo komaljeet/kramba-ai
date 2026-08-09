@@ -2412,3 +2412,89 @@ amplifies numerical noise into a different training trajectory rather than rejec
 
 Artifacts: `results/dynamic_lr/ab_dynamic_lr.json`, `lr_log.json`, `curves.png`,
 `logs/ab_dynamic_lr.log`.
+
+## Parameter-free LR (Prodigy) — wins fine-tuning outright, loses pretraining (Issue #134, 2026-08-09)
+
+**One line: with no learning rate given at all, Prodigy beats hand-tuned Muon by 0.18 nats on a
+fine-tune and loses to it by 0.07 on a from-scratch pretrain — so the honest recommendation is a
+split by regime, not the single universal setting the issue hoped for.**
+
+Opened directly out of #133, whose real finding was that a human has to pick this number and
+picks it wrong when the regime changes. `hvn/optimizers.py` gains `Prodigy`
+(Mishchenko & Defazio, arXiv:2306.06101): `lr` is pinned to 1.0 and is not a knob; the
+optimizer estimates the step size `d` from observed gradients and keeps re-estimating. Two
+variants share one estimator — `--optimizer prodigy` (published Adam-family update) and
+`--optimizer muon-prodigy` (Muon's Newton-Schulz **direction**, Prodigy's `d` as the **step
+size**). The second coupling is not in the paper and its guarantees do not transfer; that is
+stated in the docstring, not left to be discovered.
+
+Both regimes, `scripts/ab_prodigy.py`: identical pre-materialised batches, per-arm re-seeding,
+`--deterministic`, graded on held-out probe loss. The Prodigy arms get **no LR, no warmup and
+no cosine** — the `d`-ramp is the warmup, and adding a schedule would quietly re-introduce a
+tuned knob.
+
+### Fine-tune regime — 5,000 steps from `hybrid_a4_v2/hybrid_a4_step8000.pt` (start 4.29448)
+
+| arm | final held-out | step size | wall | vs tuned |
+|---|---:|---|---:|---:|
+| Muon, hand-tuned | 3.92877 | 0.002 (tuned) | 25.6 min | — |
+| muon-prodigy | 3.80098 | 6.09e-05 (auto) | 30.5 min | **-0.128 (28 sigma)** |
+| **prodigy** | **3.75055** | 6.60e-05 (auto) | **23.9 min** | **-0.178 (39 sigma)** |
+
+**Plain Prodigy wins on quality AND is the fastest arm**, having chosen a step size **30x
+smaller** than the hand-set value. The harness is cross-validated: its `muon` arm reproduced
+#133's independent sane-LR run to 5 decimals at every checkpoint (3.96485 at 1,000, 3.92877
+final) from a different script.
+
+### Pretrain regime — 1,500 steps from fresh init, same architecture (start 10.91736)
+
+| arm | final held-out | step size | wall | vs tuned |
+|---|---:|---|---:|---:|
+| **Muon, hand-tuned** | **5.56450** | 0.02 (tuned) | 8.2 min | — |
+| muon-prodigy | 5.81351 | 1.41e-03 (auto) | 9.7 min | +0.249 (54 sigma) |
+| prodigy | 5.63261 | 1.69e-03 (auto) | 7.5 min | +0.068 (15 sigma) |
+
+**Hand-tuned Muon wins here**, which is the regime #129 actually validated 0.02 for. Note the
+baseline asymmetry that makes this the more trustworthy of the two tables: the pretrain `muon`
+arm is genuinely tuned, whereas the fine-tune one used 0.002 — #133's rough 10x correction,
+never swept. A properly swept Muon would close part of the fine-tune margin, though not
+plausibly all 39 sigma of it.
+
+**A caveat that may explain the muon-prodigy loss entirely:** its `d` was **still climbing at
+step 1,500** (9.34e-04 at 1,000 -> 1.41e-03 at 1,500), i.e. it never finished ramping from
+`d0=1e-6` inside the test. Plain Prodigy settled by step 500 and lost by far less. A real
+pretrain is 100,000+ steps, where a 1,500-step ramp is 1.5% of the run. **This test cannot
+distinguish "Prodigy is worse at pretraining" from "1,500 steps is too short to see it" and
+should not be read as if it could.**
+
+### The claim the issue was built to test, answered honestly
+
+The premise was that ONE invocation with no learning rate covers both regimes. **It does not.**
+It covers fine-tuning better than a human does, and pretraining worse. Recommendation:
+
+- **Fine-tuning: use `--optimizer prodigy`.** Better model, faster, no number to pick. This is
+  the regime the repo actually spends its time in (1-3 h runs).
+- **Pretraining: keep `--optimizer muon --muon-lr 0.02`.** Validated in #129, wins here.
+
+### The consequence that matters more than the optimizer
+
+**Every fine-tune in this repo ran at a badly mis-set learning rate.** The chat FT (#108), the
+tool-use FT (#110), and the grounded-QA FTs behind the 35.5%-near / 8.5%-far recall numbers all
+used `--lr 2e-5` AdamW or the pretrain-default Muon, against an estimator that lands 30x lower.
+Those runs are 1-3 hours each and cheap to redo.
+
+**In particular the 35.5% near-window recall "plateau" (identical at step 5000 and step 8000,
+which the A4 writeup read as a data limit) is now ambiguous.** Those 2 attention layers were
+freshly initialised and trained from scratch during that fine-tune, and fresh random layers are
+exactly where a too-high LR settles into a mediocre fit and stays. "Plateaued" and "badly
+optimised" look identical from outside. Re-running the grounded-QA FT under `--optimizer
+prodigy` and re-probing at the 300-trial bar is ~2 h and would settle whether that ceiling was
+real or self-inflicted. **Not yet done.**
+
+### Limits
+
+One seed per arm. The pretrain regime is 1,500 steps against a real pretrain's 100,000+. The
+fine-tune baseline is corrected-not-swept. `tests/test_prodigy.py` 16/16 — every convergence
+test also asserts something about `d`, since "loss goes down" alone would pass with an inert
+estimator and a lucky `d0`. Artifacts: `results/prodigy/ab_{finetune,pretrain}.json`,
+`logs/ab_prodigy_{finetune,pretrain}.log`.
