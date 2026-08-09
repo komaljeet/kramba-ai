@@ -2498,3 +2498,107 @@ fine-tune baseline is corrected-not-swept. `tests/test_prodigy.py` 16/16 — eve
 test also asserts something about `d`, since "loss goes down" alone would pass with an inert
 estimator and a lucky `d0`. Artifacts: `results/prodigy/ab_{finetune,pretrain}.json`,
 `logs/ab_prodigy_{finetune,pretrain}.log`.
+
+## RAG works: 0% -> 22.5% on facts the weights cannot hold (Issue #137, 2026-08-09)
+
+**One line: retrieval turns a knowledge question this model answers 0% of the time into one it
+answers 22.5% of the time — and the single most important tuning result is that `top-k=1` beats
+`top-k=3` by 16 points, because extra retrieved passages actively hurt.**
+
+Opened out of the observation that the 83M's measured weakness is *only* knowledge (closed-book
+0/5, ppl ~110 web) while its measured strength is *reading a passage handed to it* (35.5%
+near-window exact recall, the capability the 2 windowed-attention layers were added for). RAG
+converts the weakness into the strength.
+
+`hvn/retrieval.py` — Okapi BM25, pure Python/numpy, **no new dependency and no second neural
+model**. Lexical deliberately: BM25 is the honest floor a dense retriever must later beat, and
+introducing an embedding model now would confound "is the retriever good" with "can this model
+use retrieved text" — the entanglement that forced #122's retraction.
+
+### The measurement
+
+Three PAIRED arms over the same questions, 200 trials, on `hybrid_a4_v2/hybrid_a4_step8000.pt`.
+Facts are about **invented** entities, so closed-book is unanswerable by construction and any
+lift is provably retrieval (`eval/rag_probe.py`).
+
+| arm | accuracy | retrieval recall | prompt |
+|---|---:|---:|---:|
+| closed-book | **0.0%** (0/200) | — | 24 tok |
+| RAG, top-3 | 6.0% (12/200) | **100%** | 77 tok |
+| **RAG, top-1** | **22.5%** (45/200) | **100%** | 52 tok |
+| oracle (perfect passage) | 21.5-22.0% | — | 52 tok |
+
+**RAG at k=1 matches the oracle** (22.5% vs 21.5%, within the n=200 noise of ~2.9pp). Retrieval
+is at its ceiling: there is nothing left for a better retriever to win.
+
+### The finding worth carrying forward: more context is worse
+
+The first run reported a 16-point gap between RAG (k=3) and oracle, and the script's own verdict
+line said "retrieval is the bottleneck". **That was wrong, and recall@3 = 100% proves it** — the
+correct passage was in the context every single time. The gap was the *other two* passages
+crowding it out. Dropping to k=1 recovered all 16 points.
+
+The verdict logic is now fixed to check recall before blaming retrieval, because the wrong
+version of that line is exactly the kind of thing that gets quoted into a doc unexamined.
+
+**Practical rule for this model: retrieve one passage, not three.** At a 512-token trained window
+(#135) context is the scarcest resource in the pipeline, and an 83M model has little capacity to
+ignore a distractor. This is likely to relax with scale and with a longer trained window; at this
+size it is a 3.75x effect.
+
+### Cost
+
+BM25 index over 2,000 facts builds in **0.01s**; end-to-end query (retrieve + generate) is
+**0.20 s**. No training, no GPU-days, no new dependency — the cheapest real capability gain in
+this repo's history.
+
+### Limits, stated because they bound the claim
+
+- **The 22% is not comparable to the 35.5% recall figure.** To index 2,000 facts the probe needed
+  a wider pseudo-word space than `synthetic_recall_probe`'s 20x20=400 words (which caps at 200
+  facts — see the bug below), so it uses 3-syllable words. Longer rare words are harder to
+  reproduce exactly. The within-run arms are all on the same words and so are comparable to each
+  other; the cross-doc comparison is not.
+- **Invented facts are the easy case for BM25** — a unique entity name has very high IDF. Real
+  prose, where the query shares common words with thousands of documents, is harder. Recall@k
+  will not be 100% there.
+- One checkpoint, n=200 (sd ~2.9pp), 320-token context budget.
+
+### A latent infinite loop found and fixed
+
+`synthetic_recall_probe.make_pair` redrew pseudo-words in an unbounded `while True` until it
+found an unused pair. The space is 20x20 = **400 words** and each fact consumes two, so asking
+for more than 200 facts spins a core **forever**, silently, with no output. The RAG probe
+requested 2,000 and hung on fact #201; diagnosed from a live stack (5 identical samples, 5.05s
+CPU per 5s wall — spinning, not blocked), which also ruled out the import/network hypotheses.
+Now bounded and raises with the actual limit. Existing probe runs are unaffected (they use at
+most 17 pairs), but the trap was live for anyone raising `--n-distractors`.
+
+## Prodigy on the grounded-QA FT — recall decays monotonically with steps (Issue #134 follow-up)
+
+Testing whether the 35.5% near-window "plateau" was a badly-optimised fit that a better LR would
+break through. **It was not — the opposite.** `continue_ft_hybrid.py --optimizer prodigy`, 2,000
+steps from `hybrid_a4_step8000`, then `eval/synthetic_recall_probe.py` at 300 trials:
+
+| FT steps | near-window recall |
+|---|---:|
+| 0 (baseline) | **36.0%** (108/300) |
+| 1,000 | 21.3% (64/300) |
+| 2,000 | 9.0% (27/300) |
+
+Far-window: 7.7% -> 1.3%. Train loss fell 2.21 -> 1.40 across the same run.
+
+**Clean monotonic decay.** Optimising *better* walked recall downhill *faster*: the 5,240-example
+corpus is exhausted at 8,000 steps, and further optimisation buys memorisation of those specific
+pairs — which the probe cannot credit, because it scores **invented** words.
+
+**This retracts the recommendation in the #134 entry above** that every fine-tune should be redone
+under Prodigy because they ran at a mis-set LR. A better optimiser does not help when the corpus,
+not the optimisation, is the limit. The lever is more and more diverse data, which is the
+conclusion this document has now reached four separate times.
+
+The RAG result above is the constructive version of the same observation: if the corpus cannot
+teach the knowledge, retrieve it instead of training it.
+
+Artifacts: `results/rag/rag_probe_{baseline,baseline_k1,prodigy}.json`,
+`results/prodigy/probe_*.txt`, `logs/rag_probe.log`.

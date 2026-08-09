@@ -58,14 +58,31 @@ def make_word(rng: torch.Generator) -> str:
     return a + b
 
 
+VOCAB_SIZE = len(_SYL_A) * len(_SYL_B)   # 400 distinct pseudo-words
+MAX_PAIRS = VOCAB_SIZE // 2              # each pair consumes two of them
+
+
 def make_pair(rng: torch.Generator, used: set[str]) -> tuple[str, str]:
-    """A distinct (entity, value) pseudo-word pair, both unused so far."""
-    while True:
+    """A distinct (entity, value) pseudo-word pair, both unused so far.
+
+    The retry is bounded. The unbounded ``while True`` this replaces spun a core
+    forever once ``used`` covered all 400 words — silently, with no output, which
+    is the hardest failure mode to diagnose (it cost a 3-minute stall and a
+    debugging pass in #137 before anyone looked at the syllable-table size).
+    Callers asking for more than ``MAX_PAIRS`` now fail immediately and say why.
+    """
+    for _ in range(10_000):
         entity, value = make_word(rng), make_word(rng)
         if entity != value and entity not in used and value not in used:
             used.add(entity)
             used.add(value)
             return entity, value
+    raise RuntimeError(
+        f"pseudo-word space exhausted: {len(used)} of {VOCAB_SIZE} words used. "
+        f"This generator supports at most {MAX_PAIRS} distinct pairs "
+        f"({len(_SYL_A)}x{len(_SYL_B)} words, 2 per pair). Widen _SYL_A/_SYL_B "
+        f"or use a generator with a larger space (see eval/rag_probe.py)."
+    )
 
 
 def whole_word_hit(text: str, word: str) -> bool:

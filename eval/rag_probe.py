@@ -48,20 +48,60 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from eval.synthetic_recall_probe import (  # noqa: E402
-    ASST_PREFIX, OPEN_BOOK_INSTRUCTION, USER_PREFIX,
-    generate, make_pair, whole_word_hit,
+    _SYL_A, _SYL_B, ASST_PREFIX, OPEN_BOOK_INSTRUCTION, USER_PREFIX,
+    generate, whole_word_hit,
 )
 from hvn.retrieval import BM25Index, fit_context  # noqa: E402
 from train_edge_conversational import load_checkpoint_for_resume  # noqa: E402
 
+# A third syllable, used ONLY here. synthetic_recall_probe's 20x20 = 400-word
+# space supports at most 200 distinct facts, and a 200-document haystack makes
+# BM25's job far easier than it would be at realistic scale — which would
+# overstate retrieval recall and quietly flatter the result. Adding a syllable
+# gives 20x20x20 = 8,000 words, i.e. 4,000 facts.
+#
+# Deliberately NOT changing the tables in synthetic_recall_probe.py: today's
+# 36.0% / 7.7% baseline numbers were measured against those exact words, and
+# widening them would silently break comparability with every recall figure in
+# docs/state.md.
+_SYL_C = ["", "dor", "mek", "sal", "vin", "tok", "pra", "lun", "zeph", "quor",
+          "riv", "nax", "bel", "hyr", "com", "dael", "fex", "gith", "urn", "olm"]
+
+WORD_SPACE = len(_SYL_A) * len(_SYL_B) * len(_SYL_C)
+MAX_FACTS = WORD_SPACE // 2
+
+
+def make_word3(rng: torch.Generator) -> str:
+    a = _SYL_A[int(torch.randint(0, len(_SYL_A), (1,), generator=rng).item())]
+    b = _SYL_B[int(torch.randint(0, len(_SYL_B), (1,), generator=rng).item())]
+    c = _SYL_C[int(torch.randint(0, len(_SYL_C), (1,), generator=rng).item())]
+    return a + b + c
+
 
 def build_corpus(n_facts: int, seed: int):
-    """A knowledge base of invented facts, plus the (entity, value) key."""
+    """A knowledge base of invented facts, plus the (entity, value) key.
+
+    Fails immediately and loudly if the request exceeds the word space. The
+    version this replaces used an unbounded redraw loop and simply spun a core
+    forever at fact #201, with no output at all — three minutes of an apparent
+    hang before anyone counted the syllables.
+    """
+    if n_facts > MAX_FACTS:
+        raise ValueError(
+            f"--corpus-size {n_facts} exceeds the {MAX_FACTS} distinct facts this "
+            f"generator can produce ({WORD_SPACE} words, 2 per fact). Add "
+            f"syllables to _SYL_C to go higher.")
     rng = torch.Generator().manual_seed(seed)
     used: set[str] = set()
     facts, pairs = [], []
-    for _ in range(n_facts):
-        e, v = make_pair(rng, used)
+    for i in range(n_facts):
+        for attempt in range(10_000):
+            e, v = make_word3(rng), make_word3(rng)
+            if e != v and e not in used and v not in used:
+                used.update((e, v))
+                break
+        else:
+            raise RuntimeError(f"could not draw a fresh pair for fact {i}")
         facts.append(f"The {e} is called {v}.")
         pairs.append((e, v))
     return facts, pairs
@@ -115,8 +155,14 @@ def main() -> int:
 
     # The trial questions are a fixed subset of the corpus, identical for every
     # arm, so the arms are paired rather than merely comparable.
-    step = max(1, len(pairs) // args.n_trials)
-    trials = [pairs[i * step] for i in range(min(args.n_trials, len(pairs) // step))]
+    # Evenly spaced through the corpus so trials are not all from one end of it.
+    # (The previous expression silently returned len(pairs) trials rather than
+    # --n-trials whenever the corpus was smaller than the requested count.)
+    if args.n_trials >= len(pairs):
+        trials = list(pairs)
+    else:
+        stride = len(pairs) / args.n_trials
+        trials = [pairs[int(i * stride)] for i in range(args.n_trials)]
     print(f"[rag] {len(trials)} trials over a {len(index)}-fact corpus, "
           f"top-k={args.top_k}, context budget {args.context_budget} tokens")
 
@@ -170,8 +216,22 @@ def main() -> int:
         print(f"[rag] retrieval lift (rag - closed): {lift:+.1%}")
     if "oracle" in results and "rag" in results:
         gap = results["oracle"]["accuracy"] - results["rag"]["accuracy"]
-        print(f"[rag] oracle - rag: {gap:+.1%} "
-              f"-> {'retrieval is the bottleneck' if gap > 0.05 else 'retrieval is NOT the bottleneck'}")
+        recall = results["rag"]["retrieval_recall_at_k"]
+        print(f"[rag] oracle - rag: {gap:+.1%}")
+        # The first version of this line read the gap as "retrieval is the
+        # bottleneck" whenever it was large. That is wrong, and the very first
+        # real run proved it: the gap was 16 points while recall@k was 100%.
+        # A gap with perfect recall cannot be a retrieval failure — the correct
+        # passage WAS in the context. It is the other k-1 passages crowding it.
+        if gap <= 0.05:
+            print("[rag]   -> retrieval costs nothing; RAG is at its ceiling")
+        elif recall is not None and recall >= 0.95:
+            print(f"[rag]   -> NOT a retrieval failure: recall@k is {recall:.0%}, "
+                  f"so the right passage was always present. The gap is CONTEXT "
+                  f"NOISE from the other k-1 passages — try --top-k 1.")
+        else:
+            print(f"[rag]   -> retrieval is the bottleneck "
+                  f"(recall@k only {recall:.0%})")
     if "oracle" in results:
         print(f"[rag] CEILING: with a perfect passage this model answers "
               f"{results['oracle']['accuracy']:.1%} of the time. No retriever "

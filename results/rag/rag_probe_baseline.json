@@ -1,0 +1,39 @@
+{
+  "checkpoint": "checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt",
+  "corpus_size": 2000,
+  "top_k": 3,
+  "context_budget": 320,
+  "index_build_sec": 0.01123666763305664,
+  "arms": {
+    "closed": {
+      "accuracy": 0.0,
+      "hits": 0,
+      "n_trials": 200,
+      "retrieval_recall_at_k": null,
+      "mean_prompt_tokens": 24.45,
+      "max_prompt_tokens": 26,
+      "mean_passages": 0.0,
+      "sec_per_query": 0.45634907245635986
+    },
+    "rag": {
+      "accuracy": 0.06,
+      "hits": 12,
+      "n_trials": 200,
+      "retrieval_recall_at_k": 1.0,
+      "mean_prompt_tokens": 77.3,
+      "max_prompt_tokens": 81,
+      "mean_passages": 3.0,
+      "sec_per_query": 0.20673439025878906
+    },
+    "oracle": {
+      "accuracy": 0.22,
+      "hits": 44,
+      "n_trials": 200,
+      "retrieval_recall_at_k": null,
+      "mean_prompt_tokens": 52.3,
+      "max_prompt_tokens": 56,
+      "mean_passages": 1.0,
+      "sec_per_query": 0.189111670255661
+    }
+  }
+}
