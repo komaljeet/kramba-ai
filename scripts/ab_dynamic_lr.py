@@ -269,10 +269,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--out-dir", default="results/dynamic_lr")
     p.add_argument("--out", default=None)
+    p.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=True,
+                   help="Make the arms bitwise comparable. Costs ~9 pct wall-clock "
+                        "and is ON by default here because without it this A/B "
+                        "cannot resolve its own target effect — see below.")
     args = p.parse_args(argv)
 
     if "fixed" in args.arms and args.fixed_mult is None:
         p.error("--arms fixed requires --fixed-mult")
+
+    if args.deterministic:
+        # Two identical-code arms land 0.0046 nats apart (sd over 8 runs), with
+        # the sign of the gap flipping run to run. Root cause: this torch build
+        # has no flash-attention, so the 2 TransformerBlocks' SDPA falls to the
+        # mem-efficient CUTLASS kernel, whose backward accumulates grad_q with
+        # atomics — nondeterministic by PyTorch's own warning. Muon then
+        # amplifies it: Newton-Schulz normalises the update, so a ~2e-3 relative
+        # gradient perturbation becomes a full-size step in a different
+        # direction. The target effect for this experiment is 0.01-0.05 nats, so
+        # the floor sits inside the band being measured and an A/B run without
+        # this is not capable of detecting what it claims to.
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        torch.use_deterministic_algorithms(True, warn_only=False)
+        print("[ab] deterministic algorithms ON (~9 pct slower, arms bitwise "
+              "comparable)")
 
     device = require_cuda()
     os.makedirs(args.out_dir, exist_ok=True)
