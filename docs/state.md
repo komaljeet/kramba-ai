@@ -2339,10 +2339,30 @@ phase counts, which are strong but are not the same thing as the arm. Recorded a
 not glossed: if anyone later wants to claim the detector itself helps, that arm is the bar, and
 it is one 27-minute run.
 
-**Recommendation: do NOT make `--dynamic-lr` default.** The actionable finding is the base LR,
-which is a one-value fix affecting every fine-tune in this repo, not a new scheduler with 152
-no-op adjustments per run. The next run worth spending, if any, is a plain LR sweep
-(0.02 / 0.006 / 0.002 under fixed cosine) to find the right value — not more scheduler logic.
+**Recommendation: do NOT make `--dynamic-lr` default.**
+
+### CORRECTION — the baseline was a strawman, and the "10x too high" is narrower than stated
+
+This entry first claimed the LR finding "affects every fine-tune in this repo". **It does
+not.** Checked directly after writing that: `continue_ft_hybrid.py:296`,
+`finetune_edge_conversational.py:600` and `continue_ft_looped.py:181` all default to
+**`--lr 2e-5`**. The repo's fine-tune scripts already encode the right answer.
+
+The `muon_lr=0.02` used above came from `scripts/ab_dynamic_lr.py` copying
+`train_edge_conversational.py`'s defaults, which are **pretraining** values — correct for a
+freshly initialised model that needs large steps, wrong for a checkpoint already 8,000 steps
+into training. New harness, inherited default, nobody had previously run a continue-training
+job at pretrain LR.
+
+**So the honest reading is weaker than the table suggests: the cosine arm is a badly-tuned
+control, not a fair one.** The 0.30 nats measures how much damage a 10x-too-high LR does and
+how quickly a cut rule undoes it — not that dynamic scheduling beats a competently configured
+cosine. A cosine baseline at a sane LR would very likely beat both arms here, and that run has
+not been done.
+
+What survives the correction: the scheduler's *cut* path demonstrably works and rescued a
+mis-set LR inside 300 steps; the raise rules are dead (2 and 0 firings); and the noise-floor /
+determinism finding below is independent of any of this.
 
 ### A real bug found on the way: the A/B was not reproducible at all
 
