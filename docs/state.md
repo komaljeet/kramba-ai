@@ -2341,6 +2341,29 @@ it is one 27-minute run.
 
 **Recommendation: do NOT make `--dynamic-lr` default.**
 
+### MEASURED — the sane-LR arm beats the scheduler, and that settles it
+
+The third arm, run after the correction below: plain fixed cosine at a 10x lower base LR
+(`--lr 2e-5 --muon-lr 0.002`), same harness, same batches, same seed, `--deterministic`.
+
+| arm | base LR | final held-out | vs dynamic |
+|---|---|---:|---:|
+| cosine | muon 0.02 | 4.3374 | +0.300 |
+| dynamic | muon 0.02, auto-cut to ~0.002 | 4.0372 | — |
+| **cosine** | **muon 0.002** | **3.9288** | **-0.108** |
+
+**Plain cosine at a sane LR beats the dynamic scheduler by 0.108 nats — 23x the noise floor.**
+The scheduler's entire advantage was recovering from a mis-set learning rate; not making the
+mistake is better than detecting it, because the dynamic arm still spends its first ~300 steps
+at the wrong LR being knocked off the checkpoint before the cuts land. That damage is never
+fully recovered inside 5,000 steps.
+
+**Final verdict on #133: the method does not work.** It is a recovery mechanism for a
+misconfiguration, and it is beaten by not having the misconfiguration. `--dynamic-lr` stays
+non-default. What the exercise actually produced, and what makes it worth keeping: the
+determinism fix below, and issue #134 (parameter-free LR), which attacks the real problem —
+that a human has to pick this number at all.
+
 ### CORRECTION — the baseline was a strawman, and the "10x too high" is narrower than stated
 
 This entry first claimed the LR finding "affects every fine-tune in this repo". **It does
