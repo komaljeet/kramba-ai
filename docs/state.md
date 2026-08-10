@@ -2602,3 +2602,136 @@ teach the knowledge, retrieve it instead of training it.
 
 Artifacts: `results/rag/rag_probe_{baseline,baseline_k1,prodigy}.json`,
 `results/prodigy/probe_*.txt`, `logs/rag_probe.log`.
+
+## 62% of the 83M was vocabulary — tied embeddings WIN, the 32K vocab does not (Issue #139, 2026-08-10)
+
+**One line: nobody had ever counted where the parameters went. 62% of this "83M model" is two
+vocabulary tables. Tying them is a strict win — 31% fewer parameters and BETTER quality. Shrinking
+the vocabulary to 32K is a real trade, not a free win, and on the current English corpus it is
+slightly negative.**
+
+Opened after the maintainer refused to accept "training levers are exhausted". That claim was true
+of every lever anyone had *examined* — optimizers, kernels, memory, scan, packing, schedulers — and
+all of them are downstream of the model's shape. One `named_parameters()` count found this in
+seconds.
+
+### The audit (`results/vocab/audit_multi.json`)
+
+Through the real `build_model_and_config` path with ternary on — not a standalone `EdgeHVN`, because
+that is precisely the mistake that made every VRAM envelope in [training.md](training.md) wrong:
+
+| vocab | tied | total params | of which real model | MFLOP/token |
+|---:|:--:|---:|---:|---:|
+| 50,257 | no | 83,079,329 | **38.0%** | 127.0 |
+| 50,257 | yes | 57,347,745 | 55.0% | 127.0 |
+| 32,000 | yes | 47,981,904 | 65.8% | 108.3 |
+| 16,000 | yes | 39,773,904 | 79.4% | 91.9 |
+
+The two levers differ in kind. The input table is a **gather** — it costs memory and no compute, so
+tying it is free on FLOPs. The output head is a **matmul**, 512 x 50257 per token, **45% of forward
+FLOPs against 38% for all twelve blocks combined** — so shrinking the vocab is a compute lever.
+
+### Tied embeddings — PROVEN, adopt it
+
+1,500 steps from fresh init, identical batches/seed/`--deterministic`, only `tie_embeddings`
+differing (`results/vocab/ab_tied.json`, `ab_untied.json`):
+
+| arm | final held-out | params | wall |
+|---|---:|---:|---:|
+| untied | 5.56450 | 83,079,329 | 8.2 min |
+| **tied** | **5.50681** | **57,347,745** | 8.8 min |
+
+**0.058 nats BETTER with 31% fewer parameters** — 12.5 sigma against the #133 noise floor of
+sd 0.0046. Not a trade; strictly better and smaller. Both arms share a vocabulary, so per-token loss
+IS comparable here.
+
+Likely mechanism: regularisation. 51.5M of the 83M were two independent tables learning nearly the
+same mapping from limited data; forcing them to share removes 25.7M parameters that were otherwise
+free to memorise.
+
+Honest cost: **~7% slower per step** despite identical FLOPs, because the shared table now receives
+gradients from both the input lookup and the output head, serialising an accumulation.
+
+### The 32K mixed tokenizer — a real trade, currently negative on English
+
+Trained ByteLevel BPE on 300 MB, 50/40/10 code/English/chat. Code came from 21 shallow-cloned
+permissive repos (`scripts/collect_code_corpus.py`) — `bigcode/the-stack-dedup` lists anonymously
+but 401s on download, and this machine's HF token is malformed (#120), so there is no anonymous path.
+
+**Tokens per document, identical source text, at full corpus scale:**
+
+| corpus | GPT-2 | 32K | ratio |
+|---|---:|---:|---:|
+| code (sample) | 16.12 tok/line | 11.30 | **0.701** |
+| OASST chat | 15,724,872 | 11,929,880 | **0.759** |
+| SlimPajama | 1,318,230,992 | 1,346,158,575 | 1.021 |
+| WikiText | 119,073,409 | 129,653,042 | 1.089 |
+
+The 4,000-line sample predicted 1.022 for SlimPajama; the full 1.3-billion-token corpus gives 1.021.
+The method holds at scale.
+
+**The A/B, graded on bits per byte** (1,500 steps each, 2,010,062 held-out bytes of FineWeb-Edu —
+downloaded but mix share 0.0, so unseen by both arms):
+
+| arm | **bits/byte** | tokens/byte | per-token NLL | wall |
+|---|---:|---:|---:|---:|
+| GPT-2 50257, untied | **2.0444** | 0.2164 | 6.5497 | 8.9 min |
+| 32K, tied | 2.0829 | 0.2308 | 6.2555 | 8.0 min |
+
+**The 32K arm is 1.9% WORSE per byte and uses 6.7% more tokens on English.** Net compute per byte is
+~9% cheaper — not the 20% a sampling-weighted estimate suggested, and not the 24% quoted earlier
+from an unweighted mean that included code the corpus does not contain.
+
+**Three limits, because they decide whether this is worth revisiting:**
+- **The held-out set is pure English prose, the 32K vocab's WORST domain.** Its measured advantages
+  are code (0.701) and chat (0.759), and neither is in this held-out set or in the pretrain corpus.
+  This test measures the vocabulary exactly where it cannot win.
+- **The arms are matched on STEPS, not compute.** The 32K arm has 42% fewer parameters and finished
+  10% faster; at equal compute it gets more steps and part of the 1.9% closes.
+- One seed, 1,500 steps.
+
+**Recommendation: adopt tied embeddings; hold the 32K vocab.** It is a one-way door — a model cannot
+be fine-tuned onto a different tokenizer — and its case rests on code and chat being in the corpus,
+which is #136's job. Revisit it there, not before.
+
+### Why per-token loss could not have answered this
+
+At **step 0**, untrained, zero knowledge: the 32K arm reads **10.41** and the 50257 arm **10.82** —
+exactly ln(vocab) in both cases. After 1,500 steps the order **inverts**: 6.26 vs 6.55, now favouring
+32K, because each of its tokens carries more text and is genuinely harder to predict.
+
+Two artefacts pulling opposite ways, neither about quality, and the sign flips during training. On
+per-token loss this A/B would have reported the 32K vocab as the clear winner.
+
+`eval/bits_per_byte.py` normalises against source bytes instead. The first token of each window is
+left unscored — a model must not be charged for predicting a token it had no context for, and that
+penalty falls harder on whichever tokenizer produces more windows.
+
+### Infrastructure: four silent hazards closed on the way
+
+None would have raised an error; each would have produced a plausible wrong number.
+
+1. **The data pipeline overrode the caller's tokenizer with GPT-2's unconditionally.** Passing a 32K
+   tokenizer would have tokenized the whole corpus with GPT-2 anyway, and the model would have
+   trained on ids from a vocabulary it does not have.
+2. **The `.bin` cache recorded nothing about which tokenizer produced it.** Switching vocab reused
+   GPT-2 ids in silence. Now a `.tokenizer` sidecar, and a mismatch refuses. Unlabelled pre-#139
+   caches are adopted as GPT-2 out loud — and that is not a loophole: an unlabelled cache with a
+   *custom* tokenizer still refuses.
+3. **`pre_training_audit` compared logits width to the 50257 constant**, so it would have rejected a
+   32K model before step 1 — the audit blocking the run it exists to protect.
+4. **EOS was hardcoded 50256 in 10 files.** The 32K vocab's EOS is 0. A 32K model served with 50256
+   could never sample its stop token, so every reply would run to the token limit — reading as a
+   quality problem while being a configuration one. `EdgeHVN` now carries `eos_token_id`, persisted
+   and restored. Still hardcoded in `hvn/edge/chat.py`, `tool_session.py`, `eval/grounded_qa.py`,
+   `finetune_edge_conversational.py` and `packing.py`'s `pad_id`.
+
+**Also: re-tokenizing is 4.28x faster and bit-identical.** `_tokenize_text_to_bin` called
+`tokenizer.encode` once per 4 MB block — one Python call into a single-threaded path, pegging one
+core of sixteen. Now split across cores via the Rust backend's `encode_batch`: 2.39s to 0.56s on
+4 MB, and 1,017,861 tokens either way. Identical is not free — chunks must begin **at** a newline,
+not after one, because newline-plus-indent merges are exactly what a code-trained vocabulary learns.
+The full 5.4 GB pass went from ~55 minutes to 10.
+
+Artifacts: `results/vocab/*.json`, `logs/ab_tied.log`, `logs/ab_vocab.log`, `logs/ab_bpb.log`,
+`data_cache/tokenizer_32k/`.
