@@ -117,6 +117,12 @@ class DeltaNetBlock(nn.Module):
         True.  When False the state uses no decay (pure DeltaNet).
     use_swiglu : bool
         Use a SwiGLU FFN instead of the standard GELU FFN.
+    ffn_activation : str
+        Which pointwise activation the plain (non-SwiGLU, non-MoE) FFN uses --
+        ``"gelu"`` (default, byte-identical to the pre-#140 path), ``"relu2"``,
+        or ``"powlu"``.  See ``hvn/core/activations.py``.  SwiGLU and MoE define
+        their own nonlinearity, so combining them with a non-default value raises
+        rather than silently ignoring it (Issue #140).
     train_chunk : int
         Chunk length ``C`` for the chunked-parallel delta rule used in the
         training forward.  The recurrence is reassociated so only ``S/C``
@@ -136,6 +142,7 @@ class DeltaNetBlock(nn.Module):
         use_output_gate: bool = True,
         use_decay_gate: bool = True,
         use_swiglu: bool = False,
+        ffn_activation: str = "gelu",
         train_chunk: int = 32,
         use_triton_scan: bool = False,
         use_megakernel_scan: bool = False,
@@ -242,6 +249,17 @@ class DeltaNetBlock(nn.Module):
         # attacks FLOPs-per-token rather than memory -- see hvn/core/moe.py for
         # why the recurrence (q/k/v) is deliberately NOT routed. Default off:
         # moe_experts<=1 leaves the dense path byte-identical.
+        # Issue #140: the pointwise activation is selectable. SwiGLU and MoE
+        # carry their own nonlinearity, so a non-default request there is a
+        # config error, not something to drop on the floor -- silently ignoring
+        # it would make an "arm" secretly measure the incumbent.
+        if ffn_activation != "gelu" and (use_swiglu or (moe_experts or 1) > 1):
+            raise ValueError(
+                f"ffn_activation={ffn_activation!r} is only supported by the "
+                f"plain FFN; got use_swiglu={use_swiglu}, moe_experts={moe_experts}"
+            )
+        self.ffn_activation = ffn_activation
+
         if moe_experts and moe_experts > 1:
             from .moe import MoEFFN
             self.ffn = MoEFFN(
@@ -252,9 +270,10 @@ class DeltaNetBlock(nn.Module):
         elif use_swiglu:
             self.ffn = SwiGLU(d_model, expansion=3, dropout=dropout)
         else:
+            from .activations import make_activation
             self.ffn = nn.Sequential(
                 nn.Linear(d_model, d_model * 2),
-                nn.GELU(),
+                make_activation(ffn_activation),
                 nn.Dropout(dropout),
                 nn.Linear(d_model * 2, d_model),
                 nn.Dropout(dropout),
