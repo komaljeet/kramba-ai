@@ -1,0 +1,53 @@
+{
+  "config": {
+    "steps": 1500,
+    "warmup": 100,
+    "batch_size": 4,
+    "seq_len": 512,
+    "d_model": 512,
+    "layers": 12,
+    "n_heads": 8,
+    "attn_layers": [
+      3,
+      10
+    ],
+    "attn_window": 4096,
+    "heldout_bytes": 2000000,
+    "seed": 7,
+    "out": "results/vocab/ab_code.json"
+  },
+  "arms": {
+    "gpt2": {
+      "vocab_size": 50257,
+      "bits_per_byte": {
+        "bits_per_byte": 2.6568744232593016,
+        "total_nll_nats": 3886992.8341674805,
+        "n_tokens": 859166,
+        "n_scored_tokens": 859165,
+        "n_bytes": 2110655,
+        "n_windows": 1679,
+        "tokens_per_byte": 0.4070613150893917,
+        "mean_token_nll_NOT_COMPARABLE": 4.524151745203168
+      },
+      "wall_sec": 1052.6236798763275,
+      "train_tokens": 72841334
+    },
+    "v32k": {
+      "vocab_size": 32000,
+      "bits_per_byte": {
+        "bits_per_byte": 2.4906510019285686,
+        "total_nll_nats": 3643808.872619629,
+        "n_tokens": 742285,
+        "n_scored_tokens": 742284,
+        "n_bytes": 2110655,
+        "n_windows": 1450,
+        "tokens_per_byte": 0.351684666608233,
+        "mean_token_nll_NOT_COMPARABLE": 4.908914745056648
+      },
+      "wall_sec": 456.73098397254944,
+      "train_tokens": 52598601
+    }
+  },
+  "bits_per_byte_pct_change": -6.256352196232884,
+  "tokens_per_byte_pct_change": -13.604006676241841
+}
