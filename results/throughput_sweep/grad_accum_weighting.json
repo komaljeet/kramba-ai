@@ -1,0 +1,59 @@
+{
+  "issue": 141,
+  "config": {
+    "data": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data\\grounded_qa_expanded.jsonl",
+    "seq_len": 512,
+    "effective_batch": 32,
+    "batches": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32
+    ],
+    "trials": 200,
+    "seed": 0,
+    "out": "results/throughput_sweep/grad_accum_weighting.json"
+  },
+  "rows": 1012,
+  "answer_tokens_per_row": {
+    "mean": 14.214426877470355,
+    "sd": 2.4354247763975465,
+    "min": 8.0,
+    "max": 26.0,
+    "cv": 0.17133471489150623
+  },
+  "results": {
+    "b1": {
+      "grad_accum": 32,
+      "mean_abs_deviation": 0.1352783518587002,
+      "mean_max_overweight": 1.4373134075126262
+    },
+    "b2": {
+      "grad_accum": 16,
+      "mean_abs_deviation": 0.09505989725384349,
+      "mean_max_overweight": 1.2412278700680517
+    },
+    "b4": {
+      "grad_accum": 8,
+      "mean_abs_deviation": 0.06526249937551737,
+      "mean_max_overweight": 1.134540785645814
+    },
+    "b8": {
+      "grad_accum": 4,
+      "mean_abs_deviation": 0.04320377809796898,
+      "mean_max_overweight": 1.0692966096940109
+    },
+    "b16": {
+      "grad_accum": 2,
+      "mean_abs_deviation": 0.023871819682416674,
+      "mean_max_overweight": 1.0247090855066359
+    },
+    "b32": {
+      "grad_accum": 1,
+      "mean_abs_deviation": 0.0,
+      "mean_max_overweight": 1.0
+    }
+  }
+}
