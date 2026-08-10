@@ -843,10 +843,18 @@ would compile something the script never invokes. Reconsidered under #142 and le
 failure (a config reading "fits" on allocated while reserving past the card and running 40%
 slower) cannot pass unnoticed in a real run.
 
-**Still unclaimed for pretrain:** `--n-heads`. #112 measured `8 → 16` at **2.4× at 355M**, and
-#141 at **1.12–1.17× at 83M**, so the win is size-dependent. It changes the architecture
-(`read_norm_weight` is `[n_heads, d_head]`), so it applies only to a **new** pretrain, and its
-quality effect has never been measured.
+**`--n-heads` for pretrain — now graded (#144).** #112 measured `8 → 16` at **2.4× at 355M** and
+#141 at **1.12–1.17× at 83M**, so the speed win is size-dependent. #144 measured the *quality*
+side that had never been checked. At 83M, 1,500 from-scratch steps, identical seed and identical
+batch sequence: held-out probe loss differs by **+0.00535 nats (0.08%)** while bits/byte on unseen
+FineWeb-Edu differs by **−0.0009 (0.04%) in the opposite direction** — two held-out sets
+disagreeing on the *sign* of a ~0.1% effect, which is the signature of **no detectable quality
+cost**. A twin arm (h8 run twice) came out bit-identical, so the run-to-run floor is exactly zero.
+
+**Safe to adopt for a new pretrain on this evidence.** It changes the architecture
+(`read_norm_weight` is `[n_heads, d_head]`) so it cannot be applied to an existing checkpoint, and
+the evidence covers only **early** training at 83M — 3.07M tokens, 0.19% of a real pretrain, one
+seed. It does **not** clear h16 at 355M. Full limits in [state.md](state.md).
 
 ### Muon is the default optimizer (Issue #129) — confirmed with ternary ON
 
