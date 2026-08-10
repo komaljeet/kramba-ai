@@ -1346,6 +1346,109 @@ def load_tokenizer(spec: str = "gpt2", **kwargs):
     return tok
 
 
+def apply_fast_stack(model, triton_scan: bool = True,
+                     megakernel_scan: bool = False, tf32: bool = True,
+                     compile_model: bool = True, verbose: bool = True):
+    """Put a built model into the execution mode training actually uses (#136).
+
+    **The single implementation of what ``--fast`` means.** ``--fast`` is
+    ``default=True`` on this script, but it was applied inline in ``main()``, so
+    any other caller -- every measurement harness -- silently got an uncompiled,
+    un-Tritonised model and reported throughput no real run would ever see.
+
+    That is not hypothetical. `scripts/size_sweep.py` measured eager and
+    published "#136's config spills at 105% of VRAM and needs 30.6 days". Run
+    properly it fits at 82.6% and needs 9.0 -- a 3.4x error, in a number that was
+    about to size a 9-day training run. The retraction is in docs/state.md.
+
+    Note this canNOT be folded into ``build_model_and_config``: ``torch.compile``
+    must be applied AFTER checkpoint resume, so that loading sees a plain module
+    and ``_save_edge_checkpoint`` unwraps a known shape. Construction and
+    execution mode are genuinely separate steps; the fix is to have one function
+    for the second, not to merge it into the first.
+
+    Returns the model -- possibly wrapped in an OptimizedModule, so call it after
+    resume and before the training loop.
+    """
+    if tf32:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+    def _blocks(m):
+        if getattr(m, "blocks", None) is not None:
+            return m.blocks
+        if getattr(m, "shared_block", None) is not None:
+            return [m.shared_block.block]
+        return []
+
+    if triton_scan:
+        n = 0
+        for blk in _blocks(model):
+            if hasattr(blk, "use_triton_scan"):
+                blk.use_triton_scan = True
+                n += 1
+        if verbose:
+            print(f"\n  Fused Triton scan enabled on {n} DeltaNet block(s) (#83).")
+
+    if megakernel_scan and triton_scan:
+        n = 0
+        for blk in _blocks(model):
+            if hasattr(blk, "use_megakernel_scan"):
+                blk.use_megakernel_scan = True
+                n += 1
+        if verbose:
+            print(f"\n  Design B blockwise-recompute backward enabled on {n} "
+                  f"DeltaNet block(s) (#96) -- ~1.05x faster step under --fast.")
+    elif megakernel_scan and not triton_scan and verbose:
+        print("\n  WARNING: megakernel_scan requires triton_scan; ignoring "
+              "(the sequential forward must already be the scan).")
+
+    if compile_model:
+        if verbose:
+            print("\n  Compiling model with torch.compile (first steps will be slow)...")
+        model = torch.compile(model)
+    return model
+
+
+def check_head_dim(d_model: int, n_heads: int, triton_scan: bool = True) -> None:
+    """Fail NOW if the Triton scan cannot compile for this shape (#136).
+
+    ``hvn/core/deltanet_triton.py`` does ``tl.arange(0, D)`` over the head
+    dimension, and Triton requires that range to be a power of 2. The rule is
+    documented in ``hvn/kernels/hamiltonian_kernel.py:293`` and was enforced
+    nowhere, so a bad shape did not warn -- it raised an InductorError partway
+    into the run, naming ``tl.arange`` and saying nothing about d_model or
+    n_heads. On a 9-day pretrain that is a very expensive way to find out.
+
+    d_model=768 with the common n_heads=8 gives head_dim 96 and dies. It wants
+    12 heads. This turns that into one line at startup.
+    """
+    if not triton_scan:
+        return
+    if n_heads <= 0 or d_model % n_heads != 0:
+        raise ValueError(
+            f"d_model={d_model} is not divisible by n_heads={n_heads}")
+    head_dim = d_model // n_heads
+    if head_dim & (head_dim - 1):
+        # Candidates whose head_dim is a power of 2 in the range the kernel is
+        # happy with, preferring head_dim closest to 64 -- the conventional
+        # choice and the one the #136 sweep measured. Returning a technically
+        # valid but unusual shape (768 -> 6 heads of 128) is worse advice than
+        # returning the standard one.
+        cands = [h for h in range(1, d_model + 1)
+                 if d_model % h == 0
+                 and 16 <= d_model // h <= 128
+                 and not ((d_model // h) & (d_model // h - 1))]
+        cands.sort(key=lambda h: (abs((d_model // h) - 64), h))
+        hint = (f" Try n_heads={cands[0]} (head_dim="
+                f"{d_model // cands[0]})." if cands else "")
+        raise ValueError(
+            f"head_dim = d_model/n_heads = {d_model}/{n_heads} = {head_dim}, "
+            f"which is not a power of 2. The Triton scan kernel does "
+            f"tl.arange(0, {head_dim}) and will fail to compile under --fast."
+            f"{hint}")
+
+
 def build_model_and_config(
     settings: dict,
     tokenizer,
@@ -1384,6 +1487,10 @@ def build_model_and_config(
     print("\n" + "=" * 70)
     print("STEP 3 — TRAINING CONFIGURATION")
     print("=" * 70)
+
+    # #136: fail here rather than partway into the run. The Triton scan needs a
+    # power-of-2 head_dim and nothing used to check it.
+    check_head_dim(settings["d_model"], settings["n_heads"])
 
     config = {
         "arch": arch,
@@ -2863,32 +2970,19 @@ def main():
     # Fused Triton scan (#83): identity-preserving ~2.6x training speedup + less
     # VRAM, numerically stable at all decay. Enabled per-DeltaNet-block. Set
     # before compile so torch.compile fuses the non-scan parts around it.
-    if args.triton_scan:
-        blocks = model.blocks if getattr(model, "blocks", None) is not None else \
-            ([model.shared_block.block] if getattr(model, "shared_block", None) is not None else [])
-        n_set = 0
-        for blk in blocks:
-            if hasattr(blk, "use_triton_scan"):
-                blk.use_triton_scan = True
-                n_set += 1
-        print(f"\n  Fused Triton scan enabled on {n_set} DeltaNet block(s) (#83).")
-
-    # Design B (#96): fused blockwise-recompute backward. Only meaningful with
-    # --triton-scan (it swaps the scan's backward, not the forward). Set on each
-    # DeltaNet block before compile so torch.compile bakes the dispatch in.
-    if args.megakernel_scan and args.triton_scan:
-        blocks = model.blocks if getattr(model, "blocks", None) is not None else \
-            ([model.shared_block.block] if getattr(model, "shared_block", None) is not None else [])
-        n_set = 0
-        for blk in blocks:
-            if hasattr(blk, "use_megakernel_scan"):
-                blk.use_megakernel_scan = True
-                n_set += 1
-        print(f"\n  Design B blockwise-recompute backward enabled on {n_set} "
-              f"DeltaNet block(s) (#96) -- ~1.05x faster step under --fast.")
-    elif args.megakernel_scan and not args.triton_scan:
-        print("\n  WARNING: --megakernel-scan requires --triton-scan; ignoring "
-              "(the sequential forward must already be the scan).")
+    # #136: the Triton scan / megakernel / compile stack now lives in ONE
+    # function, apply_fast_stack, so measurement harnesses can put a model into
+    # the same mode instead of each re-implementing a subset of it. This block
+    # used to be the only implementation, which is why every script that called
+    # build_model_and_config directly measured an uncompiled model.
+    # Applied after resume so checkpoint loading saw a plain module.
+    model = apply_fast_stack(
+        model,
+        triton_scan=args.triton_scan,
+        megakernel_scan=args.megakernel_scan,
+        tf32=args.tf32,
+        compile_model=args.compile,
+    )
 
     # Adaptive-exact chunk (#95): pick the largest numerically-exact chunk per
     # forward given the decay. Faster than fixed chunk32 AND than --compile alone
@@ -2903,12 +2997,9 @@ def main():
                 n_set += 1
         print(f"\n  Adaptive-exact chunk enabled on {n_set} DeltaNet block(s) (#95).")
 
-    # torch.compile (#83): identity-preserving ~2.4x training speedup. Applied
-    # after resume so checkpoint loading sees the plain module; saving unwraps
-    # the OptimizedModule (see _save_edge_checkpoint). Composable with --triton-scan.
-    if args.compile:
-        print("\n  Compiling model with torch.compile (first steps will be slow)...")
-        model = torch.compile(model)
+    # torch.compile is applied by apply_fast_stack above (#136), after resume so
+    # checkpoint loading saw a plain module and _save_edge_checkpoint unwraps a
+    # known shape.
 
     if args.profile:
         # Steady-state profiling: skip the first ~12 compile-warmup optimizer steps,

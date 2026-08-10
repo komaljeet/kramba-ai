@@ -93,14 +93,11 @@ def build(vocab: int, tie: bool, d_model: int, n_layers: int, device,
     # InductorError under --fast -- a hard crash, not a fallback. Nothing in the
     # repo validates this, so it is enforced here.
     n_heads = max(1, d_model // HEAD_DIM)
-    assert d_model % n_heads == 0 and (HEAD_DIM & (HEAD_DIM - 1)) == 0, (
-        f"d_model={d_model} cannot be split into power-of-2 head_dim")
     settings = {"batch_size": batch_size, "grad_accum": 8, "seq_len": seq_len,
                 "d_model": d_model, "num_layers": n_layers, "n_heads": n_heads}
-    if fast:
-        # TF32, as --fast sets it.
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+    # build_model_and_config now calls check_head_dim itself, so a bad shape
+    # fails here with a message naming d_model/n_heads instead of dying later
+    # inside Triton.
     model, _cfg = tec.build_model_and_config(
         settings, None, device,
         checkpoint_dir="checkpoints/_sizesweep", arch="hvn-hybrid",
@@ -109,12 +106,12 @@ def build(vocab: int, tie: bool, d_model: int, n_layers: int, device,
         optimizer="muon", precision="bf16", lr=3e-4, vocab_size=vocab,
     )
     if fast:
-        # Triton scan, as --fast sets it for the DeltaNet blocks.
-        for blk in model.blocks:
-            inner = getattr(blk, "block", blk)
-            if hasattr(inner, "use_triton_scan"):
-                inner.use_triton_scan = True
-        model = torch.compile(model)
+        # THE shared implementation of --fast, not a local re-creation of it.
+        # This sweep's first version hand-rolled a subset here and measured a
+        # mode training never runs in; that is exactly the bug apply_fast_stack
+        # exists to make impossible.
+        model = tec.apply_fast_stack(model, triton_scan=True, tf32=True,
+                                     compile_model=True, verbose=False)
     return model
 
 

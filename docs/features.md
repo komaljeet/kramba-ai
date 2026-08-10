@@ -49,7 +49,7 @@
 | #66 | Head-parallel tensor parallelism for the DeltaNet block (Megatron-style f/g pair) | `hvn/core/head_parallel.py`, `docs/TENSOR_PARALLEL_DESIGN.md`, `tests/test_issue66.py` |
 | #67 | Multi-node launch (torchrun/SLURM) + consolidated checkpoint I/O | `hvn/launch.py`, `docs/DISTRIBUTED_LAUNCH.md`, `tests/test_issue67.py` |
 | #68 | Frontier training plan/spec — config from measured exponents, Chinchilla budgets, risk register, gates | `docs/FRONTIER_TRAINING_PLAN.md` |
-| #69 | Measured RTX 4050 (6 GB) training envelope — ceiling ~270M params; WDDM silent host-spill documented | `eval/vram_envelope.py`, `results/vram_envelope_rtx4050.json`, [training.md](training.md) |
+| #69 | Measured RTX 4050 (6 GB) training envelope — ceiling ~270M params; WDDM silent host-spill documented | `results/vram_envelope_rtx4050.json` (tool removed in #136 — superseded by `scripts/size_sweep.py`), [training.md](training.md) |
 | #70 | RTX 4060 (8 GB) envelope — projected fit; 1B/10B still infeasible; 16 GB Ti caveat | `results/vram_envelope_rtx4060_projection.json`, [training.md](training.md) |
 | #71 | Wire EdgeHVN + ternary + DeltaNet into `train.py` — `--edge`/`--ternary`; step-based ckpt/logging; CUDA Graphs crash fix | `train.py`, `tests/test_issue71.py` |
 | #129 | Muon is the default optimizer, confirmed with ternary ON — 1.75x fewer steps to AdamW's 1000-step val loss, ~1.54x wall-clock; `--fast` now default with a `--no-fast` escape hatch; fixed a banner that made every log misreport its optimizer/precision/lr | `train_edge_conversational.py`, [training.md](training.md) |
