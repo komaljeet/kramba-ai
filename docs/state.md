@@ -3123,3 +3123,142 @@ architecture work.
 
 Artifacts: `results/size_sweep_megakernel.json`, `results/size_sweep_1024.json`,
 `logs/size_sweep_mega.log`, `logs/size_sweep_1024.log`.
+
+## HANDOFF: #136 is ready to pretrain (2026-08-10, session close)
+
+Written at the end of a long session so a fresh window can continue without
+re-deriving any of it. Everything below is committed; nothing lives only in chat.
+
+### The recommended run
+
+    python train_edge_conversational.py \
+      --code-corpus data_cache/code_corpus/stack_code.txt \
+      --tokenizer data_cache/tokenizer_32k_fim \
+      --fim --fim-rate 0.5 --fim-spm-rate 0.5 \
+      --arch hvn-hybrid --attn-layers 3,10 \
+      --d-model 896 --num-layers 16 --n-heads 14 \
+      --tie-embeddings \
+      --checkpoint-dir checkpoints/code_896x16 \
+      --val-fraction 0.005
+
+**n_heads=14 is not optional.** head_dim must be a power of 2 or the Triton scan
+crashes under --fast; 896/14 = 64. `check_head_dim` now enforces it at startup.
+
+**--checkpoint-dir must be fresh.** Resuming rebuilds the architecture from the
+checkpoint; `_check_resume_matches_request` now refuses on mismatch rather than
+silently training the wrong model, but a dedicated directory avoids the question.
+
+Expect **9.1 days measured, 10-12 realistic** (measured with synthetic tensors,
+no dataloader, on a laptop that throttles).
+
+### What is settled, and where the numbers are
+
+| decision | answer | source |
+|---|---|---|
+| architecture | hvn-hybrid, d=896, 16L, 14 heads | `results/size_sweep_megakernel.json` |
+| size | 157M total / **129M body**, 67.6% VRAM, 9.1 d | same |
+| vocabulary | 32K tied + 3 FIM sentinels = **32003** | `results/vocab/ab_mixed.json` |
+| corpus | 11.20 GB, 2.86M files, **3.98B tokens** | `results/codecomplete/corpus_stats.json` |
+| FIM | rate 0.5, spm 0.5, char-level cuts | `hvn/fim.py`, 39 tests |
+
+Coverage is 1.27x Chinchilla for 157M, so the run stays under one epoch.
+
+### The three open questions, in priority order
+
+1. **Token budget: 3.14B (total params) or 2.58B (body params)?** ~1.5 days of
+   difference. The 20-tokens-per-param convention is applied to TOTAL params
+   throughout this repo, but the two arms in the size sweep have identical
+   bodies, so the 32K arm is credited with needing 30% fewer tokens purely for
+   having smaller lookup tables. **Unmeasured, and the weakest number in every
+   table.** Recommendation: use 3.14B -- it errs toward more data, and this
+   project's most expensive failure was undertraining.
+
+2. **A resume test, before the clock starts.** Designed but not run. Three of the
+   five ways resume can break make the loss curve look BETTER, not worse (data
+   position restarting re-reads familiar data; optimizer momentum loss; LR
+   schedule restart), so it needs an uninterrupted control arm:
+   run 60 clean -> run 30, kill, resume to 60 -> compare step count and loss.
+   Without arm 1 any plausible number passes.
+
+3. **The eval does not exist.** #136 criterion 4 is line-level accept rate and
+   exact-match next-line on held-out repos, against a stated baseline (n-gram or
+   nearest-line retrieval). Nothing measures this yet, and a model with no eval
+   cannot produce the result the whole track exists for.
+
+### What was found today, condensed
+
+Five bugs, none of which raised an error and all of which produced confident
+wrong answers:
+
+- `eval/vram_envelope.py` sized runs from the wrong model class at vocab 8000.
+  Deleted; superseded by `scripts/size_sweep.py`.
+- `--fast` lives in `main()`, so every measurement harness measured an
+  uncompiled model. Published "30.6 days" for a 9.0-day config. Fixed by
+  `apply_fast_stack`, the single implementation.
+- `main()` has been unable to start a training run since #139 merged
+  (`eos_token_id` passed but not accepted). Nothing noticed because every A/B
+  harness bypasses `main()`.
+- The pre-training audit could not pass on the hybrid (rebuild dropped
+  `block_plan`), so it only ever validated the plain architecture.
+- Resuming silently replaced the requested architecture with the checkpoint's:
+  a request for 157M trained a 28M model, at step 100 of 120, with no warning.
+
+The pattern is one thing: **a stale or partial artifact quietly preferred over
+what was asked for.** #139 closed it for the tokenizer cache; today closed it for
+execution mode, model class, and resume.
+
+### Known limits carried forward
+
+- The held-out split is the corpus TAIL, and the corpus is written in language
+  order, so it is SQL-heavy rather than representative. Fine for watching a loss
+  curve, not for a language-stratified quality claim.
+- The realised language mix is not the planned mix: filtering removes minified
+  JS by BYTES far more than by file count. JavaScript needed a manual top-up
+  from 7.9% to 15.9%.
+- 2.43% of files in The Stack's "permissive subset" are not permissively
+  licensed per file. Measured across 1, 29 and 34 shards (2.55/2.43/2.37%), so
+  it is a property of the dataset. They are dropped.
+
+### UPDATE (2026-08-10 19:00): the smoke run CRASHED -- start here
+
+The handoff above says the pipeline was verified end-to-end. **It was not.** The
+120-step smoke reached training, passed all four audit checks, compiled, and then
+died at 18:35:48:
+
+    extern_kernels.bmm(buf333, reinterpret_tensor(buf327, (56, 64, 32),
+                       (2048, 1, 64), 0), out=buf334)
+    RuntimeError: CUDA error: CUBLAS_STATUS_INTERNAL_ERROR
+                  when calling cublasSgemmStridedBatched(...)
+    [W CachingHostAllocator.cpp:26] Exception in pinned allocator free()
+
+`56 = batch 4 x 14 heads`, `64 = head_dim`, so it is the batched matmul at the
+shapes this config introduces. Log: `logs/smoke_code.log` (the traceback starts
+at line 233; the file also contains a large C-level stack dump, filter with
+`grep -vE "blocks\.[0-9]+\.|python314.dll"`).
+
+**Not diagnosed.** Two candidates, neither confirmed:
+
+- **A disguised allocation failure.** CUBLAS_STATUS_INTERNAL_ERROR on a bmm is
+  frequently cuBLAS failing to get its workspace. The pinned-allocator warning
+  points the same way, at HOST pinned memory rather than VRAM.
+- **Something specific to n_heads=14.** This is the first time this config has
+  been trained; the size sweep ran the same shapes, but see below.
+
+**The lesson this repeats, and it is the same one as every other bug today:**
+`scripts/size_sweep.py` measured d=896/16L/14 heads as fitting cleanly at 67.6%
+VRAM, and that measurement is not wrong -- it simply had **no DataLoader, no
+pinned host buffers and no gradient accumulation**. The real training path has
+all three. "The sweep says it fits" was again treated as evidence about a path
+the sweep does not exercise.
+
+**Next window starts here, before anything else:**
+
+1. Reproduce with `--num-workers 0` (removes pinned host memory) and with a
+   smaller `--grad-accum`, to separate allocation pressure from a shape problem.
+2. If it is allocation, the 896x16 config may need `--grad-checkpoint` or a
+   smaller batch, and the 9.1-day estimate changes.
+3. If it reproduces at n_heads=14 but not n_heads=8 with the same memory
+   settings, it is a shape/kernel problem and the config choice is affected.
+
+Until this is understood, **the 9.1-day plan is not launchable** -- and that is
+the honest status, not the "ready to pretrain" heading above.
