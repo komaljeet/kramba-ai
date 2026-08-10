@@ -253,6 +253,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         "only — tying changes the model, so it cannot be applied "
                         "to an existing untied checkpoint.")
     p.add_argument("--vocab-size", type=int, default=GPT2_VOCAB_SIZE)
+    p.add_argument("--tokenizer", default="gpt2",
+                   help="'gpt2' or a directory from scripts/train_tokenizer.py. "
+                        "Sets vocab_size and selects the matching .bin caches.")
     args = p.parse_args(argv)
 
     if args.tie_embeddings and args.regime == "finetune":
@@ -271,9 +274,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     out_path = args.out or os.path.join(out_dir, f"ab_{args.regime}.json")
 
     import train_edge_conversational as tec
-    from transformers import GPT2TokenizerFast
 
-    tok = GPT2TokenizerFast.from_pretrained("gpt2")
+    # Issue #139: the tokenizer determines vocab_size, eos_token_id AND which
+    # .bin caches the pipeline reads, so it must come from one place.
+    tok = tec.load_tokenizer(args.tokenizer)
+    if args.vocab_size != tok.vocab_size:
+        print(f"[ab] vocab_size {args.vocab_size} -> {tok.vocab_size} "
+              f"(taken from --tokenizer {args.tokenizer})")
+        args.vocab_size = tok.vocab_size
     torch.manual_seed(args.seed)
     loader, _v, stats = tec.build_dataset_pipeline(
         tokenizer=tok, seq_len=args.seq_len, batch_size=args.batch_size,
