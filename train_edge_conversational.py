@@ -2620,14 +2620,25 @@ def main():
                              "Composes with --block-coordinate (that shrinks optimizer-"
                              "state memory; this shrinks activation memory -- "
                              "independent axes). Default: off.")
-    parser.add_argument("--tie-embeddings", action="store_true",
-                        help="Tie token_embedding and decoder output-projection weights "
-                             "(Issue #106, classic GPT-2/ALBERT trick). Halves the "
-                             "embedding+output-projection param count and cuts optimizer-"
-                             "state VRAM for that chunk ~3x. Changes what's being trained "
-                             "(not just memory bookkeeping) -- verified via CPU parity/"
-                             "convergence checks (tests/test_tied_embeddings.py), but "
-                             "still opt-in. Default: off (existing checkpoints unaffected).")
+    parser.add_argument("--tie-embeddings", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="Tie token_embedding and the decoder output projection "
+                             "(Issue #106). DEFAULT ON since #139, which measured it "
+                             "rather than assuming it: 1,500 from-scratch steps, "
+                             "identical batches/seed/--deterministic, only this flag "
+                             "differing -> held-out 5.50681 tied vs 5.56450 untied, "
+                             "i.e. 0.058 nats BETTER with 31 pct FEWER parameters "
+                             "(83.08M -> 57.35M), 12.5 sigma against the #133 noise "
+                             "floor. Not a memory-for-quality trade -- strictly better "
+                             "AND smaller, most likely because the two tables were "
+                             "learning nearly the same mapping and one of them was "
+                             "free capacity to memorise with. Costs ~7 pct per step "
+                             "(the shared table takes gradients from both the lookup "
+                             "and the head, serialising an accumulation). "
+                             "--no-tie-embeddings restores the old behaviour; existing "
+                             "checkpoints are unaffected either way, since "
+                             "load_checkpoint_for_resume reads the setting from the "
+                             "checkpoint.")
     fast_group = parser.add_mutually_exclusive_group()
     fast_group.add_argument("--no-fast", dest="fast", action="store_false",
                             help="Disable the --fast preset and train from the bare "
