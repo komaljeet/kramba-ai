@@ -587,12 +587,55 @@ def _tokenizer_signature(tokenizer) -> str:
     return f"{name}/{size}"
 
 
+def _encode_parallel(tokenizer, text: str, n_chunks: int) -> list:
+    r"""Encode via the Rust backend's multi-core ``encode_batch`` (Issue #139).
+
+    ``tokenizer.encode`` is one Python call into a single-threaded path, so a
+    multi-GB re-tokenize pegs one core and leaves the rest idle. The Rust
+    backend parallelises ``encode_batch`` across cores.
+
+    **Split points are chosen so the result is identical to encoding the whole
+    string.** Chunks begin AT a newline rather than after one, because BPE
+    merges of the form ``"\n    "`` — a newline plus an indent — are exactly what
+    a code-trained vocabulary learns. Splitting after the newline would break
+    that merge at every boundary and silently inflate the token count on
+    precisely the corpus this vocabulary exists for.
+
+    Falls back to the plain path for slow tokenizers, which have no backend.
+    """
+    if n_chunks <= 1 or len(text) < 2 * n_chunks:
+        return tokenizer.encode(text)
+    backend = (getattr(tokenizer, "backend_tokenizer", None)
+               or getattr(tokenizer, "_tokenizer", None))
+    if backend is None or not hasattr(backend, "encode_batch"):
+        return tokenizer.encode(text)
+
+    target = len(text) // n_chunks
+    parts, start = [], 0
+    for _ in range(n_chunks - 1):
+        cut = text.find("\n", start + target)
+        if cut == -1 or cut <= start:
+            break
+        parts.append(text[start:cut])
+        start = cut                      # next chunk BEGINS with the newline
+    parts.append(text[start:])
+    parts = [p for p in parts if p]
+    if len(parts) <= 1:
+        return tokenizer.encode(text)
+
+    ids = []
+    for enc in backend.encode_batch(parts, add_special_tokens=False):
+        ids.extend(enc.ids)
+    return ids
+
+
 def _tokenize_text_to_bin(
     text_path: str,
     bin_path: str,
     tokenizer,
     max_bytes: int | None = None,
     block_chars: int = 4_000_000,
+    encode_workers: int | None = None,
 ) -> int:
     """Stream-tokenize a UTF-8 text file into an on-disk uint16 .bin of token ids.
 
@@ -642,6 +685,8 @@ def _tokenize_text_to_bin(
         print(f"    Tokenized cache hit: {bin_path} ({n:,} tokens)")
         return n
 
+    if encode_workers is None:
+        encode_workers = max(1, os.cpu_count() or 4)
     os.makedirs(os.path.dirname(bin_path), exist_ok=True)
     tmp_path = bin_path + ".tmp"
     total_tokens = 0
@@ -657,7 +702,7 @@ def _tokenize_text_to_bin(
             if not block:
                 break
             bytes_read += len(block.encode("utf-8"))
-            ids = tokenizer.encode(block)
+            ids = _encode_parallel(tokenizer, block, encode_workers)
             np.asarray(ids, dtype=np.uint16).tofile(fout)
             total_tokens += len(ids)
             blocks += 1
@@ -811,18 +856,36 @@ class MixedLocalDataset(Dataset):
             print(f"    Using caller's tokenizer: {type(tokenizer).__name__} "
                   f"(vocab {getattr(tokenizer, 'vocab_size', '?')})")
 
+        # Issue #139: give non-GPT-2 vocabularies their own .bin files. The
+        # signature sidecar already REFUSES to reuse a mismatched cache, which
+        # is the safety property — but with a single filename per source, a
+        # 32K run and a GPT-2 run cannot coexist, and an A/B between them would
+        # mean re-tokenizing the whole corpus on every arm switch. GPT-2 keeps
+        # the bare name so every existing cache on disk is still found.
+        _tok_suffix = ""
+        if not (type(enc).__name__.startswith("GPT2")
+                and getattr(enc, "vocab_size", None) == GPT2_VOCAB_SIZE):
+            _tok_suffix = f".v{getattr(enc, 'vocab_size', 'x')}"
+
+        def _bin(name: str) -> str:
+            return os.path.join(tok_dir, f"{name}{_tok_suffix}.bin")
+
+        if _tok_suffix:
+            print(f"  Tokenized caches suffixed '{_tok_suffix}' "
+                  f"(custom tokenizer; GPT-2 caches untouched)")
+
         print("\n  Preparing datasets (tokenize once -> memmap, flat RAM)...")
 
         # 1. SlimPajama-627B (50%) — language foundation
         lang_path = _download_language_foundation(slimpajama_max_bytes, cache_dir, slimpajama_dir)
         print(f"    Tokenizing SlimPajama (cap {slimpajama_token_bytes / 1024**2:.0f} MB)...")
-        slim_bin = os.path.join(tok_dir, "slimpajama.bin")
+        slim_bin = _bin("slimpajama")
         _tokenize_text_to_bin(lang_path, slim_bin, enc, max_bytes=slimpajama_token_bytes)
 
         # 2. OpenAssistant (35%)
         oasst_path = _download_oasst(cache_dir)
         print(f"    Tokenizing OpenAssistant...")
-        oasst_bin = os.path.join(tok_dir, "oasst.bin")
+        oasst_bin = _bin("oasst")
         _tokenize_text_to_bin(oasst_path, oasst_bin, enc)
 
         # 3. WikiText-103 (15%) — local files already in the codebase
@@ -831,7 +894,7 @@ class MixedLocalDataset(Dataset):
         wt_bin = None
         if os.path.exists(wt103_path):
             print(f"    Tokenizing WikiText-103 from {wt103_path}...")
-            wt_bin = os.path.join(tok_dir, "wikitext.bin")
+            wt_bin = _bin("wikitext")
             _tokenize_text_to_bin(wt103_path, wt_bin, enc)
         else:
             print(f"    WikiText-103 not found locally, skipping")
@@ -858,7 +921,7 @@ class MixedLocalDataset(Dataset):
             fineweb_path = _load_fineweb_edu(cache_dir, fineweb_edu_dir, max_bytes=fineweb_edu_token_bytes)
             if fineweb_path is not None:
                 print(f"    Tokenizing FineWeb-Edu...")
-                fineweb_bin = os.path.join(tok_dir, "fineweb_edu.bin")
+                fineweb_bin = _bin("fineweb_edu")
                 _tokenize_text_to_bin(fineweb_path, fineweb_bin, enc, max_bytes=fineweb_edu_token_bytes)
 
         # --- Memory-map each tokenized source (read-only, paged on demand) ---

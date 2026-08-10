@@ -116,3 +116,38 @@ def test_custom_tokenizer_writes_its_own_signature(tmp_path):
     tec._tokenize_text_to_bin(str(txt), binp, FakeTokenizer())
     with open(binp + ".tokenizer", encoding="utf-8") as fh:
         assert fh.read().strip() == "custom32k/32000"
+
+
+# --------------------------------------------------------------------------
+# parallel encoding (#139) — must be identical, not merely close
+# --------------------------------------------------------------------------
+
+
+def test_parallel_encode_is_identical_to_sequential():
+    """The re-tokenize speedup must not change a single token.
+
+    Chunks begin AT a newline rather than after one, so BPE merges spanning
+    "\n" + indent survive the split. Splitting after the newline would break
+    exactly the merges a code-trained vocabulary exists to have, and would show
+    up only as a slightly larger token count — the kind of drift nobody checks.
+    """
+    tok = gpt2()
+    text = ("def f():\n    return 1\n\n" * 400) + ("hello world\n" * 400)
+    seq = tok.encode(text)
+    for workers in (2, 4, 16):
+        par = tec._encode_parallel(tok, text, workers)
+        assert par == seq, f"workers={workers} changed the tokenization"
+
+
+def test_parallel_encode_falls_back_when_there_is_no_backend():
+    class SlowTok:
+        def encode(self, t):
+            return [7] * len(t.split())
+    text = "a b c\n" * 100
+    assert tec._encode_parallel(SlowTok(), text, 8) == SlowTok().encode(text)
+
+
+def test_parallel_encode_handles_text_without_newlines():
+    tok = gpt2()
+    text = "abcdefgh" * 500          # no split points at all
+    assert tec._encode_parallel(tok, text, 8) == tok.encode(text)
