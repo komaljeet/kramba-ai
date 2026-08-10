@@ -498,6 +498,29 @@ class EdgeHVN(nn.Module):
         return [block.init_state(batch_size, device=device, dtype=dtype)
                 for block in self.blocks]
 
+    def enable_graph_decode(self, max_positions: int | None = None) -> dict:
+        """Prepare every block for CUDA-graph-captured decode (Issue #138).
+
+        Currently: precompute RoPE tables on the attention blocks. Without them
+        ``forward_step`` builds cos/sin from a Python int each token, which is a
+        CPU->GPU copy that capture rejects, and which would bake one position
+        into the captured graph even if the copy were removed.
+
+        Opt-in and idempotent. Returns what it touched so a caller can assert
+        rather than assume — a model with zero attention blocks would otherwise
+        report success having done nothing.
+        """
+        from hvn.core.transformer_block import TransformerBlock
+
+        touched = {"attention_blocks": 0, "max_positions": None}
+        for block in self.blocks:
+            inner = getattr(block, "block", block)
+            if isinstance(inner, TransformerBlock):
+                n = inner.enable_rope_table(max_positions=max_positions)
+                touched["attention_blocks"] += 1
+                touched["max_positions"] = n
+        return touched
+
     def forward_step(self, input_ids: torch.Tensor, states: list,
                      position_idx: Optional[int] = None) -> tuple[torch.Tensor, list]:
         """Process one token incrementally. input_ids: [B, 1] -> (logits [B,1,V], new_states)."""

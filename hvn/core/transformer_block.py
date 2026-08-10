@@ -60,9 +60,38 @@ def _rope_cos_sin_at(position_idx: int, d_head: int, device, dtype,
     """
     half = d_head // 2
     inv_freq = 1.0 / (base ** (torch.arange(0, half, device=device).float() / half))
-    t = torch.tensor([float(position_idx)], device=device)
+    t = torch.arange(position_idx, position_idx + 1, device=device,
+                     dtype=torch.float32)
     freqs = torch.outer(t, inv_freq)          # [1, half]
     emb = torch.cat([freqs, freqs], dim=-1)   # [1, d_head]
+    return emb.cos().to(dtype), emb.sin().to(dtype)
+
+
+def build_rope_table(max_positions: int, d_head: int, device, dtype,
+                     base: float = 10000.0):
+    """Precomputed RoPE cos/sin for positions ``[0, max_positions)`` (Issue #138).
+
+    Two reasons this replaces per-token construction on the decode path, and the
+    second is the one that matters:
+
+    1. ``torch.tensor([float(position_idx)], device=cuda)`` is a **CPU->GPU copy
+       from unpinned memory**, which CUDA graph capture rejects outright.
+    2. Even with the copy gone, ``position_idx`` changes every token, and a graph
+       bakes in the values it captured. A graph recorded at position 17 would
+       replay position 17's rotation forever — **silently wrong, not an error**,
+       which is far worse than a failed capture.
+
+    A table plus a device-resident index fixes both: the graph performs an
+    ``index_select`` whose *input* moves, so each replay reads the correct row.
+    Cost is trivial — 4096 positions x 64 d_head x 2 tables in fp32 is ~2 MB.
+
+    Returns ``(cos, sin)``, each ``[max_positions, d_head]``.
+    """
+    half = d_head // 2
+    inv_freq = 1.0 / (base ** (torch.arange(0, half, device=device).float() / half))
+    t = torch.arange(max_positions, device=device, dtype=torch.float32)
+    freqs = torch.outer(t, inv_freq)              # [P, half]
+    emb = torch.cat([freqs, freqs], dim=-1)       # [P, d_head]
     return emb.cos().to(dtype), emb.sin().to(dtype)
 
 
@@ -231,6 +260,58 @@ class TransformerBlock(nn.Module):
             "written": 0,
         }
 
+    def enable_rope_table(self, max_positions: int | None = None,
+                          device=None, dtype=None) -> int:
+        """Precompute the RoPE table so decode can be CUDA-graph captured (#138).
+
+        Opt-in and idempotent. Without it ``forward_step`` builds cos/sin per
+        token, which (a) is a CPU->GPU copy that graph capture rejects and (b)
+        would bake one position into a captured graph.
+
+        ``max_positions`` defaults to the attention window, since a bounded
+        window is the furthest back this block can ever attend. Returns the size
+        so a caller can assert the range it needs is covered rather than
+        discovering a silent clamp at token ``max_positions``.
+        """
+        p = next(self.parameters())
+        device = device if device is not None else p.device
+        dtype = dtype if dtype is not None else p.dtype
+        if max_positions is None:
+            max_positions = self.window if self.window is not None else 4096
+        cos, sin = build_rope_table(max_positions, self.d_head, device, dtype,
+                                    self.rope_base)
+        self.register_buffer("_rope_cos", cos, persistent=False)
+        self.register_buffer("_rope_sin", sin, persistent=False)
+        return max_positions
+
+    def _rope_at(self, position_idx, d_head, device, dtype):
+        """cos/sin for one position, from the table when it exists.
+
+        ``position_idx`` may be a Python int (eager) or a 0-d/1-element device
+        tensor (graph-safe: the index moves, so each replay reads its own row).
+        A Python int inside a capture would be constant-folded into the graph and
+        every replay would silently reuse that one position's rotation.
+        """
+        cos_tab = getattr(self, "_rope_cos", None)
+        if cos_tab is None:
+            return _rope_cos_sin_at(int(position_idx), d_head, device, dtype,
+                                    self.rope_base)
+        n = cos_tab.shape[0]
+        if torch.is_tensor(position_idx):
+            idx = position_idx.reshape(1).to(torch.long) % n
+        else:
+            # Range-check only on the int path: reading a device tensor here
+            # would force a host sync every token and defeat the purpose.
+            if position_idx >= n:
+                raise IndexError(
+                    f"position {position_idx} exceeds the RoPE table ({n}); "
+                    f"call enable_rope_table(max_positions=...) with a larger "
+                    f"range rather than wrapping silently")
+            idx = torch.as_tensor([position_idx], device=cos_tab.device,
+                                  dtype=torch.long)
+        return (cos_tab.index_select(0, idx).to(dtype),
+                self._rope_sin.index_select(0, idx).to(dtype))
+
     def forward_step(self, x_t: torch.Tensor, state: dict,
                      position_idx: int = 0) -> tuple[torch.Tensor, dict]:
         """Process one token incrementally. x_t: [B, 1, D] -> ([B, 1, D], new_state).
@@ -252,8 +333,7 @@ class TransformerBlock(nn.Module):
         k = self.k_proj(x_norm).view(B, 1, H, d).transpose(1, 2)
         v = self.v_proj(x_norm).view(B, 1, H, d).transpose(1, 2)
 
-        cos, sin = _rope_cos_sin_at(position_idx, d, x_norm.device, q.dtype,
-                                    self.rope_base)
+        cos, sin = self._rope_at(position_idx, d, x_norm.device, q.dtype)
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
 
