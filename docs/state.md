@@ -2836,3 +2836,106 @@ nats" result, which is now the repo default, cannot be reproduced from the repo.
 harness is open work.
 
 Artifacts: `results/vocab/ab_code.json`, `scripts/ab_vocab_on_code.py`.
+
+## The 32K vocab on a MIXED corpus: a split, not a win -- break-even is ~17% code (Issue #139, 2026-08-10)
+
+**One line: on a corpus containing code, English and chat, the 32K vocabulary is 8.6% BETTER on
+code, 2.4% WORSE on English and 2.7% better on chat -- so there is no single answer, and the
+decision rule is the code share of the corpus: above ~17% code the 32K vocab wins, below it
+GPT-2 wins.**
+
+The two prior measurements disagreed in sign. #139 graded the vocabulary on English only and got
+1.9% worse; the code follow-up graded it on code only and got 6.26% better. Both were
+single-domain, so neither could answer the question that actually decides adoption -- what
+happens on a corpus containing both. The tokenizer is a one-way door: a model cannot be
+fine-tuned onto a different vocabulary, so the choice is made once, before the pretrain.
+
+`scripts/ab_vocab_mixed.py`: both arms train on the SAME mixed corpus, then each is scored on
+THREE separate held-out sets, byte-identical per domain across arms.
+
+### Setup
+
+193 MB mixed corpus, measured shares **code 49.4% / English 39.7% / chat 10.8%** by bytes (the
+mix the 32K tokenizer was itself trained on). Sources are `code_corpus/code_all.txt`,
+`slimpajama_en.txt` and `oasst1.txt`, interleaved in 1 MB blocks so random window sampling reaches
+every domain instead of hitting three contiguous slabs. 1,500 steps per arm, seed 7,
+`--deterministic`, tied embeddings, no ternary, tokenizer as the only difference.
+
+Held-out is 2 MB per domain with a **2 MB discarded gap** between train and held-out in each
+source. Without the gap the slices touch, and one repository or chat thread straddling the
+boundary puts its own text on both sides -- contamination that a larger held-out set does not fix.
+
+### Result (`results/vocab/ab_mixed.json`)
+
+| domain | GPT-2 b/B | 32K b/B | change | 32K tokens/byte |
+|---|---:|---:|---:|---:|
+| code | 2.1637 | **1.9770** | **-8.63%** | 0.3312 vs 0.5048 |
+| English | 2.1983 | 2.2514 | **+2.42%** | 0.2413 vs 0.2329 |
+| chat | 2.5755 | **2.5070** | **-2.66%** | 0.2673 vs 0.3355 |
+| blended at the trained mix | 2.2220 | **2.1434** | -3.54% | -- |
+
+**The blended -3.54% is the least useful number in the table** and is recorded only for
+completeness. It is a property of the mix that happened to be trained on, not of the vocabulary.
+Per-domain figures are the durable result because they re-blend for any other mix without
+another GPU hour.
+
+### The decision rule
+
+Absolute differences (32K minus GPT-2, bits/byte): code **-0.1867**, English **+0.0531**, chat
+**-0.0685**. Solving for where the blend is zero:
+
+| corpus | 32K vs GPT-2 |
+|---|---:|
+| 100% code (Issue #136's model) | **-8.63% (32K wins)** |
+| 30% code / 60% English / 10% chat | -1.4% (32K wins) |
+| **~17% code / 73% English / 10% chat** | **break-even** |
+| 5% code / 85% English / 10% chat | +1.30% (GPT-2 wins) |
+| this repo's current pretrain mix (~65% English / 35% chat) | +0.45% (GPT-2 wins) |
+
+With no chat at all, break-even rises to **~22% code**.
+
+**Recommendation: adopt 32K for the code model (#136); keep GPT-2 for the general/chat line.**
+The single universal answer this issue kept looking for does not exist, and the blended number
+would have hidden that.
+
+### The asymmetry that cuts against the 32K vocab
+
+The arms are matched on TOKENS, not bytes. On this corpus the 32K vocabulary needs 56,127,531
+tokens where GPT-2 needs 70,189,328 for identical text, so at the same 3.07M-token budget **the
+32K arm trained on ~25% more text**.
+
+**It lost on English anyway.** The English penalty is therefore measured *against* a 25% data
+advantage, which means the true penalty is larger than the 2.42% quoted. The same logic flatters
+the code and chat wins by an unknown amount. This is the honest reading in both directions, and
+it is why the recommendation splits by domain rather than declaring a winner.
+
+### A clean confirmation of the compute saving
+
+Both arms ran alone on the GPU this time, so wall times ARE comparable (unlike the code A/B,
+where a duplicate process contended):
+
+- GPT-2 arm 564.3 s, 32K arm 481.2 s -> **ratio 0.853**.
+- Predicted from the audit: 108.3 / 127.0 MFLOP/token = **0.853**.
+
+The measured wall-clock ratio matches the predicted FLOP ratio to three decimals. The smaller
+output head delivers exactly the ~15% per-token saving the parameter audit said it would, with no
+hidden cost elsewhere.
+
+### Limits
+
+- 1,500 steps, one seed, one mix. This sizes direction and rough magnitude; it is not a pretrain.
+- Held-out slices differ from the code-only A/B's, so bits/byte values are NOT comparable across
+  the two runs. Only the within-run GPT-2-vs-32K gap carries meaning.
+- The break-even shares are linear extrapolations from three measured domains. They assume a
+  domain's per-byte difficulty does not change with its share of the mix, which is an assumption,
+  not a measurement.
+
+### Two guards whose only job is to fail
+
+`_check_heldout` refuses to run if any domain's held-out set is under 500K chars, and each domain
+must score at least 200 windows or the run aborts. #139 shipped a held-out set that was silently
+EMPTY -- `read(n)` consumes characters, not bytes, so the slice hit EOF -- and bits/byte would
+have reported `nan` without complaint. A silent `nan` is how a broken measurement becomes a
+published number.
+
+Artifacts: `results/vocab/ab_mixed.json`, `scripts/ab_vocab_mixed.py`, `logs/ab_vocab_mixed.log`.
