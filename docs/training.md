@@ -765,6 +765,10 @@ exact (`tests/test_issue50.py`). Explicit flags always win.
 expands to **bf16 + TF32 + `torch.compile` + Triton scan + async DataLoader (4 workers)**.
 Explicitly-passed levers override the preset (e.g. `--fast --precision fp32`).
 
+> **Update (#142/#143):** `--fast` is now also the default on `continue_ft_hybrid.py` and
+> `finetune_edge_conversational.py`, each measured in its own loop (+39% and +25.5%). See
+> "Fine-tune recipe defaults" below. `continue_ft_looped.py` deliberately has no compile path.
+
 **Use `--fast` for every real training run.** This is not a suggestion added after the fact —
 it is what the project already does. `logs/chinchilla20k_pretrain.log`,
 `logs/chinchilla83m_pretrain.log` and `logs/hybrid_a4_2attn_102k.log` all open with the
@@ -783,6 +787,66 @@ change the model, so an A/B that only needs *speed* parity can keep those.
 `Not enough SMs to use max_autotune_gemm mode` on this card and falls back — documented in the
 speed-ceiling investigation, not an error. `reduce-overhead`/CUDA-graph modes do crash on
 `nn.Embedding` here; plain `torch.compile` (what `--fast` uses) is the supported configuration.
+
+### Fine-tune recipe defaults (Issues #142/#143, 2026-08-11) — and why pretrain gained nothing
+
+**The throughput wins from #141 were a fine-tuning story, not a pretraining one.** Pretrain
+already had both levers; the FT scripts were the ones running slow. Current defaults:
+
+| script | micro-batch | grad_accum | compile | changed? |
+|---|---|---|---|---|
+| `train_edge_conversational.py` (pretrain) | 4 (hardware scan) | 8 | `--fast` on (#129) | **no — already had both** |
+| `continue_ft_hybrid.py` | 4 | 8 | **`--fast` now ON** | compile (#142) |
+| `finetune_edge_conversational.py` | **4** (was 2) | **4** (was 8) | **`--fast` added, ON** | both (#142/#143) |
+| `continue_ft_looped.py` | 4 | 8 | none, deliberately | no |
+
+**Why pretrain was already fine:** `hardware_scan()` picks `batch_size 4 / grad_accum 8`
+whenever free VRAM ≥ 2.5 GB, and only falls back to `batch 2 / grad_accum 16` below that.
+On this card it has always chosen 4. `--fast` has been the default since #129.
+
+> **The low-VRAM fallback now has a known price.** `hardware_scan()`'s `batch 2 / grad_accum 16`
+> branch was written purely as a memory accommodation. #141 measured that config at **−27%
+> throughput** versus `batch 4 / grad_accum 8` at the same effective batch. It is still the right
+> choice when the memory isn't there — but it is a real cost, not a free substitution, and a
+> machine that trips it will train materially slower for reasons the log does not explain.
+
+**`finetune_edge_conversational.py`'s `grad_accum` was halved alongside its batch** so the
+effective batch stays 16. The speedup comes from micro-batch size; changing the effective batch
+would have been a training-dynamics change smuggled in behind a throughput fix.
+
+**The compile gain is loop-specific — do not port the number.** Measured separately in each
+loop, at the same model and card:
+
+| loop | compile gain | noise floor |
+|---|---:|---:|
+| `continue_ft_hybrid` (grounded-QA) | **+39%** | 1.0–1.5% |
+| `finetune_edge_conversational` (OASST + replay) | **+25.5%** | 0.31% |
+
+Both real and far outside their floors; the lever simply pays less on chat data (whose rows pack
+at 1.45 examples/row against grounded-QA's 5.18). Inheriting the first number would have
+overstated the second by ~1.5×.
+
+**`continue_ft_looped.py` is uncompiled on purpose.** `looped_forward_train()` bypasses
+`model.forward()` — the path both measurements above exercise — so compiling the top-level model
+would compile something the script never invokes. Reconsidered under #142 and left alone.
+
+**Two hazards, both checked before the defaults shipped:**
+
+- `torch.compile` prefixes `state_dict` keys with `_orig_mod.`, which would silently produce
+  **unloadable checkpoints** from every run using the new defaults. `_save_edge_checkpoint`
+  already unwraps it.
+- Compile is applied to the **training path only** in `finetune_edge_conversational.py`. Its
+  `sample_reply` generates token-by-token with a growing sequence, so a compiled module there
+  would recompile *per token* — slower than eager.
+
+**Both FT scripts now print peak reserved VRAM and flag a spill on exit**, so #141's silent-spill
+failure (a config reading "fits" on allocated while reserving past the card and running 40%
+slower) cannot pass unnoticed in a real run.
+
+**Still unclaimed for pretrain:** `--n-heads`. #112 measured `8 → 16` at **2.4× at 355M**, and
+#141 at **1.12–1.17× at 83M**, so the win is size-dependent. It changes the architecture
+(`read_norm_weight` is `[n_heads, d_head]`), so it applies only to a **new** pretrain, and its
+quality effect has never been measured.
 
 ### Muon is the default optimizer (Issue #129) — confirmed with ternary ON
 
