@@ -114,6 +114,39 @@ hypothesis fitted after the fact, not a measurement; confirming it needs a profi
   quality effect is unmeasured. Only the batch-size rows are actionable on the current model.
 - Median of 3 rounds, one machine, one seed.
 
+### CONFIRMED end-to-end through the real pipeline (2026-08-10)
+
+The +37.7% above is synthetic tokens with no dataloader. `scripts/confirm_batch_speedup.py`
+re-measures it through the **real** path — real corpus (`grounded_qa_expanded.jsonl`, 5,240
+records), real `GroundedQADataset` + `PackedDataset` packing, and the training loop copied from
+`continue_ft_hybrid.continue_ft` (`doc_ids`, bf16 autocast, `clip_grad_norm_`, AdamW). Both arms
+run 40 optimizer steps at an effective batch of 32 rows = **identical token counts**, arms
+interleaved, 2 rounds:
+
+| mode | b2/ga16 | b4/ga8 | gain |
+|---|---:|---:|---:|
+| eager | 8,201 tok/s | 11,102 tok/s | **+35.4%** |
+| compiled (`--fast`) | 11,413 tok/s | 14,963 tok/s | **+31.1%** |
+
+**The dataloader is not the limit** — time blocked on `next()` was **0.2–0.3%** in every arm.
+That was the one failure mode that would have killed the claim, and it is measured, not assumed.
+
+**Two secondary findings:**
+
+- **`torch.compile` is worth ~+39% on its own** (8,201 → 11,413 at b2), and it **stacks** with
+  the batch change: `compiled + b4` reaches **14,963 tok/s vs 8,201 for eager b2 — 1.82×**.
+- **The batch win shrinks under compile (35.4% → 31.1%), which is evidence for the mechanism
+  this entry could previously only guess at.** The post-hoc explanation above was fixed
+  per-micro-batch overhead amortised over more tokens; `torch.compile` reduces exactly that
+  overhead, so it should leave less for a bigger batch to recover — and it does. Supporting
+  evidence, not proof: a launch-count profile still hasn't been run.
+
+**Limits:** 2 rounds per arm, and the spread within an arm (eager b4: 10,650 vs 11,554, ~8%) is
+wider than the synthetic harness's 1.04% noise floor — real data and a live dataloader are
+noisier. Treat the end-to-end figure as **~30–35%**, not a third significant figure. Absolute
+tok/s is also lower than the synthetic run (8,201 vs 9,087 at b2) because the real path carries
+masking, `doc_ids` and grad clipping; only the ratio transfers.
+
 ### Reproduced on updated `main` after #140 merged (2026-08-10, same day)
 
 Re-run with identical settings on a tree containing #140 (`results_recheck_main.json`):
