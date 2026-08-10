@@ -573,6 +573,9 @@ def _download_oasst(cache_dir: str) -> str:
     return out_path
 
 
+from hvn.vocab import GPT2_EOS_ID, resolve_eos_id  # noqa: E402
+
+
 def _tokenizer_signature(tokenizer) -> str:
     """A short, stable identity for whichever tokenizer produced a .bin.
 
@@ -585,6 +588,43 @@ def _tokenizer_signature(tokenizer) -> str:
     if size is None and hasattr(tokenizer, "get_vocab_size"):
         size = tokenizer.get_vocab_size()
     return f"{name}/{size}"
+
+
+def _fim_signature(fim: dict | None) -> str:
+    """Cache-signature fragment for the FIM configuration (#136).
+
+    Returns "" when FIM is off, so every pre-#136 .bin keeps its existing
+    signature and is not needlessly invalidated. When FIM is on the fragment is
+    appended, which means a cache built WITHOUT the transform can never be
+    silently reused for a FIM run -- the same failure #139 closed for the
+    tokenizer, in the same place, for the same reason: the ids look perfectly
+    valid, they are just the wrong data.
+    """
+    if not fim:
+        return ""
+    return (f"|fim{fim.get('rate', 0.5)}"
+            f"-spm{fim.get('spm_rate', 0.5)}"
+            f"-seed{fim.get('seed', 0)}")
+
+
+def _fim_blockwise(text: str, fim: dict, rng) -> str:
+    """Apply FIM per DOCUMENT within a block of concatenated documents.
+
+    Documents are separated by the corpus separator (``<|endoftext|>``). The
+    transform is meaningless applied to a 4 MB slab of many files -- it would
+    teach the model to relocate whole files, not to fill a gap in one.
+    """
+    from hvn.fim import apply_fim
+    sep = fim.get("separator", "<|endoftext|>")
+    parts = text.split(sep)
+    out = []
+    for part in parts:
+        if part and rng.random() < fim.get("rate", 0.5):
+            out.append(apply_fim(part, rng,
+                                 spm=rng.random() < fim.get("spm_rate", 0.5)))
+        else:
+            out.append(part)
+    return sep.join(out)
 
 
 def _encode_parallel(tokenizer, text: str, n_chunks: int) -> list:
@@ -636,6 +676,7 @@ def _tokenize_text_to_bin(
     max_bytes: int | None = None,
     block_chars: int = 4_000_000,
     encode_workers: int | None = None,
+    fim: dict | None = None,
 ) -> int:
     """Stream-tokenize a UTF-8 text file into an on-disk uint16 .bin of token ids.
 
@@ -655,7 +696,7 @@ def _tokenize_text_to_bin(
     # model, or worse, on ids that are merely WRONG rather than out of range.
     # A sidecar records the tokenizer's identity, and a mismatch refuses to
     # proceed rather than guessing which one is correct.
-    sig = _tokenizer_signature(tokenizer)
+    sig = _tokenizer_signature(tokenizer) + _fim_signature(fim)
     sig_path = bin_path + ".tokenizer"
     if os.path.exists(bin_path) and os.path.getsize(bin_path) > 0:
         prev = None
@@ -693,6 +734,17 @@ def _tokenize_text_to_bin(
     bytes_read = 0
     blocks = 0
     t0 = time.time()
+    # FIM is per-DOCUMENT, but blocks are a fixed number of CHARACTERS, so a
+    # document routinely straddles a block boundary. `pending` carries the
+    # trailing partial document into the next block. Without it, the tail of one
+    # file and the head of the next would be transformed as a single document --
+    # teaching the model to fill gaps that span two unrelated files, which is
+    # both wrong and completely invisible in the output.
+    import random as _random
+    fim_rng = _random.Random(fim.get("seed", 0)) if fim else None
+    fim_sep = (fim or {}).get("separator", "<|endoftext|>")
+    pending = ""
+
     with open(text_path, "r", encoding="utf-8", errors="replace") as fin, \
          open(tmp_path, "wb") as fout:
         while True:
@@ -700,8 +752,27 @@ def _tokenize_text_to_bin(
                 break
             block = fin.read(block_chars)
             if not block:
+                if fim and pending:          # final partial document
+                    block = _fim_blockwise(pending, fim, fim_rng)
+                    pending = ""
+                    bytes_read += len(block.encode("utf-8"))
+                    ids = _encode_parallel(tokenizer, block, encode_workers)
+                    np.asarray(ids, dtype=np.uint16).tofile(fout)
+                    total_tokens += len(ids)
                 break
             bytes_read += len(block.encode("utf-8"))
+            if fim:
+                buf = pending + block
+                head, sep_found, tail = buf.rpartition(fim_sep)
+                if sep_found:
+                    # Everything before the LAST separator is whole documents.
+                    pending = tail
+                    block = _fim_blockwise(head, fim, fim_rng) + fim_sep
+                else:
+                    # No separator in the buffer yet -- keep accumulating rather
+                    # than transform a fragment as if it were a document.
+                    pending = buf
+                    continue
             ids = _encode_parallel(tokenizer, block, encode_workers)
             np.asarray(ids, dtype=np.uint16).tofile(fout)
             total_tokens += len(ids)
@@ -800,6 +871,8 @@ class MixedLocalDataset(Dataset):
         max_repeat: int = 3,
         mix: tuple[float, float, float, float] | None = None,
         val_fraction: float = 0.0,
+        code_corpus: str | None = None,
+        fim: dict | None = None,
     ):
         """Build the mixed dataset from on-disk memory-mapped token files.
 
@@ -875,6 +948,35 @@ class MixedLocalDataset(Dataset):
                   f"(custom tokenizer; GPT-2 caches untouched)")
 
         print("\n  Preparing datasets (tokenize once -> memmap, flat RAM)...")
+
+        # Issue #136: a code model trains on code ALONE, so `code_corpus`
+        # REPLACES the four-source mix rather than becoming a fifth share.
+        # Short-circuiting here matters: falling through would download and
+        # tokenize SlimPajama, OASST and WikiText for a run that uses none of
+        # them -- hours of work whose only effect is to fill the disk.
+        if code_corpus is not None:
+            if not os.path.exists(code_corpus):
+                raise FileNotFoundError(
+                    f"code corpus {code_corpus!r} not found. Build it with "
+                    f"scripts/download_the_stack.py then "
+                    f"scripts/extract_the_stack.py.")
+            print(f"    Code-only corpus: {code_corpus} "
+                  f"({os.path.getsize(code_corpus) / 1024**3:.2f} GB)")
+            if fim:
+                print(f"    FIM: rate={fim.get('rate')} "
+                      f"spm_rate={fim.get('spm_rate')} seed={fim.get('seed')}")
+            else:
+                print("    FIM: OFF")
+            code_bin = _bin("code")
+            _tokenize_text_to_bin(code_corpus, code_bin, enc, fim=fim)
+            self._source_paths = [os.path.abspath(code_bin)]
+            self._source_dtype = np.uint16
+            self.source_names = ["Code"]
+            self.sources = [np.memmap(code_bin, dtype=np.uint16, mode="r")]
+            self.total_tokens = int(len(self.sources[0]))
+            self.mix = (1.0,)
+            self._build_code_index(seq_len, val_fraction)
+            return
 
         # 1. SlimPajama-627B (50%) — language foundation
         lang_path = _download_language_foundation(slimpajama_max_bytes, cache_dir, slimpajama_dir)
@@ -1100,6 +1202,61 @@ class MixedLocalDataset(Dataset):
             f"{names[s]}={counts[s]:,} ({100 * counts[s] / tot:.1f}%)"
             for s in range(len(self.sources))))
 
+    def _build_code_index(self, seq_len: int, val_fraction: float) -> None:
+        """Window index for the single-source code corpus (#136).
+
+        The held-out split is the CONTIGUOUS TAIL of the corpus, not a random
+        sample of windows, and one window is dropped between train and val as a
+        gap. Both choices matter:
+
+        - A random split would put windows from the same source FILE on both
+          sides. Code repeats itself heavily within a file (imports, boilerplate,
+          the same helper called twenty times), so a random split measures
+          memorisation of files the model has already read. That is the shape of
+          the mistake retracted in #132.
+        - Without the gap, the last train window and the first val window share
+          no tokens but sit adjacent, and a model that has seen the train window
+          has effectively seen the val window's immediate context.
+
+        The corpus is written in language order, so the tail is SQL-heavy rather
+        than representative. Recorded as a known limit: this split is for
+        watching the loss curve, not for a language-stratified quality claim.
+        """
+        arr = self.sources[0]
+        n_win = (len(arr) - seq_len - 1) // seq_len + 1 if len(arr) >= seq_len + 1 else 0
+        if n_win <= 0:
+            raise ValueError(
+                f"code corpus has {len(arr):,} tokens, too few for seq_len="
+                f"{seq_len}")
+        starts = np.arange(n_win, dtype=np.int64) * seq_len
+
+        n_val = int(n_win * val_fraction)
+        if n_val > 0 and n_win - n_val - 1 > 0:
+            train_starts = starts[: n_win - n_val - 1]   # -1 = the gap window
+            val_starts = starts[n_win - n_val:]
+        else:
+            train_starts = starts
+            val_starts = np.zeros(0, dtype=np.int64)
+
+        perm = np.random.RandomState(42).permutation(len(train_starts))
+        self.starts = train_starts[perm]
+        self.src_ids = np.zeros(len(self.starts), dtype=np.uint8)
+
+        if len(val_starts):
+            vperm = np.random.RandomState(1234).permutation(len(val_starts))
+            self.val_starts = val_starts[vperm]
+            self.val_src_ids = np.zeros(len(self.val_starts), dtype=np.uint8)
+        else:
+            self.val_starts = np.zeros(0, dtype=np.int64)
+            self.val_src_ids = np.zeros(0, dtype=np.uint8)
+
+        self.total_chunks = len(self.starts)
+        print()
+        print(f"    Code dataset: {len(self.starts):,} train windows "
+              f"({len(self.val_starts):,} held-out), seq_len={seq_len}, "
+              f"{self.total_tokens:,} tokens "
+              f"({self.total_tokens / 1e9:.2f}B)")
+
     def val_dataset(self) -> "_WindowDataset":
         """Return a Dataset over the held-out validation windows (token-disjoint
         from train), sharing the same memory-mapped sources."""
@@ -1170,6 +1327,35 @@ class WikiText103LocalDataset(Dataset):
         return x, y
 
 
+def _check_fim_tokenizer(tokenizer) -> None:
+    """Refuse --fim unless the tokenizer carries the sentinels as single tokens.
+
+    Without them each sentinel encodes to EIGHT tokens. Training would proceed
+    perfectly happily -- no error, a normal-looking loss curve -- while every FIM
+    document carried 24 tokens of overhead and the model tried to learn that a
+    particular 8-token sequence is structural punctuation. The failure is only
+    visible days later as a model that is oddly bad at completion.
+
+    Returns None so the caller can use it inline; raises on failure.
+    """
+    from hvn.fim import FIM_TOKENS
+    bad = []
+    for t in FIM_TOKENS:
+        try:
+            n = len(tokenizer.encode(t))
+        except Exception:                      # pragma: no cover - defensive
+            n = -1
+        if n != 1:
+            bad.append(f"{t} -> {n} tokens")
+    if bad:
+        raise SystemExit(
+            "--fim requires a tokenizer with the FIM sentinels as single "
+            "tokens, but: " + "; ".join(bad) + ".\n"
+            "Build one with: python scripts/build_fim_tokenizer.py\n"
+            "then pass: --tokenizer data_cache/tokenizer_32k_fim")
+    return None
+
+
 def build_dataset_pipeline(
     tokenizer,
     seq_len: int,
@@ -1184,6 +1370,8 @@ def build_dataset_pipeline(
     mix: tuple[float, float, float, float] | None = None,
     slimpajama_token_bytes: int = 500 * 1024**2,
     max_repeat: int = 3,
+    code_corpus: str | None = None,
+    fim: dict | None = None,
 ) -> tuple[DataLoader, "DataLoader | None", dict]:
     """Build the mixed-source train (and held-out val) DataLoaders + stats.
 
@@ -1241,8 +1429,10 @@ def build_dataset_pipeline(
             max_repeat=max_repeat,
             mix=mix,
             val_fraction=val_fraction,
+            code_corpus=code_corpus,
+            fim=fim,
         )
-        stats["source"] = "mixed_local"
+        stats["source"] = "code_only" if code_corpus else "mixed_local"
         stats["total_tokens"] = dataset.total_tokens
         stats["num_samples"] = len(dataset)
         print(f"  Tokens: {stats['total_tokens']}")
@@ -1482,6 +1672,7 @@ def build_model_and_config(
     precision: str = "bf16",
     lr: float = 3e-4,
     vocab_size: int = GPT2_VOCAB_SIZE,
+    eos_token_id: int | None = None,
 ) -> tuple[EdgeHVN, dict]:
     """Build the EdgeHVN model with DeltaNet (or transformer baseline) + config.
 
@@ -1593,6 +1784,16 @@ def build_model_and_config(
         attn_window=attn_window,
         grad_checkpoint=grad_checkpoint,
         tie_embeddings=tie_embeddings,
+        # #139 gave EdgeHVN an eos_token_id and main() has passed one ever since,
+        # but this function never accepted the argument -- so every call through
+        # main() raised TypeError at model construction. It went unnoticed
+        # because every A/B harness since then (ab_vocab_on_code, ab_vocab_mixed,
+        # size_sweep) calls build_model_and_config directly and never reaches
+        # main(). The measurement scripts bypassing main() is exactly why main()
+        # rotted. Resolved rather than defaulted: a 32K model's EOS is 0, and 0
+        # is falsy, so `or` here would silently substitute GPT-2's 50256.
+        eos_token_id=(eos_token_id if eos_token_id is not None
+                      else resolve_eos_id(tokenizer=tokenizer)),
     )
     param_count = sum(p.numel() for p in model.parameters())
     config["param_count"] = param_count
@@ -1807,6 +2008,14 @@ def pre_training_audit(
             print(f"    ✓ n_heads in checkpoint: {ckpt.get('n_heads', 'MISSING')}")
 
             # Rebuild model from checkpoint metadata and verify state_dict loads
+            # Every field the checkpoint records must be replayed here, or the
+            # audit rebuilds a DIFFERENT model and its own check fails.
+            # block_plan/attn_window/tie_embeddings were saved but never passed:
+            # invisible for arch=hvn (block_plan is None there), fatal for the
+            # hybrid, which is the architecture this project actually trains.
+            # The audit could not have passed on a hybrid since block_plan was
+            # added -- and nothing noticed, because the audit only ever ran on
+            # the plain arch.
             rebuilt = EdgeHVN(
                 vocab_size=ckpt["vocab_size"],
                 d_model=ckpt["d_model"],
@@ -1815,6 +2024,10 @@ def pre_training_audit(
                 use_deltanet=ckpt.get("use_deltanet", False),
                 deltanet_conv_kernel=ckpt.get("deltanet_conv_kernel", 4),
                 block_type=ckpt.get("block_type", None),
+                block_plan=ckpt.get("block_plan", None),
+                attn_window=ckpt.get("attn_window", None),
+                tie_embeddings=ckpt.get("tie_embeddings", False),
+                eos_token_id=ckpt.get("eos_token_id", GPT2_EOS_ID),
             )
             # Apply ternary to rebuilt model (same layers as original) — only if the
             # checkpoint was ternary (fp32 A/B runs skip it).
@@ -1884,6 +2097,62 @@ def find_latest_checkpoint(checkpoint_dir: str) -> str | None:
         return base_path
 
     return None
+
+
+def _check_resume_matches_request(requested, ckpt: dict, path: str, args) -> None:
+    """Refuse to resume a checkpoint whose architecture is not what was asked for.
+
+    Resuming replaces the model built from the CLI flags with one rebuilt from
+    the checkpoint. That is correct when continuing the same run and catastrophic
+    otherwise: a stale checkpoint in the default directory silently overrides
+    --d-model, --num-layers, --arch and the vocabulary, and the only visible
+    symptom is a parameter count nobody is reading closely.
+
+    Observed on 2026-08-10: a request for d=896/16L (157M) trained a 28M model
+    resumed from an unrelated 83M-line checkpoint, at step 100 of 120, with no
+    warning. It also silently invalidates the pre-training audit, which ran
+    against the discarded model.
+
+    This is the mirror of #139's tokenizer-cache guard: same failure (stale
+    artifact quietly preferred over the request), same fix (compare and refuse).
+    """
+    def _want(attr, default=None):
+        v = getattr(args, attr, None)
+        return default if v is None else v
+
+    mismatches = []
+    checks = [
+        ("d_model", ckpt.get("d_model"), _want("d_model")),
+        ("num_layers", ckpt.get("num_layers"), _want("num_layers")),
+        ("n_heads", ckpt.get("n_heads"), _want("n_heads")),
+        ("vocab_size", ckpt.get("vocab_size"),
+         getattr(requested, "vocab_size", None)),
+        ("tie_embeddings", bool(ckpt.get("tie_embeddings", False)),
+         bool(_want("tie_embeddings", False))),
+    ]
+    for name, have, want in checks:
+        if want is not None and have is not None and have != want:
+            mismatches.append(f"{name}: checkpoint={have}, requested={want}")
+
+    ckpt_plan = ckpt.get("block_plan")
+    want_hybrid = getattr(args, "arch", None) == "hvn-hybrid"
+    if want_hybrid and not ckpt_plan:
+        mismatches.append("arch: checkpoint is not hybrid, requested hvn-hybrid")
+    if ckpt_plan and not want_hybrid:
+        mismatches.append(f"arch: checkpoint is hybrid, requested "
+                          f"{getattr(args, 'arch', '?')}")
+
+    if mismatches:
+        raise SystemExit(
+            f"\nRefusing to resume: {path}\n"
+            f"  its architecture does not match what this run asked for:\n"
+            + "".join(f"    - {m}\n" for m in mismatches)
+            + "\n  Resuming would silently train the CHECKPOINT's model and "
+              "discard your\n  flags -- and the pre-training audit you just "
+              "passed was run against\n  the model being discarded.\n\n"
+              "  Either point --checkpoint-dir at a fresh directory for this "
+              "run, or\n  delete/move the checkpoint if you meant to start "
+              "over.\n")
 
 
 def load_checkpoint_for_resume(
@@ -2556,6 +2825,34 @@ def main():
     parser.add_argument("--fineweb-edu-token-bytes", type=int, default=None,
                         help="Cap on FineWeb-Edu text tokenized, in UTF-8 bytes. Default "
                              "None = use everything that's been downloaded.")
+    # --- Issue #136: code-only pretrain + Fill-in-the-Middle ---
+    parser.add_argument("--code-corpus", type=str, default=None,
+                        help="Path to a code corpus .txt (built by "
+                             "scripts/extract_the_stack.py). REPLACES the "
+                             "four-source mix entirely -- a code model trains on "
+                             "code alone -- so SlimPajama/OASST/WikiText are "
+                             "never downloaded or tokenized for such a run.")
+    parser.add_argument("--fim", action="store_true", default=False,
+                        help="Fill-in-the-Middle (Bavarian et al. 2022). A "
+                             "TRAINING-DATA transform, so it must be chosen "
+                             "before the pretrain -- it cannot be added to a "
+                             "finished model. Requires a tokenizer carrying the "
+                             "three sentinels: build one with "
+                             "scripts/build_fim_tokenizer.py and pass "
+                             "--tokenizer data_cache/tokenizer_32k_fim.")
+    parser.add_argument("--fim-rate", type=float, default=0.5,
+                        help="Fraction of documents transformed. Below 1.0 on "
+                             "purpose: the model must still generate forward "
+                             "from a cursor with nothing after it.")
+    parser.add_argument("--fim-spm-rate", type=float, default=0.5,
+                        help="Fraction of FIM documents using SPM (suffix "
+                             "first) rather than PSM.")
+    parser.add_argument("--fim-seed", type=int, default=0,
+                        help="Seed for cut points. Part of the .bin cache "
+                             "signature, so changing it re-tokenizes rather "
+                             "than silently reusing differently-cut data.")
+    parser.add_argument("--fim-separator", type=str, default="<|endoftext|>",
+                        help="Document separator in the corpus file.")
     parser.add_argument("--pretrain-mix", type=str, default=None,
                         help="Pretrain source mix as 'slim,oasst,wiki,fineweb_edu' fractions "
                              "(e.g. '0.85,0.0,0.15,0.0' = knowledge-heavy mix that DROPS "
@@ -2908,6 +3205,11 @@ def main():
         mix=args.pretrain_mix,
         slimpajama_token_bytes=args.slimpajama_token_bytes,
         max_repeat=args.max_repeat,
+        code_corpus=args.code_corpus,
+        fim=(_check_fim_tokenizer(tokenizer) or
+             {"rate": args.fim_rate, "spm_rate": args.fim_spm_rate,
+              "seed": args.fim_seed, "separator": args.fim_separator}
+             if args.fim else None),
     )
 
     # === Step 3: Training Configuration ===
@@ -2969,7 +3271,14 @@ def main():
     if resume_ckpt:
         print(f"\n  Found existing checkpoint: {resume_ckpt}")
         print(f"  Resuming training from this checkpoint...")
-        model, resume_step, _ = load_checkpoint_for_resume(resume_ckpt, device)
+        _resumed, resume_step, _ckpt = load_checkpoint_for_resume(resume_ckpt, device)
+        # Resuming REPLACES the model built from the CLI flags. Without this
+        # check that swap is silent: ask for d=896/16L, leave an unrelated
+        # checkpoint in the default directory, and you train a 28M model while
+        # the log says nothing. It also makes the pre-training audit decorative,
+        # since the audit validated the model that just got thrown away.
+        _check_resume_matches_request(model, _ckpt, resume_ckpt, args)
+        model = _resumed
         print(f"  Resumed at step {resume_step}")
         # Optimizer momentum + BCD cycle position (Issue #112) live in a separate
         # rolling file, not in the archived checkpoint — see _save_resume_state.
