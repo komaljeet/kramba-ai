@@ -32,10 +32,46 @@ flat regions would have meant something.
 
 ### What to change today
 
-**`--batch-size 4 --grad-accum 8`** in place of `batch 2 / grad_accum 16`. Same effective batch,
-same gradient, same result — **+37.7% throughput**, at 3,974 MiB reserved on a 6,140 MiB card.
-A 2-hour continued-FT becomes ~1h27. This applies to the *existing* checkpoint; nothing about
-the model changes.
+**`--batch-size 4 --grad-accum 8`** in place of `batch 2 / grad_accum 16`. Same effective batch
+(32 rows) — **+37.7% throughput**, at 3,974 MiB reserved on a 6,140 MiB card. A 2-hour
+continued-FT becomes ~1h27. This applies to the *existing* checkpoint; nothing about the model
+changes.
+
+> **⚠️ CORRECTION (2026-08-10, later): "same gradient, same result" was wrong.** This entry
+> originally claimed the two configs compute an identical gradient. They do not, and the reason
+> matters more than the size of the error. The loss is **masked** (`ignore_index=-100`,
+> `continue_ft_hybrid.py:189`) — only answer tokens count — so each micro-batch's loss is a mean
+> over its *own* unmasked-token count `N_g`, and `loss / grad_accum` then weights every
+> micro-batch equally regardless of `N_g`:
+>
+> ```
+> accumulated = (1/G) · Σ_g [ (1/N_g) · Σ_{i∈g} ℓ_i ]     vs     true = (1/ΣN_g) · Σ_all ℓ_i
+> ```
+>
+> Equal only if every `N_g` is identical, which masking guarantees they are not. This is the
+> standard gradient-accumulation normalisation gap.
+>
+> **Measured** (`scripts/check_grad_accum_weighting.py`, real packed corpus, 200 draws of 32 rows):
+>
+> | micro-batch | grad_accum | max row over-weight | mean deviation from true batch loss |
+> |---:|---:|---:|---:|
+> | 1 | 32 | 1.437× | 13.5% |
+> | **2** (old recipe) | 16 | 1.241× | **9.5%** |
+> | **4** (new recipe) | 8 | 1.135× | **6.5%** |
+> | 8 | 4 | 1.069× | 4.3% |
+> | 32 | 1 | 1.000× | 0.0% |
+>
+> **The direction is favourable: `b4/ga8` is 31% *closer* to the true token-weighted objective
+> than `b2/ga16`.** So the speedup is not bought with a worse gradient — but "identical" was
+> never true, and neither config computes the true batch loss.
+>
+> The effect is small here only because packing (#132) makes rows uniform: 14.2 answer tokens
+> per row, sd 2.4, CV 0.171. **On ragged, unpacked, or heavily-masked data the distortion grows**
+> — at micro-batch 1 it is already 13.5%. Any future recipe that changes `grad_accum` should
+> check this rather than assume accumulation is free.
+>
+> **Still unmeasured:** what either gradient does to a *trained* model. This shows the gradients
+> differ and in which direction, not the downstream quality effect.
 
 **Do not go to batch 8.** It reserves 6,512 MiB against a 5.9966 GiB card and Windows WDDM backs
 the overflow with host RAM — it does not OOM, it just runs **40% slower than batch 2** while
