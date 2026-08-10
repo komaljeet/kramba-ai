@@ -5,6 +5,79 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## The 83M was starving the GPU — `batch 2 → 4` is +37.7% for free (Issue #141, 2026-08-10)
+
+**One line: the fine-tune recipe's `batch_size=2` leaves ~38% of this card's throughput on the
+table, at identical effective batch and identical maths. And the `N = B·H` occupancy story that
+motivated the sweep is refuted by its own results.**
+
+`scripts/throughput_sweep.py`, RTX 4050 (20 SMs, 5.9966 GiB), eager, seq 512, **effective batch
+held at 32** (`grad_accum` derived per arm, so every arm does the same optimizer maths), 3
+interleaved rounds × 32 timed micro-batches, 83M 2-attn hybrid + ternary + Triton scan:
+
+| arm | B·H | tok/s | vs `b2_h8` | alloc | reserved | fit |
+|---|---:|---:|---:|---:|---:|---|
+| b1_h8 | 8 | 5,376 | −40.8% | 1,655 | 1,738 | ok |
+| **b2_h8** (today's recipe) | 16 | 9,087 | — | 2,458 | 2,538 | ok |
+| **b4_h8** | 32 | **12,511** | **+37.7%** | 3,491 | 3,974 | ok |
+| b8_h8 | 64 | 5,396 | −40.6% | 5,586 | **6,512** | ❌ **SPILLED** |
+| b1_h16 | 16 | 5,882 | −35.3% | 1,655 | 1,738 | ok |
+| b2_h16 | 32 | 10,181 | +12.0% | 2,461 | 2,542 | ok |
+| **b4_h16** | 64 | **14,608** | **+60.8%** | 3,496 | 3,980 | ok |
+| b8_h16 | 128 | 5,143 | −43.4% | 5,596 | **6,512** | ❌ **SPILLED** |
+
+Noise floor (the `b2_h8` config entered twice under two names): **1.49%**. Positive control
+(batch 1, 8 programs for 20 SMs): **−40.8%** — the harness resolves occupancy effects, so its
+flat regions would have meant something.
+
+### What to change today
+
+**`--batch-size 4 --grad-accum 8`** in place of `batch 2 / grad_accum 16`. Same effective batch,
+same gradient, same result — **+37.7% throughput**, at 3,974 MiB reserved on a 6,140 MiB card.
+A 2-hour continued-FT becomes ~1h27. This applies to the *existing* checkpoint; nothing about
+the model changes.
+
+**Do not go to batch 8.** It reserves 6,512 MiB against a 5.9966 GiB card and Windows WDDM backs
+the overflow with host RAM — it does not OOM, it just runs **40% slower than batch 2** while
+looking healthy. This is exactly the failure `docs/training.md` warns about, reproduced: had the
+sweep tracked only `max_memory_allocated` (5,586 MiB, comfortably "fitting"), the conclusion
+would have been *"throughput collapses above batch 4"* instead of *"batch 8 does not fit"*.
+
+### The refutation
+
+The sweep was built on `docs/training.md`'s claim that throughput is set by `N = B·H` programs
+filling 20 SMs. **That model is wrong**, and its own prediction is what falsifies it: equal `B·H`
+must give equal throughput.
+
+| pair at equal B·H | tok/s | gap |
+|---|---:|---:|
+| b2_h8 vs b1_h16 (both B·H = 16) | 9,087 vs 5,882 | **55%** |
+| b4_h8 vs b2_h16 (both B·H = 32) | 12,511 vs 10,181 | **23%** |
+
+**Batch and heads are not interchangeable, and batch dominates.** Doubling batch is worth
++37.7% where doubling heads is worth +12.0% from the same starting point. The residual head
+effect is real but small at this size (+12% at b2, +16.8% at b4) — nothing like the 2.4×
+recorded at 355M, which suggests the head win is size-dependent (d_head 128→64 there vs 64→32
+here) rather than a general property.
+
+A better-fitting explanation is **fixed per-micro-batch overhead** — kernel launches, Python
+dispatch, the optimizer's own work — amortised over more tokens as the batch grows. More heads
+split the *same* tokens across more programs and so cannot amortise anything. This is a
+hypothesis fitted after the fact, not a measurement; confirming it needs a profile
+(`aten::` launch counts per micro-batch vs batch size), which was not run.
+
+### Limits, stated because they bound the claim
+
+- **Synthetic tokens, no dataloader.** Real runs have a loader that may not keep a 2× larger
+  batch fed. The +37.7% is the compute-side ceiling; confirm with a short real run before
+  quoting it as end-to-end. Packing (#132, on by default) also changes tokens-per-step.
+- **Eager, not `--fast`.** `torch.compile` changes launch overhead, which is exactly the
+  quantity the fitted explanation depends on.
+- **`n_heads` changes the architecture** (`read_norm_weight` is `[n_heads, d_head]`), so the
+  h=16 rows apply to a *new* pretrain, not to `hybrid_a4_v2/hybrid_a4_step8000.pt` — and their
+  quality effect is unmeasured. Only the batch-size rows are actionable on the current model.
+- Median of 3 rounds, one machine, one seed.
+
 ## EdgeHVN 83M — the measured PPL picture (2026-07-10)
 
 The 83M has **three separate PPL/capability readings on three different data types** —

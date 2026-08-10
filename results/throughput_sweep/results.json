@@ -1,0 +1,282 @@
+{
+  "issue": 141,
+  "what_this_measures": "training throughput vs batch_size x n_heads",
+  "not_a_quality_result": "n_heads changes the architecture; quality unmeasured",
+  "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "sms": 20,
+  "card_mib": 6140.5,
+  "config": {
+    "checkpoint": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\checkpoints\\hybrid_a4_v2\\hybrid_a4_step8000.pt",
+    "seq_len": 512,
+    "batches": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "heads": [
+      8,
+      16
+    ],
+    "effective_batch": 32,
+    "warmup_steps": 6,
+    "timed_steps": 32,
+    "repeats": 3,
+    "out": "results\\throughput_sweep\\results.json"
+  },
+  "model": {
+    "d_model": 512,
+    "num_layers": 12,
+    "vocab_size": 50257
+  },
+  "checkpoint_n_heads": 8,
+  "samples": {
+    "b1_h8": [
+      {
+        "seconds": 3.2343121999997493,
+        "grad_accum": 32,
+        "tokens_per_sec": 5065.682898515879,
+        "peak_alloc_mib": 1655.14453125,
+        "peak_reserved_mib": 1738.0,
+        "spilled": false
+      },
+      {
+        "seconds": 3.0474779000001035,
+        "grad_accum": 32,
+        "tokens_per_sec": 5376.248995931831,
+        "peak_alloc_mib": 1654.64453125,
+        "peak_reserved_mib": 1738.0,
+        "spilled": false
+      },
+      {
+        "seconds": 3.028127300000051,
+        "grad_accum": 32,
+        "tokens_per_sec": 5410.604765526114,
+        "peak_alloc_mib": 1654.64453125,
+        "peak_reserved_mib": 1738.0,
+        "spilled": false
+      }
+    ],
+    "b2_h8": [
+      {
+        "seconds": 3.6410334000001967,
+        "grad_accum": 16,
+        "tokens_per_sec": 8999.642793718462,
+        "peak_alloc_mib": 2457.6787109375,
+        "peak_reserved_mib": 2538.0,
+        "spilled": false
+      },
+      {
+        "seconds": 3.605972700000166,
+        "grad_accum": 16,
+        "tokens_per_sec": 9087.145889928255,
+        "peak_alloc_mib": 2457.6787109375,
+        "peak_reserved_mib": 2538.0,
+        "spilled": false
+      },
+      {
+        "seconds": 3.5715211000001545,
+        "grad_accum": 16,
+        "tokens_per_sec": 9174.802299221636,
+        "peak_alloc_mib": 2457.6787109375,
+        "peak_reserved_mib": 2538.0,
+        "spilled": false
+      }
+    ],
+    "b4_h8": [
+      {
+        "seconds": 5.238110499999948,
+        "grad_accum": 8,
+        "tokens_per_sec": 12511.381728201544,
+        "peak_alloc_mib": 3491.3271484375,
+        "peak_reserved_mib": 3974.0,
+        "spilled": false
+      },
+      {
+        "seconds": 5.265747099999771,
+        "grad_accum": 8,
+        "tokens_per_sec": 12445.71734179996,
+        "peak_alloc_mib": 3491.3271484375,
+        "peak_reserved_mib": 3974.0,
+        "spilled": false
+      },
+      {
+        "seconds": 5.238022999999885,
+        "grad_accum": 8,
+        "tokens_per_sec": 12511.59072802877,
+        "peak_alloc_mib": 3491.3271484375,
+        "peak_reserved_mib": 3974.0,
+        "spilled": false
+      }
+    ],
+    "b8_h8": [
+      {
+        "seconds": 24.293572099999892,
+        "grad_accum": 4,
+        "tokens_per_sec": 5395.336653682172,
+        "peak_alloc_mib": 5585.8974609375,
+        "peak_reserved_mib": 6512.0,
+        "spilled": true
+      },
+      {
+        "seconds": 24.288677500000176,
+        "grad_accum": 4,
+        "tokens_per_sec": 5396.423909864959,
+        "peak_alloc_mib": 5585.8974609375,
+        "peak_reserved_mib": 6512.0,
+        "spilled": true
+      },
+      {
+        "seconds": 24.272721400000137,
+        "grad_accum": 4,
+        "tokens_per_sec": 5399.971343963074,
+        "peak_alloc_mib": 5585.8974609375,
+        "peak_reserved_mib": 6512.0,
+        "spilled": true
+      }
+    ],
+    "b1_h16": [
+      {
+        "seconds": 2.785507499999767,
+        "grad_accum": 32,
+        "tokens_per_sec": 5881.872513357574,
+        "peak_alloc_mib": 1655.42578125,
+        "peak_reserved_mib": 1738.0,
+        "spilled": false
+      },
+      {
+        "seconds": 2.8012391000002026,
+        "grad_accum": 32,
+        "tokens_per_sec": 5848.840250730048,
+        "peak_alloc_mib": 1655.42578125,
+        "peak_reserved_mib": 1738.0,
+        "spilled": false
+      },
+      {
+        "seconds": 2.766719500000363,
+        "grad_accum": 32,
+        "tokens_per_sec": 5921.814625587397,
+        "peak_alloc_mib": 1655.42578125,
+        "peak_reserved_mib": 1738.0,
+        "spilled": false
+      }
+    ],
+    "b2_h16": [
+      {
+        "seconds": 3.204564500000288,
+        "grad_accum": 16,
+        "tokens_per_sec": 10225.414404982972,
+        "peak_alloc_mib": 2460.5068359375,
+        "peak_reserved_mib": 2542.0,
+        "spilled": false
+      },
+      {
+        "seconds": 3.233838900000137,
+        "grad_accum": 16,
+        "tokens_per_sec": 10132.848609124781,
+        "peak_alloc_mib": 2460.5068359375,
+        "peak_reserved_mib": 2542.0,
+        "spilled": false
+      },
+      {
+        "seconds": 3.218682499999886,
+        "grad_accum": 16,
+        "tokens_per_sec": 10180.563009865422,
+        "peak_alloc_mib": 2460.5068359375,
+        "peak_reserved_mib": 2542.0,
+        "spilled": false
+      }
+    ],
+    "b4_h16": [
+      {
+        "seconds": 4.497512999999799,
+        "grad_accum": 8,
+        "tokens_per_sec": 14571.608798018578,
+        "peak_alloc_mib": 3496.4052734375,
+        "peak_reserved_mib": 3980.0,
+        "spilled": false
+      },
+      {
+        "seconds": 4.486336400000255,
+        "grad_accum": 8,
+        "tokens_per_sec": 14607.910365347609,
+        "peak_alloc_mib": 3496.4052734375,
+        "peak_reserved_mib": 3980.0,
+        "spilled": false
+      },
+      {
+        "seconds": 4.481628399999863,
+        "grad_accum": 8,
+        "tokens_per_sec": 14623.256136095979,
+        "peak_alloc_mib": 3496.4052734375,
+        "peak_reserved_mib": 3980.0,
+        "spilled": false
+      }
+    ],
+    "b8_h16": [
+      {
+        "seconds": 25.484199699999863,
+        "grad_accum": 4,
+        "tokens_per_sec": 5143.265299400425,
+        "peak_alloc_mib": 5595.4755859375,
+        "peak_reserved_mib": 6512.0,
+        "spilled": true
+      },
+      {
+        "seconds": 25.399404199999935,
+        "grad_accum": 4,
+        "tokens_per_sec": 5160.436007392659,
+        "peak_alloc_mib": 5595.4755859375,
+        "peak_reserved_mib": 6512.0,
+        "spilled": true
+      },
+      {
+        "seconds": 25.599769899999956,
+        "grad_accum": 4,
+        "tokens_per_sec": 5120.046020413653,
+        "peak_alloc_mib": 5595.4755859375,
+        "peak_reserved_mib": 6512.0,
+        "spilled": true
+      }
+    ],
+    "noise_twin": [
+      {
+        "seconds": 3.5907305000000633,
+        "grad_accum": 16,
+        "tokens_per_sec": 9125.719682944577,
+        "peak_alloc_mib": 2457.6787109375,
+        "peak_reserved_mib": 2538.0,
+        "spilled": false
+      },
+      {
+        "seconds": 3.553006000000096,
+        "grad_accum": 16,
+        "tokens_per_sec": 9222.613190070357,
+        "peak_alloc_mib": 2457.6787109375,
+        "peak_reserved_mib": 2538.0,
+        "spilled": false
+      },
+      {
+        "seconds": 3.5334179000001313,
+        "grad_accum": 16,
+        "tokens_per_sec": 9273.740306800048,
+        "peak_alloc_mib": 2457.6787109375,
+        "peak_reserved_mib": 2538.0,
+        "spilled": false
+      }
+    ]
+  },
+  "spilled": {
+    "b1_h8": false,
+    "b2_h8": false,
+    "b4_h8": false,
+    "b8_h8": true,
+    "b1_h16": false,
+    "b2_h16": false,
+    "b4_h16": false,
+    "b8_h16": true,
+    "noise_twin": false
+  },
+  "noise_floor_pct": 1.4907574037327473,
+  "positive_control_passed": true
+}
