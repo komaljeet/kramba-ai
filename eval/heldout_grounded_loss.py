@@ -102,7 +102,7 @@ def corpus_loss(model, loader, device, use_bf16: bool) -> tuple[float, int]:
         x, y = x.to(device), y.to(device)
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_bf16):
             logits = model(x)
-        loss = crit(logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1))
+        loss = crit(logits.reshape(-1, logits.size(-1)).float(), y.reshape(-1))
         total += float(loss.item())
         n_tok += int((y != -100).sum().item())
     return total / max(1, n_tok), n_tok

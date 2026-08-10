@@ -84,7 +84,7 @@ def run(model, loader, device, steps, packed):
 
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
             logits = model(x) if doc is None else model(x, doc_ids=doc)
-            loss = crit(logits.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1))
+            loss = crit(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()

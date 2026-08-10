@@ -66,7 +66,7 @@ def per_token_loss(model, x, y, autocast: bool = True):
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=autocast):
         logits = model(x)
     return F.cross_entropy(
-        logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1),
+        logits.reshape(-1, logits.size(-1)).float(), y.reshape(-1),
         reduction="none",
     ).view(y.shape)
 

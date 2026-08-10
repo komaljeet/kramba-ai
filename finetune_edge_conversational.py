@@ -517,7 +517,7 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
             y = y.to(device, non_blocking=True)
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 logits = model(x) if doc_ids is None else model(x, doc_ids=doc_ids)
-                loss = criterion(logits.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1))
+                loss = criterion(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
                 loss = loss / grad_accum
             loss.backward()
             accum_loss_t += loss.detach()

@@ -75,6 +75,7 @@ class EdgeHVN(nn.Module):
         attn_window: Optional[int] = None,
         grad_checkpoint: bool = False,
         tie_embeddings: bool = False,
+        eos_token_id: int = 50256,
         moe_experts: int = 1,
         moe_top_k: int = 2,
     ):
@@ -177,6 +178,13 @@ class EdgeHVN(nn.Module):
         # `use_mlp` default is False (EdgeHVN never sets it True), so
         # `self.decoder.decoder` is always a plain nn.Linear here.
         self.tie_embeddings = tie_embeddings
+        # Issue #139: EOS is a property of the TOKENIZER, not a constant. GPT-2's
+        # is 50256; the 32K vocab's is 0. A 32K model served with EOS_ID=50256
+        # would never sample that id -- it is out of range -- so generation would
+        # run to the token limit on every single turn, silently, and look like a
+        # quality problem rather than a configuration one. Defaults to GPT-2's so
+        # every existing checkpoint and caller is unchanged.
+        self.eos_token_id = eos_token_id
         if tie_embeddings:
             # nn.Embedding's default init (std~1.0) is ~20x larger than
             # nn.Linear's (std~0.05 at this scale) -- tying naively (keeping
@@ -576,7 +584,7 @@ class EdgeHVN(nn.Module):
         history -- matches the common convention (e.g. HF `generate`'s
         default window) and keeps the cost O(turn length) not O(history).
         """
-        EOS_ID = 50256
+        EOS_ID = getattr(self, "eos_token_id", 50256)
         if device is None:
             device = next(self.parameters()).device
 

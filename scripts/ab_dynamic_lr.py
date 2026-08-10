@@ -84,7 +84,7 @@ def evaluate_pairs(model, pairs, device) -> float:
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
             logits = model(x)
             loss = nn.functional.cross_entropy(
-                logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1))
+                logits.reshape(-1, logits.size(-1)).float(), y.reshape(-1))
         total += float(loss)
     return total / max(len(pairs), 1)
 
@@ -165,7 +165,7 @@ def run_arm(
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
             logits = model(x)
             loss = nn.functional.cross_entropy(
-                logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1))
+                logits.reshape(-1, logits.size(-1)).float(), y.reshape(-1))
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
