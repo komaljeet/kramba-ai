@@ -36,8 +36,12 @@ import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from train_edge_conversational import load_checkpoint_for_resume  # noqa: E402
+from hvn.vocab import GPT2_EOS_ID, resolve_eos_id  # noqa: E402
 
-EOS = 50256
+# Legacy alias only. `generate` resolves EOS from the model/tokenizer it is
+# actually given (#136) -- a 32K model's EOS is 0, and stopping on 50256 would
+# mean never stopping at all.
+EOS = GPT2_EOS_ID
 USER_PREFIX = "<|user|>\n"
 ASST_PREFIX = "<|assistant|>\n"
 
@@ -69,6 +73,7 @@ ITEMS = [
 @torch.no_grad()
 def generate(model, tok, device, prompt, max_new=60, temp=0.4, top_p=0.9,
              rep_pen=1.3):
+    eos = resolve_eos_id(model, tok)
     ids = tok.encode(prompt)
     x = torch.tensor([ids], device=device)
     out: list[int] = []
@@ -83,7 +88,7 @@ def generate(model, tok, device, prompt, max_new=60, temp=0.4, top_p=0.9,
         sp[cum - sp > top_p] = 0
         sp = sp / sp.sum()
         nxt = int(si[torch.multinomial(sp, 1)])
-        if nxt == EOS:
+        if nxt == eos:
             break
         out.append(nxt)
         x = torch.cat([x, torch.tensor([[nxt]], device=device)], dim=1)

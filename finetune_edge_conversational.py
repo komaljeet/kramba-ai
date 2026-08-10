@@ -58,8 +58,12 @@ from train_edge_conversational import (
     load_checkpoint_for_resume,
 )
 
-# GPT-2 end-of-text id (also used as pad); role markers are plain text.
-EOS_ID = 50256
+from hvn.vocab import GPT2_EOS_ID, resolve_eos_id  # noqa: E402
+
+# Legacy fallback for checkpoints written before eos_token_id was persisted.
+# Every dataset and the generation loop resolve EOS from their own tokenizer or
+# model instead (#136); this constant is the last resort, not the answer.
+EOS_ID = GPT2_EOS_ID
 USER_PREFIX = "<|user|>\n"
 ASSISTANT_PREFIX = "<|assistant|>\n"
 
@@ -173,6 +177,12 @@ class InstructionDataset(Dataset):
 
     def __init__(self, tokenizer, conversations: list[list[tuple[str, str]]],
                  seq_len: int = 512, pad: bool = True):
+        # #136: EOS comes from THIS tokenizer, not the module constant. Local on
+        # purpose, so every use below is covered rather than the ones someone
+        # remembered to change. Training a 32K model with GPT-2's 50256 appended
+        # would teach it to emit an id outside its own vocabulary.
+        EOS_ID = resolve_eos_id(tokenizer=tokenizer)
+        self.eos_id = EOS_ID
         self.seq_len = seq_len
         self.pad = pad
         self.examples: list[tuple[np.ndarray, np.ndarray]] = []
@@ -274,6 +284,10 @@ class GroundedQADataset(Dataset):
 
     def __init__(self, tokenizer, records: list[dict], seq_len: int = 512,
                  pad: bool = True):
+        # #136: EOS from this tokenizer, not the module constant. See
+        # InstructionDataset for why this is a local.
+        EOS_ID = resolve_eos_id(tokenizer=tokenizer)
+        self.eos_id = EOS_ID
         self.seq_len = seq_len
         self.pad = pad
         self.examples: list[tuple[np.ndarray, np.ndarray]] = []
@@ -375,6 +389,9 @@ class ToolUseDataset(Dataset):
         from hvn.tools import TOOL_TOKENS
         import json as _json
 
+        # #136: EOS from this tokenizer, not the module constant.
+        EOS_ID = resolve_eos_id(tokenizer=tokenizer)
+        self.eos_id = EOS_ID
         self.seq_len = seq_len
         self.pad = pad
         self.examples: list[tuple[np.ndarray, np.ndarray]] = []
@@ -570,6 +587,7 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
 @torch.no_grad()
 def sample_reply(model, tokenizer, device, user_msg, max_new=60):
     model.eval()
+    EOS_ID = resolve_eos_id(model, tokenizer)  # #136: not the module constant
     prompt = USER_PREFIX + user_msg + "\n" + ASSISTANT_PREFIX
     ids = tokenizer.encode(prompt)
     x = torch.tensor([ids], device=device)
@@ -694,15 +712,19 @@ def main():
         # a row would make the requested fractions mean something subtly
         # different from what the flags say.
         from hvn.core.packing import PackedDataset
+        # Pad with the SAME id the datasets appended as EOS. Taking it from the
+        # dataset rather than the module constant keeps padding and EOS in
+        # agreement for any vocabulary (#136).
+        pack_pad_id = getattr(chat_ds, "eos_id", EOS_ID)
         print("\n  Packing (Issue #132) — padding-free rows:")
         print("    chat:", end=" ")
         chat_ds = PackedDataset(chat_ds.examples, seq_len=args.seq_len,
-                                pad_id=EOS_ID, seed=args.pack_seed, strategy=args.pack_strategy)
+                                pad_id=pack_pad_id, seed=args.pack_seed, strategy=args.pack_strategy)
         packed_extra = []
         for ds, frac, label in extra:
             print(f"    {label}:", end=" ")
             packed_extra.append(
-                (PackedDataset(ds.examples, seq_len=args.seq_len, pad_id=EOS_ID,
+                (PackedDataset(ds.examples, seq_len=args.seq_len, pad_id=pack_pad_id,
                                seed=args.pack_seed, strategy=args.pack_strategy), frac, label)
             )
         extra = packed_extra
