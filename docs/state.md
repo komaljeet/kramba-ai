@@ -3218,3 +3218,47 @@ execution mode, model class, and resume.
 - 2.43% of files in The Stack's "permissive subset" are not permissively
   licensed per file. Measured across 1, 29 and 34 shards (2.55/2.43/2.37%), so
   it is a property of the dataset. They are dropped.
+
+### UPDATE (2026-08-10 19:00): the smoke run CRASHED -- start here
+
+The handoff above says the pipeline was verified end-to-end. **It was not.** The
+120-step smoke reached training, passed all four audit checks, compiled, and then
+died at 18:35:48:
+
+    extern_kernels.bmm(buf333, reinterpret_tensor(buf327, (56, 64, 32),
+                       (2048, 1, 64), 0), out=buf334)
+    RuntimeError: CUDA error: CUBLAS_STATUS_INTERNAL_ERROR
+                  when calling cublasSgemmStridedBatched(...)
+    [W CachingHostAllocator.cpp:26] Exception in pinned allocator free()
+
+`56 = batch 4 x 14 heads`, `64 = head_dim`, so it is the batched matmul at the
+shapes this config introduces. Log: `logs/smoke_code.log` (the traceback starts
+at line 233; the file also contains a large C-level stack dump, filter with
+`grep -vE "blocks\.[0-9]+\.|python314.dll"`).
+
+**Not diagnosed.** Two candidates, neither confirmed:
+
+- **A disguised allocation failure.** CUBLAS_STATUS_INTERNAL_ERROR on a bmm is
+  frequently cuBLAS failing to get its workspace. The pinned-allocator warning
+  points the same way, at HOST pinned memory rather than VRAM.
+- **Something specific to n_heads=14.** This is the first time this config has
+  been trained; the size sweep ran the same shapes, but see below.
+
+**The lesson this repeats, and it is the same one as every other bug today:**
+`scripts/size_sweep.py` measured d=896/16L/14 heads as fitting cleanly at 67.6%
+VRAM, and that measurement is not wrong -- it simply had **no DataLoader, no
+pinned host buffers and no gradient accumulation**. The real training path has
+all three. "The sweep says it fits" was again treated as evidence about a path
+the sweep does not exercise.
+
+**Next window starts here, before anything else:**
+
+1. Reproduce with `--num-workers 0` (removes pinned host memory) and with a
+   smaller `--grad-accum`, to separate allocation pressure from a shape problem.
+2. If it is allocation, the 896x16 config may need `--grad-checkpoint` or a
+   smaller batch, and the 9.1-day estimate changes.
+3. If it reproduces at n_heads=14 but not n_heads=8 with the same memory
+   settings, it is a shape/kernel problem and the config choice is affected.
+
+Until this is understood, **the 9.1-day plan is not launchable** -- and that is
+the honest status, not the "ready to pretrain" heading above.
