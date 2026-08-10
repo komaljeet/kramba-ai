@@ -1,0 +1,117 @@
+{
+  "config": "d_model=512, 12 layers, 8 heads, ternary, attn_layers=[3,10]",
+  "rows": [
+    {
+      "vocab": 50257,
+      "tied": false,
+      "token_embedding": 25731584,
+      "output_head": 25781841,
+      "blocks_and_other": 31565904,
+      "total": 83079329,
+      "flops": {
+        "blocks": 75497472,
+        "output_head": 51463168,
+        "total": 126960640,
+        "head_share_pct": 40.53474210589991
+      }
+    },
+    {
+      "vocab": 50257,
+      "tied": true,
+      "token_embedding": 25731584,
+      "output_head": 50257,
+      "blocks_and_other": 31565904,
+      "total": 57347745,
+      "flops": {
+        "blocks": 75497472,
+        "output_head": 51463168,
+        "total": 126960640,
+        "head_share_pct": 40.53474210589991
+      }
+    },
+    {
+      "vocab": 32000,
+      "tied": false,
+      "token_embedding": 16384000,
+      "output_head": 16416000,
+      "blocks_and_other": 31565904,
+      "total": 64365904,
+      "flops": {
+        "blocks": 75497472,
+        "output_head": 32768000,
+        "total": 108265472,
+        "head_share_pct": 30.26634382566586
+      }
+    },
+    {
+      "vocab": 32000,
+      "tied": true,
+      "token_embedding": 16384000,
+      "output_head": 32000,
+      "blocks_and_other": 31565904,
+      "total": 47981904,
+      "flops": {
+        "blocks": 75497472,
+        "output_head": 32768000,
+        "total": 108265472,
+        "head_share_pct": 30.26634382566586
+      }
+    },
+    {
+      "vocab": 24000,
+      "tied": false,
+      "token_embedding": 12288000,
+      "output_head": 12312000,
+      "blocks_and_other": 31565904,
+      "total": 56165904,
+      "flops": {
+        "blocks": 75497472,
+        "output_head": 24576000,
+        "total": 100073472,
+        "head_share_pct": 24.557956777996072
+      }
+    },
+    {
+      "vocab": 24000,
+      "tied": true,
+      "token_embedding": 12288000,
+      "output_head": 24000,
+      "blocks_and_other": 31565904,
+      "total": 43877904,
+      "flops": {
+        "blocks": 75497472,
+        "output_head": 24576000,
+        "total": 100073472,
+        "head_share_pct": 24.557956777996072
+      }
+    },
+    {
+      "vocab": 16000,
+      "tied": false,
+      "token_embedding": 8192000,
+      "output_head": 8208000,
+      "blocks_and_other": 31565904,
+      "total": 47965904,
+      "flops": {
+        "blocks": 75497472,
+        "output_head": 16384000,
+        "total": 91881472,
+        "head_share_pct": 17.83166904422254
+      }
+    },
+    {
+      "vocab": 16000,
+      "tied": true,
+      "token_embedding": 8192000,
+      "output_head": 16000,
+      "blocks_and_other": 31565904,
+      "total": 39773904,
+      "flops": {
+        "blocks": 75497472,
+        "output_head": 16384000,
+        "total": 91881472,
+        "head_share_pct": 17.83166904422254
+      }
+    }
+  ]
+}

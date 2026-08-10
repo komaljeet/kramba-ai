@@ -106,8 +106,12 @@ def build_model(args, device):
     from hvn.edge.ternary import apply_ternary_to_model
     # Same architecture as the checkpoint, random weights — so the pretrain and
     # finetune regimes differ ONLY in the starting point, not in model shape.
+    # Issue #139: vocab_size and tie_embeddings are size knobs, not constants.
+    # At d_model=512 the two vocab tables are 62% of an "83M" model, so an A/B
+    # that cannot vary them cannot see the largest lever in the config.
     model = EdgeHVN(
-        vocab_size=GPT2_VOCAB_SIZE,
+        vocab_size=args.vocab_size,
+        tie_embeddings=args.tie_embeddings,
         d_model=ckpt.get("d_model", 512),
         num_layers=ckpt.get("num_layers", 12),
         n_heads=ckpt.get("n_heads", 8),
@@ -242,7 +246,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--out", default=None)
     p.add_argument("--deterministic", action=argparse.BooleanOptionalAction,
                    default=True)
+    p.add_argument("--tie-embeddings", action="store_true",
+                   help="Issue #139: share the input embedding and output head. "
+                        "Removes 31 pct of parameters at ZERO FLOP cost (the "
+                        "input table is a gather, not a matmul). Pretrain regime "
+                        "only — tying changes the model, so it cannot be applied "
+                        "to an existing untied checkpoint.")
+    p.add_argument("--vocab-size", type=int, default=GPT2_VOCAB_SIZE)
     args = p.parse_args(argv)
+
+    if args.tie_embeddings and args.regime == "finetune":
+        p.error("--tie-embeddings only applies to --regime pretrain: tying "
+                "changes the parameter set, so it cannot be applied to an "
+                "existing untied checkpoint (it would silently drop the head).")
 
     if args.deterministic:
         os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
