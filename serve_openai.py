@@ -43,6 +43,10 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Overwritten from the checkpoint at load time (#139): EOS belongs to the
+# tokenizer, and a 32K-vocab model's is 0, not GPT-2's 50256. Serving with the
+# wrong one means the stop token is never sampled and every reply runs to the
+# token limit.
 EOS = 50256
 USER_PREFIX = "<|user|>\n"
 ASST_PREFIX = "<|assistant|>\n"
@@ -222,6 +226,9 @@ def main() -> int:
     print(f"[serve] loading {args.checkpoint}")
     model, step, _ck = load_checkpoint_for_resume(args.checkpoint, device)
     model.eval()
+    global EOS
+    EOS = getattr(model, "eos_token_id", 50256)
+    print(f"[serve] eos_token_id={EOS} (from checkpoint)")
 
     _STATE.update(model=model, device=device,
                   tok=GPT2TokenizerFast.from_pretrained("gpt2"),

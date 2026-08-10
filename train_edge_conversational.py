@@ -104,6 +104,7 @@ def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
         # from the model rather than a constant, and defaulted on load, so every
         # checkpoint written before this key existed still loads as 50257.
         "vocab_size": getattr(model, 'vocab_size', GPT2_VOCAB_SIZE),
+        "eos_token_id": getattr(model, 'eos_token_id', 50256),
         "grad_checkpoint": getattr(model, 'grad_checkpoint', False),
         "global_step": global_step,
     }
@@ -1679,6 +1680,7 @@ def load_checkpoint_for_resume(
         block_plan=block_plan,
         attn_window=attn_window,
         tie_embeddings=ckpt.get("tie_embeddings", False),
+        eos_token_id=ckpt.get("eos_token_id", 50256),
         grad_checkpoint=ckpt.get("grad_checkpoint", False),
     )
 
