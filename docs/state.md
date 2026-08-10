@@ -2939,3 +2939,129 @@ have reported `nan` without complaint. A silent `nan` is how a broken measuremen
 published number.
 
 Artifacts: `results/vocab/ab_mixed.json`, `scripts/ab_vocab_mixed.py`, `logs/ab_vocab_mixed.log`.
+
+## How big a model can this card actually train? 129M body in 9.3 days (Issue #136 sizing, 2026-08-10)
+
+**One line: measured the real ceiling with the real architecture in the real execution mode, and the
+answer is that the 32K tied vocabulary buys a 36% larger MODEL BODY at the same wall-clock -- 129M
+body in 9.3 days against 95M body in 9.0 days for #136's planned GPT-2 config.**
+
+### Why a new tool when eval/vram_envelope.py already sweeps sizes
+
+That tool cannot answer the question, for three independent reasons, and training.md already warns
+its rows "must not be used to size a real run":
+
+1. **It hardcodes `VOCAB = 8000`.** At d=1024 that is ~8M params of embedding against ~103M for an
+   untied GPT-2 vocabulary. It makes the vocabulary term -- 42-62% of these models per the #139
+   audit -- nearly invisible, so every row overstates how much *body* the card can afford.
+2. **It builds `HamiltonianVortexNetwork`**, the core class, which has NO `block_plan` and NO
+   `attn_window`. The trained model is `EdgeHVN` with two sliding-attention layers at positions
+   3 and 10. The old rows measure a pure DeltaNet trunk -- not the hybrid -- and the attention
+   layers are exactly the ones whose memory scales differently with d_model.
+3. **No tie_embeddings flag**, so it cannot represent what is now the repo default.
+
+`scripts/size_sweep.py` goes through `build_model_and_config` with `arch="hvn-hybrid"`, ternary on,
+Muon, and the `--fast` stack applied.
+
+### The result (`results/size_sweep_fast.json`), --fast ON, head_dim 64, B=4 S=512
+
+| config | arm | total | **body** | vocab share | peak VRAM | tok/s | days | verdict |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| 640x16 | gpt2-untied | 130M | 66M | 49.4% | 3,934 MiB (64.1%) | 5,639 | 5.3 | ok |
+| 640x16 | **32k-tied** | 86M | 66M | 23.7% | **3,046 MiB (49.6%)** | 6,455 | **3.1** | ok |
+| 768x16 | gpt2-untied | 172M | 95M | 44.9% | 5,070 MiB (82.6%) | 4,399 | 9.0 | ok |
+| 768x16 | **32k-tied** | 119M | 95M | 20.6% | 3,760 MiB (61.2%) | 4,916 | **5.6** | ok |
+| 896x16 | gpt2-untied | 219M | 129M | 41.1% | 5,314 MiB (86.5%) | 3,492 | 14.5 | SUSPECT |
+| 896x16 | **32k-tied** | **157M** | **129M** | 18.2% | 4,722 MiB (76.9%) | 3,934 | **9.3** | **ok** |
+
+**Largest body that fits cleanly: 896x16 32k-tied -- 129M of body inside 157M of total.**
+
+The comparison that matters is not total parameters, it is **body at equal wall-clock**:
+
+| | #136 as planned | this recommendation |
+|---|---|---|
+| config | 768x16, GPT-2 untied | **896x16, 32K tied** |
+| body (what learns) | 95M | **129M (+36%)** |
+| total params | 172M | 157M |
+| peak VRAM | 82.6% | **76.9%** |
+| days to Chinchilla | 9.0 | 9.3 |
+
+Same card, essentially the same clock, 36% more model. The budget comes entirely from not spending
+45% of the parameters on two lookup tables.
+
+### The measurement error this run made, and corrected
+
+**The first version of this sweep measured eager mode and was wrong about everything absolute.**
+`--fast` is `default=True` on `train_edge_conversational` (line 2652, since #129) but is applied in
+`main()`, NOT in `build_model_and_config` -- so calling the builder directly silently gets none of
+compile, TF32 or Triton scan.
+
+That produced a published-looking claim that #136's config "does not fit, spills at 105% of VRAM,
+needs 30.6 days". **Retracted.** Measured properly it fits at 82.6% and needs 9.0 days, and #136's
+own ~7-day estimate was approximately right.
+
+| 768x16 gpt2 | peak VRAM | tok/s | days |
+|---|---:|---:|---:|
+| eager (first, wrong) | 6,446 MiB (105.0%) | 1,300 | 30.6 |
+| --fast (correct) | 5,070 MiB (82.6%) | 4,399 | 9.0 |
+
+**Caveat on that contrast, stated because it is not a clean isolation:** the eager sweep used a
+fixed `n_heads=8` while the --fast sweep derives `n_heads = d_model / 64`, so at d=768 the two runs
+differ in head count (8 vs 12) as well as compile mode. The --fast table is internally consistent
+and is the decision-relevant one; the eager-vs-fast deltas are indicative, not measured.
+
+**The lesson, which is the same one #139 recorded in different words:** building through the real
+construction path is necessary but NOT sufficient. It must also RUN the way training runs. Two
+tools failed here for two different reasons -- one measured the wrong model class, one measured the
+wrong execution mode -- and both looked authoritative.
+
+### A hard crash nobody had hit: head_dim must be a power of 2
+
+`hvn/core/deltanet_triton.py:57` does `tl.arange(0, D)` over the head dimension, and Triton requires
+that range to be a power of 2. With `n_heads=8`:
+
+| d_model | head_dim | Triton scan |
+|---:|---:|---|
+| 512 | 64 | ok |
+| 640 | 80 | **InductorError** |
+| 768 | 96 | **InductorError** |
+| 896 | 112 | **InductorError** |
+| 1024 | 128 | ok |
+
+**It is a hard crash under --fast, not a silent fallback.** The rule is documented in
+`hvn/kernels/hamiltonian_kernel.py:293` and enforced nowhere. The fix is not to avoid those widths
+-- it is to pick `n_heads` so `d_model / n_heads` is a power of 2: d=768 wants **12 heads**, d=896
+wants **14**. With 8 heads a 7-day run would die partway in with a traceback naming `tl.arange` and
+saying nothing about the model config.
+
+**Recommended follow-up: a startup guard.** When `triton_scan` is on, assert `d_model % n_heads == 0`
+and that the quotient is a power of 2, and fail immediately with a message naming both numbers.
+
+### The spill detector, and why a plain ok/OOM verdict is not enough
+
+On Windows/WDDM, exceeding VRAM does **not** raise OOM -- the driver spills to host RAM over PCIe
+and the step merely gets slower. A run that "succeeded" may be a run that did not fit. The eager
+sweep produced rows at 105%, 127% and 138% of VRAM that all completed without error.
+
+So `verdict` is only `ok` when peak reserved is under 85% of total AND step-time variability is
+under 0.25. Either signal alone marks the row SUSPECT. Reporting only completion is how the 268M row
+in training.md was published as fitting when the real script spills at 355M.
+
+### Limits
+
+- 20 measured steps after 6 warmup, one seed, B=4 S=512, no dataloader in the loop. Real training
+  adds data loading and may use longer sequences; these are a floor on memory, not a ceiling.
+- Peak memory is reset AFTER warmup, so torch.compile's transient autotuning allocations are
+  excluded. Steady-state is what a multi-day run sits at, but a large enough compile-time spike
+  could still spill during the first step.
+- **The `days` column applies this repo's 20-tokens-per-param convention to TOTAL params.** The two
+  arms have identical bodies, so the 32K arm is credited with needing ~30% fewer tokens purely for
+  having smaller lookup tables. If the correct budget scales with BODY params instead, the day
+  counts converge and the honest 32K advantage shrinks to the throughput margin (1.11-1.15x) plus
+  the VRAM headroom. **This is unmeasured and it is the weakest number in the table.**
+- Chinchilla-optimality itself is an assumption at this scale; #134 noted a 1,500-step pretrain
+  cannot distinguish a real effect from an unfinished ramp.
+
+Artifacts: `results/size_sweep_fast.json` (--fast, decision-relevant), `results/size_sweep.json`
+(eager, retained only as the record of the retracted measurement), `scripts/size_sweep.py`,
+`logs/size_sweep_fast.log`.

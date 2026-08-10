@@ -1,0 +1,202 @@
+{
+  "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "total_vram_mb": 6140.5,
+  "config": {
+    "configs": [
+      "640x16",
+      "768x16",
+      "896x16",
+      "1024x16"
+    ],
+    "steps": 20,
+    "warmup": 5,
+    "batch_size": 4,
+    "seq_len": 512,
+    "out": "results/size_sweep.json"
+  },
+  "tokens_per_param": 20,
+  "rows": [
+    {
+      "label": "gpt2-untied",
+      "vocab": 50257,
+      "tied": false,
+      "d_model": 640,
+      "num_layers": 16,
+      "params": 130102209,
+      "vocab_params": 64328960,
+      "body_params": 65773249,
+      "vocab_share_pct": 49.444940631254,
+      "sec_per_step": 0.930674450006336,
+      "step_cv": 0.07675990836813505,
+      "tok_per_s": 2200.554662251722,
+      "peak_reserved_mb": 5350.0,
+      "peak_alloc_mb": 5257.736328125,
+      "vram_pct": 87.12645550036642,
+      "chinchilla_tokens": 2602044180,
+      "chinchilla_days": 13.685755050736534,
+      "verdict": "SUSPECT: reserved 87% of VRAM",
+      "warnings": [
+        "reserved 87% of VRAM"
+      ]
+    },
+    {
+      "label": "32k-tied",
+      "vocab": 32000,
+      "tied": true,
+      "d_model": 640,
+      "num_layers": 16,
+      "params": 86234992,
+      "vocab_params": 20480000,
+      "body_params": 65754992,
+      "vocab_share_pct": 23.749060010349396,
+      "sec_per_step": 0.8359746499991161,
+      "step_cv": 0.0514400202991561,
+      "tok_per_s": 2449.835051819054,
+      "peak_reserved_mb": 4388.0,
+      "peak_alloc_mb": 4231.673828125,
+      "vram_pct": 71.45997882908559,
+      "chinchilla_tokens": 1724699840,
+      "chinchilla_days": 8.14822356667713,
+      "verdict": "ok",
+      "warnings": []
+    },
+    {
+      "label": "gpt2-untied",
+      "vocab": 50257,
+      "tied": false,
+      "d_model": 768,
+      "num_layers": 16,
+      "params": 171841217,
+      "vocab_params": 77194752,
+      "body_params": 94646465,
+      "vocab_share_pct": 44.922139954350996,
+      "sec_per_step": 1.575207700007013,
+      "step_cv": 0.03978183923908143,
+      "tok_per_s": 1300.1460061367666,
+      "peak_reserved_mb": 6446.0,
+      "peak_alloc_mb": 6259.4970703125,
+      "vram_pct": 104.9751648888527,
+      "chinchilla_tokens": 3436824340,
+      "chinchilla_days": 30.59507109431243,
+      "verdict": "SUSPECT: reserved 105% of VRAM",
+      "warnings": [
+        "reserved 105% of VRAM"
+      ]
+    },
+    {
+      "label": "32k-tied",
+      "vocab": 32000,
+      "tied": true,
+      "d_model": 768,
+      "num_layers": 16,
+      "params": 119204208,
+      "vocab_params": 24576000,
+      "body_params": 94628208,
+      "vocab_share_pct": 20.616721852637955,
+      "sec_per_step": 0.9549614999996265,
+      "step_cv": 0.05541123869667232,
+      "tok_per_s": 2144.5890750577914,
+      "peak_reserved_mb": 5380.0,
+      "peak_alloc_mb": 5133.8291015625,
+      "vram_pct": 87.61501506391987,
+      "chinchilla_tokens": 2384084160,
+      "chinchilla_days": 12.866598542158053,
+      "verdict": "SUSPECT: reserved 88% of VRAM",
+      "warnings": [
+        "reserved 88% of VRAM"
+      ]
+    },
+    {
+      "label": "gpt2-untied",
+      "vocab": 50257,
+      "tied": false,
+      "d_model": 896,
+      "num_layers": 16,
+      "params": 218823105,
+      "vocab_params": 90060544,
+      "body_params": 128762561,
+      "vocab_share_pct": 41.15678003929247,
+      "sec_per_step": 3.6185545999978785,
+      "step_cv": 0.015225651429466655,
+      "tok_per_s": 565.9718385902484,
+      "peak_reserved_mb": 7788.0,
+      "peak_alloc_mb": 7240.32373046875,
+      "vram_pct": 126.83006269847732,
+      "chinchilla_tokens": 4376462100,
+      "chinchilla_days": 89.49826311844085,
+      "verdict": "SUSPECT: reserved 127% of VRAM",
+      "warnings": [
+        "reserved 127% of VRAM"
+      ]
+    },
+    {
+      "label": "32k-tied",
+      "vocab": 32000,
+      "tied": true,
+      "d_model": 896,
+      "num_layers": 16,
+      "params": 157416304,
+      "vocab_params": 28672000,
+      "body_params": 128744304,
+      "vocab_share_pct": 18.21412348748831,
+      "sec_per_step": 1.5141640999936499,
+      "step_cv": 0.024921467005419803,
+      "tok_per_s": 1352.5614561912998,
+      "peak_reserved_mb": 6244.0,
+      "peak_alloc_mb": 5996.216796875,
+      "vram_pct": 101.68553049425942,
+      "chinchilla_tokens": 3148326080,
+      "chinchilla_days": 26.940705054444127,
+      "verdict": "SUSPECT: reserved 102% of VRAM",
+      "warnings": [
+        "reserved 102% of VRAM"
+      ]
+    },
+    {
+      "label": "gpt2-untied",
+      "vocab": 50257,
+      "tied": false,
+      "d_model": 1024,
+      "num_layers": 16,
+      "params": 271047873,
+      "vocab_params": 102926336,
+      "body_params": 168121537,
+      "vocab_share_pct": 37.97348964992616,
+      "sec_per_step": 3.8092699499975424,
+      "step_cv": 0.0215544875248809,
+      "tok_per_s": 537.6358270437938,
+      "peak_reserved_mb": 8498.0,
+      "peak_alloc_mb": 8220.20458984375,
+      "vram_pct": 138.39263903590913,
+      "chinchilla_tokens": 5420957460,
+      "chinchilla_days": 116.70085964961868,
+      "verdict": "SUSPECT: reserved 138% of VRAM",
+      "warnings": [
+        "reserved 138% of VRAM"
+      ]
+    },
+    {
+      "label": "32k-tied",
+      "vocab": 32000,
+      "tied": true,
+      "d_model": 1024,
+      "num_layers": 16,
+      "params": 200871280,
+      "vocab_params": 32768000,
+      "body_params": 168103280,
+      "vocab_share_pct": 16.312934332872274,
+      "sec_per_step": 3.5384302500024205,
+      "step_cv": 0.01089697238571606,
+      "tok_per_s": 578.7877265628167,
+      "peak_reserved_mb": 7050.0,
+      "peak_alloc_mb": 6886.1064453125,
+      "vram_pct": 114.8114974350623,
+      "chinchilla_tokens": 4017425600,
+      "chinchilla_days": 80.33684777252267,
+      "verdict": "SUSPECT: reserved 115% of VRAM",
+      "warnings": [
+        "reserved 115% of VRAM"
+      ]
+    }
+  ]
+}
