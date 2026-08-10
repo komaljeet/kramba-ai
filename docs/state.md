@@ -78,6 +78,27 @@ hypothesis fitted after the fact, not a measurement; confirming it needs a profi
   quality effect is unmeasured. Only the batch-size rows are actionable on the current model.
 - Median of 3 rounds, one machine, one seed.
 
+### Reproduced on updated `main` after #140 merged (2026-08-10, same day)
+
+Re-run with identical settings on a tree containing #140 (`results_recheck_main.json`):
+
+| arm | first run | re-run on updated main | drift |
+|---|---:|---:|---:|
+| b2_h8 (baseline) | 9,087.1 tok/s | 9,091.7 tok/s | **+0.05%** |
+| b4_h8 | +37.7% | **+37.5%** | 0.2 pp |
+| b4_h16 | +60.8% | +60.1% | 0.7 pp |
+| b2_h16 | +12.0% | +10.9% | 1.1 pp |
+| b8_h8 / b8_h16 | SPILLED, 6,512 MiB | SPILLED, 6,512 MiB | identical |
+
+Noise floor 1.04%, positive control −41.1%. **Every arm reproduces inside the noise floor**,
+across two separate processes on different trees — so the win is not a single-run artifact.
+
+This also clears something #140's own tests could not: that issue's FFN refactor
+(`nn.GELU()` → `make_activation("gelu")`) is asserted byte-identical in *output*
+(`max|Δlogits| = 0.0`), but an output test cannot detect a construction change that alters
+kernel dispatch or fusion. The baseline reproducing to 0.05% shows it costs no throughput
+either.
+
 ## FFN activation buys no training speed — GELU stays, PowLU is worse (Issue #140, 2026-08-10)
 
 **Question:** does swapping the DeltaNet FFN's activation (GELU → ReLU² or PowLU) speed up
