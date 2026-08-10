@@ -5,6 +5,69 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## FT recipes adopt #141's wins — and the compile gain does NOT transfer at full size (Issues #142/#143, 2026-08-11)
+
+#141's two levers are now the defaults in the fine-tune recipes. The interesting part is #143:
+**a number measured in one training loop was worth ~1.5× less in another**, which is exactly
+what #142 refused to assume.
+
+### What changed
+
+| script | micro-batch | grad_accum | compile |
+|---|---|---|---|
+| `continue_ft_hybrid.py` | 4 (already) | 8 (already) | **`--fast` now default ON** (#142) |
+| `finetune_edge_conversational.py` | **2 → 4** (#142) | **8 → 4** (#142) | **`--fast` added, default ON** (#143) |
+| `continue_ft_looped.py` | 4 (already) | 8 (already) | deliberately none — see below |
+| `train_edge_conversational.py` | auto | auto | already on (#129) |
+
+`finetune_edge_conversational`'s `grad_accum` was halved alongside the batch so the **effective
+batch stays 16** — a pure throughput change, not a change to training dynamics.
+
+### #143 — measure the same lever in a different loop, get a different answer
+
+`scripts/measure_chatft_compile.py`, real OASST + grounded-replay mix, interleaved arms, eager
+entered twice under two names, 30 timed optimizer steps/arm, batch 4 × grad_accum 4, 2 rounds:
+
+| arm | tok/s |
+|---|---:|
+| eager | 11,447 |
+| **compiled** | **14,367 (+25.5%)** |
+| noise floor (eager vs itself) | **0.31%** |
+| recompiles inside the timed window | **0** |
+
+**+25.5% here vs +39% in `continue_ft_hybrid`'s loop.** Both are real and well outside their
+noise floors; the lever simply pays less on this data. Plausible cause (unverified): chat rows
+pack at 1.45 examples/row against grounded-QA's 5.18, a very different row distribution and
+mask density. Had #142 defaulted this on using the other loop's number, the documented gain
+would have been ~1.5× too high.
+
+**`continue_ft_looped.py` stays uncompiled deliberately.** `looped_forward_train()` bypasses
+`model.forward()` — the path both measurements above actually exercise — so compiling the
+top-level model there would compile something the script never invokes. Reconsidered under
+#142 and left unchanged, with the reasoning recorded in the file so it doesn't read as an
+oversight.
+
+### Two hazards checked rather than assumed
+
+- **`torch.compile` renames `state_dict` keys** with an `_orig_mod.` prefix, which would
+  silently produce unloadable checkpoints from every run using the new `--fast` defaults.
+  `_save_edge_checkpoint` already unwraps it — verified before shipping the default flip.
+- **Compile is applied to the training path only.** `sample_reply` generates token-by-token with
+  a growing sequence, so a compiled module there would recompile *per token* — slower than
+  eager, and it would be charged to "compile" in any benchmark. The wrapper shares parameters
+  with the plain module, so training still updates the same weights.
+
+### Gate — GPU smoke runs
+
+| script | steps | s/step | peak reserved |
+|---|---:|---:|---:|
+| `continue_ft_hybrid.py` | 20 | 1.22 | 3,420 / 6,140 MiB |
+| `finetune_edge_conversational.py` | 72 | 0.74 | 4,050 / 6,140 MiB |
+
+Both scripts now also **report peak reserved VRAM and flag a spill** — the failure that made
+#141's batch-8 arm look merely "slow" instead of "not fitting" cannot now pass unnoticed in a
+real run. `tests/test_continue_ft_hybrid.py` 7/7.
+
 ## The 83M was starving the GPU — `batch 2 → 4` is +37.7% for free (Issue #141, 2026-08-10)
 
 **One line: the fine-tune recipe's `batch_size=2` leaves ~38% of this card's throughput on the
