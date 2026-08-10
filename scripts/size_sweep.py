@@ -72,7 +72,8 @@ ARMS = [
 
 
 def build(vocab: int, tie: bool, d_model: int, n_layers: int, device,
-          seq_len: int, batch_size: int, fast: bool = True):
+          seq_len: int, batch_size: int, fast: bool = True,
+          megakernel: bool = False):
     """Build through the real path, and run it the way training actually runs.
 
     ``--fast`` is default=True on train_edge_conversational (since #129) and is
@@ -93,14 +94,11 @@ def build(vocab: int, tie: bool, d_model: int, n_layers: int, device,
     # InductorError under --fast -- a hard crash, not a fallback. Nothing in the
     # repo validates this, so it is enforced here.
     n_heads = max(1, d_model // HEAD_DIM)
-    assert d_model % n_heads == 0 and (HEAD_DIM & (HEAD_DIM - 1)) == 0, (
-        f"d_model={d_model} cannot be split into power-of-2 head_dim")
     settings = {"batch_size": batch_size, "grad_accum": 8, "seq_len": seq_len,
                 "d_model": d_model, "num_layers": n_layers, "n_heads": n_heads}
-    if fast:
-        # TF32, as --fast sets it.
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+    # build_model_and_config now calls check_head_dim itself, so a bad shape
+    # fails here with a message naming d_model/n_heads instead of dying later
+    # inside Triton.
     model, _cfg = tec.build_model_and_config(
         settings, None, device,
         checkpoint_dir="checkpoints/_sizesweep", arch="hvn-hybrid",
@@ -109,12 +107,13 @@ def build(vocab: int, tie: bool, d_model: int, n_layers: int, device,
         optimizer="muon", precision="bf16", lr=3e-4, vocab_size=vocab,
     )
     if fast:
-        # Triton scan, as --fast sets it for the DeltaNet blocks.
-        for blk in model.blocks:
-            inner = getattr(blk, "block", blk)
-            if hasattr(inner, "use_triton_scan"):
-                inner.use_triton_scan = True
-        model = torch.compile(model)
+        # THE shared implementation of --fast, not a local re-creation of it.
+        # This sweep's first version hand-rolled a subset here and measured a
+        # mode training never runs in; that is exactly the bug apply_fast_stack
+        # exists to make impossible.
+        model = tec.apply_fast_stack(model, triton_scan=True,
+                                     megakernel_scan=megakernel, tf32=True,
+                                     compile_model=True, verbose=False)
     return model
 
 
@@ -130,12 +129,14 @@ def measure(vocab, tie, label, d_model, n_layers, args, total_vram_mb) -> dict:
            "n_heads": max(1, d_model // HEAD_DIM), "head_dim": HEAD_DIM}
     try:
         model = build(vocab, tie, d_model, n_layers, device, args.seq_len,
-                      args.batch_size, fast=args.fast)
+                      args.batch_size, fast=args.fast,
+                      megakernel=args.megakernel)
     except torch.OutOfMemoryError:
         row.update(verdict="oom-at-build")
         return row
 
     row["fast"] = args.fast
+    row["megakernel"] = args.megakernel
     params = sum(p.numel() for p in model.parameters())
     # Vocabulary vs body: the split that decides whether a size is worth it.
     vocab_params = d_model * vocab * (1 if tie else 2)
@@ -224,6 +225,10 @@ def main() -> int:
                          "real run would ever see.")
     ap.add_argument("--no-fast", dest="fast", action="store_false",
                     help="Eager mode. Only for isolating what --fast is worth.")
+    ap.add_argument("--megakernel", action="store_true", default=False,
+                    help="Design B blockwise-recompute backward (#96), measured "
+                         "at ~1.05x end-to-end with bit-identical loss. Requires "
+                         "--fast. OFF by default because it is opt-in in training.")
     ap.add_argument("--out", default="results/size_sweep.json")
     args = ap.parse_args()
 
@@ -233,7 +238,8 @@ def main() -> int:
     total_vram_mb = props.total_memory / 1024 ** 2
     print(f"[sweep] {props.name} | {total_vram_mb:.0f} MiB | "
           f"B={args.batch_size} S={args.seq_len} | {args.steps} measured steps | "
-          f"fast={'ON (compile+tf32+triton)' if args.fast else 'OFF (eager)'}",
+          f"fast={'ON (compile+tf32+triton)' if args.fast else 'OFF (eager)'}"
+          f"{' +megakernel' if args.megakernel else ''}",
           flush=True)
     print(f"[sweep] NOTE: WDDM spills silently past VRAM -- a row that runs is "
           f"not proof it fits. Watch the verdict column.", flush=True)

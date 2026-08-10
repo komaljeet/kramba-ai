@@ -83,8 +83,30 @@ add `--grad_accum 4` to recover effective batch.
 > 8000) but **must not be used to size a real run**. Rows not re-measured above are of
 > unknown accuracy for the real script — assume they understate.
 
-Measured with `python -m eval.vram_envelope` (DeltaNet block, **vocab 8000** — see the
-correction above, B=8, S=128, bf16, fused AdamW; full grid in
+> ### ⛔ SUPERSEDED (2026-08-10, #136) — use `scripts/size_sweep.py`
+>
+> **`eval/vram_envelope.py` has been deleted, and the table below is kept only as a
+> historical record.** It could not size a real run for three independent reasons:
+>
+> 1. **vocab 8000.** At d=1024 that is ~8M params of embedding against ~103M for an untied
+>    GPT-2 vocabulary. #139 measured the vocabulary at **42–62%** of these models, so this
+>    table makes the single largest term nearly invisible and **overstates** how much model
+>    body the card can afford.
+> 2. **Wrong model class.** It built `HamiltonianVortexNetwork`, which has no `block_plan`
+>    and no `attn_window`. Every trained model here is `EdgeHVN` **hybrid**, with two
+>    sliding-attention layers. The rows describe a pure DeltaNet trunk.
+> 3. **No `tie_embeddings`**, so it cannot represent the current default.
+>
+> Current numbers, measured through `build_model_and_config` in the real `--fast` execution
+> mode, are in [state.md](state.md) ("How big a model can this card actually train?") and
+> `results/size_sweep_fast.json`. Headline: **129M body in 9.3 days at `d=896, 16L` with the
+> 32K tied vocabulary**, against 95M body in 9.0 days for `d=768, 16L` untied GPT-2.
+>
+> Also note **`d_model / n_heads` must be a power of 2** or the Triton scan crashes under
+> `--fast`; `check_head_dim()` now enforces this at startup.
+
+Measured with the removed `eval/vram_envelope.py` (DeltaNet block, **vocab 8000** — see the
+corrections above, B=8, S=128, bf16, fused AdamW; full grid in
 `results/vram_envelope_rtx4050.json`):
 
 | Config | Params | Peak VRAM | s/step | Trains in 6 GB? |
@@ -575,7 +597,8 @@ Memory **demand** is measured (card-independent; WDDM spill rows record true dem
 6 GiB); the 8 GB **fit** column is arithmetic against 8192 MiB — a **projection, not a
 physical-4060 measurement** (step times don't transfer). Derived table:
 `results/vram_envelope_rtx4060_projection.json`; validate on real hardware with
-`python -m eval.vram_envelope`.
+`python scripts/size_sweep.py` (which replaced `eval/vram_envelope.py` in #136 — the
+projection below inherits that tool's vocab-8000 and wrong-model-class caveats).
 
 | Config | Params | Demand | 6 GB (4050) | 8 GB (4060) |
 |---|---:|---:|---|---|
