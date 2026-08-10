@@ -1,0 +1,95 @@
+﻿[ab] deterministic ON — h8 and h8_twin must come out IDENTICAL
+python.exe : Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked 
+critical (_ssl.c:1081). Will retry later.
+At line:1 char:438
++ ... lyContinue; & "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Scripts ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Could not refre...ll retry later.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[ab] data: {'mix_ratio': {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}, 'seq_len': 512, 'batch_size': 4, 'source': 'mixed_local', 'total_tokens': 1333955864, 'num_samples': 223757, 'num_batches': 55939}
+[ab] 16 held-out probes + 1500 identical training batches for every arm
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'h8' (n_heads=8, d_head=64, 83,079,329 params) ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[ab]   step     0  held-out 10.92840
+[ab]   step   250  held-out 8.51198  train 9.41730  (1.4 min)
+[ab]   step   500  held-out 7.69257  train 8.26242  (2.8 min)
+[ab]   step   750  held-out 7.17891  train 7.58756  (4.1 min)
+[ab]   step  1000  held-out 6.87791  train 7.16324  (5.5 min)
+[ab]   step  1250  held-out 6.73609  train 6.97925  (6.8 min)
+[ab]   step  1500  held-out 6.69093  train 6.89497  (8.2 min)
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (434889 > 1024). Running this sequence through the model will result in indexing 
+errors
+[ab]   bits/byte 2.3071 on 2,010,062 held-out bytes
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'h16' (n_heads=16, d_head=32, 83,120,369 params) ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,539,200 params; AdamW aux lr=2e-05 / 51,581,169 params)
+[ab]   step     0  held-out 10.89762
+[ab]   step   250  held-out 8.51046  train 9.41115  (1.2 min)
+[ab]   step   500  held-out 7.70661  train 8.25895  (2.5 min)
+[ab]   step   750  held-out 7.19080  train 7.59347  (3.7 min)
+[ab]   step  1000  held-out 6.88239  train 7.17135  (5.0 min)
+[ab]   step  1250  held-out 6.74130  train 6.98436  (6.2 min)
+[ab]   step  1500  held-out 6.69628  train 6.89867  (7.4 min)
+[ab]   bits/byte 2.3062 on 2,010,062 held-out bytes
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'h8_twin' (n_heads=8, d_head=64, 83,079,329 params) ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[ab]   step     0  held-out 10.92840
+[ab]   step   250  held-out 8.51198  train 9.41730  (1.3 min)
+[ab]   step   500  held-out 7.69257  train 8.26242  (2.7 min)
+[ab]   step   750  held-out 7.17891  train 7.58756  (4.0 min)
+[ab]   step  1000  held-out 6.87791  train 7.16324  (5.3 min)
+[ab]   step  1250  held-out 6.73609  train 6.97925  (6.7 min)
+[ab]   step  1500  held-out 6.69093  train 6.89497  (8.0 min)
+[ab]   bits/byte 2.3071 on 2,010,062 held-out bytes
+
+[ab] ================= n_heads A/B =================
+[ab] arm         d_head    held-out   bits/byte  wall (min)   steps/s
+[ab] h8              64     6.69093      2.3071         8.2      3.06
+[ab] h16             32     6.69628      2.3062         7.4      3.36
+[ab] h8_twin         64     6.69093      2.3071         8.0      3.13
+
+[ab] KNOWN-ANSWER CELL — h8 vs h8_twin: 0.000e+00
+[ab] twin arms bit-identical -> noise floor is exactly 0, so ANY h8-vs-h16 difference below is real signal.
+
+[ab] MATCHED STEPS (1500): h16 - h8 = +0.00535 nats (h16 worse)
+[ab] MATCHED WALL CLOCK (7.4 min): h16 - h8 = -0.03981 nats (h16 better)
+[ab] h16 throughput: 1.096x of h8
+
+[ab] VERDICT: h16 costs 0.00535 nats at matched steps, at 1.10x speed
+[ab] LIMIT: one seed, short from-scratch run -> this bounds EARLY-training quality at 83M only, not convergence or larger d.
+[ab] wrote results\n_heads\ab_n_heads.json

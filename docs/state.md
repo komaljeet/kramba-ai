@@ -5,6 +5,71 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## `n_heads` 8 vs 16 — the speed lever costs no measurable quality (Issue #144, 2026-08-11)
+
+**One line: `--n-heads 16` buys ~10% throughput for a held-out difference of 0.08%, and the two
+held-out metrics disagree about even the *sign* of that difference. No quality cost detected at
+83M in early training.**
+
+`--n-heads 8 → 16` was recorded as a **2.4× speedup at 355M** (#112) and **1.12–1.17× at 83M**
+(#141), documented purely as a speed knob — which is exactly how `--block-coordinate` was
+documented before #112 found it cost ~4× perplexity. This grades it.
+
+`scripts/ab_n_heads.py`, from-scratch (n_heads changes `read_norm_weight`'s shape, so there is no
+warm-start), 1,500 steps × batch 4 × seq 512, Muon @ 0.02, identical seed, **identical
+pre-materialised batch sequence in every arm**, `--deterministic`:
+
+| arm | d_head | held-out loss | bits/byte | wall | steps/s |
+|---|---:|---:|---:|---:|---:|
+| h8 | 64 | 6.69093 | 2.3071 | 8.2 min | 3.06 |
+| **h16** | 32 | 6.69628 | **2.3062** | 7.4 min | **3.36** |
+| h8_twin | 64 | 6.69093 | 2.3071 | 8.0 min | 3.13 |
+
+### The known-answer cell, and exactly what it does and does not license
+
+`h8_twin` is `h8` run again under a different name. It came out **bit-identical: 0.000e+00**. So
+determinism holds and the run-to-run noise floor is *exactly* zero — the +0.00535 nats measured
+below is perfectly reproducible, not drift.
+
+**It does not license calling that gap meaningful.** A zero floor covers repeat runs *at the same
+seed*; it says nothing about seed-to-seed variance, which is unmeasured here and in every
+comparable setup is far larger than 0.08%. Reading "noise floor 0" as "any difference is
+important" would be the mistake this cell exists to prevent, not one it endorses.
+
+### The two metrics disagree in sign
+
+| view | h16 − h8 | reading |
+|---|---:|---|
+| matched steps, held-out probe loss | **+0.00535 nats** (0.08%) | h16 slightly worse |
+| matched steps, bits/byte on unseen FineWeb-Edu | **−0.0009 bits** (0.04%) | h16 slightly **better** |
+| matched wall clock (7.4 min) | **−0.03981 nats** | h16 better |
+
+The probe loss is drawn from the training mix (SlimPajama / OASST / WikiText); bits/byte is
+computed on FineWeb-Edu, which has mix share 0.0 and is unseen by both arms. **Two held-out sets,
+opposite signs, both differences ~0.1%** — that is the signature of no real effect, not of a
+small one. Reporting only the first number would have manufactured a "cost" that the second
+refutes.
+
+### Verdict
+
+**`--n-heads 16` is safe to adopt for a new pretrain on this evidence**, and it is ~10% faster
+here (1.096×, consistent with #141's 1.12–1.17×). At matched wall clock it is ahead on every
+metric, because the extra speed buys extra steps.
+
+**Limits, which bound this to a narrow claim:**
+
+- **1,500 steps × 2,048 tokens = 3.07M tokens — 0.19% of the 83M's real 1.65B-token pretrain.**
+  This measures *very* early training. A head-count effect that emerges later, or reverses, would
+  not appear here.
+- **One seed.** See the known-answer note above: the gap is reproducible, not robust.
+- **83M only.** The *speed* win is already known to be size-dependent (2.4× at 355M vs 1.10× here,
+  d_head 128→64 vs 64→32), so the quality effect may be too. This does not clear h16 at 355M.
+- Applies to a **new** pretrain only — `n_heads` cannot be changed on an existing checkpoint.
+
+Firming this up would need multiple seeds and ~20K steps (~2 h). Not run: the measured effect is
+0.08% with the sign in dispute, so the honest reading is already "no detectable difference", and
+a longer run would most likely spend two hours confirming that.
+
 ## FT recipes adopt #141's wins — and the compile gain does NOT transfer at full size (Issues #142/#143, 2026-08-11)
 
 #141's two levers are now the defaults in the fine-tune recipes. The interesting part is #143:
