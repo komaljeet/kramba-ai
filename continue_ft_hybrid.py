@@ -276,6 +276,18 @@ def continue_ft(model, dataloader, sampler, device, *, lr, max_steps, grad_accum
     _save_edge_checkpoint(model, out, global_step=global_step)
     print(f"\n  ✓ A4 complete: {global_step} steps, "
           f"{(time.time()-start)/60:.1f} min — saved {out}")
+    # Issue #142: report peak RESERVED, not allocated, and not nvidia-smi.
+    # #141 hit a config reading 5,586 MiB allocated ("fits") while reserving
+    # 6,512 MiB on a 5.9966 GiB card -- Windows WDDM backs the overflow with
+    # host RAM rather than OOM-ing, so the run looks healthy and gets 40%
+    # slower. Reserved vs card size is the only signal that catches it.
+    if torch.cuda.is_available():
+        card = torch.cuda.get_device_properties(0).total_memory / 2**20
+        alloc = torch.cuda.max_memory_allocated() / 2**20
+        reserved = torch.cuda.max_memory_reserved() / 2**20
+        warn = "  ⚠ SPILLING TO HOST RAM" if reserved > card else ""
+        print(f"  peak VRAM: {alloc:.0f} MiB allocated / {reserved:.0f} MiB "
+              f"reserved of {card:.0f} MiB card{warn}")
     csv_file.close()
 
 
@@ -330,8 +342,18 @@ def main():
     ap.add_argument("--max-conversations", type=int, default=None,
                     help="cap OASST conversations (e.g. --smoke uses 200)")
     ap.add_argument("--hf-cache-dir", type=str, default=None)
-    ap.add_argument("--fast", action="store_true",
-                    help="bf16 + TF32 + torch.compile + triton-scan + megakernel-scan")
+    # Issue #142: --fast defaults ON. #141 measured torch.compile at ~+39% in
+    # THIS script's loop (b2/ga16 8,201 -> 11,413 tok/s), and it stacks with the
+    # micro-batch 4 default below for 1.82x overall. --no-fast opts out; keep it
+    # off for any --block-coordinate run, which recompiles at every block switch
+    # (docs/training.md, #112).
+    fast_group = ap.add_mutually_exclusive_group()
+    fast_group.add_argument("--fast", dest="fast", action="store_true", default=True,
+                            help="bf16 + TF32 + torch.compile + triton-scan + "
+                                 "megakernel-scan (DEFAULT ON since #142)")
+    fast_group.add_argument("--no-fast", dest="fast", action="store_false",
+                            help="disable torch.compile (required for "
+                                 "--block-coordinate runs)")
     ap.add_argument("--smoke", action="store_true",
                     help="tiny run (few steps) — pipeline validation on CPU/GPU")
     args = ap.parse_args()

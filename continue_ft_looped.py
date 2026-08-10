@@ -30,6 +30,13 @@ looped_forward_train() bypasses model.forward() to implement the custom
 multi-loop logic, so compiling the top-level model would compile a path
 that's never invoked here -- a no-op, not a speedup.
 
+Issue #142 revisited this after #141 measured torch.compile at ~+39% in
+continue_ft_hybrid's loop, and left it unchanged: that measurement was taken
+through model.forward(), which is precisely the path this script does not use.
+Compiling looped_forward_train() itself is untried and would be a real change,
+not a default flip. The micro-batch already defaults to 4, so this script
+already has the other half of #141's win.
+
 Usage::
 
     python continue_ft_looped.py --max-steps 2000 --max-loops 4 \\

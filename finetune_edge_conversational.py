@@ -578,6 +578,16 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
     csv_file.close()
     print(f"\n  Fine-tuning complete: {global_step} steps, "
           f"{(time.time()-start)/60:.1f} min")
+    # Issue #142: peak RESERVED, not allocated -- see the note in
+    # continue_ft_hybrid.py. A config can read "fits" on allocated while
+    # reserving past the card and silently spilling to host RAM.
+    if torch.cuda.is_available():
+        card = torch.cuda.get_device_properties(0).total_memory / 2**20
+        alloc = torch.cuda.max_memory_allocated() / 2**20
+        reserved = torch.cuda.max_memory_reserved() / 2**20
+        warn = "  ⚠ SPILLING TO HOST RAM" if reserved > card else ""
+        print(f"  peak VRAM: {alloc:.0f} MiB allocated / {reserved:.0f} MiB "
+              f"reserved of {card:.0f} MiB card{warn}")
 
 
 # ---------------------------------------------------------------------------
@@ -613,8 +623,14 @@ def main():
                              "checkpoints/edge_chinchilla83m/ instead.")
     parser.add_argument("--out", type=str, default="hvn_edge_chat.pt")
     parser.add_argument("--seq-len", type=int, default=512)
-    parser.add_argument("--batch-size", type=int, default=2)
-    parser.add_argument("--grad-accum", type=int, default=8)
+    # Issue #142: micro-batch 2 -> 4 with grad_accum 8 -> 4, so the EFFECTIVE
+    # batch stays 16 and this is a pure throughput change, not a change to
+    # training dynamics. #141 measured micro-batch 2 -> 4 at +35.4% end-to-end
+    # (peak 4,136 MiB reserved, comfortable on the 6 GiB card). Do NOT raise this
+    # to 8: it reserves 6,512 MiB, and Windows WDDM backs the overflow with host
+    # RAM instead of OOM-ing -- 40% SLOWER than batch 2 while looking healthy.
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--grad-accum", type=int, default=4)
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--max-conversations", type=int, default=None)
