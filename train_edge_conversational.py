@@ -1318,6 +1318,9 @@ def load_tokenizer(spec: str = "gpt2", **kwargs):
     off it instead of assuming GPT-2's 50256.
     """
     if spec in ("gpt2", "", None):
+        # Imported here, not at module scope: this module is imported by scripts
+        # that never touch a tokenizer, and the transformers import is slow.
+        from transformers import GPT2Tokenizer
         tok = GPT2Tokenizer.from_pretrained("gpt2", **kwargs)
         tok.pad_token = tok.eos_token
         return tok
