@@ -1,0 +1,116 @@
+{
+  "config": {
+    "steps": 1500,
+    "warmup": 100,
+    "batch_size": 4,
+    "seq_len": 512,
+    "d_model": 512,
+    "layers": 12,
+    "n_heads": 8,
+    "attn_layers": [
+      3,
+      10
+    ],
+    "attn_window": 4096,
+    "code_chars": 100000000,
+    "english_chars": 80000000,
+    "chat_chars": 20000000,
+    "min_windows": 200,
+    "seed": 7,
+    "out": "results/vocab/ab_mixed.json"
+  },
+  "train_bytes": {
+    "code": 100068415,
+    "english": 80449660,
+    "chat": 21887035
+  },
+  "mix_weights": {
+    "code": 0.4943966829691207,
+    "english": 0.3974685224103285,
+    "chat": 0.10813479462055084
+  },
+  "arms": {
+    "gpt2": {
+      "vocab_size": 50257,
+      "per_domain": {
+        "code": {
+          "bits_per_byte": 2.163666774397497,
+          "total_nll_nats": 3001391.216583252,
+          "n_tokens": 1010257,
+          "n_scored_tokens": 1010256,
+          "n_bytes": 2001275,
+          "n_windows": 1974,
+          "tokens_per_byte": 0.5048066857378422,
+          "mean_token_nll_NOT_COMPARABLE": 2.97092144623071
+        },
+        "english": {
+          "bits_per_byte": 2.1982826144994436,
+          "total_nll_nats": 3068527.835632324,
+          "n_tokens": 469042,
+          "n_scored_tokens": 469041,
+          "n_bytes": 2013822,
+          "n_windows": 917,
+          "tokens_per_byte": 0.2329113496624826,
+          "mean_token_nll_NOT_COMPARABLE": 6.542131360866799
+        },
+        "chat": {
+          "bits_per_byte": 2.575512718303174,
+          "total_nll_nats": 3821517.383605957,
+          "n_tokens": 718141,
+          "n_scored_tokens": 718140,
+          "n_bytes": 2140655,
+          "n_windows": 1403,
+          "tokens_per_byte": 0.33547722542866554,
+          "mean_token_nll_NOT_COMPARABLE": 5.321410008641709
+        }
+      },
+      "wall_sec": 564.3184154033661,
+      "train_tokens": 70189328
+    },
+    "v32k": {
+      "vocab_size": 32000,
+      "per_domain": {
+        "code": {
+          "bits_per_byte": 1.9769714905567208,
+          "total_nll_nats": 2742411.6030273438,
+          "n_tokens": 662841,
+          "n_scored_tokens": 662840,
+          "n_bytes": 2001275,
+          "n_windows": 1295,
+          "tokens_per_byte": 0.3312093540368015,
+          "mean_token_nll_NOT_COMPARABLE": 4.137365884719304
+        },
+        "english": {
+          "bits_per_byte": 2.251423349552344,
+          "total_nll_nats": 3142705.661376953,
+          "n_tokens": 485877,
+          "n_scored_tokens": 485876,
+          "n_bytes": 2013822,
+          "n_windows": 949,
+          "tokens_per_byte": 0.24127107559655223,
+          "mean_token_nll_NOT_COMPARABLE": 6.468122857224792
+        },
+        "chat": {
+          "bits_per_byte": 2.506956300303647,
+          "total_nll_nats": 3719794.126220703,
+          "n_tokens": 572158,
+          "n_scored_tokens": 572157,
+          "n_bytes": 2140655,
+          "n_windows": 1118,
+          "tokens_per_byte": 0.2672817432047668,
+          "mean_token_nll_NOT_COMPARABLE": 6.501352122268369
+        }
+      },
+      "wall_sec": 481.2450647354126,
+      "train_tokens": 56127531
+    }
+  },
+  "per_domain_pct_change": {
+    "code": -8.628652343786348,
+    "english": 2.4173750318723597,
+    "chat": -2.6618551526584655
+  },
+  "blended_gpt2": 2.221960357774357,
+  "blended_v32k": 2.1433672639784747,
+  "blended_pct_change": -3.5371060298576062
+}
