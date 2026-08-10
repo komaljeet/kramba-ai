@@ -36,3 +36,7 @@ results/ghost/series*/
 # Git-Bash-on-Windows artifact: a literal dev/null directory created when a
 # hook or script redirects to /dev/null from a non-POSIX shell.
 dev/null/
+
+# Run logs — untracked working output (kept sweeping into commits via `git add -A`)
+logs/
+scripts/logs/
