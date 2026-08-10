@@ -38,9 +38,13 @@ from typing import Any, Optional
 import torch
 
 from ..tools import ToolCallParser, ToolExecutor
+from ..vocab import GPT2_EOS_ID, check_vocab_match, resolve_eos_id
 from .chat import EdgeConversationFormatter
 
-EOS_ID = 50256
+# Legacy alias. Kept so existing importers keep working, but nothing in this
+# module reads it any more -- EOS is resolved per session from the model and
+# tokenizer (#136). See hvn/vocab.py for why a module-level EOS is a bug.
+EOS_ID = GPT2_EOS_ID
 
 
 class EdgeToolCallingSession:
@@ -89,6 +93,11 @@ class EdgeToolCallingSession:
         self.top_k = top_k
         self.repetition_penalty = repetition_penalty
         self.formatter = EdgeConversationFormatter()
+        # #136: resolved per session, never read from a module constant. A 32K
+        # model's EOS is 0; with 50256 it could never stop, so every run would
+        # burn max_new_tokens while looking like a model that rambles.
+        check_vocab_match(model, tokenizer, where="EdgeToolCallingSession")
+        self.eos_id = resolve_eos_id(model, tokenizer)
 
     @torch.no_grad()
     def run(self, query: str) -> dict:
@@ -134,7 +143,7 @@ class EdgeToolCallingSession:
             probs = torch.softmax(logits, dim=-1)
             next_id = int(torch.multinomial(probs, num_samples=1).item())
 
-            if next_id == EOS_ID:
+            if next_id == self.eos_id:
                 break
 
             generated_ids.append(next_id)
