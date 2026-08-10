@@ -242,8 +242,13 @@ class TransformerBlock(nn.Module):
         true: peak cache memory is now the same on token 1 as on token 100,000,
         rather than climbing to it.
 
-        ``written`` is a plain Python int; ``hvn/chat.py``'s state-tree codec
-        passes non-tensor scalars through unchanged, so this still round-trips.
+        ``written`` is a plain Python int by default; ``hvn/chat.py``'s state-tree
+        codec passes non-tensor scalars through unchanged, so it round-trips.
+
+        **Under ``graph_safe_decode`` it is a device tensor instead**, because a
+        CUDA graph cannot touch Python. A graph captured with an int ``written``
+        bakes in that token's write slot and attention extent and replays them
+        forever — the context silently stops growing (see ``forward_step``).
         """
         device = device if device is not None else next(self.parameters()).device
         dtype = dtype if dtype is not None else next(self.parameters()).dtype
@@ -254,11 +259,27 @@ class TransformerBlock(nn.Module):
                                 device=device, dtype=dtype)
             return {"k_cache": empty, "v_cache": empty.clone()}
         shape = (batch_size, self.n_heads, self.window, self.d_head)
+        graph_safe = getattr(self, "graph_safe_decode", False)
         return {
             "k_cache": torch.zeros(shape, device=device, dtype=dtype),
             "v_cache": torch.zeros(shape, device=device, dtype=dtype),
-            "written": 0,
+            "written": (torch.zeros((), dtype=torch.long, device=device)
+                        if graph_safe else 0),
         }
+
+    def _ring_positions(self, W: int, device) -> torch.Tensor:
+        """Cached ``arange(W)`` for the ring mask.
+
+        Built once, not per token: ``torch.arange`` inside ``forward_step`` is an
+        allocation, and an allocation inside a CUDA graph capture comes from the
+        graph's private pool — legal, but it means one more kernel per token for
+        a value that never changes.
+        """
+        buf = getattr(self, "_ring_pos", None)
+        if buf is None or buf.numel() != W or buf.device != device:
+            buf = torch.arange(W, device=device)
+            self.register_buffer("_ring_pos", buf, persistent=False)
+        return buf
 
     def enable_rope_table(self, max_positions: int | None = None,
                           device=None, dtype=None) -> int:
@@ -282,6 +303,9 @@ class TransformerBlock(nn.Module):
                                     self.rope_base)
         self.register_buffer("_rope_cos", cos, persistent=False)
         self.register_buffer("_rope_sin", sin, persistent=False)
+        # Makes init_state hand back a DEVICE-tensor `written`, which is what
+        # lets a captured graph advance the ring instead of replaying one slot.
+        self.graph_safe_decode = True
         return max_positions
 
     def _rope_at(self, position_idx, d_head, device, dtype):
@@ -353,6 +377,40 @@ class TransformerBlock(nn.Module):
             k_cache, v_cache = state["k_cache"], state["v_cache"]
             written = state["written"]
             W = k_cache.shape[2]
+
+            if torch.is_tensor(written):
+                # --- graph-safe path (Issue #138) --------------------------
+                # EVERYTHING the graph touches must be device-resident. With an
+                # int `written`, a captured graph bakes in this token's write
+                # slot AND the attention extent, so every replay overwrites one
+                # slot and attends over a fixed prefix — the context silently
+                # stops growing. Measured directly: `written` stayed at 16 across
+                # three replays while the logits kept changing, so it looked
+                # alive and was wrong.
+                #
+                # Two consequences, both deliberate:
+                #   * the write is index_copy_ with a DEVICE index, not a Python
+                #     slice;
+                #   * attention reads the FULL ring at fixed shape with a mask,
+                #     because a `[:, :, :n_valid]` slice is exactly the dynamic
+                #     shape that got baked in. That costs attention over the whole
+                #     window even early on, which is why the graphed path should
+                #     use a window near the trained sequence length rather than
+                #     4096.
+                slot = (written % W).reshape(1)
+                k_cache.index_copy_(2, slot, k)
+                v_cache.index_copy_(2, slot, v)
+                written.add_(1)
+                idx = self._ring_positions(W, k_cache.device)
+                valid = idx < written.clamp(max=W)          # [W] bool
+                attn_mask = valid.view(1, 1, 1, W)
+                o = F.scaled_dot_product_attention(q, k_cache, v_cache,
+                                                   attn_mask=attn_mask)
+                o = o.transpose(1, 2).reshape(B, 1, D)
+                attn_out = self.out_proj(o)
+                ffn_out = self.ffn(x_norm)
+                return x_t + self.dropout(attn_out) + ffn_out, state
+
             slot = written % W
             k_cache[:, :, slot:slot + 1, :] = k
             v_cache[:, :, slot:slot + 1, :] = v

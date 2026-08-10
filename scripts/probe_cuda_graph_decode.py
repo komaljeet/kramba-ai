@@ -61,6 +61,12 @@ def main() -> int:
                     help="tokens before capture — must exceed the attention "
                          "window's fill so the KV ring is in its WRAPPED, "
                          "fixed-shape steady state (#138 approach 0)")
+    ap.add_argument("--max-positions", type=int, default=512,
+                   help="RoPE table size AND the effective graphed window. The "
+                        "graph-safe path attends over the FULL ring every token, "
+                        "so 4096 would pay 8x the attention cost for a session "
+                        "that never gets that long; 512 matches the trained "
+                        "sequence length.")
     ap.add_argument("--out", default="results/decode_launches/cuda_graph_probe.json")
     args = ap.parse_args()
 
@@ -75,7 +81,7 @@ def main() -> int:
 
     # RoPE tables, so cos/sin come from an index_select on a DEVICE tensor
     # rather than a per-token CPU->GPU construction (#138).
-    touched = model.enable_graph_decode()
+    touched = model.enable_graph_decode(max_positions=args.max_positions)
     result["graph_prep"] = touched
     print(f"[graph] 0. prepared {touched['attention_blocks']} attention blocks, "
           f"RoPE table {touched['max_positions']} positions")
@@ -146,37 +152,62 @@ def main() -> int:
     result["replay"] = "OK"
     result["replay_logits_finite"] = bool(torch.isfinite(replay_logits).all())
 
-    # A graph that is fast and WRONG is worthless, and wrongness here is silent:
-    # the captured position, token or state could be stale and the logits would
-    # still look plausible. So compare replay against eager for the SAME input
-    # and the SAME starting state -- snapshot, replay, restore, run eager.
-    snap = [t.clone() for t in flatten_state(states)]
-    live = flatten_state(states)
+    # A graph that is fast and WRONG is worthless, and the first version of this
+    # check was itself wrong: it compared ONE replay against ONE eager step from
+    # the same restored state, which passes at 0.000e+00 even when the graph has
+    # baked in a fixed write slot and attention extent. Measured directly then:
+    # `written` stayed at 16 across three replays while the logits kept changing,
+    # so it looked alive and had silently stopped growing its context.
+    #
+    # So: replay a SEQUENCE and compare against eager over the same sequence.
+    # Anything baked in shows up from the second token onward.
+    def snapshot():
+        return [t.clone() for t in flatten_state(states)]
 
-    static_tok.fill_(tok_id)
-    static_pos.fill_(pos)
-    with torch.no_grad():
-        graph.replay()
-        torch.cuda.synchronize()
-        g_logits = static_logits.clone()
-        g_state = [t.clone() for t in live]
-
-        for dst, src in zip(live, snap):     # restore the pre-replay state
+    def restore(snap, w0):
+        for dst, src in zip(flatten_state(states), snap):
             dst.copy_(src)
-        e_logits, _ = model.forward_step(static_tok, states,
-                                         position_idx=static_pos)
-        torch.cuda.synchronize()
-        e_state = flatten_state(states)
+        for st in states:
+            if isinstance(st, dict) and torch.is_tensor(st.get("written")):
+                st["written"].fill_(w0)
 
-    dlogits = float((g_logits - e_logits).abs().max())
-    dstate = max((float((a - b).abs().max()) for a, b in zip(g_state, e_state)),
-                 default=0.0)
-    result["max_abs_dlogits_graph_vs_eager"] = dlogits
-    result["max_abs_dstate_graph_vs_eager"] = dstate
-    print(f"[graph] 2. replay vs eager: max|dlogits| = {dlogits:.3e}, "
-          f"max|dstate| = {dstate:.3e}")
-    if dlogits > 1e-5 or dstate > 1e-5:
-        print("[graph]    -> DIVERGENT. The speed number below is meaningless.")
+    w0 = next((int(st["written"]) for st in states
+               if isinstance(st, dict) and torch.is_tensor(st.get("written"))), 0)
+    snap = snapshot()
+    seq = [int(torch.randint(0, V, (1,))) for _ in range(8)]
+
+    with torch.no_grad():
+        eager_out = []
+        for i, t in enumerate(seq):
+            static_tok.fill_(t); static_pos.fill_(pos + i)
+            lg, _ = model.forward_step(static_tok, states, position_idx=static_pos)
+            eager_out.append(lg.clone())
+        eager_written = [int(st["written"]) for st in states
+                         if isinstance(st, dict) and torch.is_tensor(st.get("written"))]
+
+        restore(snap, w0)
+        replay_out = []
+        for i, t in enumerate(seq):
+            static_tok.fill_(t); static_pos.fill_(pos + i)
+            graph.replay(); torch.cuda.synchronize()
+            replay_out.append(static_logits.clone())
+        replay_written = [int(st["written"]) for st in states
+                          if isinstance(st, dict) and torch.is_tensor(st.get("written"))]
+
+    per_token = [float((a - b).abs().max()) for a, b in zip(eager_out, replay_out)]
+    result["replay"] = "OK"
+    result["n_verified_tokens"] = len(seq)
+    result["per_token_max_abs_dlogits"] = per_token
+    result["worst_max_abs_dlogits"] = max(per_token)
+    result["written_eager"] = eager_written
+    result["written_replay"] = replay_written
+    result["ring_advances"] = eager_written == replay_written
+    print(f"[graph] 2. {len(seq)} replays vs eager: worst max|dlogits| = "
+          f"{max(per_token):.3e}; ring counter {w0} -> {replay_written} "
+          f"(eager {eager_written}), advances = {eager_written == replay_written}")
+    if max(per_token) > 1e-5 or eager_written != replay_written:
+        print("[graph]    -> DIVERGENT or the ring is not advancing. "
+              "The speed number below is meaningless.")
 
     # --- 3. launches per replay ------------------------------------------
     from torch.profiler import ProfilerActivity, profile
