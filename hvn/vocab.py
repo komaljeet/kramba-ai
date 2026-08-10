@@ -61,13 +61,34 @@ def resolve_eos_id(model: Any = None, tokenizer: Any = None,
 
 def resolve_vocab_size(model: Any = None, tokenizer: Any = None,
                        default: int = GPT2_VOCAB_SIZE) -> int:
-    """Return the vocabulary size for this model/tokenizer pair."""
-    for src in (model, tokenizer):
-        if src is None:
-            continue
-        v = getattr(src, "vocab_size", None)
-        if v is not None:
-            return int(v)
+    """Return the vocabulary size an embedding table must cover.
+
+    **``tokenizer.vocab_size`` is NOT that number when tokens have been added.**
+    HuggingFace excludes added tokens from ``vocab_size`` but includes them in
+    ``len(tokenizer)``, and the ids it emits go up to ``len(tokenizer) - 1``.
+
+    The FIM tokenizer (#136) is exactly this case: ``vocab_size`` reports 32000
+    while the three sentinels are ids 32000-32002. Sizing a model from
+    ``vocab_size`` gives a 32000-row embedding, and the first FIM document indexes
+    past the end -- a CUDA device-side assert minutes into a multi-day run, with
+    a message naming an embedding kernel and nothing about tokenizers.
+
+    So the tokenizer's contribution is ``max(vocab_size, len(tokenizer))``. The
+    model is still asked first, because a loaded checkpoint's own vocab_size is
+    authoritative about the table it actually has.
+    """
+    v = getattr(model, "vocab_size", None) if model is not None else None
+    if v is not None:
+        return int(v)
+
+    if tokenizer is not None:
+        v = getattr(tokenizer, "vocab_size", None)
+        try:
+            n = len(tokenizer)
+        except TypeError:
+            n = None
+        if v is not None or n is not None:
+            return int(max(x for x in (v, n) if x is not None))
     return int(default)
 
 

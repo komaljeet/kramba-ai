@@ -1328,6 +1328,24 @@ def load_tokenizer(spec: str = "gpt2", **kwargs):
     from tokenizers import ByteLevelBPETokenizer
     from transformers import PreTrainedTokenizerFast
 
+    # #136: a directory may also carry tokenizer.json, the fast format, which
+    # is how the FIM sentinels are persisted -- they are ADDED tokens and
+    # cannot be expressed in vocab.json/merges.txt alone (the ByteLevel
+    # pre-tokenizer would split them into bytes before BPE ever saw them).
+    # Preferred when present, so a FIM-trained model always loads the
+    # vocabulary it was trained on.
+    fast_json = os.path.join(spec, "tokenizer.json")
+    if os.path.isfile(fast_json):
+        from tokenizers import Tokenizer as _FastTokenizer
+        tok = PreTrainedTokenizerFast(
+            tokenizer_object=_FastTokenizer.from_file(fast_json),
+            eos_token="<|endoftext|>", bos_token="<|endoftext|>",
+            unk_token="<|endoftext|>", pad_token="<|endoftext|>",
+        )
+        tok.name_or_path = spec
+        tok.model_max_length = 10 ** 9
+        return tok
+
     vocab = os.path.join(spec, "vocab.json")
     merges = os.path.join(spec, "merges.txt")
     if not (os.path.exists(vocab) and os.path.exists(merges)):
