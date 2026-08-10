@@ -1,0 +1,19 @@
+{
+  "prompt_tokens": 24,
+  "max_new_tokens": 64,
+  "eager_ms": 1179.3753000019933,
+  "graph_ms": 606.9043999887072,
+  "speedup": 1.9432637166972893,
+  "speedup_eager_first": 1.9038616649841105,
+  "speedup_graph_first": 1.9834436574055627,
+  "tokens": {
+    "eager": [
+      62,
+      62
+    ],
+    "graph": [
+      62,
+      62
+    ]
+  }
+}
