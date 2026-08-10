@@ -1,0 +1,123 @@
+{
+  "issue": 141,
+  "config": {
+    "checkpoint": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\checkpoints\\hybrid_a4_v2\\hybrid_a4_step8000.pt",
+    "data": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data\\grounded_qa_expanded.jsonl",
+    "seq_len": 512,
+    "opt_steps": 40,
+    "warmup_opt_steps": 3,
+    "num_workers": 2,
+    "repeats": 2,
+    "compile": true,
+    "out": "results\\throughput_sweep\\real_run_confirm.json"
+  },
+  "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "card_mib": 6140.5,
+  "samples": {
+    "b2_ga16_eager": [
+      {
+        "seconds": 77.83307169999989,
+        "tokens": 655360,
+        "tokens_per_sec": 8420.071130251961,
+        "loader_wait_s": 0.14745090000724304,
+        "loader_wait_pct": 0.1894450479554223,
+        "peak_alloc_mib": 2522.1767578125,
+        "peak_reserved_mib": 2600.0,
+        "spilled": false
+      },
+      {
+        "seconds": 82.11018270000022,
+        "tokens": 655360,
+        "tokens_per_sec": 7981.47048819072,
+        "loader_wait_s": 0.17774659998303832,
+        "loader_wait_pct": 0.21647327303174765,
+        "peak_alloc_mib": 2519.44921875,
+        "peak_reserved_mib": 2620.0,
+        "spilled": false
+      }
+    ],
+    "b4_ga8_eager": [
+      {
+        "seconds": 61.533984200000305,
+        "tokens": 655360,
+        "tokens_per_sec": 10650.374886662983,
+        "loader_wait_s": 0.09764219999851775,
+        "loader_wait_pct": 0.15868012004741483,
+        "peak_alloc_mib": 3637.6416015625,
+        "peak_reserved_mib": 4136.0,
+        "spilled": false
+      },
+      {
+        "seconds": 56.71925300000021,
+        "tokens": 655360,
+        "tokens_per_sec": 11554.454005238707,
+        "loader_wait_s": 0.09162640000067768,
+        "loader_wait_pct": 0.16154373542380282,
+        "peak_alloc_mib": 3637.6416015625,
+        "peak_reserved_mib": 4136.0,
+        "spilled": false
+      }
+    ],
+    "b2_ga16_compiled": [
+      {
+        "seconds": 55.62818160000006,
+        "tokens": 655360,
+        "tokens_per_sec": 11781.078963041267,
+        "loader_wait_s": 0.16364600000088103,
+        "loader_wait_pct": 0.2941782299798936,
+        "peak_alloc_mib": 2368.5556640625,
+        "peak_reserved_mib": 2410.0,
+        "spilled": false
+      },
+      {
+        "seconds": 59.33881230000043,
+        "tokens": 655360,
+        "tokens_per_sec": 11044.373397409494,
+        "loader_wait_s": 0.16860140000790125,
+        "loader_wait_pct": 0.28413342544758013,
+        "peak_alloc_mib": 2363.6259765625,
+        "peak_reserved_mib": 2446.0,
+        "spilled": false
+      }
+    ],
+    "b4_ga8_compiled": [
+      {
+        "seconds": 43.70045930000015,
+        "tokens": 655360,
+        "tokens_per_sec": 14996.638719538532,
+        "loader_wait_s": 0.06857880000916339,
+        "loader_wait_pct": 0.1569292430964522,
+        "peak_alloc_mib": 3335.9775390625,
+        "peak_reserved_mib": 3672.0,
+        "spilled": false
+      },
+      {
+        "seconds": 43.89752860000044,
+        "tokens": 655360,
+        "tokens_per_sec": 14929.314266680458,
+        "loader_wait_s": 0.06803100000252016,
+        "loader_wait_pct": 0.15497683394075965,
+        "peak_alloc_mib": 3334.3037109375,
+        "peak_reserved_mib": 3420.0,
+        "spilled": false
+      }
+    ]
+  },
+  "results": {
+    "eager": {
+      "b2_ga16_tok_s": 8200.77080922134,
+      "b4_ga8_tok_s": 11102.414445950846,
+      "delta_pct": 35.38257200733813,
+      "b2_loader_wait_pct": 0.20295916049358498,
+      "b4_loader_wait_pct": 0.16011192773560884
+    },
+    "compiled": {
+      "b2_ga16_tok_s": 11412.726180225382,
+      "b4_ga8_tok_s": 14962.976493109494,
+      "delta_pct": 31.10781996185596,
+      "b2_loader_wait_pct": 0.2891558277137369,
+      "b4_loader_wait_pct": 0.15595303851860592
+    }
+  },
+  "synthetic_claim_pct": 37.7
+}

@@ -1,0 +1,40 @@
+﻿GPU: NVIDIA GeForce RTX 4050 Laptop GPU | 20 SMs | 5.9966 GiB
+python.exe : Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked 
+critical (_ssl.c:1081). Will retry later.
+At line:1 char:452
++ ... lyContinue; & "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Scripts ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Could not refre...ll retry later.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+corpus: 5240 records from C:\Users\komal\Documents\Codes\kramba-ai\data\grounded_qa_expanded.jsonl
+  Built 5,240 grounded-QA examples (seq_len=512, 0 truncated to fit)
+  Packed 5,240 examples into 1,012 rows (5.18 ex/row, 5.18x fewer rows); padding waste 81.4% -> 3.9%
+
+Effective batch 32 rows (16,384 tokens) per optimizer step in BOTH arms.
+40 timed optimizer steps each => identical token counts.
+
+  [eager] round 1/2  b2_ga16     8420.1 tok/s  loader wait   0.2%  reserved  2600.0 MiB
+  [eager] round 1/2  b4_ga8     10650.4 tok/s  loader wait   0.2%  reserved  4136.0 MiB
+
+  [eager] round 2/2  b2_ga16     7981.5 tok/s  loader wait   0.2%  reserved  2620.0 MiB
+  [eager] round 2/2  b4_ga8     11554.5 tok/s  loader wait   0.2%  reserved  4136.0 MiB
+
+W0810 23:14:48.056000 13668 Lib\site-packages\torch\_inductor\utils.py:1717] [1/0_1] Not enough SMs to use max_autotune_gemm mode
+  [compiled] round 1/2  b2_ga16    11781.1 tok/s  loader wait   0.3%  reserved  2410.0 MiB
+  [compiled] round 1/2  b4_ga8     14996.6 tok/s  loader wait   0.2%  reserved  3672.0 MiB
+
+  [compiled] round 2/2  b2_ga16    11044.4 tok/s  loader wait   0.3%  reserved  2446.0 MiB
+  [compiled] round 2/2  b4_ga8     14929.3 tok/s  loader wait   0.2%  reserved  3420.0 MiB
+
+==========================================================================
+[eager] b2_ga16   8200.8 tok/s  ->  b4_ga8  11102.4 tok/s   = +35.4%
+         loader wait: 0.2% (b2) vs 0.2% (b4)
+[compiled] b2_ga16  11412.7 tok/s  ->  b4_ga8  14963.0 tok/s   = +31.1%
+         loader wait: 0.3% (b2) vs 0.2% (b4)
+==========================================================================
+
+Synthetic-token claim to confirm: +37.7% (scripts/throughput_sweep.py).
+A large shortfall with high loader wait = the dataloader is the limit.
+
+Wrote results\throughput_sweep\real_run_confirm.json
