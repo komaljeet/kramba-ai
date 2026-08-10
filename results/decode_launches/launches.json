@@ -1,0 +1,16 @@
+{
+  "runs": [
+    {
+      "n_tokens": 32,
+      "kernel_launches": 17056,
+      "launches_per_token": 533.0,
+      "cpu_self_ms": 491.4336000000058,
+      "device_self_ms": 66.49101099999895,
+      "cpu_over_device": 7.390978007538696,
+      "label": "baseline",
+      "checkpoint": "checkpoints/hybrid_chat_v1.pt",
+      "vocab_size": 50257,
+      "step": 0
+    }
+  ]
+}
