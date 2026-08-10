@@ -78,6 +78,7 @@ class EdgeHVN(nn.Module):
         eos_token_id: int = 50256,
         moe_experts: int = 1,
         moe_top_k: int = 2,
+        ffn_activation: str = "gelu",
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -120,6 +121,10 @@ class EdgeHVN(nn.Module):
             )
             plan = [_bt] * num_layers
         self.block_plan = plan
+        # Issue #140: recorded so a checkpoint knows which activation it was
+        # trained with -- loading relu2 weights into a gelu model would succeed
+        # silently (identical shapes) and quietly measure the wrong thing.
+        self.ffn_activation = ffn_activation
         # Sliding-window width for transformer layers (None = full causal). Only
         # bites at inference when context > window (see TransformerBlock._attention).
         self.attn_window = attn_window
@@ -139,12 +144,15 @@ class EdgeHVN(nn.Module):
                 # Issue #123: moe_experts>1 routes this block's FFN through a
                 # Mixture-of-Experts (capacity at sub-linear compute). Default
                 # 1 = dense, byte-identical to the pre-#123 path.
+                # Issue #140: ffn_activation selects the FFN's pointwise op.
+                # "gelu" (default) is byte-identical to the pre-#140 block.
                 return DeltaNetBlock(
                     d_model=d_model, n_heads=n_heads, dropout=dropout,
                     conv_kernel=deltanet_conv_kernel,
                     use_triton_scan=use_triton_scan,
                     moe_experts=moe_experts, moe_top_k=moe_top_k,
                     use_megakernel_scan=use_megakernel_scan,
+                    ffn_activation=ffn_activation,
                 )
             if t == "hvn":
                 return HVNBlock(
