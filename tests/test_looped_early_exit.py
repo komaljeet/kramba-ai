@@ -35,6 +35,20 @@ def _tiny_hybrid_model(seed=0):
     return model
 
 
+def _state_equal(a, b) -> bool:
+    """Compare one state entry, tensor or not.
+
+    Issue #138's KV ring buffer added a plain-int ``written`` counter to the
+    attention blocks' state (an int on purpose: hvn/chat.py's state codec passes
+    non-tensor scalars through unchanged, so it round-trips). ``torch.equal``
+    raises TypeError on it, which broke these two tests when that landed — the
+    ring-buffer MR ran the ring and incremental suites but not this one.
+    """
+    if torch.is_tensor(a) or torch.is_tensor(b):
+        return torch.is_tensor(a) and torch.is_tensor(b) and torch.equal(a, b)
+    return a == b
+
+
 def test_max_loops_1_is_bit_identical_to_base_forward_step():
     model = _tiny_hybrid_model()
     states_a = model.init_state(1)
@@ -51,7 +65,7 @@ def test_max_loops_1_is_bit_identical_to_base_forward_step():
     assert torch.equal(base_logits, looped_logits), "max_loops=1 must reproduce the base forward_step exactly"
     for sa, sb in zip(base_states, looped_states):
         for k in sa:
-            assert torch.equal(sa[k], sb[k]), f"state mismatch in key {k!r}"
+            assert _state_equal(sa[k], sb[k]), f"state mismatch in key {k!r}"
 
 
 def test_commits_loop1_state_and_final_loop_logits():
@@ -101,10 +115,10 @@ def test_commits_loop1_state_and_final_loop_logits():
     # State: from LOOP 1 -- and provably NOT loop 2's.
     for sa, sb in zip(loop1_states, looped_states):
         for k in sa:
-            assert torch.equal(sa[k], sb[k]), f"committed state should be loop 1's; mismatch in {k!r}"
+            assert _state_equal(sa[k], sb[k]), f"committed state should be loop 1's; mismatch in {k!r}"
 
     differs = any(
-        not torch.equal(s1[k], s2[k])
+        not _state_equal(s1[k], s2[k])
         for s1, s2 in zip(loop1_states, loop2_states) for k in s1
     )
     assert differs, "loop-1 and loop-2 states are identical, so this test cannot detect a regression"
