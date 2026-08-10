@@ -115,7 +115,7 @@ def continue_ft_looped(model, dataloader, device, *, lr, max_steps, max_loops,
             per_loop_logits = looped_forward_train(model, x, position_ids, k,
                                                    deep_supervise=deep_supervise,
                                                    doc_ids=doc_ids)
-            loss = sum(criterion(lg.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1))
+            loss = sum(criterion(lg.reshape(-1, lg.size(-1)), y.reshape(-1))
                       for lg in per_loop_logits) / len(per_loop_logits)
             loss = loss / grad_accum
         loss.backward()

@@ -128,7 +128,7 @@ def evaluate_loss(model, batches: Sequence[torch.Tensor], device: torch.device) 
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
             logits = model(x)
             loss = nn.functional.cross_entropy(
-                logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1)
+                logits.reshape(-1, logits.size(-1)).float(), y.reshape(-1)
             )
         total += float(loss)
         count += 1
@@ -258,7 +258,7 @@ def make_series(args) -> int:
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 logits = model(x)
                 loss = nn.functional.cross_entropy(
-                    logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1)
+                    logits.reshape(-1, logits.size(-1)).float(), y.reshape(-1)
                 )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -545,7 +545,7 @@ def ab_continue(args) -> int:
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 logits = model(x)
                 loss = nn.functional.cross_entropy(
-                    logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1))
+                    logits.reshape(-1, logits.size(-1)).float(), y.reshape(-1))
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
@@ -670,7 +670,7 @@ def repeat_average(args) -> int:
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 logits = model(x)
                 loss = nn.functional.cross_entropy(
-                    logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1))
+                    logits.reshape(-1, logits.size(-1)).float(), y.reshape(-1))
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
@@ -810,7 +810,7 @@ def parallel_ensemble(args) -> int:
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
             logits = model(x)
             loss = nn.functional.cross_entropy(
-                logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1))
+                logits.reshape(-1, logits.size(-1)).float(), y.reshape(-1))
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
@@ -1194,7 +1194,7 @@ def window_fit_run(args) -> int:
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 logits = model(x)
                 loss = nn.functional.cross_entropy(
-                    logits.reshape(-1, GPT2_VOCAB_SIZE).float(), y.reshape(-1))
+                    logits.reshape(-1, logits.size(-1)).float(), y.reshape(-1))
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()

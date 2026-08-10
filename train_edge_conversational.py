@@ -1442,13 +1442,19 @@ def pre_training_audit(
             audit_model.eval()
             with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
                 logits = audit_model(x)
+            # Issue #139: compare against the MODEL's vocab, not a constant.
+            # Hardcoding 50257 here made the audit reject every non-GPT-2 vocab
+            # outright — the audit would have blocked a 32K run before step 1,
+            # which is exactly the failure a pre-training audit is supposed to
+            # prevent, not cause.
+            expected_vocab = getattr(audit_model, "vocab_size", GPT2_VOCAB_SIZE)
             print(f"    Input shape:  {x.shape}")
-            print(f"    Output shape: {logits.shape} (expected [{x.shape[0]}, {x.shape[1]}, {GPT2_VOCAB_SIZE}])")
+            print(f"    Output shape: {logits.shape} (expected [{x.shape[0]}, {x.shape[1]}, {expected_vocab}])")
             if logits.shape[0] != x.shape[0] or logits.shape[1] != x.shape[1]:
                 print(f"    ❌ Output shape mismatch!")
                 all_passed = False
-            elif logits.shape[2] != GPT2_VOCAB_SIZE:
-                print(f"    ❌ Vocab dimension mismatch: got {logits.shape[2]}, expected {GPT2_VOCAB_SIZE}")
+            elif logits.shape[2] != expected_vocab:
+                print(f"    ❌ Vocab dimension mismatch: got {logits.shape[2]}, expected {expected_vocab}")
                 all_passed = False
             else:
                 print(f"    ✓ Forward pass correct")
@@ -1459,7 +1465,7 @@ def pre_training_audit(
             with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
                 logits = audit_model(x)
                 loss = nn.CrossEntropyLoss()(
-                    logits.reshape(-1, GPT2_VOCAB_SIZE),
+                    logits.reshape(-1, logits.size(-1)),
                     y.reshape(-1),
                 )
             loss.backward()
@@ -1734,7 +1740,7 @@ def evaluate(model, val_loader, device, max_batches: int = 100,
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
             logits = model(x)
             per_sample = crit(
-                logits.reshape(-1, GPT2_VOCAB_SIZE), y.reshape(-1)
+                logits.reshape(-1, logits.size(-1)), y.reshape(-1)
             ).reshape(x.shape[0], -1).mean(dim=1)
         B = x.shape[0]
         tot_loss_t += per_sample.detach().sum()
@@ -2031,7 +2037,7 @@ def train(
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
             logits = model(batch_x)
             tok_loss = torch.nn.functional.cross_entropy(
-                logits.reshape(-1, GPT2_VOCAB_SIZE),
+                logits.reshape(-1, logits.size(-1)),
                 batch_y.reshape(-1),
                 reduction="none",
             )
