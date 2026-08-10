@@ -135,7 +135,7 @@ def make_optimizer(arm: str, model, args):
     raise ValueError(f"unknown arm {arm!r}")
 
 
-def run_arm(arm, args, batches, probes, device) -> dict:
+def run_arm(arm, args, batches, probes, device, tokenizer=None) -> dict:
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
@@ -203,8 +203,25 @@ def run_arm(arm, args, batches, probes, device) -> dict:
                   f"({(time.time() - t0) / 60:.1f} min)", flush=True)
             model.train()
 
+    # Issue #139: bits per byte, computed HERE while the model is still in
+    # memory. Per-token loss is not comparable across vocabularies -- at step 0
+    # the 32K arm reads 10.41 and the 50257 arm 10.82, purely ln(vocab), with
+    # neither having learned anything. bits/byte normalises against the source
+    # TEXT, so both arms are graded on identical bytes.
+    bpb = None
+    if args.bpb_text and tokenizer is not None and os.path.exists(args.bpb_text):
+        from eval.bits_per_byte import bits_per_byte
+        with open(args.bpb_text, encoding="utf-8", errors="replace") as fh:
+            heldout = fh.read(args.bpb_max_bytes)
+        bpb = bits_per_byte(model, tokenizer, heldout, seq_len=args.seq_len,
+                            device=device)
+        print(f"[ab]   bits/byte {bpb['bits_per_byte']:.4f} on "
+              f"{bpb['n_bytes']:,} held-out bytes "
+              f"({bpb['tokens_per_byte']:.4f} tokens/byte)  <- COMPARABLE")
+
     out = {
         "arm": arm, "regime": args.regime,
+        "bits_per_byte": bpb,
         "optimizer_desc": desc,
         "wall_clock_sec": time.time() - t0,
         "final_heldout_loss": traj[-1]["heldout_loss"],
@@ -253,6 +270,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         "only — tying changes the model, so it cannot be applied "
                         "to an existing untied checkpoint.")
     p.add_argument("--vocab-size", type=int, default=GPT2_VOCAB_SIZE)
+    p.add_argument("--bpb-text", default="data_cache/heldout_fineweb.txt",
+                   help="held-out RAW TEXT for bits-per-byte. FineWeb-Edu has "
+                        "mix share 0.0, so it is unseen by every arm.")
+    p.add_argument("--bpb-max-bytes", type=int, default=2_000_000)
     p.add_argument("--tokenizer", default="gpt2",
                    help="'gpt2' or a directory from scripts/train_tokenizer.py. "
                         "Sets vocab_size and selects the matching .bin caches.")
@@ -304,7 +325,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             results = json.load(fh).get("arms", {})
 
     for arm in args.arms:
-        results[arm] = run_arm(arm, args, batches, probes, device)
+        results[arm] = run_arm(arm, args, batches, probes, device, tok)
         _write(out_path, args, results)
 
     print(f"\n[ab] ============ {args.regime.upper()} ============")
@@ -314,6 +335,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               else f"{r['hand_tuned_lr']:g} (tuned)")
         print(f"[ab] {name:<14} {r['final_heldout_loss']:>15.5f} {lr:>16} "
               f"{r['wall_clock_sec'] / 60:>11.1f}")
+    for name, r in results.items():
+        if r.get("bits_per_byte"):
+            print(f"[ab] {name:<14} bits/byte {r['bits_per_byte']['bits_per_byte']:.4f}"
+                  f"  (the comparable number)")
     if "muon" in results:
         base = results["muon"]["final_heldout_loss"]
         for name, r in results.items():
