@@ -3065,3 +3065,61 @@ in training.md was published as fitting when the real script spills at 355M.
 Artifacts: `results/size_sweep_fast.json` (--fast, decision-relevant), `results/size_sweep.json`
 (eager, retained only as the record of the retracted measurement), `scripts/size_sweep.py`,
 `logs/size_sweep_fast.log`.
+
+### Addendum (#136, 2026-08-10): megakernel on, and 168M body is reachable -- but only with the 32K vocab
+
+Two follow-up runs after the sweep above, same script, same steps, same seed, so these are paired
+against the numbers in the table.
+
+**Design B (`--megakernel-scan`, #96) enabled.** It was never on in the first sweep.
+
+| 896x16 | VRAM | tok/s | days |
+|---|---:|---:|---:|
+| 32k-tied, megakernel OFF | 4,722 MiB (76.9%) | 3,934 | 9.3 |
+| **32k-tied, megakernel ON** | **4,148 MiB (67.6%)** | 4,007 | **9.1** |
+| gpt2-untied, megakernel OFF | 5,314 MiB (86.5%) | 3,492 | 14.5 |
+| gpt2-untied, megakernel ON | 5,286 MiB (86.1%) | 3,626 | 14.0 |
+
+**The gain is memory, not speed: -574 MiB on the 32K arm for +1.9% throughput.** That is well under
+#96's ~1.05x end-to-end figure but consistent with its mechanism -- Design B recomputes in the
+backward instead of storing, trading compute for VRAM.
+
+**Unexplained, and recorded as such:** the memory saving is 574 MiB on the 32K arm and 28 MiB on
+GPT-2, for the same change at the same size. One run per arm cannot separate a real effect from
+allocator variation. Not worth a mechanism story on this evidence.
+
+**Both arms reproduced the previous table within noise, which is the regression check** that moving
+the fast stack out of `main()` into `apply_fast_stack` did not change behaviour.
+
+### The headroom bought a bigger body
+
+At 67.6% there was ~1.9 GB spare, so d=1024 was worth measuring -- it had only ever been run eager,
+where it read 114.8%.
+
+| 1024x16 | total | body | VRAM | tok/s | days | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| gpt2-untied | 271M | 168M | 6,224 MiB (101.4%) | 2,324 | 27.0 | SUSPECT (spills) |
+| **32k-tied** | 201M | **168M** | **4,652 MiB (75.8%)** | 3,159 | 14.7 | **ok** |
+
+**A 168M body is only reachable with the 32K vocabulary.** The GPT-2 arm spills at the same size,
+because 103M of its parameters are two lookup tables. This is the strongest form of the #139 result:
+at d=1024 the vocabulary choice is not "cheaper", it is the difference between trainable and not.
+
+### The ladder, and which rung to pick
+
+All --fast + megakernel, all clean fits:
+
+| config | body | VRAM | days | days per 10M body |
+|---|---:|---:|---:|---:|
+| 896x16 32k-tied | 129M | 67.6% | **9.1** | **0.71** |
+| 1024x16 32k-tied | 168M | 75.8% | 14.7 | 0.87 |
+
+**896x16 remains the recommendation.** Going to 1024 buys +30% body for +61% time -- a worse rate
+per unit of model. 1024 is genuinely available if 15 days is acceptable; it is not free.
+
+For context on where this started: #136 planned a **95M body in ~9 days**. The same card now gives a
+**129M body in 9.1 days**, from the vocabulary and execution-mode changes alone, with no
+architecture work.
+
+Artifacts: `results/size_sweep_megakernel.json`, `results/size_sweep_1024.json`,
+`logs/size_sweep_mega.log`, `logs/size_sweep_1024.log`.

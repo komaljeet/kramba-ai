@@ -72,7 +72,8 @@ ARMS = [
 
 
 def build(vocab: int, tie: bool, d_model: int, n_layers: int, device,
-          seq_len: int, batch_size: int, fast: bool = True):
+          seq_len: int, batch_size: int, fast: bool = True,
+          megakernel: bool = False):
     """Build through the real path, and run it the way training actually runs.
 
     ``--fast`` is default=True on train_edge_conversational (since #129) and is
@@ -110,7 +111,8 @@ def build(vocab: int, tie: bool, d_model: int, n_layers: int, device,
         # This sweep's first version hand-rolled a subset here and measured a
         # mode training never runs in; that is exactly the bug apply_fast_stack
         # exists to make impossible.
-        model = tec.apply_fast_stack(model, triton_scan=True, tf32=True,
+        model = tec.apply_fast_stack(model, triton_scan=True,
+                                     megakernel_scan=megakernel, tf32=True,
                                      compile_model=True, verbose=False)
     return model
 
@@ -127,12 +129,14 @@ def measure(vocab, tie, label, d_model, n_layers, args, total_vram_mb) -> dict:
            "n_heads": max(1, d_model // HEAD_DIM), "head_dim": HEAD_DIM}
     try:
         model = build(vocab, tie, d_model, n_layers, device, args.seq_len,
-                      args.batch_size, fast=args.fast)
+                      args.batch_size, fast=args.fast,
+                      megakernel=args.megakernel)
     except torch.OutOfMemoryError:
         row.update(verdict="oom-at-build")
         return row
 
     row["fast"] = args.fast
+    row["megakernel"] = args.megakernel
     params = sum(p.numel() for p in model.parameters())
     # Vocabulary vs body: the split that decides whether a size is worth it.
     vocab_params = d_model * vocab * (1 if tie else 2)
@@ -221,6 +225,10 @@ def main() -> int:
                          "real run would ever see.")
     ap.add_argument("--no-fast", dest="fast", action="store_false",
                     help="Eager mode. Only for isolating what --fast is worth.")
+    ap.add_argument("--megakernel", action="store_true", default=False,
+                    help="Design B blockwise-recompute backward (#96), measured "
+                         "at ~1.05x end-to-end with bit-identical loss. Requires "
+                         "--fast. OFF by default because it is opt-in in training.")
     ap.add_argument("--out", default="results/size_sweep.json")
     args = ap.parse_args()
 
@@ -230,7 +238,8 @@ def main() -> int:
     total_vram_mb = props.total_memory / 1024 ** 2
     print(f"[sweep] {props.name} | {total_vram_mb:.0f} MiB | "
           f"B={args.batch_size} S={args.seq_len} | {args.steps} measured steps | "
-          f"fast={'ON (compile+tf32+triton)' if args.fast else 'OFF (eager)'}",
+          f"fast={'ON (compile+tf32+triton)' if args.fast else 'OFF (eager)'}"
+          f"{' +megakernel' if args.megakernel else ''}",
           flush=True)
     print(f"[sweep] NOTE: WDDM spills silently past VRAM -- a row that runs is "
           f"not proof it fits. Watch the verdict column.", flush=True)
