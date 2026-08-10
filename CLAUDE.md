@@ -12,6 +12,25 @@ Model policy (strict):
     however small — "this one's simple enough to guess at" is exactly where it goes wrong.
   - **Before building anything:** check the plan against the issue's own wording, and
     check that the measurement can actually detect the thing being claimed.
+  - **Before RUNNING any test or benchmark, ask: "if the thing I am testing were
+    broken, would this catch it?"** Answer it before you see the result, not after.
+    A test that cannot fail is worse than no test — it converts a bug into a
+    published number. Every expensive mistake in this repo has this shape:
+      - #138 shipped "6.8x" from a CUDA graph that could take exactly ONE correct
+        step. The check compared one replay against one eager step from the same
+        state; both do the same thing, so it passed at `max|dlogits| = 0.000e+00`
+        while the model's context had silently stopped growing.
+      - #117's cache served untrained weights for a whole epic because the only
+        test watched aggregate loss, which still trended down.
+      - #122's 5-item recall gate was retracted for gating a scale-up decision on
+        a measurement dominated by luck.
+      - #132's verdict was retracted for grading arms on **train** loss in a
+        multi-pass regime, which measures memorisation, not quality.
+    Practical rules that follow: compare a **sequence**, not one step, whenever
+    state carries forward; assert the specific quantity that would freeze or go
+    stale, not just the output; and add a test whose only job is to fail if the
+    real test ever becomes vacuous (too few tokens, too few trials, a floored
+    metric).
   - **Writing too** — docs/state.md entries, commit messages, MR text. Do NOT switch
     models mid-task to write these up. Writing about work just done needs the full
     session context, so it cannot be handed to a subagent, and toggling `/model` by hand

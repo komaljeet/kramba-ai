@@ -60,9 +60,38 @@ def _rope_cos_sin_at(position_idx: int, d_head: int, device, dtype,
     """
     half = d_head // 2
     inv_freq = 1.0 / (base ** (torch.arange(0, half, device=device).float() / half))
-    t = torch.tensor([float(position_idx)], device=device)
+    t = torch.arange(position_idx, position_idx + 1, device=device,
+                     dtype=torch.float32)
     freqs = torch.outer(t, inv_freq)          # [1, half]
     emb = torch.cat([freqs, freqs], dim=-1)   # [1, d_head]
+    return emb.cos().to(dtype), emb.sin().to(dtype)
+
+
+def build_rope_table(max_positions: int, d_head: int, device, dtype,
+                     base: float = 10000.0):
+    """Precomputed RoPE cos/sin for positions ``[0, max_positions)`` (Issue #138).
+
+    Two reasons this replaces per-token construction on the decode path, and the
+    second is the one that matters:
+
+    1. ``torch.tensor([float(position_idx)], device=cuda)`` is a **CPU->GPU copy
+       from unpinned memory**, which CUDA graph capture rejects outright.
+    2. Even with the copy gone, ``position_idx`` changes every token, and a graph
+       bakes in the values it captured. A graph recorded at position 17 would
+       replay position 17's rotation forever — **silently wrong, not an error**,
+       which is far worse than a failed capture.
+
+    A table plus a device-resident index fixes both: the graph performs an
+    ``index_select`` whose *input* moves, so each replay reads the correct row.
+    Cost is trivial — 4096 positions x 64 d_head x 2 tables in fp32 is ~2 MB.
+
+    Returns ``(cos, sin)``, each ``[max_positions, d_head]``.
+    """
+    half = d_head // 2
+    inv_freq = 1.0 / (base ** (torch.arange(0, half, device=device).float() / half))
+    t = torch.arange(max_positions, device=device, dtype=torch.float32)
+    freqs = torch.outer(t, inv_freq)              # [P, half]
+    emb = torch.cat([freqs, freqs], dim=-1)       # [P, d_head]
     return emb.cos().to(dtype), emb.sin().to(dtype)
 
 
@@ -213,8 +242,13 @@ class TransformerBlock(nn.Module):
         true: peak cache memory is now the same on token 1 as on token 100,000,
         rather than climbing to it.
 
-        ``written`` is a plain Python int; ``hvn/chat.py``'s state-tree codec
-        passes non-tensor scalars through unchanged, so this still round-trips.
+        ``written`` is a plain Python int by default; ``hvn/chat.py``'s state-tree
+        codec passes non-tensor scalars through unchanged, so it round-trips.
+
+        **Under ``graph_safe_decode`` it is a device tensor instead**, because a
+        CUDA graph cannot touch Python. A graph captured with an int ``written``
+        bakes in that token's write slot and attention extent and replays them
+        forever — the context silently stops growing (see ``forward_step``).
         """
         device = device if device is not None else next(self.parameters()).device
         dtype = dtype if dtype is not None else next(self.parameters()).dtype
@@ -225,11 +259,82 @@ class TransformerBlock(nn.Module):
                                 device=device, dtype=dtype)
             return {"k_cache": empty, "v_cache": empty.clone()}
         shape = (batch_size, self.n_heads, self.window, self.d_head)
+        graph_safe = getattr(self, "graph_safe_decode", False)
         return {
             "k_cache": torch.zeros(shape, device=device, dtype=dtype),
             "v_cache": torch.zeros(shape, device=device, dtype=dtype),
-            "written": 0,
+            "written": (torch.zeros((), dtype=torch.long, device=device)
+                        if graph_safe else 0),
         }
+
+    def _ring_positions(self, W: int, device) -> torch.Tensor:
+        """Cached ``arange(W)`` for the ring mask.
+
+        Built once, not per token: ``torch.arange`` inside ``forward_step`` is an
+        allocation, and an allocation inside a CUDA graph capture comes from the
+        graph's private pool — legal, but it means one more kernel per token for
+        a value that never changes.
+        """
+        buf = getattr(self, "_ring_pos", None)
+        if buf is None or buf.numel() != W or buf.device != device:
+            buf = torch.arange(W, device=device)
+            self.register_buffer("_ring_pos", buf, persistent=False)
+        return buf
+
+    def enable_rope_table(self, max_positions: int | None = None,
+                          device=None, dtype=None) -> int:
+        """Precompute the RoPE table so decode can be CUDA-graph captured (#138).
+
+        Opt-in and idempotent. Without it ``forward_step`` builds cos/sin per
+        token, which (a) is a CPU->GPU copy that graph capture rejects and (b)
+        would bake one position into a captured graph.
+
+        ``max_positions`` defaults to the attention window, since a bounded
+        window is the furthest back this block can ever attend. Returns the size
+        so a caller can assert the range it needs is covered rather than
+        discovering a silent clamp at token ``max_positions``.
+        """
+        p = next(self.parameters())
+        device = device if device is not None else p.device
+        dtype = dtype if dtype is not None else p.dtype
+        if max_positions is None:
+            max_positions = self.window if self.window is not None else 4096
+        cos, sin = build_rope_table(max_positions, self.d_head, device, dtype,
+                                    self.rope_base)
+        self.register_buffer("_rope_cos", cos, persistent=False)
+        self.register_buffer("_rope_sin", sin, persistent=False)
+        # Makes init_state hand back a DEVICE-tensor `written`, which is what
+        # lets a captured graph advance the ring instead of replaying one slot.
+        self.graph_safe_decode = True
+        return max_positions
+
+    def _rope_at(self, position_idx, d_head, device, dtype):
+        """cos/sin for one position, from the table when it exists.
+
+        ``position_idx`` may be a Python int (eager) or a 0-d/1-element device
+        tensor (graph-safe: the index moves, so each replay reads its own row).
+        A Python int inside a capture would be constant-folded into the graph and
+        every replay would silently reuse that one position's rotation.
+        """
+        cos_tab = getattr(self, "_rope_cos", None)
+        if cos_tab is None:
+            return _rope_cos_sin_at(int(position_idx), d_head, device, dtype,
+                                    self.rope_base)
+        n = cos_tab.shape[0]
+        if torch.is_tensor(position_idx):
+            idx = position_idx.reshape(1).to(torch.long) % n
+        else:
+            # Range-check only on the int path: reading a device tensor here
+            # would force a host sync every token and defeat the purpose.
+            if position_idx >= n:
+                raise IndexError(
+                    f"position {position_idx} exceeds the RoPE table ({n}); "
+                    f"call enable_rope_table(max_positions=...) with a larger "
+                    f"range rather than wrapping silently")
+            idx = torch.as_tensor([position_idx], device=cos_tab.device,
+                                  dtype=torch.long)
+        return (cos_tab.index_select(0, idx).to(dtype),
+                self._rope_sin.index_select(0, idx).to(dtype))
 
     def forward_step(self, x_t: torch.Tensor, state: dict,
                      position_idx: int = 0) -> tuple[torch.Tensor, dict]:
@@ -252,8 +357,7 @@ class TransformerBlock(nn.Module):
         k = self.k_proj(x_norm).view(B, 1, H, d).transpose(1, 2)
         v = self.v_proj(x_norm).view(B, 1, H, d).transpose(1, 2)
 
-        cos, sin = _rope_cos_sin_at(position_idx, d, x_norm.device, q.dtype,
-                                    self.rope_base)
+        cos, sin = self._rope_at(position_idx, d, x_norm.device, q.dtype)
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
 
@@ -273,6 +377,40 @@ class TransformerBlock(nn.Module):
             k_cache, v_cache = state["k_cache"], state["v_cache"]
             written = state["written"]
             W = k_cache.shape[2]
+
+            if torch.is_tensor(written):
+                # --- graph-safe path (Issue #138) --------------------------
+                # EVERYTHING the graph touches must be device-resident. With an
+                # int `written`, a captured graph bakes in this token's write
+                # slot AND the attention extent, so every replay overwrites one
+                # slot and attends over a fixed prefix — the context silently
+                # stops growing. Measured directly: `written` stayed at 16 across
+                # three replays while the logits kept changing, so it looked
+                # alive and was wrong.
+                #
+                # Two consequences, both deliberate:
+                #   * the write is index_copy_ with a DEVICE index, not a Python
+                #     slice;
+                #   * attention reads the FULL ring at fixed shape with a mask,
+                #     because a `[:, :, :n_valid]` slice is exactly the dynamic
+                #     shape that got baked in. That costs attention over the whole
+                #     window even early on, which is why the graphed path should
+                #     use a window near the trained sequence length rather than
+                #     4096.
+                slot = (written % W).reshape(1)
+                k_cache.index_copy_(2, slot, k)
+                v_cache.index_copy_(2, slot, v)
+                written.add_(1)
+                idx = self._ring_positions(W, k_cache.device)
+                valid = idx < written.clamp(max=W)          # [W] bool
+                attn_mask = valid.view(1, 1, 1, W)
+                o = F.scaled_dot_product_attention(q, k_cache, v_cache,
+                                                   attn_mask=attn_mask)
+                o = o.transpose(1, 2).reshape(B, 1, D)
+                attn_out = self.out_proj(o)
+                ffn_out = self.ffn(x_norm)
+                return x_t + self.dropout(attn_out) + ffn_out, state
+
             slot = written % W
             k_cache[:, :, slot:slot + 1, :] = k
             v_cache[:, :, slot:slot + 1, :] = v

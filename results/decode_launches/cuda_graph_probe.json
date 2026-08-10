@@ -1,0 +1,39 @@
+{
+  "checkpoint": "checkpoints/hybrid_chat_v1.pt",
+  "graph_prep": {
+    "attention_blocks": 2,
+    "max_positions": 512
+  },
+  "state_tensors": 26,
+  "capture": "OK",
+  "state_addresses_stable_through_capture": true,
+  "replay": "OK",
+  "replay_logits_finite": true,
+  "n_verified_tokens": 8,
+  "per_token_max_abs_dlogits": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "worst_max_abs_dlogits": 0.0,
+  "written_eager": [
+    28,
+    28
+  ],
+  "written_replay": [
+    28,
+    28
+  ],
+  "ring_advances": true,
+  "replay_launches_per_token": 539.0,
+  "eager_ms_per_token": 14.09514335938411,
+  "graph_ms_per_token": 3.131700390667902,
+  "speedup": 4.500795606561208,
+  "speedup_eager_first": 4.459021871662491,
+  "speedup_graph_first": 4.543288839610404
+}

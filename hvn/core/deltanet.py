@@ -755,14 +755,26 @@ class DeltaNetBlock(nn.Module):
         return self.init_state(batch_size, device=device, dtype=dtype)
 
     def _conv_step(self, x_t: torch.Tensor, buf: torch.Tensor | None):
-        """Single-token causal conv.  x_t: [B, 1, D] → ([B, 1, D], new_buf)."""
+        """Single-token causal conv.  x_t: [B, 1, D] → ([B, 1, D], new_buf).
+
+        Issue #138: ``buf`` is shifted IN PLACE rather than rebuilt. The previous
+        version built ``window = cat([buf, xt])`` and returned ``window[:, :, 1:]``
+        — a fresh allocation plus a view whose address moved every token, which is
+        the same thing that made the DeltaNet state ungraphable.
+
+        The shift must happen AFTER the convolution reads the window, or the
+        oldest element is gone before it is used. The window is written into
+        ``buf``'s own storage extended by one slot, so ``buf`` stays the same
+        tensor throughout the run.
+        """
         if not self.conv_kernel:
             return x_t, None
         xt = x_t.transpose(1, 2)  # [B, D, 1]
         window = torch.cat([buf, xt], dim=2)  # [B, D, K]
         y = self.conv(window)  # [B, D, 1]
-        new_buf = window[:, :, 1:]  # [B, D, K-1]
-        return y.transpose(1, 2), new_buf
+        # Shift left by one, in place: buf <- window[..., 1:]
+        buf.copy_(window[:, :, 1:])
+        return y.transpose(1, 2), buf
 
     def forward_step(self, x_t: torch.Tensor, state, position_idx: int | None = None):
         """Process a single token.  x_t: [B, 1, D] → ([B, 1, D], new_state)."""
@@ -782,13 +794,25 @@ class DeltaNetBlock(nn.Module):
         v_t = to_N(v)      # [N, d]
         beta_t = to_N(beta)  # [N, 1]
 
-        S_state = state["S"]  # [N, d, d]
+        # Issue #138: update the recurrent state IN PLACE. The previous version
+        # rebound S_state twice per token (`S = S * a`, then `S = S + ...`), so
+        # every token produced a new tensor at a new address — three allocations
+        # per block, thirty per token across a 10-DeltaNet trunk, and, decisively,
+        # no stable addresses for a CUDA graph to replay against. Decode is
+        # launch-bound here (533 launches/token, GPU idle ~87% of the time), so
+        # the graph is the prize and stable state is its precondition.
+        #
+        # The arithmetic is unchanged, hence the ordering below: `Sk` must be read
+        # AFTER the decay is applied and BEFORE the outer-product update, exactly
+        # as the rebinding version did. Bit-identical output is asserted in
+        # tests/test_deltanet_inplace_state.py rather than argued for.
+        S_state = state["S"]  # [N, d, d] — mutated, not replaced
         if alpha is not None:
             a_t = to_N(alpha)  # [N, d]
-            S_state = S_state * a_t.unsqueeze(1)
+            S_state.mul_(a_t.unsqueeze(1))
         Sk = (S_state * k_t.unsqueeze(1)).sum(-1)
         u = v_t - Sk
-        S_state = S_state + beta_t.unsqueeze(-1) * (u.unsqueeze(2) * k_t.unsqueeze(1))
+        S_state.add_(beta_t.unsqueeze(-1) * (u.unsqueeze(2) * k_t.unsqueeze(1)))
         o_t = (S_state * q_t.unsqueeze(1)).sum(-1)  # [N, d]
 
         o = o_t.view(B, H, 1, d).permute(0, 2, 1, 3)  # [B, 1, H, d]
