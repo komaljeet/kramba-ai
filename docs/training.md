@@ -141,9 +141,17 @@ CPU/NVMe offload (not wired).
 
 ### Launching a real large run — the flags that matter (2026-08-07, Issue #112)
 
-**Head count is a free 2.4× speedup.** The Triton scan is `O(S·D²)` per program with only
-`N = B·H` programs to fill 20 SMs (`hvn/core/deltanet_triton.py:218,222`), so `d_head`
-dominates and more heads parallelise better. Same size, same memory, only `--n-heads` changed:
+> **⚠️ The `N = B·H` occupancy explanation below is REFUTED by measurement (Issue #141,
+> 2026-08-10).** Head count is still a real win, but not for the reason given, and it is the
+> *smaller* half of the lever. If `N = B·H` programs were what set throughput, two configs with
+> equal `B·H` would run at equal speed. They do not: at `B·H = 16`, batch 2 × 8 heads gives
+> **9,087 tok/s** while batch 1 × 16 heads gives **5,882** — a 55% gap at identical occupancy.
+> **Batch size dominates head count.** See the #141 entry in [state.md](state.md) for the full
+> grid, and for the `batch 2 → 4` change that buys +37.7% on the *existing* 83M checkpoint.
+
+**Head count is a 2.4× speedup at 355M (1.12–1.17× at 83M — Issue #141).** The Triton scan is
+`O(S·D²)` per program with `N = B·H` programs to fill 20 SMs
+(`hvn/core/deltanet_triton.py:218,222`). Same size, same memory, only `--n-heads` changed:
 
 | | params | s/micro-batch | peak alloc | reserved |
 |---|---:|---:|---:|---:|
