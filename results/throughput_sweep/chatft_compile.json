@@ -1,0 +1,68 @@
+{
+  "issue": 143,
+  "config": {
+    "base_checkpoint": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\checkpoints\\hybrid_a4_v2\\hybrid_a4_step8000.pt",
+    "grounded_replay": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data\\grounded_qa_expanded.jsonl",
+    "grounded_replay_frac": 0.15,
+    "max_conversations": 3000,
+    "seq_len": 512,
+    "batch_size": 4,
+    "grad_accum": 4,
+    "opt_steps": 30,
+    "warmup_opt_steps": 3,
+    "repeats": 2,
+    "out": "results\\throughput_sweep\\chatft_compile.json"
+  },
+  "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "samples": {
+    "eager_a": [
+      {
+        "seconds": 21.502557400000114,
+        "tokens_per_sec": 11429.338167933396,
+        "compiles_during_timed_window": 0,
+        "peak_reserved_mib": 4050.0
+      },
+      {
+        "seconds": 21.435309399999824,
+        "tokens_per_sec": 11465.194899402853,
+        "compiles_during_timed_window": 0,
+        "peak_reserved_mib": 4372.0
+      }
+    ],
+    "compiled": [
+      {
+        "seconds": 17.108712100000048,
+        "tokens_per_sec": 14364.611349091514,
+        "compiles_during_timed_window": 0,
+        "peak_reserved_mib": 4142.0
+      },
+      {
+        "seconds": 17.10259799999949,
+        "tokens_per_sec": 14369.74663147712,
+        "compiles_during_timed_window": 0,
+        "peak_reserved_mib": 4070.0
+      }
+    ],
+    "eager_b": [
+      {
+        "seconds": 21.510074099999656,
+        "tokens_per_sec": 11425.344183263596,
+        "compiles_during_timed_window": 0,
+        "peak_reserved_mib": 4430.0
+      },
+      {
+        "seconds": 21.562127899999723,
+        "tokens_per_sec": 11397.761906421265,
+        "compiles_during_timed_window": 0,
+        "peak_reserved_mib": 4372.0
+      }
+    ]
+  },
+  "eager_tok_s": 11447.266533668124,
+  "compiled_tok_s": 14367.178990284317,
+  "delta_pct": 25.507508259970134,
+  "noise_floor_pct": 0.3119826791894341,
+  "recompiles_in_window": 0,
+  "verdict": "REAL GAIN of 25.5% (noise floor 0.31%) -- default it on",
+  "reference_141_pct": 39.0
+}

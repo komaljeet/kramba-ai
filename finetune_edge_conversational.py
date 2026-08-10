@@ -672,6 +672,14 @@ def main():
                              "first_fit_decreasing wastes fewer tokens but sorts long "
                              "examples to the front.")
     parser.add_argument("--hf-cache-dir", type=str, default=None)
+    # Issue #143: default decided by measurement in THIS script's loop, not
+    # inherited from continue_ft_hybrid's -- see docs/state.md.
+    fast_group = parser.add_mutually_exclusive_group()
+    fast_group.add_argument("--fast", dest="fast", action="store_true", default=True,
+                            help="TF32 + torch.compile on the training path "
+                                 "(DEFAULT ON since #143)")
+    fast_group.add_argument("--no-fast", dest="fast", action="store_false",
+                            help="disable torch.compile")
     parser.add_argument("--smoke", action="store_true",
                         help="Tiny subset, 1 epoch — pipeline validation")
     args = parser.parse_args()
@@ -810,7 +818,26 @@ def main():
     # --- Fine-tune ---
     epochs = 1 if args.smoke else args.epochs
     log_path = os.path.splitext(args.out)[0] + "_finetune_log.csv"
-    finetune(model, dataloader, device,
+
+    # Issue #143: torch.compile for the TRAINING path only.
+    #
+    # Deliberately not applied to `model` itself. `sample_reply` below generates
+    # token-by-token with a growing sequence, so a compiled module would hit a
+    # new shape every token and recompile on each one -- far slower than eager,
+    # and it would be charged to "compile" in any benchmark. The compiled
+    # wrapper shares parameters with `model`, so training through it updates the
+    # same weights; generation and saving keep using the plain module.
+    # (`_save_edge_checkpoint` unwraps `_orig_mod` anyway, so per-epoch saves
+    # inside finetune() are safe either way.)
+    train_model = model
+    if args.fast and device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        print("  [--fast] TF32 + torch.compile on the training path "
+              "(first steps are slow while it compiles)")
+        train_model = torch.compile(model)
+
+    finetune(train_model, dataloader, device,
              lr=args.lr, epochs=epochs, grad_accum=args.grad_accum,
              out_path=args.out, log_path=log_path)
 

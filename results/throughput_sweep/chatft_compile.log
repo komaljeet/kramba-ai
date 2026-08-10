@@ -1,0 +1,39 @@
+﻿GPU: NVIDIA GeForce RTX 4050 Laptop GPU | card 6140 MiB
+python.exe : Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked 
+critical (_ssl.c:1081). Will retry later.
+At line:1 char:454
++ ... lyContinue; & "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Scripts ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Could not refre...ll retry later.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  Reading oasst1 from cache: C:\Users\komal/.cache/huggingface/datasets/OpenAssistant___oasst1\default\0.0.0\fdf72ae0827c1cda404aff25b6603abec9e3399b\oasst1-train.arrow
+  Reconstructed 3,000 conversations (lang=en) from 38,454 messages
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (1049 > 1024). Running this sequence through the model will result in indexing errors
+  Built 2,983 training examples (seq_len=512, skipped 17 with no assistant tokens)
+  Packed 2,983 examples into 2,057 rows (1.45 ex/row, 1.45x fewer rows); padding waste 32.9% -> 2.7%
+  Built 5,240 grounded-QA examples (seq_len=512, 0 truncated to fit)
+  Packed 5,240 examples into 1,012 rows (5.18 ex/row, 5.18x fewer rows); padding waste 81.4% -> 3.9%
+  mixed: 2057 chat rows + 1012 grounded rows
+
+30 timed optimizer steps/arm, batch 4 x grad_accum 4, interleaved, 2 rounds.
+
+  round 1/2  eager_a    11429.3 tok/s  reserved  4050.0 MiB  compiles in window: 0
+  round 1/2  compiled   14364.6 tok/s  reserved  4142.0 MiB  compiles in window: 0
+  round 1/2  eager_b    11425.3 tok/s  reserved  4430.0 MiB  compiles in window: 0
+
+  round 2/2  eager_a    11465.2 tok/s  reserved  4372.0 MiB  compiles in window: 0
+  round 2/2  compiled   14369.7 tok/s  reserved  4070.0 MiB  compiles in window: 0
+  round 2/2  eager_b    11397.8 tok/s  reserved  4372.0 MiB  compiles in window: 0
+
+======================================================================
+eager       11447.3 tok/s
+compiled    14367.2 tok/s   = +25.5%
+noise floor (eager vs itself): 0.31%
+recompiles inside the timed window: 0
+======================================================================
+
+Verdict: REAL GAIN of 25.5% (noise floor 0.31%) -- default it on
+For reference, #141 measured +39% in continue_ft_hybrid's loop.
+
+Wrote results\throughput_sweep\chatft_compile.json
