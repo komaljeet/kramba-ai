@@ -5,6 +5,71 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## FFN activation buys no training speed — GELU stays, PowLU is worse (Issue #140, 2026-08-10)
+
+**Question:** does swapping the DeltaNet FFN's activation (GELU → ReLU² or PowLU) speed up
+training? **Answer: no.** ReLU² ties; PowLU is measurably *slower* and costs more VRAM.
+
+`scripts/activation_speed_test.py`, RTX 4050, eager, batch 2 × seq 512, grad_accum 16,
+5 interleaved rounds × 64 timed micro-batches, model config read from
+`checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt` (d=512, 12 layers, 2-attn hybrid, ternary):
+
+| arm | tok/s (median) | vs GELU | peak VRAM |
+|---|---|---|---|
+| GELU (control) | 9,035 | — | 2,455.7 MiB |
+| **ReLU²** | 9,106 | **+0.79% — tie** | 2,455.7 MiB |
+| **PowLU** (p=1.5 learnable) | 8,677 | **−3.96%** | 2,573.7 MiB (+4.8%) |
+| GELU again (noise floor) | 9,178 | +1.58% | 2,455.7 MiB |
+| slow control (positive control) | 7,413 | −17.95% | 3,357.0 MiB |
+
+**Why this was predictable, and was predicted before running.** The FFN is two `d×2d`
+matmuls around one pointwise op; at d=512 the matmuls are ~400× the arithmetic and all three
+activations move the same bytes. An activation swap has almost no throughput to move. The
+measurement is only worth recording because it *could* have refuted that.
+
+**What makes the null trustworthy** (the #138 lesson — a test that cannot fail publishes bugs
+as numbers):
+
+- **Positive control.** A deliberately expensive activation (stacked transcendentals) came out
+  −17.95%, proving the harness resolves activation-level cost. Without it, "no difference"
+  would be indistinguishable from "harness measures nothing"; the script **voids its own run**
+  if the control fails to separate.
+- **Noise-floor arm.** GELU was entered twice under different names; the 1.58% gap between two
+  *identical* configs is the resolution limit. ReLU²'s +0.79% is inside it, so it is reported
+  as a tie, not a win. A genuine ≥2% win would have been caught.
+- **Interleaved, not sequential** (round-robin), because this repo previously measured a ~2×
+  difference between a config and itself from GPU contention drift (see the speed-ceiling entry
+  below).
+
+**PowLU's −3.96% is outside the noise floor and consistent across rounds 2–5** — a real, if
+small, regression, plus ~118 MiB extra activation memory for the saved `abs`/`sign`/`pow`
+intermediates. Combined with it being an odd, non-gating, superlinear function with no
+literature support, it is **not recommended**.
+
+Eager mode was deliberate: `torch.compile` fuses all three into the surrounding elementwise
+epilogue, which can only *shrink* the gaps. A null in eager is a null in production.
+
+**Consequence for the ablation.** The remaining case for ReLU² is quality-per-step (Primer,
+2021 reports ~1–3%), not speed — and the maintainer's bar was a speed win. That needs ~6
+GPU-hours of continued-FT, and would be confounded anyway: the checkpoint's weights spent
+8,000 steps adapting *to GELU*, so a warm-started arm measures "how fast can these weights
+adapt to a new activation", not "which activation is better". **Not funded; #140 closed on the
+throughput finding.** If revisited, the honest design is small from-scratch runs, not a
+warm-started swap.
+
+Code landed regardless (`hvn/core/activations.py`, `ffn_activation=` on `DeltaNetBlock`/
+`EdgeHVN`, 13/13 tests): `"gelu"` is byte-identical to the pre-#140 path (max|Δlogits| = 0.0
+vs the old construction), so the lever is available at zero cost if a later scale makes it
+worth re-testing.
+
+**Two spec corrections found before building** (both would have produced a meaningless run):
+the task named SwiGLU as the baseline, but the checkpoint has no `use_swiglu` key and is
+**GELU** — and SwiGLU needs a gate matrix the checkpoint lacks, so that arm would have
+measured fresh-vs-trained weights at 2.25× the FFN params. The requested known-answer cell
+("identity activation reproduces 35.5%/8.5% recall") is also unpassable: identity is a
+different function, and ±2%/±1% is inside 300-trial sampling noise (σ≈2.8% / 1.6%), so a
+*correct* harness fails it ~half the time. Replaced with the exact-logit-match cell above.
+
 ## EdgeHVN 83M — the measured PPL picture (2026-07-10)
 
 The 83M has **three separate PPL/capability readings on three different data types** —
