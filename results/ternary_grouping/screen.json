@@ -1,0 +1,65 @@
+{
+  "issue": 145,
+  "config": {
+    "checkpoint": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\checkpoints\\hybrid_a4_v2\\hybrid_a4_step8000.pt",
+    "data_dir": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data_cache",
+    "tokenizer": "gpt2",
+    "seq_len": 512,
+    "batch_size": 4,
+    "probe_batches": 32,
+    "bpb_text": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data_cache\\heldout_fineweb.txt",
+    "bpb_max_bytes": 2000000,
+    "seed": 7,
+    "out": "results\\ternary_grouping\\screen.json"
+  },
+  "native_heldout_loss": 4.280870884656906,
+  "known_answer_drift": 0.0,
+  "void": false,
+  "shadow_fp_heldout_loss": 7.626099556684494,
+  "per_tensor_heldout_loss": 4.280870884656906,
+  "schemes": {
+    "fp": {
+      "held_out_loss": 7.626099556684494,
+      "bits_per_byte": 2.600782350365479,
+      "layers_quantized": 82,
+      "weights_quantized": 28835840,
+      "recon_rel_error": 0.0
+    },
+    "per_tensor": {
+      "held_out_loss": 4.280870884656906,
+      "bits_per_byte": 1.5096574039579211,
+      "layers_quantized": 82,
+      "weights_quantized": 28835840,
+      "recon_rel_error": 0.656047413494868
+    },
+    "per_row": {
+      "held_out_loss": 4.584613099694252,
+      "bits_per_byte": 1.6242682673061142,
+      "layers_quantized": 82,
+      "weights_quantized": 28835840,
+      "recon_rel_error": 0.637886574690017
+    },
+    "group_128": {
+      "held_out_loss": 4.578530311584473,
+      "bits_per_byte": 1.615657784991902,
+      "layers_quantized": 82,
+      "weights_quantized": 28835840,
+      "recon_rel_error": 0.6344200878800863
+    },
+    "group_64": {
+      "held_out_loss": 4.607876852154732,
+      "bits_per_byte": 1.6202196374370468,
+      "layers_quantized": 82,
+      "weights_quantized": 28835840,
+      "recon_rel_error": 0.6296401054564179
+    },
+    "group_32": {
+      "held_out_loss": 4.5348938181996346,
+      "bits_per_byte": 1.5936325416092838,
+      "layers_quantized": 82,
+      "weights_quantized": 28835840,
+      "recon_rel_error": 0.6225054106608547
+    }
+  },
+  "verdict": "NOT RETROFITTABLE: finer scaling cuts reconstruction error (0.6560 -> 0.6225) yet every scheme is WORSE on held-out (best group_32: +0.25402 nats, bits/byte +0.0840). The model has ADAPTED to per-tensor quantization -- its weights sit where per-tensor rounding puts them, so a 'better' approximation of the shadow weights moves the function away from what was trained. This kills the retrofit; it does NOT decide QAT-with-grouping."
+}
