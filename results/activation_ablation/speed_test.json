@@ -1,0 +1,178 @@
+{
+  "issue": 140,
+  "what_this_measures": "training throughput vs FFN activation, eager mode",
+  "config": {
+    "checkpoint": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\checkpoints\\hybrid_a4_v2\\hybrid_a4_step8000.pt",
+    "batch_size": 2,
+    "seq_len": 512,
+    "grad_accum": 16,
+    "warmup_steps": 10,
+    "timed_steps": 64,
+    "repeats": 5,
+    "out": "results\\activation_ablation\\speed_test.json"
+  },
+  "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "model": {
+    "d_model": 512,
+    "num_layers": 12,
+    "vocab_size": 50257
+  },
+  "samples": {
+    "gelu_a": [
+      {
+        "seconds": 7.787741800000049,
+        "tokens_per_sec": 8415.276428399255,
+        "peak_vram_mib": 2457.6787109375
+      },
+      {
+        "seconds": 7.106330099999923,
+        "tokens_per_sec": 9222.200359085586,
+        "peak_vram_mib": 2455.6611328125
+      },
+      {
+        "seconds": 7.267777600000045,
+        "tokens_per_sec": 9017.337019228491,
+        "peak_vram_mib": 2455.6611328125
+      },
+      {
+        "seconds": 7.253534299999956,
+        "tokens_per_sec": 9035.043785482672,
+        "peak_vram_mib": 2455.6611328125
+      },
+      {
+        "seconds": 7.105838899999981,
+        "tokens_per_sec": 9222.837855217937,
+        "peak_vram_mib": 2455.6611328125
+      }
+    ],
+    "relu2": [
+      {
+        "seconds": 7.76689609999994,
+        "tokens_per_sec": 8437.862327011238,
+        "peak_vram_mib": 2455.6611328125
+      },
+      {
+        "seconds": 7.183094400000073,
+        "tokens_per_sec": 9123.644539601113,
+        "peak_vram_mib": 2455.6611328125
+      },
+      {
+        "seconds": 7.19697670000005,
+        "tokens_per_sec": 9106.045876180138,
+        "peak_vram_mib": 2455.6611328125
+      },
+      {
+        "seconds": 7.202796199999966,
+        "tokens_per_sec": 9098.688645390288,
+        "peak_vram_mib": 2455.6611328125
+      },
+      {
+        "seconds": 7.131012099999907,
+        "tokens_per_sec": 9190.280296958246,
+        "peak_vram_mib": 2455.6611328125
+      }
+    ],
+    "powlu": [
+      {
+        "seconds": 7.821822500000053,
+        "tokens_per_sec": 8378.609972292206,
+        "peak_vram_mib": 2573.685546875
+      },
+      {
+        "seconds": 7.552820899999915,
+        "tokens_per_sec": 8677.022912062,
+        "peak_vram_mib": 2573.685546875
+      },
+      {
+        "seconds": 7.590710700000045,
+        "tokens_per_sec": 8633.710674811993,
+        "peak_vram_mib": 2573.685546875
+      },
+      {
+        "seconds": 7.511171599999898,
+        "tokens_per_sec": 8725.136834844898,
+        "peak_vram_mib": 2573.685546875
+      },
+      {
+        "seconds": 7.546743099999958,
+        "tokens_per_sec": 8684.010987468271,
+        "peak_vram_mib": 2573.685546875
+      }
+    ],
+    "gelu_b": [
+      {
+        "seconds": 7.157409499999858,
+        "tokens_per_sec": 9156.385421289826,
+        "peak_vram_mib": 2455.6611328125
+      },
+      {
+        "seconds": 7.1405787000001055,
+        "tokens_per_sec": 9177.96760646291,
+        "peak_vram_mib": 2455.6611328125
+      },
+      {
+        "seconds": 7.40560870000013,
+        "tokens_per_sec": 8849.508886419944,
+        "peak_vram_mib": 2455.6611328125
+      },
+      {
+        "seconds": 7.101846799999976,
+        "tokens_per_sec": 9228.022209659637,
+        "peak_vram_mib": 2455.6611328125
+      },
+      {
+        "seconds": 7.1033294999999725,
+        "tokens_per_sec": 9226.096015959876,
+        "peak_vram_mib": 2455.6611328125
+      }
+    ],
+    "slow_control": [
+      {
+        "seconds": 8.751967100000002,
+        "tokens_per_sec": 7488.145150819864,
+        "peak_vram_mib": 3356.9775390625
+      },
+      {
+        "seconds": 8.905798900000036,
+        "tokens_per_sec": 7358.800792144513,
+        "peak_vram_mib": 3356.9775390625
+      },
+      {
+        "seconds": 8.90333970000006,
+        "tokens_per_sec": 7360.833373570993,
+        "peak_vram_mib": 3356.9775390625
+      },
+      {
+        "seconds": 8.840709699999934,
+        "tokens_per_sec": 7412.979525840611,
+        "peak_vram_mib": 3356.9775390625
+      },
+      {
+        "seconds": 8.708511300000055,
+        "tokens_per_sec": 7525.5112776852675,
+        "peak_vram_mib": 3356.9775390625
+      }
+    ]
+  },
+  "median_tokens_per_sec": {
+    "gelu_a": 9035.043785482672,
+    "relu2": 9106.045876180138,
+    "powlu": 8677.022912062,
+    "gelu_b": 9177.96760646291,
+    "slow_control": 7412.979525840611
+  },
+  "median_peak_vram_mib": {
+    "gelu_a": 2455.6611328125,
+    "relu2": 2455.6611328125,
+    "powlu": 2573.685546875,
+    "gelu_b": 2455.6611328125,
+    "slow_control": 3356.9775390625
+  },
+  "noise_floor_pct": 1.5818829921984898,
+  "positive_control_delta_pct": -17.953031530941352,
+  "positive_control_passed": true,
+  "verdicts": {
+    "relu2": "tie (+0.79% is within the 1.58% noise floor)",
+    "powlu": "slower by 3.96% (noise floor 1.58%)"
+  }
+}

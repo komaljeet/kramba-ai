@@ -1,0 +1,52 @@
+﻿GPU: NVIDIA GeForce RTX 4050 Laptop GPU
+config from C:\Users\komal\Documents\Codes\kramba-ai\checkpoints\hybrid_a4_v2\hybrid_a4_step8000.pt: d_model=512, layers=12, vocab=50257
+
+Interleaved timing: 5 rounds x 5 arms, 64 timed micro-batches each (batch 2 x seq 512)
+Arms are round-robin so drift hits all of them equally.
+
+  round 1/5  gelu_a          8415.3 tok/s   peak  2457.7 MiB
+  round 1/5  relu2           8437.9 tok/s   peak  2455.7 MiB
+  round 1/5  powlu           8378.6 tok/s   peak  2573.7 MiB
+  round 1/5  gelu_b          9156.4 tok/s   peak  2455.7 MiB
+  round 1/5  slow_control    7488.1 tok/s   peak  3357.0 MiB
+
+  round 2/5  gelu_a          9222.2 tok/s   peak  2455.7 MiB
+  round 2/5  relu2           9123.6 tok/s   peak  2455.7 MiB
+  round 2/5  powlu           8677.0 tok/s   peak  2573.7 MiB
+  round 2/5  gelu_b          9178.0 tok/s   peak  2455.7 MiB
+  round 2/5  slow_control    7358.8 tok/s   peak  3357.0 MiB
+
+  round 3/5  gelu_a          9017.3 tok/s   peak  2455.7 MiB
+  round 3/5  relu2           9106.0 tok/s   peak  2455.7 MiB
+  round 3/5  powlu           8633.7 tok/s   peak  2573.7 MiB
+  round 3/5  gelu_b          8849.5 tok/s   peak  2455.7 MiB
+  round 3/5  slow_control    7360.8 tok/s   peak  3357.0 MiB
+
+  round 4/5  gelu_a          9035.0 tok/s   peak  2455.7 MiB
+  round 4/5  relu2           9098.7 tok/s   peak  2455.7 MiB
+  round 4/5  powlu           8725.1 tok/s   peak  2573.7 MiB
+  round 4/5  gelu_b          9228.0 tok/s   peak  2455.7 MiB
+  round 4/5  slow_control    7413.0 tok/s   peak  3357.0 MiB
+
+  round 5/5  gelu_a          9222.8 tok/s   peak  2455.7 MiB
+  round 5/5  relu2           9190.3 tok/s   peak  2455.7 MiB
+  round 5/5  powlu           8684.0 tok/s   peak  2573.7 MiB
+  round 5/5  gelu_b          9226.1 tok/s   peak  2455.7 MiB
+  round 5/5  slow_control    7525.5 tok/s   peak  3357.0 MiB
+
+====================================================================
+arm             tok/s (median)   vs gelu_a    peak MiB
+--------------------------------------------------------------------
+gelu_a                  9035.0       0.00%      2455.7
+relu2                   9106.0       0.79%      2455.7
+powlu                   8677.0      -3.96%      2573.7
+gelu_b                  9178.0       1.58%      2455.7
+slow_control            7413.0     -17.95%      3357.0
+====================================================================
+
+Noise floor (gelu vs itself): 1.58%
+Positive control (slow_control vs gelu): -17.95%
+  relu2: tie (+0.79% is within the 1.58% noise floor)
+  powlu: slower by 3.96% (noise floor 1.58%)
+
+Wrote results\activation_ablation\speed_test.json
