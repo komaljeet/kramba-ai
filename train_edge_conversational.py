@@ -572,6 +572,20 @@ def _download_oasst(cache_dir: str) -> str:
     return out_path
 
 
+def _tokenizer_signature(tokenizer) -> str:
+    """A short, stable identity for whichever tokenizer produced a .bin.
+
+    Name plus vocab size: enough to catch every realistic mix-up (GPT-2 vs a
+    32K custom vocab) without depending on a hash of the merge table, which
+    would churn on cosmetic retrains.
+    """
+    name = getattr(tokenizer, "name_or_path", None) or type(tokenizer).__name__
+    size = getattr(tokenizer, "vocab_size", None)
+    if size is None and hasattr(tokenizer, "get_vocab_size"):
+        size = tokenizer.get_vocab_size()
+    return f"{name}/{size}"
+
+
 def _tokenize_text_to_bin(
     text_path: str,
     bin_path: str,
@@ -591,7 +605,38 @@ def _tokenize_text_to_bin(
     `max_bytes` caps how much source text is consumed (by UTF-8 byte count).
     Returns the total number of tokens written.
     """
+    # Issue #139: the cache is keyed on the .bin existing, and NOTHING recorded
+    # which tokenizer produced it. Switching vocab would therefore reuse ids
+    # from the old vocabulary in silence — training on token 45,000 in a 32K
+    # model, or worse, on ids that are merely WRONG rather than out of range.
+    # A sidecar records the tokenizer's identity, and a mismatch refuses to
+    # proceed rather than guessing which one is correct.
+    sig = _tokenizer_signature(tokenizer)
+    sig_path = bin_path + ".tokenizer"
     if os.path.exists(bin_path) and os.path.getsize(bin_path) > 0:
+        prev = None
+        if os.path.exists(sig_path):
+            with open(sig_path, encoding="utf-8") as fh:
+                prev = fh.read().strip()
+        if prev is not None and prev != sig:
+            raise RuntimeError(
+                f"{bin_path} was tokenized by {prev!r} but this run uses "
+                f"{sig!r}. Reusing it would train on ids from the wrong "
+                f"vocabulary, silently. Delete the .bin (and its .tokenizer "
+                f"sidecar) to re-tokenize, or switch back."
+            )
+        if prev is None:
+            # Pre-#139 cache with no sidecar. It can only be GPT-2 — that is the
+            # only tokenizer this pipeline ever used — so adopt that rather than
+            # forcing a needless multi-hour re-tokenize, but say so.
+            print(f"    (unlabelled cache {os.path.basename(bin_path)} assumed "
+                  f"GPT-2; writing sidecar)")
+            with open(sig_path, "w", encoding="utf-8") as fh:
+                fh.write("gpt2/50257")
+            if sig != "gpt2/50257":
+                raise RuntimeError(
+                    f"{bin_path} predates tokenizer tracking and is GPT-2, but "
+                    f"this run uses {sig!r}. Delete it to re-tokenize.")
         n = os.path.getsize(bin_path) // 2
         print(f"    Tokenized cache hit: {bin_path} ({n:,} tokens)")
         return n
@@ -619,6 +664,8 @@ def _tokenize_text_to_bin(
                 print(f"      {os.path.basename(bin_path)}: {total_tokens:,} tokens "
                       f"({bytes_read / 1024**2:.0f} MB, {time.time() - t0:.0f}s)", flush=True)
     os.replace(tmp_path, bin_path)
+    with open(sig_path, "w", encoding="utf-8") as fh:
+        fh.write(sig)
     print(f"    Tokenized {os.path.basename(text_path)} -> {bin_path} "
           f"({total_tokens:,} tokens, {time.time() - t0:.0f}s)")
     return total_tokens
@@ -746,12 +793,22 @@ class MixedLocalDataset(Dataset):
         # the slow GPT2Tokenizer but far faster on large corpora. Fall back to the
         # provided tokenizer if the fast one can't be loaded.
         enc = tokenizer
-        try:
-            from transformers import GPT2TokenizerFast
-            enc = GPT2TokenizerFast.from_pretrained("gpt2")
-            enc.model_max_length = 10 ** 9  # we chunk ourselves; silence length warnings
-        except Exception as e:  # pragma: no cover - environment dependent
-            print(f"    (fast tokenizer unavailable, using provided tokenizer: {e})")
+        # Issue #139: only swap in fast GPT-2 when the caller actually GAVE us
+        # GPT-2. The previous version overrode unconditionally, so passing a
+        # custom tokenizer silently tokenized the entire corpus with GPT-2
+        # anyway — the model would have been trained on ids from a vocabulary
+        # it does not have, and nothing would have raised.
+        _is_gpt2 = type(tokenizer).__name__.startswith("GPT2") or tokenizer is None
+        if _is_gpt2:
+            try:
+                from transformers import GPT2TokenizerFast
+                enc = GPT2TokenizerFast.from_pretrained("gpt2")
+                enc.model_max_length = 10 ** 9  # we chunk ourselves; silence warnings
+            except Exception as e:  # pragma: no cover - environment dependent
+                print(f"    (fast tokenizer unavailable, using provided tokenizer: {e})")
+        else:
+            print(f"    Using caller's tokenizer: {type(tokenizer).__name__} "
+                  f"(vocab {getattr(tokenizer, 'vocab_size', '?')})")
 
         print("\n  Preparing datasets (tokenize once -> memmap, flat RAM)...")
 
