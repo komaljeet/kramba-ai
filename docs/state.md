@@ -2499,7 +2499,7 @@ test also asserts something about `d`, since "loss goes down" alone would pass w
 estimator and a lucky `d0`. Artifacts: `results/prodigy/ab_{finetune,pretrain}.json`,
 `logs/ab_prodigy_{finetune,pretrain}.log`.
 
-## RAG works: 0% -> 22.5% on facts the weights cannot hold (Issue #137, 2026-08-09)
+## RAG works: 0% -> 22.5% on facts the weights cannot hold (Issue #137, 2026-08-10)
 
 **One line: retrieval turns a knowledge question this model answers 0% of the time into one it
 answers 22.5% of the time — and the single most important tuning result is that `top-k=1` beats
