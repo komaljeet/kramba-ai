@@ -561,6 +561,26 @@ class EdgeHVN(nn.Module):
         threshold = values[..., -1:].contiguous()
         return logits.masked_fill(logits < threshold, float("-inf"))
 
+    @staticmethod
+    def _apply_repetition_penalty_masked(logits: torch.Tensor,
+                                         seen_mask: torch.Tensor,
+                                         penalty: float) -> torch.Tensor:
+        """Repetition penalty from a device-resident boolean mask (Issue #138).
+
+        Identical arithmetic to :meth:`_apply_repetition_penalty`, but the set of
+        already-emitted ids lives on the GPU instead of in a Python ``set``.
+        Maintaining that set required ``int(next_id.item())`` every token — a
+        device-to-host sync that stops the CPU running ahead of the GPU, which is
+        exactly what a CUDA graph exists to enable. Two such syncs per token were
+        the whole reason chat_step saw 1.94x where forward_step saw 4.50x.
+        """
+        if penalty == 1.0:
+            return logits
+        return torch.where(seen_mask,
+                           torch.where(logits > 0, logits / penalty,
+                                       logits * penalty),
+                           logits)
+
     def _apply_repetition_penalty(self, logits: torch.Tensor, seen_ids: set[int],
                                   penalty: float) -> torch.Tensor:
         """Standard repetition penalty (Keskar et al., CTRL): divide the logit
@@ -615,7 +635,11 @@ class EdgeHVN(nn.Module):
         self.eval()
         states = conv_state["hamiltonian_states"]
         pos = conv_state["position"]
-        seen_ids: set[int] = set(input_ids)
+        # Device-resident "already emitted" mask, so the repetition penalty and
+        # the EOS bookkeeping cost no host syncs (#138).
+        seen_mask = torch.zeros(self.vocab_size, dtype=torch.bool, device=device)
+        if input_ids:
+            seen_mask[torch.tensor(input_ids, device=device, dtype=torch.long)] = True
 
         # zeros, not empty: this buffer is READ during graph capture below,
         # before the sampling loop ever writes it. torch.empty handed the
@@ -649,15 +673,25 @@ class EdgeHVN(nn.Module):
         next_logits = logits_step[0, -1, :] / temperature
 
         resp_id_tensors: list[torch.Tensor] = []
+        # EOS is still checked EVERY token, deliberately. Batching the check
+        # (sync once per 16) was tried and reverted: the loop then generates past
+        # EOS, and those tokens are already written into the KV cache and the ring
+        # counter by the time they are discarded — so the returned text is right
+        # while the conversation STATE is polluted for the next turn. A sync per
+        # token is the price of not corrupting multi-turn state.
+        #
+        # What IS removed is the SECOND sync per token: seen_ids was a Python set
+        # needing int(next_id.item()) to maintain, and is now a device mask.
         for _ in range(max_new_tokens):
-            logits = self._apply_repetition_penalty(next_logits, seen_ids, repetition_penalty)
+            logits = self._apply_repetition_penalty_masked(
+                next_logits, seen_mask, repetition_penalty)
             logits = self._filter_top_k(logits, top_k)
             probs = torch.softmax(logits, dim=-1)
             next_id = torch.multinomial(probs, num_samples=1)
             if int(next_id.item()) == EOS_ID:
                 break
             resp_id_tensors.append(next_id)
-            seen_ids.add(int(next_id.item()))
+            seen_mask.index_fill_(0, next_id.view(-1), True)
 
             cur.copy_(next_id.view(1, 1))
             pos_t.fill_(pos)
@@ -673,6 +707,7 @@ class EdgeHVN(nn.Module):
             next_logits = logits_step[0, -1, :] / temperature
 
         response_ids = torch.cat(resp_id_tensors).tolist() if resp_id_tensors else []
+
 
         conv_state["hamiltonian_states"] = states
         conv_state["position"] = pos

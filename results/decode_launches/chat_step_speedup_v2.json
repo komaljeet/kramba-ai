@@ -1,0 +1,8 @@
+{
+  "eager_ms": 1159.5727499952773,
+  "graph_ms": 595.7409999973606,
+  "speedup": 1.9464377137051414,
+  "tok_s_eager": 53.46796912936469,
+  "tok_s_graph": 104.07207158861767,
+  "note": "after removing the seen_ids host sync; per-token EOS sync kept"
+}
