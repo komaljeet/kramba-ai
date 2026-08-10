@@ -2735,3 +2735,104 @@ The full 5.4 GB pass went from ~55 minutes to 10.
 
 Artifacts: `results/vocab/*.json`, `logs/ab_tied.log`, `logs/ab_vocab.log`, `logs/ab_bpb.log`,
 `data_cache/tokenizer_32k/`.
+
+## The 32K vocab WINS on code -- 6.26% better bits/byte (Issue #139 follow-up, 2026-08-10)
+
+**One line: put code in the training mix and in the held-out set, and the 32K mixed vocabulary
+beats GPT-2 by 6.26% on bits per byte -- reversing the 1.9% loss #139 measured on English, and
+about 3x larger.**
+
+#139 graded the 32K vocabulary on FineWeb-Edu: pure English prose, no code in either arm's
+training mix. That entry flagged the problem in its own limits section -- "this test measures the
+vocabulary exactly where it cannot win" -- because the vocabulary's measured advantages are code
+(0.701 tokens/line) and chat (0.759), and neither was present. This is the test it never got.
+
+`scripts/ab_vocab_on_code.py`: 165 MB of permissively-licensed code as the training corpus,
+held-out is the corpus TAIL (different repositories and languages from the head, since the
+collector walks repos in sorted order), 1,500 steps per arm, tokenizer as the only difference.
+
+### The result (`results/vocab/ab_code.json`)
+
+| arm | **bits/byte** | tokens/byte | held-out bytes | windows |
+|---|---:|---:|---:|---:|
+| GPT-2 50257 | 2.6569 | 0.4071 | 2,110,655 | 1,679 |
+| **32K** | **2.4907** | **0.3517** | 2,110,655 | 1,450 |
+
+**6.26% better per byte, 13.60% fewer tokens per byte.** Both arms are scored on the *identical*
+2,110,655 held-out bytes, which is the whole reason `eval/bits_per_byte.py` exists: #139 showed
+per-token loss is not comparable across vocabularies and would have flipped the sign.
+
+For contrast, the same metric on English (#139): GPT-2 2.0444, 32K 2.0829 -- the 32K vocabulary
+1.9% WORSE. Same tokenizer, same metric, opposite sign. The domain is the whole story.
+
+### The caveat that matters: the arms are matched on TOKENS, not bytes
+
+Both arms consume 1,500 x 4 x 512 = 3,072,000 tokens. They do not consume the same amount of
+code, because that is precisely what a tokenizer changes:
+
+| arm | corpus as tokens | tokens trained on | code actually seen |
+|---|---:|---:|---:|
+| GPT-2 | 72,841,334 | 3,072,000 | ~6.96 MB (4.22% of corpus) |
+| 32K | 52,598,601 | 3,072,000 | ~9.64 MB (5.84% of corpus) |
+
+**The 32K arm trained on ~38% more code.** Some unknown share of the 6.26% is that extra text
+rather than better modelling of the same text.
+
+Stated as a mechanism, not a hole, and here is why the byte-matched control was considered and
+NOT run: packing more text into each token is what a tokenizer is *for*. It is the product, not
+contamination. A byte-matched run would discard the main benefit and report a number that
+understates the vocabulary that would actually ship.
+
+The compute argument runs the same way. From this issue's own audit, 32K tied is **108.3
+MFLOP/token against 127.0** for the 50257 head. The 32K arm sees ~38% more code AND costs ~15%
+less per token, so matched on compute it wins by more than 6.26%, not less. #139's mirror-image
+caveat ("matched on STEPS, not compute ... at equal compute part of the 1.9% closes") pointed the
+other way on English; it points this way here.
+
+### Limits
+
+- **Wall times in the JSON are not comparable and must not be quoted.** The gpt2 arm's 1,052 s
+  shared the GPU with a duplicate process (below); the v32k arm's 457 s ran alone. That 2.3x is an
+  artefact of the launch mistake, not a speedup. Quality is unaffected -- determinism is
+  per-process (`torch.use_deterministic_algorithms(True)`, per-arm re-seeding).
+- One seed, 1,500 steps, one held-out set.
+- Held-out is the corpus tail. Different repos from the head, so not a memorisation check, but it
+  is the weakest part of the design and the script says so in its own docstring.
+- Both arms see well under one epoch (4-6% of corpus), so neither is in a multi-pass regime.
+
+### What this does NOT settle
+
+**The adoption decision is still open, and #136 still owns it.** This measures code alone. The
+English penalty has not been re-measured against a corpus containing both, and the vocabulary is a
+one-way door -- a model cannot be fine-tuned onto a different tokenizer. The run that would move
+the decision is a mixed-corpus A/B, which is exactly where #139 said to revisit it.
+
+Current reading: 32K wins on code by 6.26%, loses on English by 1.9%. Whether that nets out
+depends entirely on the mix, and nobody has measured the mix.
+
+### Two process failures worth recording
+
+**1. The run was launched twice, and the second launch hid the first.** Both processes were
+redirected to `logs/ab_code_vocab.log`. Each held its own write offset, so the later process
+overwrote the earlier one *in place*: file size stayed pinned at 2,717 bytes, `tail -f` never saw
+growth, and a monitor watching for progress stayed silent through a completed run. Silence read as
+"still running" for 16 minutes after the verdict had already been written. Two copies of a
+12-layer model also pushed the 6 GB card to 5,766 MiB and one arm died of CUDA OOM inside Muon's
+Newton-Schulz (`hvn/optimizers.py:73`). Rule added to CLAUDE.md: one run per log file, and check
+the GPU is clear before launching.
+
+**2. `logs/ab_code_vocab.log` is not a citable artefact for this run.** Its step lines are two
+processes interleaved -- the timings read 6.6, 10.6, 12.4 min for successive checkpoints, and one
+line lost its opening bracket where the writes collided. The JSON is clean, written only by the
+surviving process. Cite the JSON.
+
+### A reproducibility gap found on the way
+
+**The #139 A/B script was never committed.** `main` carries `results/vocab/ab_bpb_{gpt2,32k}.json`,
+`ab_tied.json` and `ab_untied.json`, but no script that produces them -- only
+`scripts/audit_vocab_budget.py` and `scripts/train_tokenizer.py`. Searched every `.py` on disk
+outside `.venv` and every branch: it does not exist. So the headline "tied embeddings win by 0.058
+nats" result, which is now the repo default, cannot be reproduced from the repo. Rewriting that
+harness is open work.
+
+Artifacts: `results/vocab/ab_code.json`, `scripts/ab_vocab_on_code.py`.

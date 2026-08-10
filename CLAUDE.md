@@ -1,5 +1,16 @@
 # kramba-ai — agent guide
 
+## How to talk to the maintainer (read this first)
+
+- **Start every reply with the current date and time**, read from this PC
+  (`Get-Date`), not from the session start. Sessions here run past midnight and
+  the start-of-session date goes stale, which has already mis-dated a docs entry.
+- **Use plain, simple words.** Short chunks, one idea per paragraph. No ornate
+  phrasing, no essay structure, no bolded lead-ins on ordinary answers. Complex
+  wording costs tokens and hides the point; the maintainer wants the finding, not
+  the prose. Say the verdict first, in human units.
+- Long technical detail belongs in docs/state.md, commits and MR text — not chat.
+
 Model policy (strict):
 - **Opus** — **orchestration, design, all coding, all debugging.** Everything where a
   wrong *decision* is the expensive failure.
@@ -69,5 +80,10 @@ context a fresh subagent lacks. Opus writes docs/commits/MR text inline.
 
 ## Working rules (see docs/ai_rules.md for the full version)
 - Long GPU benchmarks/monitors → run in background + tail logs, never block the session.
+- **One run per log file, and check nothing else is on the GPU before launching.**
+  Two processes redirected to the same log each keep their own write offset, so the
+  later one overwrites the earlier in place: the file stops growing, `tail -f` goes
+  silent, and a finished run looks hung. Two copies of a 12-layer model also OOM the
+  6 GB card. Both happened on 2026-08-10 (see docs/state.md, code-vocab A/B).
 - Feature branches only; never push to main (maintainer merges manually).
 - Parallel Claude sessions share this working tree — prefer git worktrees, commit early.
