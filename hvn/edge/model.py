@@ -587,6 +587,7 @@ class EdgeHVN(nn.Module):
         top_k: int = 10,
         device: Optional[torch.device] = None,
         repetition_penalty: float = 1.0,
+        use_cuda_graph: bool = False,
     ) -> tuple[list[int], dict]:
         """Process a conversation turn incrementally. Same overall shape as
         HamiltonianVortexNetwork.chat_step (hvn/core/model.py:1118): feed
@@ -616,16 +617,34 @@ class EdgeHVN(nn.Module):
         pos = conv_state["position"]
         seen_ids: set[int] = set(input_ids)
 
-        cur = torch.empty(1, 1, dtype=torch.long, device=device)
+        # zeros, not empty: this buffer is READ during graph capture below,
+        # before the sampling loop ever writes it. torch.empty handed the
+        # embedding a garbage id (observed: 4.6e18 against a vocab of 256), which
+        # fires a device-side assert inside Indexing.cu and poisons the CUDA
+        # context — surfacing later at an unrelated line.
+        cur = torch.zeros(1, 1, dtype=torch.long, device=device)
+        # Issue #138: position lives on the device so a captured graph indexes a
+        # moving value rather than folding one position in. Harmless when
+        # use_cuda_graph is False -- forward_step accepts either.
+        pos_t = torch.zeros((), dtype=torch.long, device=device)
+
+        # Prefill stays EAGER, always. Shapes vary with the prompt, and before the
+        # KV ring wraps the mask changes every token; capture needs a fixed shape.
         if len(input_ids) > 0:
             input_row = torch.tensor([input_ids], dtype=torch.long, device=device)
             for t in range(input_row.size(1)):
+                pos_t.fill_(pos)
                 logits_step, states = self.forward_step(
-                    input_row[:, t : t + 1], states, position_idx=pos
+                    input_row[:, t : t + 1], states, position_idx=pos_t
                 )
                 pos += 1
         else:
             logits_step = None
+
+        graph = None
+        graph_logits = None
+        if use_cuda_graph and logits_step is not None and device.type == "cuda":
+            graph, graph_logits = self._capture_decode_graph(cur, states, pos_t)
 
         next_logits = logits_step[0, -1, :] / temperature
 
@@ -641,7 +660,15 @@ class EdgeHVN(nn.Module):
             seen_ids.add(int(next_id.item()))
 
             cur.copy_(next_id.view(1, 1))
-            logits_step, states = self.forward_step(cur, states, position_idx=pos)
+            pos_t.fill_(pos)
+            if graph is not None:
+                # Replay writes into the SAME buffers the capture used: cur, pos_t
+                # and the state tensors. Nothing is returned because nothing moves.
+                graph.replay()
+                logits_step = graph_logits
+            else:
+                logits_step, states = self.forward_step(cur, states,
+                                                        position_idx=pos_t)
             pos += 1
             next_logits = logits_step[0, -1, :] / temperature
 
@@ -653,6 +680,65 @@ class EdgeHVN(nn.Module):
         conv_state["history_ids"].extend(response_ids)
 
         return response_ids, conv_state
+
+    def _capture_decode_graph(self, cur, states, pos_t):
+        """Capture one decode step for replay (Issue #138).
+
+        Returns ``(graph, static_logits)`` or ``(None, None)`` if capture is not
+        possible — a failure here must degrade to eager decoding, never raise,
+        because a serving path that dies on an optimisation is worse than a slow
+        one.
+
+        Requires ``enable_graph_decode()`` to have run: without it the attention
+        blocks build RoPE from a Python int (a CPU->GPU copy capture rejects) and
+        keep their ring counter as a Python int, which a graph cannot increment —
+        producing a graph that replays one slot forever. That failure is silent,
+        so this refuses to capture rather than risk it.
+        """
+        from hvn.core.transformer_block import TransformerBlock
+
+        attn = [getattr(b, "block", b) for b in self.blocks]
+        attn = [b for b in attn if isinstance(b, TransformerBlock)]
+        if attn and not all(getattr(b, "graph_safe_decode", False) for b in attn):
+            return None, None
+        # Warm-up and capture each run a REAL forward_step, and decode state is
+        # now mutated in place (#138), so those four steps advance the ring
+        # counter, the KV slots and the DeltaNet state. Without snapshot/restore
+        # the graphed run starts four tokens ahead of where `pos` says it is, and
+        # diverges from eager on the very first sampled token.
+        tensors = [v for st in states if isinstance(st, dict)
+                   for k in sorted(st) if torch.is_tensor(v := st[k])]
+        snapshot = [t.clone() for t in tensors]
+
+        try:
+            side = torch.cuda.Stream()
+            side.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(side):
+                for _ in range(3):      # settle allocator / kernel choices
+                    self.forward_step(cur, states, position_idx=pos_t)
+            torch.cuda.current_stream().wait_stream(side)
+            torch.cuda.synchronize()
+
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                static_logits, _ = self.forward_step(cur, states,
+                                                     position_idx=pos_t)
+        except torch.cuda.CudaError:    # pragma: no cover - hardware dependent
+            # NOT swallowed. A device-side assert kills the CUDA context, so
+            # "falling back to eager" would fail at the next kernel launch with a
+            # traceback pointing somewhere innocent. Re-raise while the cause is
+            # still legible.
+            raise
+        except Exception as exc:        # pragma: no cover - hardware dependent
+            print(f"  [graph] capture unavailable ({type(exc).__name__}: {exc}); "
+                  f"falling back to eager decode")
+            for dst, src in zip(tensors, snapshot):
+                dst.copy_(src)
+            return None, None
+
+        for dst, src in zip(tensors, snapshot):
+            dst.copy_(src)
+        return graph, static_logits
 
     # ------------------------------------------------------------------
     # Compression pipeline
