@@ -1,0 +1,169 @@
+{
+  "target_tokens": 3140000000.0,
+  "mix": {
+    "python": 0.3,
+    "javascript": 0.15,
+    "java": 0.1,
+    "typescript": 0.08,
+    "c": 0.07,
+    "cpp": 0.07,
+    "c-sharp": 0.05,
+    "go": 0.05,
+    "rust": 0.04,
+    "php": 0.04,
+    "ruby": 0.02,
+    "shell": 0.02,
+    "sql": 0.01
+  },
+  "tokens_per_byte": 0.3312,
+  "text_per_parquet_byte": 3.09,
+  "report": {
+    "python": {
+      "shards": 8,
+      "of": 143,
+      "parquet_bytes": 1577086603,
+      "est_text_bytes": 4873197603.2699995,
+      "est_tokens": 1614003046.203024,
+      "requested_share": 0.3,
+      "realised_share": 0.291241719209771
+    },
+    "javascript": {
+      "shards": 4,
+      "of": 310,
+      "parquet_bytes": 841867438,
+      "est_text_bytes": 2601370383.42,
+      "est_tokens": 861573870.988704,
+      "requested_share": 0.15,
+      "realised_share": 0.15546826631044897
+    },
+    "java": {
+      "shards": 3,
+      "of": 208,
+      "parquet_bytes": 548272006,
+      "est_text_bytes": 1694160498.54,
+      "est_tokens": 561105957.1164479,
+      "requested_share": 0.1,
+      "realised_share": 0.1012497863581369
+    },
+    "typescript": {
+      "shards": 2,
+      "of": 71,
+      "parquet_bytes": 422311399,
+      "est_text_bytes": 1304942222.9099998,
+      "est_tokens": 432196864.22779197,
+      "requested_share": 0.08,
+      "realised_share": 0.07798855031339301
+    },
+    "c": {
+      "shards": 2,
+      "of": 126,
+      "parquet_bytes": 368656349,
+      "est_text_bytes": 1139148118.4099998,
+      "est_tokens": 377285856.81739193,
+      "requested_share": 0.07,
+      "realised_share": 0.06808003357337335
+    },
+    "cpp": {
+      "shards": 2,
+      "of": 110,
+      "parquet_bytes": 349749278,
+      "est_text_bytes": 1080725269.02,
+      "est_tokens": 357936209.099424,
+      "requested_share": 0.07,
+      "realised_share": 0.0645884511499437
+    },
+    "c-sharp": {
+      "shards": 1,
+      "of": 107,
+      "parquet_bytes": 168423779,
+      "est_text_bytes": 520429477.10999995,
+      "est_tokens": 172366242.81883198,
+      "requested_share": 0.05,
+      "realised_share": 0.031102940611160923
+    },
+    "go": {
+      "shards": 1,
+      "of": 57,
+      "parquet_bytes": 183132902,
+      "est_text_bytes": 565880667.18,
+      "est_tokens": 187419676.97001597,
+      "requested_share": 0.05,
+      "realised_share": 0.033819284952961146
+    },
+    "rust": {
+      "shards": 1,
+      "of": 21,
+      "parquet_bytes": 163808740,
+      "est_text_bytes": 506169006.59999996,
+      "est_tokens": 167643174.98591998,
+      "requested_share": 0.04,
+      "realised_share": 0.030250678034062523
+    },
+    "php": {
+      "shards": 1,
+      "of": 153,
+      "parquet_bytes": 181426156,
+      "est_text_bytes": 560606822.04,
+      "est_tokens": 185672979.45964798,
+      "requested_share": 0.04,
+      "realised_share": 0.03350409893949249
+    },
+    "ruby": {
+      "shards": 1,
+      "of": 19,
+      "parquet_bytes": 215767690,
+      "est_text_bytes": 666722162.1,
+      "est_tokens": 220818380.08752,
+      "requested_share": 0.02,
+      "realised_share": 0.03984597476510358
+    },
+    "shell": {
+      "shards": 1,
+      "of": 10,
+      "parquet_bytes": 229632098,
+      "est_text_bytes": 709563182.8199999,
+      "est_tokens": 235007326.14998397,
+      "requested_share": 0.02,
+      "realised_share": 0.04240632497926724
+    },
+    "sql": {
+      "shards": 1,
+      "of": 27,
+      "parquet_bytes": 164909146,
+      "est_text_bytes": 509569261.14,
+      "est_tokens": 168769339.289568,
+      "requested_share": 0.01,
+      "realised_share": 0.030453890802885183
+    }
+  },
+  "shards": [
+    "data/python/data-00001-of-00144.parquet",
+    "data/python/data-00002-of-00144.parquet",
+    "data/python/data-00003-of-00144.parquet",
+    "data/python/data-00004-of-00144.parquet",
+    "data/python/data-00005-of-00144.parquet",
+    "data/javascript/data-00000-of-00310.parquet",
+    "data/javascript/data-00001-of-00310.parquet",
+    "data/javascript/data-00002-of-00310.parquet",
+    "data/java/data-00000-of-00208.parquet",
+    "data/java/data-00001-of-00208.parquet",
+    "data/typescript/data-00000-of-00071.parquet",
+    "data/typescript/data-00001-of-00071.parquet",
+    "data/c/data-00000-of-00126.parquet",
+    "data/c/data-00001-of-00126.parquet",
+    "data/cpp/data-00000-of-00110.parquet",
+    "data/cpp/data-00001-of-00110.parquet",
+    "data/c-sharp/data-00000-of-00107.parquet",
+    "data/go/data-00000-of-00057.parquet",
+    "data/rust/data-00000-of-00021.parquet",
+    "data/php/data-00000-of-00153.parquet",
+    "data/ruby/data-00000-of-00019.parquet",
+    "data/shell/data-00000-of-00010.parquet",
+    "data/sql/data-00000-of-00027.parquet",
+    "data/python/data-00006-of-00144.parquet",
+    "data/python/data-00007-of-00144.parquet",
+    "data/java/data-00002-of-00208.parquet",
+    "data/python/data-00008-of-00144.parquet",
+    "data/javascript/data-00003-of-00310.parquet"
+  ]
+}
