@@ -1,0 +1,33 @@
+{
+  "issue": 153,
+  "config": {
+    "steps": 48,
+    "warmup": 8,
+    "grad_accum": 8,
+    "batch_size": 4,
+    "seq_len": 512,
+    "d_model": 512,
+    "n_heads": 8,
+    "probe_batches": 8,
+    "muon_lr": 0.02,
+    "data_dir": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data_cache",
+    "tokenizer": "gpt2",
+    "vocab_size": 50257,
+    "fast": true,
+    "scratch": null,
+    "out": "results\\gpu_utilisation\\profile.json"
+  },
+  "phases_control_s": {
+    "h2d": 0.0046377000253414735,
+    "fwd_bwd": 6.405715399989276,
+    "optimizer": 0.6265553000121145,
+    "inline_eval": 27.65757899999153,
+    "checkpoint_save": 0.28010030000586994,
+    "_total_wall": 34.974907899988466
+  },
+  "profiled_wall_s": 8.00438060000306,
+  "gpu_busy_s": 7.783178013999873,
+  "utilisation_pct": 97.23648090892752,
+  "profiler_overhead_pct": -77.11393372959905,
+  "verdict": "GPU is saturated (97.2%). The pipeline is not the bottleneck; there is no idle time to reclaim."
+}

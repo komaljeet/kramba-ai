@@ -103,6 +103,62 @@ Not that the ideas were bad — B and C were reasonable and C is genuinely novel
 gate is where the value is**. Four ideas, four kills, ~14 GPU minutes total, versus ~100 minutes to
 learn the same thing by running them. Two of the four were killed by *reading code* rather than
 measuring, and one gate (D) overturned an assumption held elsewhere in the project.
+## The GPU is 97% busy during pretraining — there is no idle time to reclaim (Issue #153, 2026-08-11)
+
+**One line: a full-stack instinct that the pipeline was starving the GPU was measured and is
+wrong. Kernel time is 97.2% of wall clock; checkpoint saves cost 0.28 s and host copies 0.005 s.**
+
+Every throughput number in this repo is tokens/sec — a *rate*, which cannot distinguish "the GPU
+is saturated" from "the GPU idles 40% of the time and still produces that rate". The only idle
+gap ever measured was the dataloader's 0.2–0.3% (#141), and that was a lean harness with
+pre-materialised batches, no saves and no evals. This measures a realistic window.
+
+`scripts/profile_pretrain_utilisation.py`, production config (`--fast`, ternary, Muon,
+grad_accum 8), 48 micro-batches **including a checkpoint save and an inline eval**:
+
+| phase | seconds | share of wall |
+|---|---:|---:|
+| forward + backward | 6.406 | the work |
+| optimizer (Muon) | 0.627 | 1.8% |
+| checkpoint save (317 MB) | **0.280** | 0.8% |
+| host→device copy | 0.005 | 0.0% |
+
+**GPU-busy / wall clock = 97.2%.**
+
+Every suspect came back negligible. The 317 MB synchronous checkpoint write, expected to be a
+recurring stall, costs **0.28 s**.
+
+### The one apparent stall was a one-time compile, checked rather than assumed
+
+The control window showed `inline_eval` at 27.7 s of a 35 s window — which would have been a large
+recurring cost. It is not recurring: switching a `torch.compile`d model to eval mode compiles a
+second graph, once per process.
+
+    eval pass 1: 1.20s      <- compiling the eval graph
+    eval pass 2: 0.29s
+    eval pass 3: 0.29s
+
+One-time. On a 9-day run it is noise. Worth knowing for short A/B harnesses, where a 1–30 s
+one-off can be a visible share of a 10-minute run.
+
+### A broken number in this run's own output, recorded rather than quietly dropped
+
+The script reported **"profiler overhead: −77.1%"**. A profiled run cannot be faster than an
+unprofiled one, so the figure is meaningless: the control window paid the one-time eval-path
+compile and the profiled window did not, so the two are not comparable. The utilisation figure
+itself is unaffected — it is kernel time over wall clock *within* the profiled window — but the
+overhead comparison needs the control run twice to be valid.
+
+### Why this matters more than it sounds
+
+It closes the "is the plumbing wasting the run" question for the planned multi-day pretrain: a
+9-day estimate is 9 days of arithmetic, not 9 days containing 3 idle ones. **There is no slack
+left in or around the training loop** — consistent with the rest of this session, where nine
+architecture ideas returned null and the remaining cost is `6 × params × tokens`.
+
+**Limits:** one config (83M hybrid, batch 4, seq 512, grad_accum 8) on one card; a 48-micro-batch
+window rather than a multi-hour run; the profiler's own overhead makes 97.2% a lower bound.
+
 ## BCD's 4x cost is under-training, not optimizer amnesia (Issue #151, 2026-08-11)
 
 **One line: keeping a block's optimizer momentum across rotations instead of deleting it closes
