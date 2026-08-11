@@ -1,6 +1,24 @@
 """
-HamiltonianVortexNetwork — Full Model
-======================================
+HamiltonianVortexNetwork — Full Model  [FROZEN: research legacy, 2026-08-11]
+============================================================================
+
+**FROZEN.** ``EdgeHVN`` (``hvn/edge/model.py``) is the production model — every
+documented training run uses it. This file and ``weightless.py`` are the only two
+modules in ``hvn/core/`` that EdgeHVN does not reach: no new features here, no
+parity expectations against EdgeHVN, kept importable for the demos, evals and
+benchmarks that still build it as a convenient small model.
+
+**This is NOT "the other architecture's package".** The other 13 modules in
+``hvn/core/`` are a **shared block library** EdgeHVN depends on — including
+``deltanet.py``, the block actually trained. The freeze applies to this file, not
+to its imports. Read docs/architecture.md § "Layering" before moving, duplicating
+or splitting anything under ``hvn/core/``.
+
+**No consistency test ties this model to EdgeHVN.** It is sometimes assumed to be
+retained as a non-ternary reference; a grep for parity assertions across the two
+finds none. If such a check is wanted, the honest form is a quantizer parity test
+(``apply_ternary_to_model`` at ``group_size=0`` vs the same-shape fp32 model), not
+a second architecture.
 
 Assembles the complete HVN language model:
     1. Token embedding layer

@@ -2,6 +2,11 @@
 Weightless (seed-regenerated) projections for the DeltaNet block — Issue #40
 ============================================================================
 
+**FROZEN: research legacy (2026-08-11).** Imported only by the frozen
+``hvn/core/model.py``; ``EdgeHVN`` — the production model — does not reach it.
+No new features, no parity expectations, kept importable. See
+docs/architecture.md § "Layering".
+
 Goal (from the issue): *"instead of using weights maybe use something else to
 keep file size and memory used low? We already won the no-qkv battle."*
 
