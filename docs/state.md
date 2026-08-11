@@ -5,6 +5,39 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## RETEST AT SCALE — levers measured null at 83M that should improve with width (2026-08-11)
+
+> **Read this before concluding a lever is dead.** Every entry below was measured as *no gain* or
+> *negative* at 83M (d_model 512, d_head 64) and written up with language like "the lever is
+> closed". That phrasing is **too strong**: for most of them the *mechanism* predicts they get
+> better as the model widens, and this project's stated goal is to go bigger later. The code is
+> landed and flag-gated in every case — nothing was deleted, and retesting is a flag flip, not a
+> rebuild.
+>
+> This index exists because the alternative is archaeology through a dozen closed issues at the
+> moment someone launches a larger run.
+
+| lever | flag / entry point | measured at 83M | why width should change it |
+|---|---|---|---|
+| **Chunk-parallel scan (forward)** | `train_chunk`, `--megakernel-scan` | ❌ #95 chunked hybrid 2–4× slower; #96 Design A ~1.5× slower | The parallel form replaces `C` cheap sequential steps with one `C×C` interaction solve. Per-step cost grows with `d_head²`, the solve does not — so the trade flips as `d_head` grows. **At d_head 64 the steps are too cheap to be worth skipping.** The kernel header still reads *"chunk-parallel tiling for throughput — TODO"*: the forward version is not even built. |
+| **n_heads 8 → 16** | `--n-heads` | ✅ +10% speed, no quality cost (#144) — but only **1.12–1.17×** | Already demonstrated size-dependent: **2.4× at 355M** (#112) vs 1.1× here. The win grows with model width. |
+| **MoE FFN** | `--moe-experts`, `--moe-top-k` | ❌ #123: beat dense by 11.8% where the bar was 19% | MoE's premise is capacity-per-FLOP, which pays when a dense model of the same compute is capacity-limited. At 83M it is not. The bar itself (−0.504 exponent) moves with size. |
+| **Multi-token prediction** | not built | ❌ ruled out from the literature | Its own scaling ablation reports **negative below ~1B**. Explicitly a size threshold, not a refutation. |
+| **Selective tokens (Rho-1)** | `scripts/ab_selective_tokens.py` | ❌ no gain at 83M (#: 2026-08-07) | Rho-1's own floor is **1.1B**. Same order-of-magnitude gap as MTP. |
+| **Group-wise ternary scales** | `group_size=` on `apply_ternary_to_model` | ❌ #146: per-tensor wins; grouped costs 3–62% more storage | Untested claim, but the storage *ratio* improves with width: scale count grows as `out×in/group`, while codes grow as `out×in`. Wider layers amortise the scales better. Quality side genuinely looked null. |
+| **ReLU² / PowLU activations** | `ffn_activation=` | ❌ #140: no throughput change | **Do NOT retest for speed** — the null is structural, not size-dependent: activations are pointwise against `d²` matmuls, so the gap only widens with size. Quality-per-step (Primer's ~1–3%) was never measured and is the only open question. |
+| **BCD optimizer-state retention** | `retain_optimizer_state=` | ❌ #151: closes −0.3% of the gap | Not width-dependent — but **rotation-dependent**: it helped (+0.124 nats) at 5 steps/block and did nothing at 100, because momentum has to survive the round trip. A rotation-matched `beta` (~0.99947) is untested. |
+| **Progressive layer stacking** | `scripts/ab_progressive_stacking.py` | ❌ #147: +18% throughput, ~0 quality; the apparent win was an LR restart | Depth-growth's saving scales with layer count. At 12 layers half-depth saves little; at 24+ the arithmetic is more favourable. |
+| **Sequence-length curriculum** | `scripts/throughput_sweep.py` | ❌ #149: 2.9% slower | Occupancy is `B×H` against 20 SMs; more heads at larger size changes the fill. Weakest candidate on this list. |
+| **Per-token optimizer-state paging** | not built (#151) | n/a — analysis only | Saving is ~206 MB at GPT-2's 50K vocab; it scales with `vocab × d_model`. Only interesting at a larger tokenizer or wider model, where VRAM actually binds. |
+
+**Two that should NOT be retested for the same reason twice:**
+
+- **Attention layers are the *cheap* ones during training** (#149: removing both was 6.4% *slower*). Any proposal premised on "attention is the expensive part" starts from a false assumption at seq 512.
+- **The pipeline is not idle** (#153: 97.2% GPU-busy). Plumbing optimisations have nothing to reclaim.
+
+**The honest framing for all of the above:** these are *"no gain at 83M"*, not *"impossible"*. Several were written up more finally than the evidence supports — the same over-confident-verdict pattern that got #122 and #132 retracted. When the next size is trained, this table is the list to walk.
+
 ## Three generated architecture ideas, all killed by cheap gates (Issues #149/#150, 2026-08-11)
 
 **One line: three novel training-speed ideas were proposed, each given a gate costing minutes
