@@ -5,6 +5,105 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Three generated architecture ideas, all killed by cheap gates (Issues #149/#150, 2026-08-11)
+
+**One line: three novel training-speed ideas were proposed, each given a gate costing minutes
+instead of the ~25-minute training A/B it would have needed, and all three died at the gate. Total
+GPU cost ~20 min against ~75 min of blind runs — and one gate produced a finding that inverts an
+assumption in this project's own framing.**
+
+Generated after every *existing* lever was exhausted (MoE, activations, BCD, multi-token
+prediction, selective tokens, ternary grouping, layer stacking — all null or negative). Each idea
+was required to name the cheapest measurement that could kill it **before** any training code was
+written.
+
+### Idea A — chunk-size curriculum · killed by reading the dispatch
+
+Schedule `train_chunk` large early (cheap, approximate) and shrink it as the model sharpens.
+**Dead before running:** `deltanet.py:689` takes the Triton path whenever `use_triton_scan` is on,
+so the `elif self.train_chunk` branch below it is unreachable — **`train_chunk` is dead code in the
+production configuration** every harness and both FT scripts use. The kernel has no equivalent
+knob (`deltanet_triton.py:66,122` is `for t in range(S)`; line 24 reads *"chunk-parallel tiling for
+throughput -- TODO"*). The experiment would have produced a clean null about a knob that was never
+connected. **Cost: 0 GPU minutes.**
+
+### Idea B — sequence-length curriculum · killed by a 4-minute timing gate (#149)
+
+Train early at **seq 128 × batch 16** instead of seq 512 × batch 4: identical tokens per step
+(2,048) but 128 scan programs instead of 32, for better occupancy on 20 SMs.
+
+| config | tok/s (3 rounds) |
+|---|---|
+| seq 512 × batch 4 (32 programs) | 12,131 / 12,217 / 12,217 |
+| seq 128 × batch 16 (128 programs) | 11,829 / 11,886 / 11,864 |
+
+**4× the programs is 2.9% *slower*.** Consistent across every round. The occupancy premise was
+wrong — and #141 had already refuted the `N = B·H` model it was built on (equal `B·H` gave 55%
+different throughput). The idea was constructed on a model this repo's own measurement had
+discarded. **Cost: ~4 GPU minutes.**
+
+### Idea C — recurrent-state warm-start · killed by measuring its premise (#150)
+
+Initialise each layer's state from a detached running average instead of zeros, so sequences stop
+paying to escape `S = 0`. Genuinely HVN-specific — a transformer has no persistent state to
+warm-start, and this is not TBPTT (no gradient crosses the boundary; it is an init prior).
+
+**Implementation cost is the reason it needed a gate:** `_triton_gated_delta_scan(q,k,v,alpha,beta)`
+accepts no initial state, and the eager paths hardcode `S_state = torch.zeros`
+(`deltanet.py:396,439,534`). Building it means a forward-and-backward change to the scan kernel —
+hours, in the code this repo has twice recorded going silently wrong.
+
+So the premise was measured instead (`scripts/probe_state_warmup_cost.py`, trained 83M,
+loss by position):
+
+| position | loss | vs tail |
+|---:|---:|---:|
+| 0 | 6.6705 | **+2.3167** |
+| 1–4 | 5.4683 | +1.1146 |
+| 4–16 | 4.9049 | +0.5511 |
+| 16–64 | 4.4555 | +0.1017 |
+| 64–128 | 4.3741 | +0.0203 |
+| 384–512 (tail) | 4.3538 | — |
+
+The state reaches useful content within ~16–64 tokens. The whole early-position penalty is
+**0.55% of sequence loss** — and that is an **upper bound**, because most of it is irreducible:
+predicting token 0 with no context is hard for any model, and a state averaged over *other*
+sequences carries nothing about this one. Its only possible contribution is a generic prior, which
+the weights already hold.
+
+**The script's own threshold called this "worth building" at 0.55% vs a 0.5% cutoff. That
+threshold was wrong and was overridden** — it did not account for irreducibility. A gate that
+returns the wrong verdict is worse than none, so the reasoning is recorded here rather than the
+number alone. **Cost: ~6 GPU minutes.**
+
+### Idea D — late attention insertion · killed, and the premise was backwards
+
+Train the first phase as pure DeltaNet (cheapest), then swap 2 layers to attention once recall
+starts to matter. Premise: the attention layers are the expensive ones.
+
+| config | tok/s (median of 3, interleaved) |
+|---|---|
+| 2 attention + 10 DeltaNet (production) | **10,393** |
+| 0 attention + 12 DeltaNet | 9,726 (**−6.4%**) |
+
+**Replacing attention with DeltaNet is 6.4% SLOWER.** At seq 512 the FLOPs are equal
+(`S²d = Sd² = 1.34e8`), but SDPA parallelises across the sequence while the DeltaNet scan is
+sequential over it. A pure-recurrent early phase would cost time, not save it. **Cost: ~4 GPU
+minutes.**
+
+> **Worth carrying forward: the attention layers are the *cheap* ones during training.** The
+> intuition that the hybrid keeps only 2 of them to limit cost is wrong for training — per
+> [architecture.md](architecture.md) the 2-layer limit is an **inference-VRAM** decision (KV cache
+> flat over a long agentic session), and that reasoning stands. But any future proposal premised on
+> "attention is the expensive part" is starting from a false assumption at this sequence length.
+
+### What this pass is evidence for
+
+Not that the ideas were bad — B and C were reasonable and C is genuinely novel. It is that **the
+gate is where the value is**. Four ideas, four kills, ~14 GPU minutes total, versus ~100 minutes to
+learn the same thing by running them. Two of the four were killed by *reading code* rather than
+measuring, and one gate (D) overturned an assumption held elsewhere in the project.
+
 ## Group-wise ternary QAT loses to per-tensor too — the lever is fully closed (Issue #146, 2026-08-11)
 
 **One line: training with finer ternary scales does not beat per-tensor either. Every grouped
