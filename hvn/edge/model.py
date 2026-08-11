@@ -74,7 +74,23 @@ class EdgeHVN(nn.Module):
         block_plan: Optional[list[str]] = None,
         attn_window: Optional[int] = None,
         grad_checkpoint: bool = False,
-        tie_embeddings: bool = False,
+        # Issue #139 measured this rather than assuming it: 1,500 from-scratch
+        # steps, identical batches/seed/--deterministic, only this flag differing
+        # -> held-out 5.50681 tied vs 5.56450 untied, i.e. 0.058 nats BETTER with
+        # 31% FEWER parameters (83.08M -> 57.35M), 12.5 sigma against #133's
+        # noise floor. Strictly better AND smaller, not a trade. Costs ~7% per
+        # step (the shared table takes gradients from both the lookup and the
+        # head, serialising an accumulation).
+        #
+        # DEFAULT ON since #151. The training CLI has defaulted it on since #139;
+        # this makes the library agree, so a model built directly (benchmarks,
+        # A/B harnesses, eval) matches what training actually produces.
+        #
+        # Existing checkpoints are unaffected: every loader passes the flag the
+        # checkpoint itself recorded (`ckpt.get("tie_embeddings", False)` in
+        # load_checkpoint_for_resume and the #112 audit rebuild), so an untied
+        # checkpoint still rebuilds untied regardless of this default.
+        tie_embeddings: bool = True,
         eos_token_id: int = 50256,
         moe_experts: int = 1,
         moe_top_k: int = 2,

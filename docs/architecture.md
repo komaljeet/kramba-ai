@@ -3,6 +3,55 @@
 > **Moved from README:** §4 Architecture Components & Project Structure · the hybrid
 > token-recall design block (originally in §5). See [index.md](index.md) for the overview.
 
+## Layering: `hvn/core/` is a shared block library, NOT "the other architecture" (2026-08-11)
+
+> **Read this before proposing to split, duplicate or move code between `core/` and `edge/`.**
+> The repo does not contain two parallel stacks. It contains **one block library with two
+> top-level wirings**, and mistaking the first for the second led to a proposal to move ~4,600
+> lines (including the Triton scan) in order to isolate two files.
+
+| layer | what it is |
+|---|---|
+| `hvn/core/` (blocks) | **shared library** — `DeltaNetBlock`, `TransformerBlock`, `HVNBlock`, `HVNDecoder`, packing, block-coordinate, MoE, activations |
+| `hvn/core/model.py` | `HamiltonianVortexNetwork` — the original top-level model |
+| `hvn/edge/model.py` | `EdgeHVN` — **the production model; every documented training run uses this** |
+
+Both `model.py` files import the *same* blocks (`core/model.py:18-21`, `edge/model.py:32-35`),
+which is why the two "architectures" feel entangled: they are two wirings of one stack, and the
+thing actually trained (`DeltaNetBlock`) lives in `core/`.
+
+### Reachability, computed rather than assumed
+
+Walking `hvn/core/`'s import graph from each top-level model:
+
+| set | modules |
+|---|---|
+| **Reachable from EdgeHVN — must stay live** (13) | `activations` `batched_memory` `batched_vortex` `block_coordinate` `decoder` `deltanet` `deltanet_triton` `hamiltonian_memory` `hvn_block` `moe` `packing` `transformer_block` `vortex_injection` |
+| **Legacy-only — freezable** (2) | `model` (`HamiltonianVortexNetwork`) · `weightless` (`WeightlessDeltaNetBlock`, imported only by it) |
+| **Orphaned** (1) | `head_parallel` — referenced by no model; only `tests/test_issue66.py` |
+
+Note that EdgeHVN reaches `vortex_injection`, `hamiltonian_memory` and the batched variants,
+because `HVNBlock` pulls them in and `block_plan` can dispatch a layer to `"hvn"`. **The vortex /
+Hamiltonian-memory machinery is live infrastructure, not legacy.**
+
+### Consequences for maintenance
+
+- **Freezing "HVN" means freezing two files** — `core/model.py` and `core/weightless.py` — not the
+  `core` package. No new features, no parity expectations, keep them importable.
+- **Do not move blocks into `edge/`.** `core/model.py` imports the same blocks, so a move forces
+  either an inverted dependency (legacy importing production) or a duplicate of `deltanet.py` +
+  `deltanet_triton.py` — the code with a documented history of being *silently wrong* (#83/#96/#122).
+  Two copies guarantee a fix landing in one and missing in the other, which is the failure mode this
+  repo has already hit twice: the audit that "could not have passed on a hybrid … because it only
+  ever ran on the plain arch", and the VRAM benches hardcoding `VOCAB = 8000` while training used
+  50,257.
+- **There is no EdgeHVN-vs-HVN consistency test.** The belief that the legacy model is retained as a
+  non-ternary reference is *not implemented* — a grep for parity/allclose assertions across the two
+  finds nothing. Code that builds a `HamiltonianVortexNetwork` (e.g. `tests/test_edge_devices.py:368`)
+  uses it as a convenient small model for exercising *other* machinery. If a ternary reference check
+  is wanted, the honest form is a quantizer parity test (`apply_ternary_to_model` at `group_size=0`
+  against the same-shape fp32 model) — no second architecture required.
+
 ## 4. Architecture Components & Project Structure
 
 ```
