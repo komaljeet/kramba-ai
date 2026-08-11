@@ -1,0 +1,99 @@
+﻿[ab] deterministic ON — control and control_twin must be IDENTICAL
+python.exe : Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked 
+critical (_ssl.c:1081). Will retry later.
+At line:1 char:366
++ ... ai-wt-147"; & "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Scripts ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Could not refre...ll retry later.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[ab] 16 probes + 3000 identical batches available
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'control' (12 layers, 83,079,329 params) ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[ab]   step     0  held-out 11.00483
+[ab]   step   250  held-out 7.61636  (12L, 1.3 min)
+[ab]   step   500  held-out 6.70922  (12L, 2.6 min)
+[ab]   step   750  held-out 6.37763  (12L, 3.9 min)
+[ab]   step  1000  held-out 6.17621  (12L, 5.1 min)
+[ab]   step  1250  held-out 6.07504  (12L, 6.4 min)
+[ab]   step  1500  held-out 6.03552  (12L, 7.7 min)
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (434889 > 1024). Running this sequence through the model will result in indexing 
+errors
+[ab]   bits/byte 2.1726
+[ab] control wall clock 7.68 min -> grown arm's budget
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'control_restart' (12 layers, 83,079,329 params) ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[ab]   step     0  held-out 11.00483
+[ab]   step   250  held-out 7.61636  (12L, 1.3 min)
+[ab]   step   500  held-out 6.70922  (12L, 2.5 min)
+[ab]   step   750  held-out 6.37763  (12L, 3.8 min)
+[ab]   step   751  optimizer+cosine restarted (no growth)
+[ab]   step  1000  held-out 6.14804  (12L, 5.1 min)
+[ab]   step  1250  held-out 5.99726  (12L, 6.4 min)
+[ab]   step  1500  held-out 5.94410  (12L, 7.6 min)
+[ab]   bits/byte 2.1560
+[ab] triton+megakernel scan on 5 DeltaNet blocks
+
+[ab] === arm 'grown' (6 layers, 67,296,889 params) ===
+[ab]     Muon (muon_lr=0.02 on 51 matrices / 15,749,120 params; AdamW aux lr=2e-05 / 51,547,769 params)
+[ab]     grows at step 750
+[ab]     wall budget 7.7 min
+[ab]   step     0  held-out 10.97845
+[ab]   step   250  held-out 7.65634  (6L, 0.8 min)
+[ab]   step   500  held-out 6.73456  (6L, 1.6 min)
+[ab]   step   750  held-out 6.40537  (6L, 2.4 min)
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+[ab]   grown 6 -> 12 layers (203 tensors copied into both halves)
+[ab]   step   751  held-out 6.46919  <- immediately after growth
+[ab]   step  1000  held-out 6.16812  (12L, 3.7 min)
+[ab]   step  1250  held-out 6.01606  (12L, 5.0 min)
+[ab]   step  1500  held-out 5.96127  (12L, 6.3 min)
+[ab]   step  1750  held-out 5.94431  (12L, 7.6 min)
+[ab]   bits/byte 2.1579
+
+[ab] ============ progressive stacking ============
+[ab] arm               steps   held-out  bits/byte  wall (min)
+[ab] control            1500    6.03552     2.1726        7.68
+[ab] control_restart    1500    5.94410     2.1560        7.62
+[ab] grown              1769    5.94041     2.1579        7.68
+
+[ab] EQUAL WALL CLOCK (7.68 min) — grown 5.94041 vs control 6.03552  = -0.09511
+[ab]   grown ran 1769 steps vs control's 1500 in the same time
+[ab] EQUAL STEPS (1500) — grown 5.96127 vs control 6.03552 = -0.07425
+
+[ab] VERDICT: stacking WINS by 0.09511 nats at equal wall clock
+[ab] LIMIT: one seed, short run, 83M only; growth point and duplication scheme unswept.
+[ab] wrote results\progressive_stacking\ab_lr_control.json

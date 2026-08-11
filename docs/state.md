@@ -5,6 +5,69 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Progressive layer stacking contributes nothing — the win was an LR restart in disguise (Issue #147, 2026-08-11)
+
+**One line: 6→12 layer growth looked like a −0.095 nat win, and ~96% of it was the cosine
+schedule being restarted at the growth point. A 12-layer model with the same restart and no
+growth matches it.**
+
+`scripts/ab_progressive_stacking.py`, from scratch, graded at **equal wall clock** (the claim is
+"same time, more progress"), identical seed, identical pre-materialised batches,
+`--deterministic`, both arms ending on the same block plan:
+
+| arm | steps | held-out | bits/byte | wall |
+|---|---:|---:|---:|---:|
+| control (12L throughout) | 1500 | 6.03552 | 2.1726 | 7.68 min |
+| **control_restart** (12L, optimizer+cosine rebuilt at 750) | 1500 | **5.94410** | **2.1560** | 7.62 min |
+| grown (6L → 12L at 750) | **1769** | 5.94041 | 2.1579 | 7.68 min |
+
+- grown vs control: **−0.09511**
+- control_restart vs control: **−0.09142**
+- grown vs control_restart: **−0.00370**, and **bits/byte ranks control_restart ahead**
+
+### How the confound was caught
+
+The first run showed grown ahead at **equal steps** (−0.074) as well as equal wall clock.
+Stacking cannot do that: at matched steps the 6-layer phase is strictly less capacity, so it
+should *lose* there and win only on time. That impossible-shaped result is what prompted the
+control — the grown arm rebuilds its optimizer and cosine at growth, so it receives a **warm
+restart** (SGDR, Loshchilov & Hutter 2016) that the plain control never gets, and against that
+control the restart's benefit is credited to "stacking".
+
+Without `control_restart` this would have been written up as "progressive stacking works,
+−0.095 nats". The stored verdict in `ab.json` said exactly that and has been corrected in
+`ab_lr_control.json`, with the superseded string kept alongside.
+
+### What survives, and what does not
+
+- **Dead: stacking as a quality lever.** −0.0037 nats against the honest control, with the two
+  metrics disagreeing on the sign.
+- **Real but unconverted: stacking's throughput.** 1,769 steps vs 1,500 in the same 7.68 min,
+  **+18%**, exactly as the arithmetic predicts (half the layers for the first half of the run).
+  That extra 18% of steps bought 0.0037 nats — i.e. nothing. Cheaper steps did not become a
+  better model.
+- **Interesting but distrusted: the LR restart is worth −0.091 nats at zero cost.** No
+  architecture change, no extra memory, one line of schedule code.
+
+### Why the LR result should NOT be adopted on this evidence
+
+A restart means more time at high LR, which flatters a **1,500-step run** (0.19% of a real
+pretrain) almost by construction — the model is nowhere near converged, so anything that keeps
+the step size large looks good. Full-length pretrains use a single long decay for exactly this
+reason, and the ranking could reverse at length. It is also not novel (SGDR).
+
+It does land in an area this repo has already found to be live: #133 concluded a dynamic LR
+schedule "wins by 0.30 nats, but the win is that the LR was 10x too high". A restart helping at
+1.5K steps may be the same story — evidence about **LR level**, not about schedules. The honest
+next test is a fixed-LR sweep at this length before anyone touches the schedule.
+
+### Limits
+
+One seed. 1,500 steps × 2,048 tokens = 3.07M, **0.19% of a real pretrain**. Growth point (750),
+duplication scheme (plain stack-doubling), and restart timing are all unswept — a different
+growth point could change the picture, though it would have to overcome a 0.0037 nat starting
+gap against a free alternative.
+
 ## Group-wise ternary QAT loses to per-tensor too — the lever is fully closed (Issue #146, 2026-08-11)
 
 **One line: training with finer ternary scales does not beat per-tensor either. Every grouped
