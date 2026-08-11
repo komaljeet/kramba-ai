@@ -1,0 +1,110 @@
+﻿[lr] deterministic ON — the 0.02 arm must reproduce #147 exactly
+python.exe : Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked 
+critical (_ssl.c:1081). Will retry later.
+At line:1 char:439
++ ... lyContinue; & "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Scripts ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Could not refre...ll retry later.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[lr] 16 probes + 1500 identical batches per arm
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[lr] === muon_lr=0.005 ===
+[lr]     Muon (muon_lr=0.005 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[lr]   step   250  held-out 7.76302  train 9.34982  (1.3 min)
+[lr]   step   500  held-out 6.77979  train 7.38298  (2.6 min)
+[lr]   step   750  held-out 6.43096  train 6.69923  (3.9 min)
+[lr]   step  1000  held-out 6.23720  train 6.41038  (5.1 min)
+[lr]   step  1250  held-out 6.15430  train 6.34782  (6.4 min)
+[lr]   step  1500  held-out 6.12494  train 6.28022  (7.7 min)
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (434889 > 1024). Running this sequence through the model will result in indexing 
+errors
+[lr]   bits/byte 2.2042
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[lr] === muon_lr=0.01 ===
+[lr]     Muon (muon_lr=0.01 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[lr]   step   250  held-out 7.65047  train 9.09509  (1.3 min)
+[lr]   step   500  held-out 6.70976  train 7.28550  (2.6 min)
+[lr]   step   750  held-out 6.36956  train 6.63048  (3.8 min)
+[lr]   step  1000  held-out 6.16503  train 6.33867  (5.1 min)
+[lr]   step  1250  held-out 6.07290  train 6.26612  (6.4 min)
+[lr]   step  1500  held-out 6.03769  train 6.18747  (7.7 min)
+[lr]   bits/byte 2.1809
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[lr] === muon_lr=0.02 ===
+[lr]     Muon (muon_lr=0.02 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[lr]   step   250  held-out 7.61636  train 8.92363  (1.3 min)
+[lr]   step   500  held-out 6.70922  train 7.27907  (2.6 min)
+[lr]   step   750  held-out 6.37763  train 6.64353  (3.8 min)
+[lr]   step  1000  held-out 6.17621  train 6.35279  (5.1 min)
+[lr]   step  1250  held-out 6.07504  train 6.27327  (6.4 min)
+[lr]   step  1500  held-out 6.03552  train 6.19116  (7.7 min)
+[lr]   bits/byte 2.1798
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[lr] === muon_lr=0.04 ===
+[lr]     Muon (muon_lr=0.04 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[lr]   step   250  held-out 7.63346  train 8.83255  (1.3 min)
+[lr]   step   500  held-out 6.73188  train 7.31081  (2.6 min)
+[lr]   step   750  held-out 6.40687  train 6.68073  (3.8 min)
+[lr]   step  1000  held-out 6.20633  train 6.39585  (5.1 min)
+[lr]   step  1250  held-out 6.11161  train 6.31601  (6.4 min)
+[lr]   step  1500  held-out 6.07227  train 6.23301  (7.6 min)
+[lr]   bits/byte 2.1899
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[lr] === muon_lr=0.08 ===
+[lr]     Muon (muon_lr=0.08 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[lr]   step   250  held-out 7.67626  train 8.79828  (1.3 min)
+[lr]   step   500  held-out 6.77687  train 7.35205  (2.6 min)
+[lr]   step   750  held-out 6.45414  train 6.72742  (3.8 min)
+[lr]   step  1000  held-out 6.25180  train 6.44820  (5.1 min)
+[lr]   step  1250  held-out 6.15515  train 6.36576  (6.4 min)
+[lr]   step  1500  held-out 6.11035  train 6.27756  (7.7 min)
+[lr]   bits/byte 2.1993
+
+[lr] ================= fixed-LR sweep =================
+[lr]    muon_lr   held-out  bits/byte   vs restart
+[lr]      0.005    6.12494     2.2042     +0.18084
+[lr]       0.01    6.03769     2.1809     +0.09359
+[lr]       0.02    6.03552     2.1798     +0.09142
+[lr]       0.04    6.07227     2.1899     +0.12817
+[lr]       0.08    6.11035     2.1993     +0.16625
+[lr] #147 plain 0.02 6.03552   (known-answer target)
+[lr] #147 restart 5.94410   (the bar to clear)
+
+[lr] KNOWN-ANSWER CELL — 0.02 arm vs #147's control: 2.213e-07
+[lr] *** VOID: this sweep is not comparable to the result it exists to explain. Do NOT report it.
+[lr] wrote results\lr_sweep\sweep.json

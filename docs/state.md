@@ -5,6 +5,215 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Three generated architecture ideas, all killed by cheap gates (Issues #149/#150, 2026-08-11)
+
+**One line: three novel training-speed ideas were proposed, each given a gate costing minutes
+instead of the ~25-minute training A/B it would have needed, and all three died at the gate. Total
+GPU cost ~20 min against ~75 min of blind runs — and one gate produced a finding that inverts an
+assumption in this project's own framing.**
+
+Generated after every *existing* lever was exhausted (MoE, activations, BCD, multi-token
+prediction, selective tokens, ternary grouping, layer stacking — all null or negative). Each idea
+was required to name the cheapest measurement that could kill it **before** any training code was
+written.
+
+### Idea A — chunk-size curriculum · killed by reading the dispatch
+
+Schedule `train_chunk` large early (cheap, approximate) and shrink it as the model sharpens.
+**Dead before running:** `deltanet.py:689` takes the Triton path whenever `use_triton_scan` is on,
+so the `elif self.train_chunk` branch below it is unreachable — **`train_chunk` is dead code in the
+production configuration** every harness and both FT scripts use. The kernel has no equivalent
+knob (`deltanet_triton.py:66,122` is `for t in range(S)`; line 24 reads *"chunk-parallel tiling for
+throughput -- TODO"*). The experiment would have produced a clean null about a knob that was never
+connected. **Cost: 0 GPU minutes.**
+
+### Idea B — sequence-length curriculum · killed by a 4-minute timing gate (#149)
+
+Train early at **seq 128 × batch 16** instead of seq 512 × batch 4: identical tokens per step
+(2,048) but 128 scan programs instead of 32, for better occupancy on 20 SMs.
+
+| config | tok/s (3 rounds) |
+|---|---|
+| seq 512 × batch 4 (32 programs) | 12,131 / 12,217 / 12,217 |
+| seq 128 × batch 16 (128 programs) | 11,829 / 11,886 / 11,864 |
+
+**4× the programs is 2.9% *slower*.** Consistent across every round. The occupancy premise was
+wrong — and #141 had already refuted the `N = B·H` model it was built on (equal `B·H` gave 55%
+different throughput). The idea was constructed on a model this repo's own measurement had
+discarded. **Cost: ~4 GPU minutes.**
+
+### Idea C — recurrent-state warm-start · killed by measuring its premise (#150)
+
+Initialise each layer's state from a detached running average instead of zeros, so sequences stop
+paying to escape `S = 0`. Genuinely HVN-specific — a transformer has no persistent state to
+warm-start, and this is not TBPTT (no gradient crosses the boundary; it is an init prior).
+
+**Implementation cost is the reason it needed a gate:** `_triton_gated_delta_scan(q,k,v,alpha,beta)`
+accepts no initial state, and the eager paths hardcode `S_state = torch.zeros`
+(`deltanet.py:396,439,534`). Building it means a forward-and-backward change to the scan kernel —
+hours, in the code this repo has twice recorded going silently wrong.
+
+So the premise was measured instead (`scripts/probe_state_warmup_cost.py`, trained 83M,
+loss by position):
+
+| position | loss | vs tail |
+|---:|---:|---:|
+| 0 | 6.6705 | **+2.3167** |
+| 1–4 | 5.4683 | +1.1146 |
+| 4–16 | 4.9049 | +0.5511 |
+| 16–64 | 4.4555 | +0.1017 |
+| 64–128 | 4.3741 | +0.0203 |
+| 384–512 (tail) | 4.3538 | — |
+
+The state reaches useful content within ~16–64 tokens. The whole early-position penalty is
+**0.55% of sequence loss** — and that is an **upper bound**, because most of it is irreducible:
+predicting token 0 with no context is hard for any model, and a state averaged over *other*
+sequences carries nothing about this one. Its only possible contribution is a generic prior, which
+the weights already hold.
+
+**The script's own threshold called this "worth building" at 0.55% vs a 0.5% cutoff. That
+threshold was wrong and was overridden** — it did not account for irreducibility. A gate that
+returns the wrong verdict is worse than none, so the reasoning is recorded here rather than the
+number alone. **Cost: ~6 GPU minutes.**
+
+### Idea D — late attention insertion · killed, and the premise was backwards
+
+Train the first phase as pure DeltaNet (cheapest), then swap 2 layers to attention once recall
+starts to matter. Premise: the attention layers are the expensive ones.
+
+| config | tok/s (median of 3, interleaved) |
+|---|---|
+| 2 attention + 10 DeltaNet (production) | **10,393** |
+| 0 attention + 12 DeltaNet | 9,726 (**−6.4%**) |
+
+**Replacing attention with DeltaNet is 6.4% SLOWER.** At seq 512 the FLOPs are equal
+(`S²d = Sd² = 1.34e8`), but SDPA parallelises across the sequence while the DeltaNet scan is
+sequential over it. A pure-recurrent early phase would cost time, not save it. **Cost: ~4 GPU
+minutes.**
+
+> **Worth carrying forward: the attention layers are the *cheap* ones during training.** The
+> intuition that the hybrid keeps only 2 of them to limit cost is wrong for training — per
+> [architecture.md](architecture.md) the 2-layer limit is an **inference-VRAM** decision (KV cache
+> flat over a long agentic session), and that reasoning stands. But any future proposal premised on
+> "attention is the expensive part" is starting from a false assumption at this sequence length.
+
+### What this pass is evidence for
+
+Not that the ideas were bad — B and C were reasonable and C is genuinely novel. It is that **the
+gate is where the value is**. Four ideas, four kills, ~14 GPU minutes total, versus ~100 minutes to
+learn the same thing by running them. Two of the four were killed by *reading code* rather than
+measuring, and one gate (D) overturned an assumption held elsewhere in the project.
+## Fixed-LR sweep: #147's restart win is a REAL schedule effect, not a mis-set LR (Issue #148, 2026-08-11)
+
+**One line: no constant learning rate reaches what a mid-run cosine restart reaches. `muon_lr=0.02`
+is already the optimum of a clean U-curve, so the restart is doing something a better number
+cannot.**
+
+#147 found a restart worth −0.091 nats, and this repo had a ready explanation: #133's dynamic-LR
+"win" turned out to be that the baseline LR was 10× too high — the schedule was compensating for
+a bad number. Same shape, so it was checked the same way. Plain single cosine in every arm, only
+`--muon-lr` differing, identical seed and pre-materialised batches, `--deterministic`:
+
+| muon_lr | held-out | bits/byte | vs restart |
+|---:|---:|---:|---:|
+| 0.005 | 6.12494 | 2.2042 | +0.18084 |
+| 0.01 | 6.03769 | 2.1809 | +0.09359 |
+| **0.02** (current default, #129) | **6.03552** | **2.1798** | **+0.09142** |
+| 0.04 | 6.07227 | 2.1899 | +0.12817 |
+| 0.08 | 6.11035 | 2.1993 | +0.16625 |
+| *cosine WITH restart @ 0.02 (#147)* | *5.94410* | — | — |
+
+**The "mis-set LR" explanation is refuted.** 0.02 sits at the bottom of a clean U — every
+direction is worse — and the best fixed LR is still **0.091 nats short** of the restart. #133's
+finding does not transfer to this case.
+
+### A broken known-answer cell, found and fixed
+
+The 0.02 arm was required to reproduce #147's control exactly. It did — drift **2.2e-7** — and
+the run **declared itself VOID anyway**, because the tolerance was 1e-9 while the reference
+`6.03552` is a literal transcribed from five-decimal printed output, carrying ~5e-6 of
+quantisation.
+
+**A test compared against a rounded constant, at a tolerance finer than that constant's
+precision, can never pass** — the exact mirror of #140's test that could never fail, and equally
+useless. The tolerance is now tied to the reference's precision (`REF_TOL = 5e-6`), the run
+passes, and the superseded verdict is kept in the JSON rather than deleted.
+
+### What this does and does not license
+
+- **Real:** at 1,500 steps, restarting the cosine at the halfway point beats every base LR tried.
+- **Not tested — schedule *shape*.** This swept the base LR under a *single cosine*. A flatter
+  decay, a constant LR with no decay, or a longer warmup might also reach 5.944. "No fixed LR
+  gets there" is **not** "nothing but a restart gets there".
+- **Still length-bound.** 1,500 steps is 0.19% of a real pretrain, and more time at high LR
+  flatters a run nowhere near converged. Whether a restart helps a 100K-step pretrain is
+  untouched, and the standard single long decay exists for reasons this run cannot see.
+
+**Practical read:** do not change the pretrain schedule on this evidence. Do note that
+`muon_lr=0.02` is confirmed optimal at this length — a useful independent check on #129's default.
+## Progressive layer stacking contributes nothing — the win was an LR restart in disguise (Issue #147, 2026-08-11)
+
+**One line: 6→12 layer growth looked like a −0.095 nat win, and ~96% of it was the cosine
+schedule being restarted at the growth point. A 12-layer model with the same restart and no
+growth matches it.**
+
+`scripts/ab_progressive_stacking.py`, from scratch, graded at **equal wall clock** (the claim is
+"same time, more progress"), identical seed, identical pre-materialised batches,
+`--deterministic`, both arms ending on the same block plan:
+
+| arm | steps | held-out | bits/byte | wall |
+|---|---:|---:|---:|---:|
+| control (12L throughout) | 1500 | 6.03552 | 2.1726 | 7.68 min |
+| **control_restart** (12L, optimizer+cosine rebuilt at 750) | 1500 | **5.94410** | **2.1560** | 7.62 min |
+| grown (6L → 12L at 750) | **1769** | 5.94041 | 2.1579 | 7.68 min |
+
+- grown vs control: **−0.09511**
+- control_restart vs control: **−0.09142**
+- grown vs control_restart: **−0.00370**, and **bits/byte ranks control_restart ahead**
+
+### How the confound was caught
+
+The first run showed grown ahead at **equal steps** (−0.074) as well as equal wall clock.
+Stacking cannot do that: at matched steps the 6-layer phase is strictly less capacity, so it
+should *lose* there and win only on time. That impossible-shaped result is what prompted the
+control — the grown arm rebuilds its optimizer and cosine at growth, so it receives a **warm
+restart** (SGDR, Loshchilov & Hutter 2016) that the plain control never gets, and against that
+control the restart's benefit is credited to "stacking".
+
+Without `control_restart` this would have been written up as "progressive stacking works,
+−0.095 nats". The stored verdict in `ab.json` said exactly that and has been corrected in
+`ab_lr_control.json`, with the superseded string kept alongside.
+
+### What survives, and what does not
+
+- **Dead: stacking as a quality lever.** −0.0037 nats against the honest control, with the two
+  metrics disagreeing on the sign.
+- **Real but unconverted: stacking's throughput.** 1,769 steps vs 1,500 in the same 7.68 min,
+  **+18%**, exactly as the arithmetic predicts (half the layers for the first half of the run).
+  That extra 18% of steps bought 0.0037 nats — i.e. nothing. Cheaper steps did not become a
+  better model.
+- **Interesting but distrusted: the LR restart is worth −0.091 nats at zero cost.** No
+  architecture change, no extra memory, one line of schedule code.
+
+### Why the LR result should NOT be adopted on this evidence
+
+A restart means more time at high LR, which flatters a **1,500-step run** (0.19% of a real
+pretrain) almost by construction — the model is nowhere near converged, so anything that keeps
+the step size large looks good. Full-length pretrains use a single long decay for exactly this
+reason, and the ranking could reverse at length. It is also not novel (SGDR).
+
+It does land in an area this repo has already found to be live: #133 concluded a dynamic LR
+schedule "wins by 0.30 nats, but the win is that the LR was 10x too high". A restart helping at
+1.5K steps may be the same story — evidence about **LR level**, not about schedules. The honest
+next test is a fixed-LR sweep at this length before anyone touches the schedule.
+
+### Limits
+
+One seed. 1,500 steps × 2,048 tokens = 3.07M, **0.19% of a real pretrain**. Growth point (750),
+duplication scheme (plain stack-doubling), and restart timing are all unswept — a different
+growth point could change the picture, though it would have to overcome a 0.0037 nat starting
+gap against a free alternative.
+
 ## Group-wise ternary QAT loses to per-tensor too — the lever is fully closed (Issue #146, 2026-08-11)
 
 **One line: training with finer ternary scales does not beat per-tensor either. Every grouped
