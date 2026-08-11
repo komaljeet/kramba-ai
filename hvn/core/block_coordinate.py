@@ -448,15 +448,41 @@ def partition_named_blocks(model: nn.Module) -> list[tuple[str, list[nn.Paramete
     """
     blocks: list[tuple[str, list[nn.Parameter]]] = []
 
+    # Issue #151: with tie_embeddings the token-embedding table and the decoder
+    # output projection are the SAME nn.Parameter under two names, so a naive
+    # walk places it in two blocks and _validate_partition rejects the model.
+    # That combination looks exotic but is the documented 355M config:
+    # --tie-embeddings has defaulted ON since #139, and #112 records
+    # --block-coordinate as MANDATORY at that size -- so a 355M BCD run raised
+    # ValueError at scheduler construction. Each parameter is assigned to the
+    # FIRST block that claims it; later duplicates are skipped.
+    #
+    # Consequence, deliberate and worth knowing: a tied table belongs to
+    # `token_embedding`, so it trains only while that block is active and does
+    # NOT also update during the tail block's turn. That is the honest reading of
+    # block-coordinate descent on a shared weight (one block trains at a time).
+    # Updating it in both would silently give the shared table twice the update
+    # frequency of every other parameter.
+    claimed: set[int] = set()
+
+    def _take(params) -> list[nn.Parameter]:
+        out = []
+        for p in params:
+            if id(p) not in claimed:
+                claimed.add(id(p))
+                out.append(p)
+        return out
+
     if getattr(model, "blocks", None) is not None:
-        blocks.append(("token_embedding", list(model.token_embedding.parameters())))
+        blocks.append(("token_embedding", _take(model.token_embedding.parameters())))
         for i, blk in enumerate(model.blocks):
-            blocks.append((f"blocks.{i}", list(blk.parameters())))
-        tail = list(model.final_norm.parameters()) + list(model.decoder.parameters())
+            blocks.append((f"blocks.{i}", _take(blk.parameters())))
+        tail = _take(list(model.final_norm.parameters())
+                     + list(model.decoder.parameters()))
         blocks.append(("final_norm+decoder", tail))
     else:
         for name, child in model.named_children():
-            params = list(child.parameters())
+            params = _take(child.parameters())
             if params:
                 blocks.append((name, params))
 
@@ -583,6 +609,29 @@ class BlockCoordinateScheduler:
             if not getattr(model, "grad_checkpoint", False):
                 raise ValueError(
                     "offload_inactive_weights=True requires model.grad_checkpoint=True"
+                )
+            # Issue #151: CPU weight offload is NOT compatible with tied
+            # embeddings. The tied table is one nn.Parameter reachable from two
+            # modules; the partition (correctly) assigns it to `token_embedding`
+            # only, but the offload bookkeeping still meets it through
+            # `model.decoder` and looks it up in `_cpu_home` by id, where it was
+            # never registered -- surfacing as a bare `KeyError: <id>` inside the
+            # prefetch stream, far from the cause.
+            #
+            # Rejected loudly rather than patched blind: this is the subsystem
+            # #117 found silently discarding ALL training for a whole epic, so an
+            # improvised fix here is worse than an unsupported combination. See
+            # docs/state.md; #112 also records `--optimizer adafactor` as removing
+            # the need for BCD at 355M entirely, which is the recommended path.
+            if getattr(model, "tie_embeddings", False):
+                raise ValueError(
+                    "offload_inactive_weights=True is not supported with "
+                    "tie_embeddings=True (Issue #151): the shared embedding/decoder "
+                    "parameter is reachable from two modules and the offload "
+                    "bookkeeping registers it under one, failing later with an "
+                    "opaque KeyError. Use --no-tie-embeddings for offload runs, or "
+                    "--optimizer adafactor, which #112 measured as removing the need "
+                    "for block-coordinate descent at 355M."
                 )
         self.model = model
         self.blocks = partition_named_blocks(model)
