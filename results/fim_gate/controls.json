@@ -1,0 +1,36 @@
+{
+  "config": {
+    "checkpoint": null,
+    "tokenizer": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data_cache\\tokenizer_32k_fim",
+    "corpus": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data_cache\\code_corpus\\stack_code.txt",
+    "separator": "<|endoftext|>",
+    "n_cases": 100,
+    "span_lines": 2,
+    "min_tokens": 200,
+    "max_ctx": 768,
+    "max_new": 80,
+    "tail_bytes": 20000000,
+    "validator": "balanced",
+    "seed": 11,
+    "out": "results\\fim_gate\\controls.json"
+  },
+  "cases": 100,
+  "gate_broken": false,
+  "results": {
+    "floor_empty": {
+      "n": 100,
+      "exact_pct": 0.0,
+      "valid_pct": 47.0
+    },
+    "floor_copy_prev_line": {
+      "n": 100,
+      "exact_pct": 0.0,
+      "valid_pct": 38.0
+    },
+    "known_answer": {
+      "n": 100,
+      "exact_pct": 100.0,
+      "valid_pct": 100.0
+    }
+  }
+}
