@@ -23,7 +23,52 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def ternary_quantize_ste(w: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+#: ``group_size`` sentinel: one scale for the whole tensor (BitNet b1.58 absmean).
+#: The default everywhere, and byte-identical to the pre-#146 implementation.
+GROUP_PER_TENSOR = 0
+#: ``group_size`` sentinel: one scale per output row (per output channel).
+GROUP_PER_ROW = -1
+
+
+def _absmean_scale(w: torch.Tensor, group_size: int, eps: float) -> torch.Tensor:
+    """Absmean scale at the requested granularity, shaped to broadcast over *w*.
+
+    ``0`` (:data:`GROUP_PER_TENSOR`) one scalar for the whole tensor -- BitNet
+    b1.58, and what this repo has always done (at d=512, 262,144 weights sharing
+    one normaliser). ``-1`` (:data:`GROUP_PER_ROW`) one scale per output row.
+    ``k > 0`` one scale per contiguous run of ``k`` along the input dim.
+    """
+    if group_size == GROUP_PER_TENSOR:
+        return w.abs().mean().clamp(min=eps)
+    if w.dim() != 2:
+        raise ValueError(f"group_size={group_size} needs a 2-D [out, in] weight, "
+                         f"got shape {tuple(w.shape)}")
+    if group_size == GROUP_PER_ROW:
+        return w.abs().mean(dim=1, keepdim=True).clamp(min=eps)
+    if group_size < 0:
+        raise ValueError(f"invalid group_size {group_size}")
+    out, inn = w.shape
+    if inn % group_size:
+        raise ValueError(
+            f"group_size={group_size} does not divide in_features={inn}. "
+            f"Padding is deliberately refused: a short final group would carry a "
+            f"scale computed over fewer weights, quietly making the last columns "
+            f"of every row a different quantizer.")
+    g = w.view(out, inn // group_size, group_size)
+    return g.abs().mean(dim=2, keepdim=True).clamp(min=eps)
+
+
+def _apply_scale(w: torch.Tensor, scale: torch.Tensor, group_size: int) -> torch.Tensor:
+    """Round ``w`` to ``{-1,0,1} * scale`` at the granularity ``scale`` was built for."""
+    if group_size in (GROUP_PER_TENSOR, GROUP_PER_ROW):
+        return torch.clamp(torch.round(w / scale), -1, 1) * scale
+    out, inn = w.shape
+    g = w.view(out, inn // group_size, group_size)
+    return (torch.clamp(torch.round(g / scale), -1, 1) * scale).view(out, inn)
+
+
+def ternary_quantize_ste(w: torch.Tensor, eps: float = 1e-6,
+                         group_size: int = GROUP_PER_TENSOR) -> torch.Tensor:
     """Quantize a tensor to ``{-1, 0, +1} · scale`` with a straight-through gradient.
 
     Uses the BitNet b1.58 "absmean" scheme: the scale is the mean absolute
@@ -36,6 +81,13 @@ def ternary_quantize_ste(w: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
         Full-precision "shadow" weight.
     eps : float
         Numerical floor for the scale to avoid division by zero.
+    group_size : int
+        Scale granularity (Issue #146). ``0`` = one scale per tensor (default,
+        byte-identical to the original), ``-1`` = per output row, ``k`` = per
+        ``k`` inputs. Finer is a strictly better approximation of *w* but costs
+        storage -- and #145 showed that being closer to the shadow weight is
+        **not** the same as being a better model, so this is a lever to measure,
+        never one to assume.
 
     Returns
     -------
@@ -43,16 +95,51 @@ def ternary_quantize_ste(w: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
         Same shape as *w*.  Values are exactly ``{-scale, 0, +scale}``, but
         the tensor carries a gradient identical to ``w``'s (straight-through).
     """
-    scale = w.detach().abs().mean().clamp(min=eps)
-    w_ternary = torch.clamp(torch.round(w / scale), -1, 1) * scale
+    scale = _absmean_scale(w.detach(), group_size, eps)
+    w_ternary = _apply_scale(w, scale, group_size)
     return w + (w_ternary - w).detach()
 
 
-def ternary_codes(w: torch.Tensor, eps: float = 1e-6) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return the raw ``{-1, 0, +1}`` codes and scale for a weight tensor (no STE, inference-only)."""
-    scale = w.detach().abs().mean().clamp(min=eps)
-    codes = torch.clamp(torch.round(w.detach() / scale), -1, 1).to(torch.int8)
+def ternary_codes(w: torch.Tensor, eps: float = 1e-6,
+                  group_size: int = GROUP_PER_TENSOR
+                  ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return the raw ``{-1, 0, +1}`` codes and scale for a weight tensor (no STE, inference-only).
+
+    With a positive ``group_size`` the scale broadcasts against the codes'
+    *grouped* view, so consumers must rebuild through :func:`dequantize_codes`
+    rather than assuming a plain elementwise multiply.
+    """
+    scale = _absmean_scale(w.detach(), group_size, eps)
+    if group_size in (GROUP_PER_TENSOR, GROUP_PER_ROW):
+        codes = torch.clamp(torch.round(w.detach() / scale), -1, 1).to(torch.int8)
+    else:
+        out, inn = w.shape
+        g = w.detach().view(out, inn // group_size, group_size)
+        codes = torch.clamp(torch.round(g / scale), -1, 1).to(torch.int8).view(out, inn)
     return codes, scale
+
+
+def dequantize_codes(codes: torch.Tensor, scale: torch.Tensor, group_size: int,
+                     dtype: torch.dtype) -> torch.Tensor:
+    """Rebuild the dense weight from codes + scale at any granularity."""
+    if group_size in (GROUP_PER_TENSOR, GROUP_PER_ROW):
+        return codes.to(dtype) * scale.to(dtype)
+    out, inn = codes.shape
+    g = codes.view(out, inn // group_size, group_size).to(dtype)
+    return (g * scale.to(dtype)).view(out, inn)
+
+
+def scale_count(out_features: int, in_features: int, group_size: int) -> int:
+    """How many scale values a weight of this shape needs -- the storage price.
+
+    Ternary's whole point is bytes, so a quality win from finer scales has to be
+    judged against this rather than reported as free.
+    """
+    if group_size == GROUP_PER_TENSOR:
+        return 1
+    if group_size == GROUP_PER_ROW:
+        return out_features
+    return out_features * (in_features // group_size)
 
 
 class TernaryLinear(nn.Module):
@@ -67,12 +154,23 @@ class TernaryLinear(nn.Module):
     Parameters
     ----------
     in_features, out_features, bias : as in ``nn.Linear``.
+    group_size : int
+        Scale granularity (Issue #146). ``0`` (default) is one scale for the
+        whole weight -- byte-identical to the pre-#146 behaviour, and the
+        configuration every existing checkpoint was trained under.  ``-1`` is
+        per output row, ``k`` is per ``k`` inputs.  Note this is a *training*
+        knob: #145 measured that re-grouping an already-trained checkpoint makes
+        it worse, so changing it on an existing model is not a free upgrade.
     """
 
-    def __init__(self, in_features: int, out_features: int, bias: bool = False):
+    def __init__(self, in_features: int, out_features: int, bias: bool = False,
+                 group_size: int = GROUP_PER_TENSOR):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
+        self.group_size = int(group_size)
+        # Fail at construction, not at the first forward halfway through a run.
+        _absmean_scale(torch.zeros(out_features, in_features), self.group_size, 1e-6)
         self.weight = nn.Parameter(torch.empty(out_features, in_features))
         nn.init.xavier_uniform_(self.weight)
         self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
@@ -84,8 +182,9 @@ class TernaryLinear(nn.Module):
 
     def _dequantized(self, dtype: torch.dtype) -> torch.Tensor:
         if self._frozen_codes is not None:
-            return self._frozen_codes.to(dtype) * self._frozen_scale
-        return ternary_quantize_ste(self.weight).to(dtype)
+            return dequantize_codes(self._frozen_codes, self._frozen_scale,
+                                    self.group_size, dtype)
+        return ternary_quantize_ste(self.weight, group_size=self.group_size).to(dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.training or torch.is_grad_enabled():
@@ -137,28 +236,39 @@ class TernaryLinear(nn.Module):
         This is the actual 1.58-bit deployment form.  The module remains
         usable for inference (:meth:`forward`) but is no longer trainable.
         """
-        codes, scale = ternary_codes(self.weight)
+        codes, scale = ternary_codes(self.weight, group_size=self.group_size)
         self._frozen_codes = codes
         self._frozen_scale = scale
         self._wcache = None  # #131: freezing changes the weight source
         self.weight.requires_grad_(False)
 
     def memory_bytes(self) -> int:
-        """Storage footprint at 1.58 bits/weight (packed) + a single fp32 scale."""
+        """Storage footprint at 1.58 bits/weight (packed) + the fp32 scales.
+
+        Issue #146: the scale term is no longer a constant 4 bytes. At
+        ``group_size=32`` a 512x512 weight carries 8,192 scales -- ~32 KiB
+        against ~51 KiB of codes, i.e. **+63% storage**, which is large enough
+        to decide whether a finer scheme is worth its quality gain. Counting it
+        as one scalar would have made every grouped scheme look free.
+        """
         import math
         bits_per_weight = math.log2(3)
         weight_bytes = self.weight.numel() * bits_per_weight / 8.0
+        scale_bytes = scale_count(self.out_features, self.in_features,
+                                  self.group_size) * 4
         bias_bytes = self.bias.numel() * 4 if self.bias is not None else 0
-        return int(weight_bytes + 4 + bias_bytes)
+        return int(weight_bytes + scale_bytes + bias_bytes)
 
     @classmethod
-    def from_linear(cls, linear: nn.Linear) -> "TernaryLinear":
+    def from_linear(cls, linear: nn.Linear,
+                    group_size: int = GROUP_PER_TENSOR) -> "TernaryLinear":
         """Build a (still-trainable) :class:`TernaryLinear` seeded from a dense layer.
 
         Useful for a short fine-tuning "recovery" pass after converting an
         already-trained model (as opposed to training ternary from scratch).
         """
-        module = cls(linear.in_features, linear.out_features, bias=linear.bias is not None)
+        module = cls(linear.in_features, linear.out_features,
+                     bias=linear.bias is not None, group_size=group_size)
         module.weight.data = linear.weight.data.clone()
         if module.bias is not None:
             module.bias.data = linear.bias.data.clone()
@@ -197,7 +307,8 @@ class TernaryHamiltonian:
         return self._shape
 
 
-def apply_ternary_to_model(model: nn.Module, target_names: list[str] | None = None) -> dict[str, "TernaryLinear"]:
+def apply_ternary_to_model(model: nn.Module, target_names: list[str] | None = None,
+                           group_size: int = GROUP_PER_TENSOR) -> dict[str, "TernaryLinear"]:
     """Replace named ``nn.Linear`` submodules in *model* with (trainable) :class:`TernaryLinear`.
 
     The new layers are seeded from the existing dense weights so the model
@@ -213,6 +324,10 @@ def apply_ternary_to_model(model: nn.Module, target_names: list[str] | None = No
     target_names : list[str], optional
         Dotted module names of the ``nn.Linear`` layers to convert.  If
         ``None``, every ``nn.Linear`` in the model is converted.
+    group_size : int
+        Scale granularity for every converted layer (Issue #146).  ``0``
+        (default) reproduces the pre-#146 behaviour exactly, which is what every
+        existing checkpoint was trained under.
 
     Returns
     -------
@@ -230,7 +345,8 @@ def apply_ternary_to_model(model: nn.Module, target_names: list[str] | None = No
         parent = model
         for p in parent_path:
             parent = getattr(parent, p)
-        ternary_layer = TernaryLinear.from_linear(linear_modules[name])
+        ternary_layer = TernaryLinear.from_linear(linear_modules[name],
+                                                  group_size=group_size)
         setattr(parent, attr, ternary_layer)
         results[name] = ternary_layer
 
