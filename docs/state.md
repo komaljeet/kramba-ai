@@ -103,6 +103,87 @@ Not that the ideas were bad — B and C were reasonable and C is genuinely novel
 gate is where the value is**. Four ideas, four kills, ~14 GPU minutes total, versus ~100 minutes to
 learn the same thing by running them. Two of the four were killed by *reading code* rather than
 measuring, and one gate (D) overturned an assumption held elsewhere in the project.
+## BCD's 4x cost is under-training, not optimizer amnesia (Issue #151, 2026-08-11)
+
+**One line: keeping a block's optimizer momentum across rotations instead of deleting it closes
+-0.3% of block-coordinate descent's quality gap. The cost is that each block trains 1/12 of the
+time, and no state trick touches that.**
+
+#112 measured BCD at ~3.9x worse perplexity and named a mechanism it never tested: *"only 1 of 14
+blocks trains at a time **with the outgoing block's optimizer state deleted on every switch**"*.
+`retain_optimizer_state=True` parks that state on CPU and restores it when the block returns.
+
+| arm | held-out | ppl |
+|---|---:|---:|
+| full model | **5.48194** | 240 |
+| bcd_delete (today's behaviour) | 7.85570 | 2,580 |
+| **bcd_retain** | 7.86224 | 2,597 |
+
+**Fraction of the gap closed by retention: -0.3%.** The lever is closed.
+
+### The arithmetic that predicted this, written before the run
+
+Heavy-ball momentum over `k` steps of zero gradient decays to `beta^k * m`. Muon runs beta=0.95,
+and a block is away ~1,100 steps at 100 steps/block:
+
+    0.95^1100 ~= 1e-25
+
+So a **correctly decayed** restore is arithmetically identical to deletion -- BCD's existing
+behaviour is already the right answer for heavy-ball momentum. Only a "paused, not decaying"
+restore has any content, and that is what was implemented and tested. It changed nothing.
+
+### The one place it did work, and why
+
+A 260-step smoke at **5 steps/block** had retention *ahead by 0.124 nats*. Same code, different
+rotation speed -- and the arithmetic explains it exactly:
+
+| rotation | steps away | surviving momentum | retention |
+|---|---:|---:|---|
+| 5 steps/block | 55 | ~0.06 | **helped (+0.124 nats)** |
+| 100 steps/block | 1,100 | ~1e-25 | nothing |
+
+**Retention only helps while the memory is still worth having.** At production rotation it
+restores numerical noise. This is one data point from a smoke run, not a finding -- but the
+mechanism and the evidence point the same way, and a rotation-matched `beta` (~0.99947 for a
+per-rotation half-life) is the untested variant if anyone returns to this.
+
+### Known-answer cell, and an honest caveat about it
+
+`bcd_delete` had to reproduce BCD's known cost or the harness would not be measuring what #112
+measured. It did, qualitatively: **+2.374 nats (10.7x ppl)** against #112's **+1.36 (3.9x)** --
+same direction, larger magnitude, on a different harness with 12 blocks rather than 14. The
+retain-vs-delete comparison is internally valid; **10.7x should not be quoted as BCD's cost.**
+
+### Related: per-token state, measured and reframed
+
+The same question at token granularity (`scripts/probe_token_update_gaps.py`, 2,000 steps of the
+real corpus) came out the opposite way:
+
+| | |
+|---|---|
+| distinct token ids touched per step | 769 (1.5% of vocab) |
+| median gap between appearances | **7 steps** |
+| momentum half-life (beta=0.95) | 13.5 steps |
+| **mean momentum surviving on return** | **0.5745** |
+
+Tokens recur constantly, so their momentum *is* still alive -- 0.57 versus the blocks' 1e-25. But
+**dense training already retains this**: the embedding momentum buffer is a persistent dense
+tensor, so per-token retention is not a change that can be made, it is what already happens.
+
+The actionable reading is inverted: **sparsifying embedding optimizer state to save memory would
+destroy ~57% of a live signal.** The safe form is to *park* idle rows on CPU rather than drop
+them -- ~206 MB of AdamW state for ~3 MB/step of traffic (~0.2% of step time), quality-neutral by
+construction. Not built: VRAM is not currently binding (3.4 GiB peak of 6 GiB), and the saving
+scales with vocabulary, so it only becomes interesting at a larger tokenizer.
+
+### Not run
+
+`scripts/sweep_effective_batch.py` (Issue #152) was written and started -- is effective batch 32 a
+training choice or just what fit in VRAM -- then **stopped after one arm** when the session moved
+to evaluation. The script, its known-answer cell against #148, and its stated fixed-LR confound
+are committed; **no result was produced.** Recorded here so the question reads as open rather than
+answered.
+
 ## Fixed-LR sweep: #147's restart win is a REAL schedule effect, not a mis-set LR (Issue #148, 2026-08-11)
 
 **One line: no constant learning rate reaches what a mid-run cosine restart reaches. `muon_lr=0.02`
