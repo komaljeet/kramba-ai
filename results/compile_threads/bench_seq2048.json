@@ -1,0 +1,14 @@
+{
+  "issue": 155,
+  "cores": 16,
+  "seq_len": 2048,
+  "results": {
+    "1": {
+      "compile_threads": 1,
+      "first_call_s": 6.1405071999906795,
+      "second_call_s": 0.5287703000067268,
+      "compile_s": 5.611736899983953,
+      "process_wall_s": 12.671486199993524
+    }
+  }
+}
