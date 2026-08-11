@@ -5,6 +5,70 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Group-wise ternary scaling cannot be retrofitted — and "fp is the upper bound" is false for a QAT model (Issue #145, 2026-08-11)
+
+**One line: finer ternary scales reduce weight error but make the trained model measurably
+worse, because it has adapted to per-tensor rounding. The free retrofit is dead; training with
+group scales is untested and untouched by this.**
+
+`ternary_quantize_ste` (`hvn/edge/ternary.py:46`) uses **one scalar per weight matrix** —
+262,144 weights sharing a normaliser at d=512. Per-row/per-group scales are what GPTQ/AWQ/NF4
+all use, cost ~0.4% storage, and `hvn/compress.py` already implements them for *post-training*
+compression. The obvious question was whether they help here.
+
+`scripts/screen_ternary_grouping.py` — zero training. Re-quantize the trained 83M's shadow
+weights under each scheme, 32 held-out probe batches + bits/byte on unseen FineWeb-Edu:
+
+| scheme | held-out | vs per_tensor | recon error | bits/byte |
+|---|---:|---:|---:|---:|
+| **per_tensor** (today) | **4.28087** | — | 0.65605 | **1.5097** |
+| per_row | 4.58461 | +0.30374 | 0.63789 | 1.6243 |
+| group_128 | 4.57853 | +0.29766 | 0.63442 | 1.6157 |
+| group_64 | 4.60788 | +0.32701 | 0.62964 | 1.6202 |
+| group_32 | 4.53489 | **+0.25402** | **0.62251** | 1.5936 |
+
+**Known-answer cell passed exactly (0.000e+00):** the harness's `per_tensor` reimplementation
+reproduces the untouched `TernaryLinear` model's held-out loss bit-for-bit, so every other arm is
+quantizing the same way production does.
+
+**The result is a clean contradiction between two metrics, which is why both were measured.**
+Finer scaling monotonically *reduces* weight reconstruction error (0.656 → 0.623) — it is a
+strictly better approximation of the shadow weights, exactly as theory says. And every scheme is
+*worse* on held-out loss and on bits/byte. Both quality metrics agree; only reconstruction
+disagrees.
+
+The explanation is that reconstruction error is measuring the wrong target. Under QAT the model's
+weights sit **where per-tensor rounding puts them** — that is the function 8,000 steps optimised.
+A scheme that approximates the *shadow* weights more faithfully moves the network away from the
+one that was trained. **Retrofitting is therefore not free and not available.**
+
+### A design error this run caught, worth recording
+
+The screen was built with an `fp` arm (shadow weights, unquantized) as the assumed **upper
+bound**, and a "% of ternary damage recovered" metric computed against it. **Both are invalid for
+a QAT model**, and the run proved it: `fp` scored **7.62610** against per_tensor's **4.28087** —
+dramatically *worse*. In QAT the forward pass always used quantized weights; the fp32 shadow
+weight is an optimizer accumulator that was never itself the model's function. Feeding it directly
+gives a different, untrained network.
+
+So there is **no "damage" to recover from this checkpoint**, and the "% recovered" figure had a
+fabricated denominator. It was removed rather than reported. The dense-fp reference that *does*
+exist (119.4 vs 143.2, +20%, 2026-08-02) came from a **separately trained** fp arm — which is the
+only way to obtain one.
+
+### What is and is not decided
+
+- **Decided: the cheap version is dead.** You cannot take an existing ternary checkpoint,
+  re-group its scales, and get anything but a worse model.
+- **Not decided: group-wise QAT.** Whether *training* with per-row/per-group scales beats training
+  with per-tensor is completely untouched here — the model would adapt to the finer scheme from
+  the start, which is precisely the mechanism that makes the retrofit fail. Settling it needs a
+  from-scratch A/B (the `scripts/ab_n_heads.py` pattern: identical batches, twin arm, held-out
+  loss + bits/byte), with `group_size = whole tensor` as the known-answer cell.
+
+The screen cost ~10 minutes and ruled out the free option before any training code was written,
+which is what it was for.
+
 ## `n_heads` 8 vs 16 — the speed lever costs no measurable quality (Issue #144, 2026-08-11)
 
 **One line: `--n-heads 16` buys ~10% throughput for a held-out difference of 0.08%, and the two

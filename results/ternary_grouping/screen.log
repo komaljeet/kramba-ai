@@ -1,0 +1,61 @@
+﻿python.exe : Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked 
+critical (_ssl.c:1081). Will retry later.
+At line:1 char:366
++ ... ai-wt-145"; & "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Scripts ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Could not refre...ll retry later.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[screen] 32 probe batches; data mixed_local
+[screen] native ternary model: held-out 4.28087 (82 TernaryLinear layers)
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (434889 > 1024). Running this sequence through the model will result in indexing 
+errors
+[screen] fp          held-out 7.62610  bpb 2.6008  recon_err 0.00000
+[screen] per_tensor  held-out 4.28087  bpb 1.5097  recon_err 0.65605
+[screen] per_row     held-out 4.58461  bpb 1.6243  recon_err 0.63789
+[screen] group_128   held-out 4.57853  bpb 1.6157  recon_err 0.63442
+[screen] group_64    held-out 4.60788  bpb 1.6202  recon_err 0.62964
+[screen] group_32    held-out 4.53489  bpb 1.5936  recon_err 0.62251
+
+[screen] KNOWN-ANSWER — my per_tensor vs native TernaryLinear: 0.000e+00
+
+[screen] shadow-weight (fp) arm: 7.62610 vs per_tensor 4.28087 -> fp WORSE (expected for QAT: shadow weights were never the forward function)
+[screen] scheme         held-out  vs per_tensor   recon err  bits/byte
+[screen] per_tensor      4.28087       +0.00000     0.65605     1.5097
+[screen] per_row         4.58461       +0.30374     0.63789     1.6243
+[screen] group_128       4.57853       +0.29766     0.63442     1.6157
+[screen] group_64        4.60788       +0.32701     0.62964     1.6202
+[screen] group_32        4.53489       +0.25402     0.62251     1.5936
+
+[screen] VERDICT: NOT RETROFITTABLE: finer scaling cuts reconstruction error (0.6560 -> 0.6225) yet every scheme is WORSE on held-out (best group_32: +0.25402 nats, bits/byte +0.0840). The model has ADAPTED to per-tensor quantization -- its weights sit where per-tensor rounding puts them, so a 'better' approximation of the shadow weights moves the function away from what was trained. This kills the retrofit; it does NOT decide QAT-with-grouping.
+[screen] LIMIT: this is post-hoc regrouping on a per-tensor-TRAINED checkpoint. It can only rule out the free version. Whether TRAINING with group scales beats training with per-tensor is untouched by this screen and needs a from-scratch A/B.
+[screen] wrote results\ternary_grouping\screen.json
