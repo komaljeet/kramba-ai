@@ -1,0 +1,30 @@
+{
+  "issue": 151,
+  "config": {
+    "steps": 2000,
+    "batch_size": 4,
+    "seq_len": 512,
+    "data_dir": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data_cache",
+    "tokenizer": "gpt2",
+    "beta": 0.95,
+    "seed": 7,
+    "out": "results\\token_gaps\\gaps.json"
+  },
+  "vocab": 50257,
+  "mean_touched_per_step": 769.2745,
+  "appearances": 1491269,
+  "first_time": 47280,
+  "percentiles": {
+    "p50": 7.0,
+    "p75": 30.0,
+    "p90": 109.0,
+    "p95": 216.0,
+    "p99": 593.0
+  },
+  "mean_gap": 43.79325862738379,
+  "max_gap": 1968.0,
+  "half_life_steps": 13.513407333964874,
+  "pct_within_one_half_life": 62.37030341273103,
+  "mean_surviving_momentum": 0.5744873000587485,
+  "verdict": "WORTH TESTING: an average 0.57 of momentum survives to the next appearance, so per-token retention has real content."
+}

@@ -1,0 +1,104 @@
+﻿python.exe : Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked 
+critical (_ssl.c:1081). Will retry later.
+At line:1 char:442
++ ... lyContinue; & "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Scripts ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Could not refre...ll retry later.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[ab] 16 probes + 4200 identical batches per arm
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'full' (no BCD) ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[ab]   step   350  held-out 7.11739  (1.8 min)
+[ab]   step   700  held-out 6.38582  (3.6 min)
+[ab]   step  1050  held-out 6.07681  (5.4 min)
+[ab]   step  1400  held-out 5.90807  (7.2 min)
+[ab]   step  1750  held-out 5.79882  (8.9 min)
+[ab]   step  2100  held-out 5.70728  (10.7 min)
+[ab]   step  2450  held-out 5.63772  (12.5 min)
+[ab]   step  2800  held-out 5.57950  (14.3 min)
+[ab]   step  3150  held-out 5.53777  (16.0 min)
+[ab]   step  3500  held-out 5.50618  (17.8 min)
+[ab]   step  3850  held-out 5.48764  (19.6 min)
+[ab]   step  4200  held-out 5.48194  (21.4 min)
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'bcd_delete' (BCD 14 blocks x 100 steps, retain=False) ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[ab]     rotation = 1400 steps; a block is away 1300 steps -> honest decay 0.95^1300 ~ 1.10e-29 (i.e. deletion)
+[ab]   step   350  held-out 9.01590  (1.0 min)
+[ab]   step   700  held-out 8.78144  (1.8 min)
+[ab]   step  1050  held-out 8.70490  (2.5 min)
+[ab]   step  1400  held-out 8.32774  (3.1 min)
+[ab]   step  1750  held-out 8.16427  (4.1 min)
+[ab]   step  2100  held-out 8.09973  (4.9 min)
+[ab]   step  2450  held-out 8.07369  (5.6 min)
+[ab]   step  2800  held-out 7.91394  (6.2 min)
+[ab]   step  3150  held-out 7.88089  (7.2 min)
+[ab]   step  3500  held-out 7.86376  (8.0 min)
+[ab]   step  3850  held-out 7.85859  (8.7 min)
+[ab]   step  4200  held-out 7.85570  (9.3 min)
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'bcd_retain' (BCD 14 blocks x 100 steps, retain=True) ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[ab]     rotation = 1400 steps; a block is away 1300 steps -> honest decay 0.95^1300 ~ 1.10e-29 (i.e. deletion)
+[ab]   step   350  held-out 9.01590  (0.9 min)
+[ab]   step   700  held-out 8.78144  (1.8 min)
+[ab]   step  1050  held-out 8.70490  (2.5 min)
+[ab]   step  1400  held-out 8.32774  (3.1 min)
+[ab]   step  1750  held-out 8.16805  (4.0 min)
+[ab]   step  2100  held-out 8.10377  (4.9 min)
+[ab]   step  2450  held-out 8.07773  (5.6 min)
+[ab]   step  2800  held-out 7.92399  (6.2 min)
+[ab]   step  3150  held-out 7.88654  (7.1 min)
+[ab]   step  3500  held-out 7.86961  (8.0 min)
+[ab]   step  3850  held-out 7.86472  (8.7 min)
+[ab]   step  4200  held-out 7.86224  (9.3 min)
+
+[ab] ============== BCD state retention ==============
+[ab] arm              held-out       ppl  wall (min)
+[ab] full              5.48194     240.3        21.4
+[ab] bcd_delete        7.85570    2580.4         9.3
+[ab] bcd_retain        7.86224    2597.3         9.3
+
+[ab] KNOWN-ANSWER — BCD's cost reproduced: +2.374 nats (10.74x ppl). #112 measured +1.36 nats (3.9x).
+
+[ab] retain vs delete: +0.00654 nats
+[ab] retain vs full:   +2.38029 nats
+[ab] fraction of BCD's gap closed by retention: -0.3%
+
+[ab] VERDICT: UNDER-TRAINING, NOT AMNESIA: retention closes only -0% of the gap. Each block training 1/14 of the time is the cost, and no optimizer-state trick fixes it. The lever closes.
+[ab] LIMIT: one seed; 12 blocks at this size vs #112's 14; undecayed restore only -- a rotation-matched beta is untested.
+[ab] wrote results\bcd_retain\ab.json

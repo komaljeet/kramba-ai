@@ -539,6 +539,7 @@ class BlockCoordinateScheduler:
         optimizer: torch.optim.Optimizer,
         steps_per_block: int = 100,
         order: str | list[int] = "sequential",
+        retain_optimizer_state: bool = False,
         offload_inactive_weights: bool = False,
         device: torch.device | str | None = None,
         offload_cache_blocks: int = 1,
@@ -637,6 +638,13 @@ class BlockCoordinateScheduler:
         self.blocks = partition_named_blocks(model)
         self.optimizer = optimizer
         self.steps_per_block = steps_per_block
+        # Issue #152: park outgoing optimizer state on CPU and restore it when
+        # the block returns, instead of discarding it. Default OFF -- BCD's
+        # documented behaviour (and the paper's Algorithm 1) is deletion, and
+        # every measurement on record (#112's ~3.9x quality cost) was taken with
+        # it off. See _activate for why the restore is deliberately undecayed.
+        self.retain_optimizer_state = bool(retain_optimizer_state)
+        self._parked_state: dict = {}
         self.offload_inactive_weights = offload_inactive_weights
         self.device = torch.device(device) if device is not None else None
         self.buffer_pool = (
@@ -718,13 +726,49 @@ class BlockCoordinateScheduler:
         active_name, active_params = self.blocks[idx]
         for p in active_params:
             p.requires_grad_(True)
+
+        # Issue #152: with retain_optimizer_state, an outgoing block's optimizer
+        # state is PARKED on CPU instead of discarded, and restored when the
+        # block comes back, so it resumes with its momentum instead of cold.
+        #
+        # Why "frozen" and not a decayed restore: heavy-ball momentum over k
+        # steps of zero gradient decays to beta^k * m. Muon runs beta=0.95 and a
+        # block is away ~1,300 steps in a 14-block rotation at 100 steps each --
+        # 0.95^1300 ~= 1e-29. A *correctly decayed* restore is therefore
+        # arithmetically identical to deletion, which is what BCD already does.
+        # The only variant with any content treats parked time as PAUSED rather
+        # than as zero-gradient time: the block saw no gradients, not bad ones.
+        # That is a modelling choice, stated rather than hidden, and it is the
+        # hypothesis under test -- #112 measured BCD at ~3.9x worse perplexity
+        # with "the outgoing block's optimizer state deleted on every switch"
+        # named as a candidate cause, never tested.
         for i, (_, params) in enumerate(self.blocks):
             if i == idx:
                 continue
             for p in params:
-                if p in self.optimizer.state:
+                st = self.optimizer.state.get(p)
+                if st is not None:
+                    if self.retain_optimizer_state:
+                        self._parked_state[p] = {
+                            k: (v.detach().to("cpu", copy=True)
+                                if torch.is_tensor(v) else v)
+                            for k, v in st.items()
+                        }
                     del self.optimizer.state[p]
                 p.grad = None
+
+        if self.retain_optimizer_state:
+            dev = self.device or next(
+                (p.device for p in active_params if p is not None), None)
+            for p in active_params:
+                parked = self._parked_state.pop(p, None)
+                if parked is not None:
+                    self.optimizer.state[p] = {
+                        k: (v.to(dev if dev is not None else p.device,
+                                 dtype=p.dtype if v.is_floating_point() else v.dtype)
+                            if torch.is_tensor(v) else v)
+                        for k, v in parked.items()
+                    }
 
         if self.offload_inactive_weights:
             # Tell the model which block is exempt from offload; the model's
