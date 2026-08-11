@@ -1,0 +1,46 @@
+{
+  "issue": 135,
+  "corpus": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data_cache\\code_corpus\\stack_code.txt",
+  "corpus_bytes": 12028509871,
+  "sampled_bytes": 200000000,
+  "documents": 30913,
+  "tokenizer": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data_cache\\tokenizer_32k_fim",
+  "percentiles": {
+    "p10": 120.0,
+    "p25": 242.0,
+    "p50": 609.0,
+    "p75": 1640.0,
+    "p90": 4392.0,
+    "p95": 8133.199999999993,
+    "p99": 28620.72000000002
+  },
+  "mean": 2494.0899298029954,
+  "max": 658276,
+  "shares": {
+    "512": {
+      "pct_files": 55.16125901724194,
+      "pct_tokens": 95.71089689698555
+    },
+    "1024": {
+      "pct_files": 35.79076763821046,
+      "pct_tokens": 90.02272275614924
+    },
+    "2048": {
+      "pct_files": 20.64180118396791,
+      "pct_tokens": 81.20560024265691
+    },
+    "4096": {
+      "pct_files": 10.798046129460099,
+      "pct_tokens": 69.9094947092082
+    },
+    "8192": {
+      "pct_files": 4.955843819752208,
+      "pct_tokens": 56.641126004448104
+    },
+    "16384": {
+      "pct_files": 2.2158962248892053,
+      "pct_tokens": 44.2924950702208
+    }
+  },
+  "verdict": "FOUNDED: median 609 tokens, and 81% of tokens live in files >=2048 (70% in >=4096). There is real long-range structure to train on -- versus medians of 86 (grounded-QA) and 359 (OASST) for the existing corpora."
+}
