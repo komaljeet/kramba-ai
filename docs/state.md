@@ -5,6 +5,92 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Group-wise ternary QAT loses to per-tensor too — the lever is fully closed (Issue #146, 2026-08-11)
+
+**One line: training with finer ternary scales does not beat per-tensor either. Every grouped
+scheme is marginally worse on held-out loss and costs 3–62% more storage. #145 killed the
+retrofit; this kills the idea.**
+
+#145 showed re-grouping an existing checkpoint makes it worse, and explicitly could not decide
+whether *training* with group scales would win — a model trained under finer scales adapts to
+them from step 0, which is precisely the mechanism that sinks the retrofit. That was worth
+testing. It does not win.
+
+`scripts/ab_ternary_grouping.py`, from scratch, 1,500 steps × batch 4 × seq 512, Muon @ 0.02,
+identical seed, **identical pre-materialised batch sequence per arm**, `--deterministic`,
+ternary applied to production's target set (excluding `beta_proj`/`alpha_proj`/`decoder`):
+
+| arm | group | held-out | bits/byte | bits/weight | storage | vs per_tensor |
+|---|---:|---:|---:|---:|---:|---:|
+| **per_tensor** | 0 | **6.03297** | 2.1802 | **1.612** | — | — |
+| per_row | −1 | 6.03843 | 2.1805 | 1.667 | 1.034× | +0.00546 |
+| group_128 | 128 | 6.03719 | 2.1801 | 1.862 | 1.155× | +0.00422 |
+| group_32 | 32 | 6.03378 | **2.1799** | 2.612 | **1.620×** | +0.00081 |
+| per_tensor_twin | 0 | 6.03297 | 2.1802 | 1.612 | — | 0.000e+00 |
+
+**Known-answer cell passed exactly (0.000e+00)** — the two per-tensor arms are bit-identical, so
+the run-to-run floor is zero.
+
+### Why the verdict does not depend on the sign
+
+Held-out loss ranks per-tensor first; bits/byte marginally prefers `group_32` (2.1799 vs 2.1802)
+— the metrics disagree at the **fourth decimal**, which is the signature of no real effect.
+
+**It does not matter which way those signs fall.** `group_32`'s best case is ~0.001–0.005 nats
+for **1.62× storage**. Ternary exists to save bytes; paying 62% more of them for a difference
+that two held-out sets cannot agree on is not a trade. This is why the harness reports effective
+bits/weight beside quality: `memory_bytes()` previously charged a flat 4 bytes for one scale, and
+had that not been fixed (#146), every grouped scheme would have looked free and `group_32` would
+have been reported as a narrow win.
+
+### A caution about short-run signals, demonstrated
+
+The 20-step smoke pass showed the grouped arms **ahead by 0.05 nats** — the direction #145's
+mechanism predicted. By step 1,500 that had **reversed**. The early reading was flagged as
+meaningless when it was taken, and it was. Worth keeping as a concrete example of why this repo
+grades at the end of a run and not at the start.
+
+### The A/B harnesses vs `--fast` — checked, and TF32 turns out to be a no-op here
+
+`--fast` is bf16 + TF32 + `torch.compile` + Triton scan + async DataLoader. The A/B harnesses
+(this one, `ab_prodigy.py` #134, `ab_n_heads.py` #144) have bf16 and the Triton scan,
+pre-materialise batches so the loader is irrelevant, and run **without compile and without
+TF32** — raised as a possible gap: a verdict measured outside production numerics is the
+#86→#129 mistake.
+
+**Measured, not argued.** A `--tf32` flag was added and the two decisive arms re-run with it:
+
+| arm | TF32 off | TF32 on |
+|---|---:|---:|
+| per_tensor | 6.03297 | **6.03297** |
+| group_32 | 6.03378 | **6.03378** |
+
+**Bit-identical to five decimals.** Which then had to be checked for vacuity, since "the flag did
+nothing" and "the flag was never on" look the same: a direct probe confirms TF32 *does* change an
+fp32 matmul under `use_deterministic_algorithms(True)` (max diff 5.1e-2), so the flag was
+genuinely active.
+
+**The reason is that there are no fp32 matmuls in this loop at all.** Forward and backward run
+under bf16 autocast, and **Muon's Newton-Schulz orthogonalisation also runs in bfloat16**
+(`hvn/optimizers.py:59,64` — `X = G.bfloat16()`). The earlier claim in this entry that Muon does
+fp32 matmuls "and those are affected" was **wrong**; it is corrected here rather than removed,
+because it was the stated reason for running the check.
+
+**Consequence: the harnesses differ from `--fast` only by `torch.compile`, which fuses the same
+operations without changing the maths.** So this verdict and **#144's `n_heads` verdict both
+transfer to real `--fast` runs** — now on evidence rather than assumption.
+
+### Limits
+
+One seed. 1,500 × 2,048 = 3.07M tokens, **0.19% of the 83M's real 1.65B-token pretrain** — early
+training at 83M only. A grouping effect that emerges at convergence or at larger `d_model` would
+not appear here. What *is* solid: at equal step count the grouped schemes are not ahead, and the
+storage cost is arithmetic, not measured, so it holds at any scale.
+
+The `group_size` code is landed and tested (17 tests, `group_size=0` bit-identical to the
+pre-#146 implementation in forward *and* backward) — available if a future scale makes it worth
+re-testing, and costing nothing while it sits at the default.
+
 ## Group-wise ternary scaling cannot be retrofitted — and "fp is the upper bound" is false for a QAT model (Issue #145, 2026-08-11)
 
 **One line: finer ternary scales reduce weight error but make the trained model measurably

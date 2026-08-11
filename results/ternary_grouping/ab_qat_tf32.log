@@ -1,0 +1,85 @@
+﻿[ab] deterministic ON — the two per_tensor arms must be IDENTICAL
+[ab] TF32 ON (matches --fast)
+python.exe : Could not refresh your Hugging Face access token: Failed to refresh access token: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Basic Constraints of CA cert not marked 
+critical (_ssl.c:1081). Will retry later.
+At line:1 char:366
++ ... ai-wt-146"; & "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Scripts ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Could not refre...ll retry later.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.5, 'OpenAssistant': 0.35, 'WikiText-103': 0.15, 'FineWeb-Edu': 0.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (1,318,230,992 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 1,333,955,864  |  windows/source: [2574669, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 1333955864
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[ab] data: mixed_local, 1,333,955,864 tokens
+[ab] 16 held-out probes + 1500 identical training batches per arm
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'per_tensor' (group_size=0, 1.612 bits/weight over 82 layers) ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[ab]   step     0  held-out 11.00795
+[ab]   step   500  held-out 6.71141  train 8.10090  (2.6 min)
+[ab]   step  1000  held-out 6.17001  train 6.49779  (5.1 min)
+[ab]   step  1500  held-out 6.03297  train 6.23198  (7.7 min)
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (434889 > 1024). Running this sequence through the model will result in indexing 
+errors
+[ab]   bits/byte 2.1802
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'group_32' (group_size=32, 2.612 bits/weight over 82 layers) ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[ab]   step     0  held-out 11.00941
+[ab]   step   500  held-out 6.71579  train 8.09547  (2.5 min)
+[ab]   step  1000  held-out 6.17386  train 6.49927  (5.1 min)
+[ab]   step  1500  held-out 6.03378  train 6.23106  (7.6 min)
+[ab]   bits/byte 2.1799
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'per_tensor_twin' (group_size=0, 1.612 bits/weight over 82 layers) ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,498,240 params; AdamW aux lr=2e-05 / 51,581,089 params)
+[ab]   step     0  held-out 11.00795
+[ab]   step   500  held-out 6.71141  train 8.10090  (2.5 min)
+[ab]   step  1000  held-out 6.17001  train 6.49779  (5.1 min)
+[ab]   step  1500  held-out 6.03297  train 6.23198  (7.7 min)
+[ab]   bits/byte 2.1802
+
+[ab] ============== group-wise ternary QAT ==============
+[ab] arm               group   held-out  bits/byte  bits/weight wall (min)
+[ab] per_tensor            0    6.03297     2.1802        1.612        7.7
+[ab] group_32             32    6.03378     2.1799        2.612        7.6
+[ab] per_tensor_twin       0    6.03297     2.1802        1.612        7.7
+
+[ab] KNOWN-ANSWER CELL — per_tensor vs its twin: 0.000e+00
+
+[ab] arm               vs per_tensor     storage
+[ab] group_32               +0.00081      1.620x
+
+[ab] VERDICT: per-tensor WINS or ties: no grouped scheme improved held-out loss, and every one of them costs more storage. The lever is closed for training too, not just retrofit
+[ab] LIMIT: one seed; 1,500 steps x 2,048 tokens = 3.07M, ~0.19% of a real pretrain. Bounds EARLY training at 83M only.
+[ab] wrote results\ternary_grouping\ab_qat_tf32.json
