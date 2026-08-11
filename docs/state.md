@@ -5,6 +5,55 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Fixed-LR sweep: #147's restart win is a REAL schedule effect, not a mis-set LR (Issue #148, 2026-08-11)
+
+**One line: no constant learning rate reaches what a mid-run cosine restart reaches. `muon_lr=0.02`
+is already the optimum of a clean U-curve, so the restart is doing something a better number
+cannot.**
+
+#147 found a restart worth −0.091 nats, and this repo had a ready explanation: #133's dynamic-LR
+"win" turned out to be that the baseline LR was 10× too high — the schedule was compensating for
+a bad number. Same shape, so it was checked the same way. Plain single cosine in every arm, only
+`--muon-lr` differing, identical seed and pre-materialised batches, `--deterministic`:
+
+| muon_lr | held-out | bits/byte | vs restart |
+|---:|---:|---:|---:|
+| 0.005 | 6.12494 | 2.2042 | +0.18084 |
+| 0.01 | 6.03769 | 2.1809 | +0.09359 |
+| **0.02** (current default, #129) | **6.03552** | **2.1798** | **+0.09142** |
+| 0.04 | 6.07227 | 2.1899 | +0.12817 |
+| 0.08 | 6.11035 | 2.1993 | +0.16625 |
+| *cosine WITH restart @ 0.02 (#147)* | *5.94410* | — | — |
+
+**The "mis-set LR" explanation is refuted.** 0.02 sits at the bottom of a clean U — every
+direction is worse — and the best fixed LR is still **0.091 nats short** of the restart. #133's
+finding does not transfer to this case.
+
+### A broken known-answer cell, found and fixed
+
+The 0.02 arm was required to reproduce #147's control exactly. It did — drift **2.2e-7** — and
+the run **declared itself VOID anyway**, because the tolerance was 1e-9 while the reference
+`6.03552` is a literal transcribed from five-decimal printed output, carrying ~5e-6 of
+quantisation.
+
+**A test compared against a rounded constant, at a tolerance finer than that constant's
+precision, can never pass** — the exact mirror of #140's test that could never fail, and equally
+useless. The tolerance is now tied to the reference's precision (`REF_TOL = 5e-6`), the run
+passes, and the superseded verdict is kept in the JSON rather than deleted.
+
+### What this does and does not license
+
+- **Real:** at 1,500 steps, restarting the cosine at the halfway point beats every base LR tried.
+- **Not tested — schedule *shape*.** This swept the base LR under a *single cosine*. A flatter
+  decay, a constant LR with no decay, or a longer warmup might also reach 5.944. "No fixed LR
+  gets there" is **not** "nothing but a restart gets there".
+- **Still length-bound.** 1,500 steps is 0.19% of a real pretrain, and more time at high LR
+  flatters a run nowhere near converged. Whether a restart helps a 100K-step pretrain is
+  untouched, and the standard single long decay exists for reasons this run cannot see.
+
+**Practical read:** do not change the pretrain schedule on this evidence. Do note that
+`muon_lr=0.02` is confirmed optimal at this length — a useful independent check on #129's default.
+
 ## Group-wise ternary QAT loses to per-tensor too — the lever is fully closed (Issue #146, 2026-08-11)
 
 **One line: training with finer ternary scales does not beat per-tensor either. Every grouped
