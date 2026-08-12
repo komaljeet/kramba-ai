@@ -759,6 +759,35 @@ a one-line banner listing what it turned on (`[A]`/`[B]` tags). **Measured:** st
 **1.58× faster** (5.53 → 3.51 s/epoch, d=256/3L/seq128/B32); Category-A primitives proven
 exact (`tests/test_issue50.py`). Explicit flags always win.
 
+### ⚠️ CORRECTED — `torch.compile` is a NET LOSS here, measured in the real loop (#158, 2026-08-12)
+
+**The +18% below was wrong.** It came from a 4-step, 1-micro-batch microbenchmark — a shape
+training never runs. Measured in the actual loop (seq 4096, grad_accum 8, `--grad-checkpoint`):
+
+| config | s/step | tok/s | GPU |
+|---|---:|---:|---:|
+| **eager + Triton scan + megakernel** | **8.66** | **3,784** | **98%** |
+| per-block compile + those kernels | 20.72 | 1,581 | 35% |
+| per-block compile, kernels OFF | 21.42 | 1,530 | 36% |
+
+**2.4× slower**, and turning the fused kernels off does not help — so it is *not* the
+graph-break interaction #129 documented, it is compile itself on this architecture.
+
+**The GPU signature is the tell: 36% mean, 96% max.** It bursts to full then stalls, which is a
+gap *between* kernels rather than slow kernels. VRAM was 4,394 MiB of 6,140 — nothing offloaded,
+nothing spilled. Unverified hypothesis: recomputation under `--grad-checkpoint` forces a sync per
+checkpointed segment — 16 blocks × 8 micro-batches = 128 stalls per step, invisible at 1
+micro-batch and dominant at 8.
+
+**This is the FOURTH independent time compile has lost on this project**: #129 (megakernel breaks
+fusion, 2 graph breaks), state.md:558 (`--block-coordinate` conflict, 6.73 vs 4.41 s/step at
+355M), the Inductor `MemoryError` at 16 layers, and now this. `--fast` keeps bf16 + TF32 + Triton
+scan + megakernel and **skips `torch.compile`**.
+
+**What still stands from the section below:** whole-model compile is genuinely impossible at this
+depth (`compute_ancestors` is O(N²), three reproductions). Per-block compile *works* — it just
+isn't worth using.
+
 ### ⚠️ COMPILE THE BLOCKS, NOT THE MODEL — whole-model `torch.compile` does not scale (Issue #158, 2026-08-12)
 
 **Read this before enabling `--fast` on anything deeper than ~12 layers, and before renting a
