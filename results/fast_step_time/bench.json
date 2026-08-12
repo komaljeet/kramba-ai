@@ -1,0 +1,52 @@
+{
+  "issue": 155,
+  "config": {
+    "seq_len": 4096,
+    "batch_size": 1,
+    "grad_accum": 8,
+    "steps": 4,
+    "d_model": 896,
+    "num_layers": 16,
+    "n_heads": 14,
+    "vocab_size": 32003,
+    "muon_lr": 0.02,
+    "grad_checkpoint": true,
+    "out": "results\\fast_step_time\\bench.json"
+  },
+  "results": {
+    "fast": {
+      "arm": "fast",
+      "compiled": true,
+      "per_step_s": [
+        17.952227800007677,
+        8.598452799997176,
+        8.612485599995125,
+        8.604848500006483
+      ],
+      "first_step_s": 17.952227800007677,
+      "steady_step_s": 8.604848500006483,
+      "startup_cost_s": 9.347379300001194,
+      "tokens_per_step": 32768,
+      "steady_tok_s": 3808.0856391574252,
+      "peak_reserved_mib": 4140.0
+    },
+    "no-fast": {
+      "arm": "no-fast",
+      "compiled": false,
+      "per_step_s": [
+        13.386367300001439,
+        13.307912300006137,
+        13.374268500003382,
+        13.411090499997954
+      ],
+      "first_step_s": 13.386367300001439,
+      "steady_step_s": 13.374268500003382,
+      "startup_cost_s": 0.012098799998057075,
+      "tokens_per_step": 32768,
+      "steady_tok_s": 2450.07792388733,
+      "peak_reserved_mib": 4916.0
+    }
+  },
+  "fast_speedup": 1.5542712344085203,
+  "tokens_in_24h_fast": 329018599.2232015
+}

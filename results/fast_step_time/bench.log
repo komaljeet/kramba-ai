@@ -1,0 +1,32 @@
+﻿157M hybrid | seq 4096 x batch 1 x accum 8 = 32,768 tokens/step | grad_checkpoint=True
+
+[fast] Muon (muon_lr=0.02 on 138 matrices / 128,626,176 params; AdamW aux lr=0.0003 / 28,868,167 params)
+[fast]  step   wall (s)     tok/s
+python.exe : W0811 23:12:02.040000 24332 Lib\site-packages\torch\_inductor\utils.py:1717] [1/0] Not enough SMs to use max_autotune_gemm mode
+At line:1 char:445
++ ... | Out-Null; & "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Scripts ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (W0811 23:12:02....otune_gemm mode:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[fast]     1      17.95      1825
+[fast]     2       8.60      3811
+[fast]     3       8.61      3805
+[fast]     4       8.60      3808
+[fast] first step 18.0s | steady 8.60s | 3808 tok/s | startup 9.3s | peak 4140 MiB
+
+[no-fast] Muon (muon_lr=0.02 on 138 matrices / 128,626,176 params; AdamW aux lr=0.0003 / 28,868,167 params)
+[no-fast]  step   wall (s)     tok/s
+[no-fast]     1      13.39      2448
+[no-fast]     2      13.31      2462
+[no-fast]     3      13.37      2450
+[no-fast]     4      13.41      2443
+[no-fast] first step 13.4s | steady 13.37s | 2450 tok/s | startup 0.0s | peak 4916 MiB
+
+            steady s/step     tok/s  first step
+      fast           8.60      3808        18.0
+   no-fast          13.37      2450        13.4
+
+--fast is 1.55x faster in steady state; its first step costs 9.3s extra (one-time compile).
+24 h at --fast ~= 329M tokens (10.5% of the 3.14B corpus plan)
+wrote results\fast_step_time\bench.json

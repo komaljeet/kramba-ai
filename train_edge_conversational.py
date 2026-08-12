@@ -584,6 +584,14 @@ def _tokenizer_signature(tokenizer) -> str:
     would churn on cosmetic retrains.
     """
     name = getattr(tokenizer, "name_or_path", None) or type(tokenizer).__name__
+    # Normalise path separators before comparing. `name_or_path` is a filesystem
+    # path for a local tokenizer, and on Windows the same directory arrives as
+    # both "data_cache/tokenizer_32k_fim" and "data_cache\tokenizer_32k_fim"
+    # depending on how it was typed. Comparing raw strings then rejects a valid
+    # cache -- observed refusing a 121M-token FIM tokenization whose ONLY
+    # difference was a backslash. The guard exists to catch a different
+    # vocabulary, not a different spelling of the same directory.
+    name = str(name).replace("\\", "/").rstrip("/")
     size = getattr(tokenizer, "vocab_size", None)
     if size is None and hasattr(tokenizer, "get_vocab_size"):
         size = tokenizer.get_vocab_size()
@@ -3185,11 +3193,24 @@ def main():
     if args.hf_cache_dir:
         tokenizer_kwargs["cache_dir"] = args.hf_cache_dir
     tokenizer = load_tokenizer(args.tokenizer, **tokenizer_kwargs)
-    vocab_size = tokenizer.vocab_size
+    # `len(tokenizer)`, NOT `tokenizer.vocab_size`. HuggingFace's `vocab_size`
+    # deliberately EXCLUDES added special tokens, so a FIM tokenizer reports
+    # 32000 while its three sentinels occupy ids 32000-32002. Sizing the
+    # embedding table from `vocab_size` builds a model three rows too small for
+    # the data it is about to train on, and the first FIM sentinel in the stream
+    # indexes out of bounds -- surfacing as a bare CUDA "device-side assert
+    # triggered" inside the pre-training audit, with no hint of the cause. This
+    # is why --fim had never completed a run.
+    #
+    # Correct for both cases: GPT-2 has no added tokens (vocab_size == len ==
+    # 50257), so this changes nothing for every existing recipe.
+    vocab_size = len(tokenizer)
+    n_added = vocab_size - getattr(tokenizer, "vocab_size", vocab_size)
     eos_token_id = (tokenizer.eos_token_id
                     if tokenizer.eos_token_id is not None else 50256)
-    print(f"  Tokenizer: {args.tokenizer} | vocab_size = {vocab_size} | "
-          f"eos_token_id = {eos_token_id}")
+    print(f"  Tokenizer: {args.tokenizer} | vocab_size = {vocab_size}"
+          + (f" (base {tokenizer.vocab_size} + {n_added} added)" if n_added else "")
+          + f" | eos_token_id = {eos_token_id}")
 
     dataloader, val_loader, dataset_stats = build_dataset_pipeline(
         tokenizer=tokenizer,
