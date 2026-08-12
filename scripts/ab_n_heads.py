@@ -60,7 +60,11 @@ from hvn.optimizers import build_optimizer                        # noqa: E402
 GPT2_VOCAB_SIZE = 50257
 
 #: arm name -> n_heads. "h8_twin" is h8 again: the known-answer cell.
-ARMS = {"h8": 8, "h16": 16, "h8_twin": 8}
+#: Issue #159: the 157M code config is d_model=896, so the question is
+#: 14 heads (d_head 64, production) vs 28 (d_head 32, measured 20.4% faster).
+#: The twin is 14 run again -- under --deterministic it must come out
+#: bit-identical, giving a zero noise floor.
+ARMS = {"h14": 14, "h28": 28, "h14_twin": 14}
 
 
 def build_model(n_heads: int, args, device):
@@ -78,7 +82,7 @@ def build_model(n_heads: int, args, device):
         d_model=args.d_model,
         num_layers=args.num_layers,
         n_heads=n_heads,
-        block_plan=(["transformer" if i in (3, 10) else "deltanet"
+        block_plan=(["transformer" if i in (4, 12) else "deltanet"
                      for i in range(args.num_layers)]),
         attn_window=args.attn_window,
     ).to(device)
@@ -196,14 +200,14 @@ def heldout_at_wall(traj: List[dict], wall_sec: float) -> Optional[float]:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--arms", nargs="+", default=["h8", "h16", "h8_twin"])
+    p.add_argument("--arms", nargs="+", default=["h14", "h28", "h14_twin"])
     p.add_argument("--steps", type=int, default=1500)
     p.add_argument("--warmup-steps", type=int, default=100)
     p.add_argument("--eval-every", type=int, default=250)
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--seq-len", type=int, default=512)
-    p.add_argument("--d-model", type=int, default=512)
-    p.add_argument("--num-layers", type=int, default=12)
+    p.add_argument("--d-model", type=int, default=896)
+    p.add_argument("--num-layers", type=int, default=16)
     p.add_argument("--attn-window", type=int, default=4096)
     p.add_argument("--muon-lr", type=float, default=0.02,
                    help="pretrain-regime value per #129 (0.002 is the "
@@ -212,6 +216,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--weight-decay", type=float, default=0.01)
     p.add_argument("--probe-batches", type=int, default=16)
     p.add_argument("--data-dir", default="data_cache")
+    p.add_argument("--code-corpus", default=None,
+                   help="train the arms on a code corpus (#136), not the "
+                        "four-source mix -- required when the A/B is deciding "
+                        "a code pretrain")
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--vocab-size", type=int, default=GPT2_VOCAB_SIZE)
     p.add_argument("--tokenizer", default="gpt2")
@@ -231,12 +239,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     import train_edge_conversational as tec
 
     tok = tec.load_tokenizer(args.tokenizer)
-    if args.vocab_size != tok.vocab_size:
-        args.vocab_size = tok.vocab_size
+    # Issue #155: len(tokenizer), NOT tokenizer.vocab_size. HuggingFace excludes
+    # ADDED tokens from vocab_size, so a FIM tokenizer reports 32000 while its
+    # sentinels occupy 32000-32002. Sizing the embedding table from vocab_size
+    # builds it 3 rows short and the first sentinel indexes out of bounds --
+    # surfacing as a bare "CUDA error: device-side assert triggered" with no hint
+    # of the cause. Same bug as the training script had; this harness had its own
+    # copy of it.
+    if args.vocab_size != len(tok):
+        args.vocab_size = len(tok)
     torch.manual_seed(args.seed)
+    # Issue #159: this A/B decides a CODE pretrain, so it must train on the code
+    # corpus -- the default four-source mix would answer the question for the
+    # wrong data. `code_corpus` REPLACES the mix entirely (#136), and `fim` must
+    # match the run being decided or the cache signature (correctly) refuses.
     loader, _v, stats = tec.build_dataset_pipeline(
         tokenizer=tok, seq_len=args.seq_len, batch_size=args.batch_size,
-        data_dir=args.data_dir, val_fraction=0.0, num_workers=0)
+        data_dir=args.data_dir, val_fraction=0.0, num_workers=0,
+        code_corpus=args.code_corpus,
+        fim=({"rate": 0.5, "spm_rate": 0.5, "seed": 0} if args.code_corpus else None))
     print(f"[ab] data: {stats}")
 
     pairs = []

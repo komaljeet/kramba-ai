@@ -1,0 +1,60 @@
+{
+  "issue": 160,
+  "config": {
+    "bvs": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64
+    ],
+    "batch": 1,
+    "heads": 14,
+    "d_head": 64,
+    "seq_len": 4096,
+    "iters": 5,
+    "check_seq": 256,
+    "out": "results\\bv_sweep\\sweep.json"
+  },
+  "sms": 20,
+  "results": {
+    "1": {
+      "ms": 18.429420000029495,
+      "programs": 896,
+      "rel_err": NaN
+    },
+    "2": {
+      "ms": 9.82774000003701,
+      "programs": 448,
+      "rel_err": NaN
+    },
+    "4": {
+      "ms": 7.631300000139163,
+      "programs": 224,
+      "rel_err": NaN
+    },
+    "8": {
+      "ms": 6.847899999775109,
+      "programs": 112,
+      "rel_err": NaN
+    },
+    "16": {
+      "ms": 5.775559999892721,
+      "programs": 56,
+      "rel_err": NaN
+    },
+    "32": {
+      "ms": 7.58267999990494,
+      "programs": 28,
+      "rel_err": NaN
+    },
+    "64": {
+      "ms": 9.59575999986555,
+      "programs": 14,
+      "rel_err": NaN
+    },
+    "verdict": "BV=16 is already optimal (best alternative 1.00x)"
+  }
+}

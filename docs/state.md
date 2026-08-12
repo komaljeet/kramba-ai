@@ -17,7 +17,7 @@
     --code-corpus data_cache/code_corpus/stack_code.txt --fim
     --tokenizer data_cache/tokenizer_32k_fim
     --arch hvn-hybrid --attn-layers 4,12 --attn-window 4096
-    --d-model 896 --num-layers 16 --n-heads 14
+    --d-model 896 --num-layers 16 --n-heads 28
     --seq-len 4096 --batch-size 1 --grad-accum 8
     --grad-checkpoint --no-fast --precision bf16 --tf32 --triton-scan --megakernel-scan
     --max-steps 10000 --checkpoint-dir checkpoints/code_157m
@@ -27,12 +27,23 @@
 | model | **157,494,343** params, **129M body**, tied embeddings, ternary |
 | corpus | **3,830,663,537 tokens** — the full 11.2 GB Stack extract, 13 languages, FIM rate 0.5 |
 | shape | 32,768 tokens/step (seq 4096 x batch 1 x accum 8) |
-| speed | **8.66 s/step = 3,767 tok/s**, GPU 98%, peak ~5.1 GiB of 6.14 |
-| plan | 10,000 steps = 328M tokens ~ 24 h (8.6% of the corpus) |
-| logs | `logs/code_157m_pretrain.out`, CSV `checkpoints/code_157m/training_log.csv` |
+| speed | **7.12 s/step = 4,600 tok/s** (28 heads, +20% vs 14), GPU 98-100%, peak 4.3 GiB of 6.14 |
+| plan | 10,000 steps = 328M tokens ~ **20 h** (8.6% of the corpus) |
+| logs | `logs/code_157m_pretrain.out`, CSV `checkpoints/code_157m_h28/training_log.csv` |
 | resume | **automatic** — `find_latest_checkpoint()` picks up the newest .pt; re-run the same command |
 
-Loss trajectory (healthy): step 50 **9.098** (ppl 8,934) -> 200 **5.157** (174) -> 500 **3.942**
+
+**Head count changed to 28 mid-session (#159).** d_head drops 64 → 32, which halves the
+recurrent state *per head* — a real capacity change to the mechanism this architecture is built
+on. The quality A/B was started and stopped after one arm, so **this is unmeasured**; the loss
+curve against the preserved 14-head run is the check. At step 50: 14 heads **9.098**, 28 heads
+**9.023**. The 14-head run (1,100 steps, loss 2.329, ppl 10.27) is kept at
+`checkpoints/code_157m_h14_step1100/` precisely so the curves can be compared.
+
+The definitive quality answer is the FIM gate on the finished model, not an 800-step A/B — early
+training is the regime where capacity limits do *not* show up.
+
+Loss trajectory (14-head reference run): step 50 **9.098** (ppl 8,934) -> 200 **5.157** (174) -> 500 **3.942**
 (51.5) -> 600 **3.503** (33.2).
 
 ### Three bugs fixed to get here — all of them silent
@@ -51,75 +62,35 @@ Loss trajectory (healthy): step 50 **9.098** (ppl 8,934) -> 200 **5.157** (174) 
    `data_cache/tokenizer_32k_fim` and `data_cache	okenizer_32k_fim` read as different
    tokenizers, rejecting a valid cache.
 
-### ⚠️ CORRECTED — `torch.compile` is a NET LOSS here, measured in the real loop (#158, 2026-08-12)
+### `torch.compile` is a NET LOSS on this architecture — settled (#158)
 
-**The +18% below was wrong.** It came from a 4-step, 1-micro-batch microbenchmark — a shape
-training never runs. Measured in the actual loop (seq 4096, grad_accum 8, `--grad-checkpoint`):
+Measured in the real training loop (seq 4096, grad_accum 8, `--grad-checkpoint`):
 
 | config | s/step | tok/s | GPU |
 |---|---:|---:|---:|
 | **eager + Triton scan + megakernel** | **8.66** | **3,784** | **98%** |
 | per-block compile + those kernels | 20.72 | 1,581 | 35% |
 | per-block compile, kernels OFF | 21.42 | 1,530 | 36% |
+| whole-model compile | — | — | `InductorError: MemoryError` after 40+ min |
 
-**2.4× slower**, and turning the fused kernels off does not help — so it is *not* the
-graph-break interaction #129 documented, it is compile itself on this architecture.
+**2.4× slower**, and disabling the fused kernels does not help — so it is not the graph-break
+interaction #129 documented, it is compile itself here. GPU utilisation tells the story: **36%
+mean, 96% max** — it bursts to full then stalls, a gap *between* kernels rather than slow
+kernels. VRAM was 4,394 MiB of 6,140, so nothing spilled.
 
-**The GPU signature is the tell: 36% mean, 96% max.** It bursts to full then stalls, which is a
-gap *between* kernels rather than slow kernels. VRAM was 4,394 MiB of 6,140 — nothing offloaded,
-nothing spilled. Unverified hypothesis: recomputation under `--grad-checkpoint` forces a sync per
-checkpointed segment — 16 blocks × 8 micro-batches = 128 stalls per step, invisible at 1
-micro-batch and dominant at 8.
+Whole-model compile is separately impossible at this depth: Inductor's `compute_ancestors` keeps
+an ancestor set for every node alive at once — **O(N²)** in graph nodes — and MemoryErrors at 16
+layers (three reproductions, seq 4096 and 2048, 6.9–9 GB free, ~24 GB of commit headroom
+remaining). Per-block compile *works*; it is simply not worth using.
 
-**This is the FOURTH independent time compile has lost on this project**: #129 (megakernel breaks
-fusion, 2 graph breaks), state.md:558 (`--block-coordinate` conflict, 6.73 vs 4.41 s/step at
-355M), the Inductor `MemoryError` at 16 layers, and now this. `--fast` keeps bf16 + TF32 + Triton
-scan + megakernel and **skips `torch.compile`**.
+**Fourth independent loss for compile here:** #129 (megakernel breaks fusion, 2 graph breaks),
+`state.md:558` (`--block-coordinate` conflict, 6.73 vs 4.41 s/step at 355M), the Inductor OOM,
+and this. `--fast` keeps bf16 + TF32 + Triton scan + megakernel and **skips `torch.compile`**.
 
-**What still stands from the section below:** whole-model compile is genuinely impossible at this
-depth (`compute_ancestors` is O(N²), three reproductions). Per-block compile *works* — it just
-isn't worth using.
-
-### `torch.compile` works — but ONLY per-block (Issue #158)
-
-**Whole-model compile is dead at this depth; per-block is worth +18%.** See
-[training.md](training.md) § "COMPILE THE BLOCKS, NOT THE MODEL" for the full finding.
-
-| | s/step | vs eager |
-|---|---:|---:|
-| eager | 1.28 | — |
-| **per-block** | **1.09** | **1.18×** |
-| whole-model | — | `InductorError: MemoryError` after 40+ min |
-
-Inductor's `compute_ancestors` keeps an ancestor set for every node alive at once — **O(N²)** in
-graph nodes — and gradient checkpointing adds the recomputation graph on top. 16 graphs of N/16
-nodes cost N²/16 instead. Wired into `build_model_and_config`, so `--fast` now compiles blocks
-individually.
-
-**This was nearly dismissed on a bad number.** A cross-harness comparison suggested ~1%; the
-maintainer refused it (*"1% on a 6B model is huge"*) and it turned out to be 18% — ~1.7 days on
-a 9.5-day run. The original claim below is left for the record.
-
-#### (superseded) `torch.compile` cannot be used at this size on this machine
-
-`--fast` dies in **host RAM**, not VRAM:
-
-    torch._inductor.exc.InductorError: MemoryError
-      scheduler.py compute_ancestors: ancestors |= name_to_ancestors[dep_node_name]
-
-Reproduced at **both seq 4096 and seq 2048**, so it scales with layer count and checkpointed
-recomputation, not sequence length. The 12-layer 83M compiles fine; 16 layers with
-`--grad-checkpoint` does not, on 15.3 GB of system RAM. Two caveats worth testing before
-concluding it is impossible: a browser was resident both times, and this is a *host* memory
-limit, so a rented Linux box with 100+ GB would likely compile fine.
-
-**Losing compile costs little here.** `--no-fast` with bf16 + TF32 + Triton scan + megakernel
-runs at **3,767 tok/s** against a compiled benchmark's 3,808 — the fused scan already does what
-Inductor would. **A/B pending** (see below); the 1% figure is a cross-harness comparison and is
-not trustworthy.
-
-**Note the correct incantation:** bare `--no-fast` reverts to **fp32** and measured **74.6
-s/step**. The pieces must be re-added by hand, exactly as `docs/training.md` says.
+> **A correction on the record.** A 4-step, 1-micro-batch microbenchmark said per-block compile
+> was **+18%** and it was written into four documents on that basis. The real loop inverted it.
+> A number from a different harness is not a measurement of this one — the rule this repo already
+> had, broken within an hour of writing it down.
 
 ### Why it is ~4x slower per step than the 83M, and why that is correct
 
@@ -161,6 +132,61 @@ problems executed in a sandbox); this gate does not duplicate it.
 4. **Decide the run length.** 10,000 steps is a de-risking pass. A full pass over 3.83B tokens is
    ~114,000 steps, **~11.5 days**, and at 20 tokens/param 3.83B supports ~190M params — so 157M
    is **data-rich, not starved**.
+
+## The speed search, closed: twelve levers, one survivor (2026-08-12)
+
+**One line: `--n-heads 28` is worth +20% and is now running. Everything else measured neutral or
+negative, and the GPU is at 98-100% doing irreducible arithmetic.**
+
+All measured at the REAL training shape (157M, seq 4096, grad_accum 8, grad-checkpoint on),
+because a microbenchmark misled this session twice.
+
+| lever | result | why |
+|---|---|---|
+| **`--n-heads` 14 → 28** | ✅ **+20%** (8.63 → 7.12 s/step) | 28 programs instead of 14 on 20 SMs; VRAM +24 MiB, params +176K |
+| `--n-heads` 56 | ❌ +2.6% | curve flattens; would halve head state again for nothing |
+| `torch.compile` | ❌ 2.4× slower | see the compile entry above |
+| Triton `BV` block size | ❌ 16 already optimal | clean U-curve: BV=1 is 0.31×, BV=64 is 0.60× |
+| chunk-parallel scan (already written, `chunked_scan_forward`) | ❌ **4× slower** | 32 serial steps instead of 4,096, but ~2.6× the arithmetic |
+| fused ternary quantizer (#154) | ⚠️ **+1.9%** | 4.14× on the kernel, ~nothing in the loop |
+| host-code rewrite (Rust/C++) | ❌ nothing to rewrite | the host is *blocked*, not busy |
+
+### Why the parallel scan loses, which keeps being rediscovered
+
+`chunked_scan_forward` cuts serial depth 128× (4,096 token-steps → 32 chunk-steps) and is **4×
+slower**. Each chunk pays a `[128,128]` Gram matrix, a triangular solve, and several matmuls —
+roughly **2.6× the total arithmetic** of the sequential version. That trade wins when per-step
+work is large; at `d_head=64` each sequential step is trivial, so the fix-up dominates.
+
+**The rule:** parallelising a scan pays when the per-step work is large relative to the fix-up
+cost. It would flip at much larger head dimensions — which is why #112 saw head effects at 355M
+that do not reproduce here. Third independent time this has been measured (#95, #96, now).
+
+### Where the time actually goes (`scripts/profile_cpu_hotspots.py`)
+
+| | share of an 8.58 s step |
+|---|---|
+| `cudaStreamSynchronize` — host **blocked waiting on the GPU** | 5.84 s (68%) |
+| `cudaLaunchKernel` — 60,275 launches | 0.61 s (7%) |
+| `ternary_quantize_ste` — pure Python, 1,760 calls | 0.395 s (4.6%) |
+
+**The CPU is idle, not slow.** That is why rewriting host code in a compiled language buys
+nothing, and why fusing the ternary quantizer — genuinely 4.14× faster in isolation — moved the
+loop only **1.9%**: it removed host work that was overlapping with GPU work anyway.
+
+`HVN_FUSED_TERNARY=1` enables it (`hvn/edge/ternary_fused.py`, 13 parity tests). **Default off**:
+1.9% is not worth changing the training-path quantizer without a reason.
+
+### Two thresholds of my own that were wrong
+
+Recorded because both would have produced a false verdict:
+
+- The fused-quantizer A/B **rejected on a loss difference of 3.08e-03** — but two runs of the
+  *same* eager arm differ by **2.58e-03**. The threshold was tighter than the harness's own
+  reproducibility, so it would have rejected an identical implementation.
+- The parity test bounded **absolute** fp32 drift at 1e-6. Drift is relative: at scale 7.82 a
+  1.2e-05 relative difference is 9.2e-05 absolute, so the bound failed on large weights for no
+  reason connected to correctness.
 
 ## RETEST AT SCALE — levers measured null at 83M that should improve with width (2026-08-11)
 

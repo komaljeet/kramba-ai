@@ -1,0 +1,129 @@
+{
+  "issue": 162,
+  "config": {
+    "d_model": 896,
+    "num_layers": 16,
+    "n_heads": 14,
+    "seq_len": 4096,
+    "grad_accum": 8,
+    "vocab_size": 32003,
+    "steps": 2,
+    "top": 18,
+    "out": "results\\cpu_hotspots\\profile.json"
+  },
+  "step_wall_s": 8.579905249998774,
+  "host_cpu_total_s": 8.488741099999977,
+  "host_share_pct": 98.93746903558393,
+  "top_ops": [
+    {
+      "op": "cudaStreamSynchronize",
+      "self_cpu_s": 5.840555599999996,
+      "device_s": 0.0,
+      "calls": 120
+    },
+    {
+      "op": "cudaLaunchKernel",
+      "self_cpu_s": 0.6086298000001132,
+      "device_s": 0.0,
+      "calls": 60275
+    },
+    {
+      "op": "Command Buffer Full",
+      "self_cpu_s": 0.567427000000004,
+      "device_s": 0.0009888259999985749,
+      "calls": 59
+    },
+    {
+      "op": "NativeDropoutBackward0",
+      "self_cpu_s": 0.15251740000000133,
+      "device_s": 0.0,
+      "calls": 384
+    },
+    {
+      "op": "aten::mm",
+      "self_cpu_s": 0.13276429999994044,
+      "device_s": 1.4508975279999572,
+      "calls": 5990
+    },
+    {
+      "op": "aten::mul",
+      "self_cpu_s": 0.07846260000004943,
+      "device_s": 0.5753894049999664,
+      "calls": 7863
+    },
+    {
+      "op": "aten::copy_",
+      "self_cpu_s": 0.06210800000001864,
+      "device_s": 0.7858083700000178,
+      "calls": 13484
+    },
+    {
+      "op": "aten::div",
+      "self_cpu_s": 0.049641099999961996,
+      "device_s": 0.18751020499997556,
+      "calls": 3666
+    },
+    {
+      "op": "aten::empty_strided",
+      "self_cpu_s": 0.048505100000025184,
+      "device_s": 0.0,
+      "calls": 13380
+    },
+    {
+      "op": "aten::_to_copy",
+      "self_cpu_s": 0.04635369999990237,
+      "device_s": 0.0,
+      "calls": 10940
+    },
+    {
+      "op": "aten::clamp",
+      "self_cpu_s": 0.04017080000000981,
+      "device_s": 0.017272479999997998,
+      "calls": 3521
+    },
+    {
+      "op": "aten::mean",
+      "self_cpu_s": 0.03340629999999111,
+      "device_s": 0.03885778500001057,
+      "calls": 2240
+    },
+    {
+      "op": "cudaMemsetAsync",
+      "self_cpu_s": 0.03318199999999417,
+      "device_s": 0.0,
+      "calls": 3852
+    },
+    {
+      "op": "aten::add",
+      "self_cpu_s": 0.03144459999993054,
+      "device_s": 0.10273852500002316,
+      "calls": 4329
+    },
+    {
+      "op": "Optimizer.step#Muon.step",
+      "self_cpu_s": 0.02640000000009127,
+      "device_s": 0.0,
+      "calls": 1
+    },
+    {
+      "op": "_MegaScan",
+      "self_cpu_s": 0.025334899999977043,
+      "device_s": 1.2967013340000089,
+      "calls": 224
+    },
+    {
+      "op": "aten::add_",
+      "self_cpu_s": 0.02488749999998243,
+      "device_s": 0.29332753900001873,
+      "calls": 4410
+    },
+    {
+      "op": "_MegaScanBackward",
+      "self_cpu_s": 0.024236300000002868,
+      "device_s": 2.2314621540000017,
+      "calls": 112
+    }
+  ],
+  "cprofile_text": "         579568 function calls (559075 primitive calls) in 8.589 seconds\n\n   Ordered by: internal time\n   List reduced from 365 to 18 due to restriction <18>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n      112    6.058    0.054    6.058    0.054 {built-in method torch.tensor}\n     1760    0.395    0.000    0.655    0.000 C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\hvn\\edge\\ternary.py:26(ternary_quantize_ste)\n        8    0.371    0.046    7.073    0.884 {method 'run_backward' of 'torch._C._EngineBase' objects}\n     2917    0.322    0.000    0.322    0.000 {method 'to' of 'torch._C.TensorBase' objects}\n     2216    0.202    0.000    0.240    0.000 {built-in method torch._C._nn.linear}\n      138    0.163    0.001    0.182    0.001 C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\hvn\\optimizers.py:54(zeropower_via_newtonschulz5)\n      768    0.102    0.000    0.109    0.000 {built-in method torch.dropout}\n     2240    0.067    0.000    0.067    0.000 {method 'mean' of 'torch._C.TensorBase' objects}\n      563    0.056    0.000    0.056    0.000 {method 'mul_' of 'torch._C.TensorBase' objects}\n     1761    0.044    0.000    0.056    0.000 {built-in method torch.clamp}\n     1760    0.042    0.000    0.042    0.000 {built-in method torch.round}\n     1760    0.040    0.000    0.040    0.000 {method 'abs' of 'torch._C.TensorBase' objects}\n     1760    0.034    0.000    0.034    0.000 {method 'clamp' of 'torch._C.TensorBase' objects}\n      587    0.028    0.000    0.036    0.000 {built-in method torch._C._linalg.linalg_vector_norm}\n     9440    0.026    0.000    0.080    0.000 C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\.venv\\Lib\\site-packages\\torch\\utils\\checkpoint.py:1139(pack_hook)\n     6800    0.025    0.000    0.614    0.000 C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\.venv\\Lib\\site-packages\\torch\\utils\\checkpoint.py:1149(unpack_hook)\n     1232    0.025    0.000    0.025    0.000 {method 'contiguous' of 'torch._C.TensorBase' objects}\n      224    0.024    0.000    1.307    0.006 C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\hvn\\core\\deltanet.py:613(forward)\n\n\n",
+  "verdict": "WORTH INVESTIGATING: host code is 98.9% of the step. Identify the top pure-Python entries above; those are real rewrite candidates."
+}
