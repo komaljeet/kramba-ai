@@ -1,0 +1,36 @@
+{
+  "issue": 154,
+  "config": {
+    "steps": 6,
+    "rounds": 2,
+    "grad_accum": 8,
+    "seq_len": 4096,
+    "repo": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai",
+    "out": "results\\fused_ternary\\ab.json"
+  },
+  "samples": {
+    "eager": [
+      7.118888300003164,
+      7.117385400000785
+    ],
+    "fused": [
+      6.984909899998456,
+      6.984177800000907
+    ]
+  },
+  "losses": {
+    "eager": [
+      10.555018424987793,
+      10.552436828613281
+    ],
+    "fused": [
+      10.550567626953125,
+      10.550735473632812
+    ]
+  },
+  "eager_s": 7.118136850001974,
+  "fused_s": 6.984543849999682,
+  "gain_pct": 1.9126946994870497,
+  "loss_diff": 0.0030760765075683594,
+  "verdict": "REJECT: the loss differs by 3.08e-03 between arms. A quantizer change must not move the trajectory -- investigate before considering the +1.9% speed."
+}

@@ -18,9 +18,18 @@ the true gradient of ``round()`` is zero almost everywhere.
 
 from __future__ import annotations
 
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+#: Issue #154: route TernaryLinear through the fused Triton quantizer.
+#: Read at import so a run can enable it without a code change. DEFAULT OFF:
+#: measured at only +1.9% in the real training loop (7.118 -> 6.985 s/step),
+#: which is not worth changing the training-path quantizer for. See the note
+#: in `_dequantized`.
+_USE_FUSED_TERNARY = os.environ.get("HVN_FUSED_TERNARY", "0") == "1"
 
 
 #: ``group_size`` sentinel: one scale for the whole tensor (BitNet b1.58 absmean).
@@ -184,6 +193,21 @@ class TernaryLinear(nn.Module):
         if self._frozen_codes is not None:
             return dequantize_codes(self._frozen_codes, self._frozen_scale,
                                     self.group_size, dtype)
+        # Issue #154: an optional fused Triton path for the default per-tensor
+        # case. It replaces a six-op chain (abs/mean/clamp/div/round/clamp/mul)
+        # that cProfile measured at 0.395 s of an 8.58 s step -- it runs 1,760
+        # times per step (110 ternary layers x 8 micro-batches x 2 for the
+        # gradient-checkpoint recompute) -- and is 4.14x faster in isolation.
+        #
+        # In the REAL loop it is worth only +1.9%, because the step is GPU-bound:
+        # the host spends 68% of it blocked in cudaStreamSynchronize, so removing
+        # host work mostly removes waiting. Hence default OFF.
+        #
+        # Only the per-tensor path is fused; grouped scales (#146) keep the eager
+        # implementation rather than silently taking a different code path.
+        if _USE_FUSED_TERNARY and self.group_size == GROUP_PER_TENSOR:
+            from .ternary_fused import ternary_quantize_ste_fused
+            return ternary_quantize_ste_fused(self.weight).to(dtype)
         return ternary_quantize_ste(self.weight, group_size=self.group_size).to(dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

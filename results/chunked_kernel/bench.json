@@ -1,0 +1,48 @@
+{
+  "issue": 161,
+  "config": {
+    "chunks": [
+      64,
+      128,
+      256,
+      512
+    ],
+    "batch": 1,
+    "heads": 14,
+    "d_head": 64,
+    "seq_len": 4096,
+    "iters": 5,
+    "out": "results\\chunked_kernel\\bench.json"
+  },
+  "results": {
+    "sequential": {
+      "ms": 6.263760000001639,
+      "serial_steps": 4096
+    },
+    "chunk_64": {
+      "ms": 47.6582999999664,
+      "serial_steps": 64,
+      "rel_err": NaN,
+      "speedup": 0.13143062173862802
+    },
+    "chunk_128": {
+      "ms": 23.82004000028246,
+      "serial_steps": 32,
+      "rel_err": NaN,
+      "speedup": 0.2629617750401495
+    },
+    "chunk_256": {
+      "ms": 25.86351999998442,
+      "serial_steps": 16,
+      "rel_err": NaN,
+      "speedup": 0.2421851317997478
+    },
+    "chunk_512": {
+      "ms": 38.72245999991719,
+      "serial_steps": 8,
+      "rel_err": NaN,
+      "speedup": 0.16176038402557674
+    }
+  },
+  "verdict": "every chunked variant was wrong or failed -- nothing to build on"
+}

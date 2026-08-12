@@ -788,7 +788,7 @@ scan + megakernel and **skips `torch.compile`**.
 depth (`compute_ancestors` is O(N²), three reproductions). Per-block compile *works* — it just
 isn't worth using.
 
-### ⚠️ COMPILE THE BLOCKS, NOT THE MODEL — whole-model `torch.compile` does not scale (Issue #158, 2026-08-12)
+### (superseded — see the correction above) Why whole-model `torch.compile` cannot work at this depth (#158)
 
 **Read this before enabling `--fast` on anything deeper than ~12 layers, and before renting a
 box to train something larger.**
