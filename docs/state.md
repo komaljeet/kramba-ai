@@ -5,6 +5,114 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## LIVE RUN — 157M code model, FIM, in progress (2026-08-12)
+
+> **Read this first if you are picking the project up.** A multi-day training run is underway
+> and this is its state. Everything below was established in the session of 2026-08-11/12.
+
+### What is running
+
+`train_edge_conversational.py`, detached, auto-resumes from `checkpoints/code_157m/`:
+
+    --code-corpus data_cache/code_corpus/stack_code.txt --fim
+    --tokenizer data_cache/tokenizer_32k_fim
+    --arch hvn-hybrid --attn-layers 4,12 --attn-window 4096
+    --d-model 896 --num-layers 16 --n-heads 14
+    --seq-len 4096 --batch-size 1 --grad-accum 8
+    --grad-checkpoint --no-fast --precision bf16 --tf32 --triton-scan --megakernel-scan
+    --max-steps 10000 --checkpoint-dir checkpoints/code_157m
+
+| | |
+|---|---|
+| model | **157,494,343** params, **129M body**, tied embeddings, ternary |
+| corpus | **3,830,663,537 tokens** — the full 11.2 GB Stack extract, 13 languages, FIM rate 0.5 |
+| shape | 32,768 tokens/step (seq 4096 x batch 1 x accum 8) |
+| speed | **8.66 s/step = 3,767 tok/s**, GPU 98%, peak ~5.1 GiB of 6.14 |
+| plan | 10,000 steps = 328M tokens ~ 24 h (8.6% of the corpus) |
+| logs | `logs/code_157m_pretrain.out`, CSV `checkpoints/code_157m/training_log.csv` |
+| resume | **automatic** — `find_latest_checkpoint()` picks up the newest .pt; re-run the same command |
+
+Loss trajectory (healthy): step 50 **9.098** (ppl 8,934) -> 200 **5.157** (174) -> 500 **3.942**
+(51.5) -> 600 **3.503** (33.2).
+
+### Three bugs fixed to get here — all of them silent
+
+1. **`--fim` could never have worked.** `vocab_size = tokenizer.vocab_size` EXCLUDES added
+   tokens, so the model was built with 32,000 rows while FIM's sentinels occupy 32000-32002.
+   Every sentinel indexed out of bounds -> bare `CUDA error: device-side assert triggered`
+   inside the pre-training audit. Now `len(tokenizer)`; identical for GPT-2 (50257).
+2. **The tokenized cache ignored which corpus produced it.** `code_bin = _bin("code")` keys on
+   the literal string "code", so pointing `--code-corpus` at a different file silently reused
+   whatever was cached first. Observed: a run announced `stack_code.txt (11.20 GB)` and loaded a
+   **121,122,231-token** cache built the previous day -- 4% of the intended data, and at the
+   planned step count **2.7 passes over it** (a memorisation regime). The signature now carries
+   source name + size + mtime and refuses loudly.
+3. **The tokenizer-identity guard compared raw paths**, so a backslash made
+   `data_cache/tokenizer_32k_fim` and `data_cache	okenizer_32k_fim` read as different
+   tokenizers, rejecting a valid cache.
+
+### `torch.compile` cannot be used at this size on this machine
+
+`--fast` dies in **host RAM**, not VRAM:
+
+    torch._inductor.exc.InductorError: MemoryError
+      scheduler.py compute_ancestors: ancestors |= name_to_ancestors[dep_node_name]
+
+Reproduced at **both seq 4096 and seq 2048**, so it scales with layer count and checkpointed
+recomputation, not sequence length. The 12-layer 83M compiles fine; 16 layers with
+`--grad-checkpoint` does not, on 15.3 GB of system RAM. Two caveats worth testing before
+concluding it is impossible: a browser was resident both times, and this is a *host* memory
+limit, so a rented Linux box with 100+ GB would likely compile fine.
+
+**Losing compile costs little here.** `--no-fast` with bf16 + TF32 + Triton scan + megakernel
+runs at **3,767 tok/s** against a compiled benchmark's 3,808 — the fused scan already does what
+Inductor would. **A/B pending** (see below); the 1% figure is a cross-harness comparison and is
+not trustworthy.
+
+**Note the correct incantation:** bare `--no-fast` reverts to **fp32** and measured **74.6
+s/step**. The pieces must be re-added by hand, exactly as `docs/training.md` says.
+
+### Why it is ~4x slower per step than the 83M, and why that is correct
+
+| | 83M | this |
+|---|---|---|
+| d_model x layers | 512 x 12 | 896 x 16 |
+| `layers x d^2` | 3.15M | **12.85M** (4.08x) |
+| tokens/step | 16,384 | 32,768 (2x) |
+| s/step | 1.36 | 8.66 (6.4x) |
+| tok/s | 12,047 | 3,767 (**3.2x slower**) |
+
+**4.08x the compute per token at 3.2x the time** — better than proportional, because larger
+matmuls use the GPU more efficiently. Parameter count is the wrong metric: #139 measured the
+83M as **62% vocabulary**, so its body was ~31M against this model's 129M — the same 4.1x from
+an independent direction.
+
+### The gate exists and is control-validated
+
+`eval/fim_completion_gate.py`: held-out files from the corpus TAIL, a whole-line span masked,
+scored on `exact` and `valid`. Controls measured on 100 cases:
+
+    floor (empty completion)   exact   0.0%   valid  47.0%
+    floor (copy previous line) exact   0.0%   valid  38.0%
+    known-answer (true span)   exact 100.0%   valid 100.0%
+
+**An empty completion is "valid" 47% of the time**, so validity alone means nothing — the bar is
+exact >> 0 with valid >> 47%. `eval/coding.py` already provides the behavioural tier (HumanEval
+problems executed in a sandbox); this gate does not duplicate it.
+
+### Immediate next steps
+
+1. **Stop at a checkpoint boundary.** `scripts/stop_after_checkpoint.ps1` waits for
+   `edge_conversational_step<N>.pt` to appear AND stop growing, then kills every python process.
+   Killing between saves loses up to 500 steps (~72 min).
+2. **Windows update + restart** (pending as of this writing).
+3. **On a clean boot, A/B `torch.compile`** — both arms one harness, same shape, Triton scan and
+   megakernel in BOTH, maximum free RAM. If it wins, resume with `--fast`; resume is NOT lossy
+   (`_save_resume_state` persists optimizer state and `build_cosine_scheduler` replays the LR).
+4. **Decide the run length.** 10,000 steps is a de-risking pass. A full pass over 3.83B tokens is
+   ~114,000 steps, **~11.5 days**, and at 20 tokens/param 3.83B supports ~190M params — so 157M
+   is **data-rich, not starved**.
+
 ## RETEST AT SCALE — levers measured null at 83M that should improve with width (2026-08-11)
 
 > **Read this before concluding a lever is dead.** Every entry below was measured as *no gain* or

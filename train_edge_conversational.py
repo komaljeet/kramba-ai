@@ -585,12 +585,13 @@ def _tokenizer_signature(tokenizer) -> str:
     """
     name = getattr(tokenizer, "name_or_path", None) or type(tokenizer).__name__
     # Normalise path separators before comparing. `name_or_path` is a filesystem
-    # path for a local tokenizer, and on Windows the same directory arrives as
-    # both "data_cache/tokenizer_32k_fim" and "data_cache\tokenizer_32k_fim"
-    # depending on how it was typed. Comparing raw strings then rejects a valid
-    # cache -- observed refusing a 121M-token FIM tokenization whose ONLY
-    # difference was a backslash. The guard exists to catch a different
-    # vocabulary, not a different spelling of the same directory.
+    # path for a local tokenizer, and on Windows the same directory reaches this
+    # function as both "data_cache/tokenizer_32k_fim" and
+    # "data_cache\tokenizer_32k_fim" depending on how it was typed. Comparing the
+    # raw strings then rejects a perfectly valid cache -- observed refusing a
+    # 121M-token FIM tokenization whose ONLY difference was a backslash. The
+    # guard is meant to catch a different vocabulary, not a different way of
+    # spelling the same directory.
     name = str(name).replace("\\", "/").rstrip("/")
     size = getattr(tokenizer, "vocab_size", None)
     if size is None and hasattr(tokenizer, "get_vocab_size"):
@@ -704,7 +705,24 @@ def _tokenize_text_to_bin(
     # model, or worse, on ids that are merely WRONG rather than out of range.
     # A sidecar records the tokenizer's identity, and a mismatch refuses to
     # proceed rather than guessing which one is correct.
-    sig = _tokenizer_signature(tokenizer) + _fim_signature(fim)
+    # Issue #157: the signature must also identify the SOURCE CORPUS. The bin
+    # name comes from `_bin("code")` -- the literal string "code" -- so pointing
+    # --code-corpus at a different file reused whatever was cached first, in
+    # silence. Observed: a run launched against stack_code.txt (11.20 GB)
+    # announced that path and then loaded a 121,122,231-token cache built the
+    # previous day from a different file -- 4% of the intended data, which at
+    # the planned step count would have been 2.7 passes over it (a memorisation
+    # regime) rather than one pass over fresh tokens. The tokenizer guard below
+    # was already loud about the wrong VOCABULARY; nothing checked the wrong
+    # TEXT. Path plus size plus mtime is enough to catch a swapped or rebuilt
+    # corpus without hashing multiple GB on every start.
+    try:
+        _st = os.stat(text_path)
+        src_sig = (f"|src={os.path.basename(text_path)}"
+                   f":{_st.st_size}:{int(_st.st_mtime)}")
+    except OSError:
+        src_sig = f"|src={os.path.basename(text_path)}"
+    sig = _tokenizer_signature(tokenizer) + _fim_signature(fim) + src_sig
     sig_path = bin_path + ".tokenizer"
     if os.path.exists(bin_path) and os.path.getsize(bin_path) > 0:
         prev = None
@@ -712,11 +730,16 @@ def _tokenize_text_to_bin(
             with open(sig_path, encoding="utf-8") as fh:
                 prev = fh.read().strip()
         if prev is not None and prev != sig:
+            same_tok = prev.split("|src=")[0] == sig.split("|src=")[0]
+            what = ("a DIFFERENT SOURCE CORPUS" if same_tok
+                    else "a different tokenizer/FIM setting")
             raise RuntimeError(
-                f"{bin_path} was tokenized by {prev!r} but this run uses "
-                f"{sig!r}. Reusing it would train on ids from the wrong "
-                f"vocabulary, silently. Delete the .bin (and its .tokenizer "
-                f"sidecar) to re-tokenize, or switch back."
+                f"{bin_path} was built from {prev!r} but this run uses "
+                f"{sig!r} -- {what}. Reusing it would train on the wrong data "
+                f"silently: the run would announce your corpus and then consume "
+                f"whatever was cached first. Delete the .bin (and its "
+                f".tokenizer sidecar) to re-tokenize, or point at the corpus "
+                f"that produced the cache."
             )
         if prev is None:
             # Pre-#139 cache with no sidecar. It can only be GPT-2 — that is the
@@ -3196,11 +3219,11 @@ def main():
     # `len(tokenizer)`, NOT `tokenizer.vocab_size`. HuggingFace's `vocab_size`
     # deliberately EXCLUDES added special tokens, so a FIM tokenizer reports
     # 32000 while its three sentinels occupy ids 32000-32002. Sizing the
-    # embedding table from `vocab_size` builds a model three rows too small for
-    # the data it is about to train on, and the first FIM sentinel in the stream
-    # indexes out of bounds -- surfacing as a bare CUDA "device-side assert
-    # triggered" inside the pre-training audit, with no hint of the cause. This
-    # is why --fim had never completed a run.
+    # embedding table from `vocab_size` therefore builds a model three rows too
+    # small for the data it is about to be trained on, and the first FIM
+    # sentinel in the stream indexes out of bounds -- surfacing as a bare CUDA
+    # "device-side assert triggered" inside the pre-training audit, with no hint
+    # of the cause. This is why --fim had never completed a run.
     #
     # Correct for both cases: GPT-2 has no added tokens (vocab_size == len ==
     # 50257), so this changes nothing for every existing recipe.
