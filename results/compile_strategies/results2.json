@@ -1,0 +1,58 @@
+{
+  "issue": 158,
+  "config": {
+    "strategies": [
+      "per_block",
+      "per_block_low",
+      "low_threshold",
+      "no_epilogue"
+    ],
+    "seq_len": 4096,
+    "steps": 6,
+    "timeout": 2400,
+    "repo": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai",
+    "out": "results\\compile_strategies\\results2.json"
+  },
+  "results": {
+    "per_block": {
+      "strategy": "per_block",
+      "ok": true,
+      "first_step_s": 3.3281389999992825,
+      "steady_step_s": 1.0937121999995725,
+      "tokens_per_s": 3745.04371442652,
+      "peak_rss_mib": 0.0,
+      "peak_vram_mib": 3808.0,
+      "process_wall_s": 14.462566600000173
+    },
+    "per_block_low": {
+      "strategy": "per_block_low",
+      "ok": true,
+      "first_step_s": 22.626860299999862,
+      "steady_step_s": 1.0808427000001757,
+      "tokens_per_s": 3789.6356241285935,
+      "peak_rss_mib": 0.0,
+      "peak_vram_mib": 3826.0,
+      "process_wall_s": 33.58745920000001
+    },
+    "low_threshold": {
+      "strategy": "low_threshold",
+      "ok": true,
+      "first_step_s": 3.2027545000000828,
+      "steady_step_s": 1.277006700000129,
+      "tokens_per_s": 3207.5007907159656,
+      "peak_rss_mib": 0.0,
+      "peak_vram_mib": 4116.0,
+      "process_wall_s": 14.594248699999298
+    },
+    "no_epilogue": {
+      "strategy": "no_epilogue",
+      "ok": true,
+      "first_step_s": 3.1727688000000853,
+      "steady_step_s": 1.2794896999994307,
+      "tokens_per_s": 3201.2762588099163,
+      "peak_rss_mib": 0.0,
+      "peak_vram_mib": 4116.0,
+      "process_wall_s": 14.614618399999927
+    }
+  }
+}

@@ -1643,9 +1643,49 @@ def apply_fast_stack(model, triton_scan: bool = True,
               "(the sequential forward must already be the scan).")
 
     if compile_model:
-        if verbose:
-            print("\n  Compiling model with torch.compile (first steps will be slow)...")
-        model = torch.compile(model)
+        # Issue #158: compile each BLOCK, not the whole model.
+        #
+        # Whole-model compile does not scale. Inductor's `compute_ancestors`
+        # (scheduler.py) keeps a complete ancestor set for EVERY node alive at
+        # once, so its memory is O(N^2) in graph nodes. At 16 layers with
+        # gradient checkpointing that exceeded 15.3 GB of system RAM and raised
+        # `InductorError: MemoryError` after 40+ minutes -- reproduced three
+        # times, at seq 4096 AND 2048, with a browser closed and on a fresh
+        # boot with 6.9 GB free. It is not memory pressure: it failed with ~24
+        # GB of commit headroom left.
+        #
+        # 16 graphs of N/16 nodes cost 16*(N/16)^2 = N^2/16 -- a 16x reduction
+        # -- while keeping nearly all the benefit, because fusion opportunities
+        # are WITHIN a block (norm -> projection -> gate -> scan -> FFN), not
+        # across block boundaries. Measured on the 157M config at seq 4096:
+        #
+        #     eager            1.28 s/step
+        #     per-block        1.09 s/step   (1.18x, compile 26s once, 3s cached)
+        #     whole-model      MemoryError after 40+ min
+        #
+        # Tuning knobs were tried and do nothing: realize_opcount_threshold=8
+        # and epilogue_fusion=False both land at exactly eager's 1.28. Only
+        # splitting the graph works.
+        #
+        # The model keeps its own forward(), so grad_checkpoint, block_plan and
+        # the doc_ids path are untouched -- only the blocks become
+        # OptimizedModules. `_save_edge_checkpoint` unwraps `_orig_mod`, and the
+        # blocks are reached through `model.blocks`, so checkpoints are
+        # unaffected.
+        blocks = getattr(model, "blocks", None)
+        if blocks is not None and len(blocks) > 0:
+            for i in range(len(blocks)):
+                blocks[i] = torch.compile(blocks[i])
+            if verbose:
+                print(f"\n  Compiled {len(blocks)} blocks individually (#158) -- "
+                      f"whole-model compile OOMs Inductor at this depth.")
+        else:
+            # shared_weights=True has no `blocks` list; fall back rather than
+            # silently skipping compile.
+            if verbose:
+                print("\n  Compiling model with torch.compile (no block list to "
+                      "split -- watch for InductorError at depth)...")
+            model = torch.compile(model)
     return model
 
 

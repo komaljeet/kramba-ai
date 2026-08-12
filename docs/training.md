@@ -759,6 +759,52 @@ a one-line banner listing what it turned on (`[A]`/`[B]` tags). **Measured:** st
 **1.58× faster** (5.53 → 3.51 s/epoch, d=256/3L/seq128/B32); Category-A primitives proven
 exact (`tests/test_issue50.py`). Explicit flags always win.
 
+### ⚠️ COMPILE THE BLOCKS, NOT THE MODEL — whole-model `torch.compile` does not scale (Issue #158, 2026-08-12)
+
+**Read this before enabling `--fast` on anything deeper than ~12 layers, and before renting a
+box to train something larger.**
+
+`torch.compile(model)` on the whole 157M hybrid (16 layers, `--grad-checkpoint`) **fails**, every
+time, with:
+
+    torch._inductor.exc.InductorError: MemoryError
+      scheduler.py compute_ancestors: ancestors |= name_to_ancestors[dep_node_name]
+
+Reproduced **three times**: seq 4096 and seq 2048, with a browser open and on a fresh boot with
+6.9 GB free. It is **not memory pressure** — it failed with ~24 GB of commit headroom left
+(15.3 GB physical + 20 GB pagefile, ~10.8 GB committed).
+
+**The mechanism, from the source.** `Scheduler.compute_ancestors` builds `name_to_ancestors`, a
+complete ancestor set for **every node, all alive simultaneously**. That is **O(N²)** in graph
+nodes. Gradient checkpointing makes it worse by adding the recomputation graph. At 16 layers, N²
+strings do not fit in RAM.
+
+**The fix: compile each block separately.** 16 graphs of N/16 nodes cost `16 × (N/16)² = N²/16`
+— a **16× memory reduction** — while keeping nearly all the benefit, because fusion opportunities
+live *within* a block (norm → projection → gate → scan → FFN), not across block boundaries.
+
+| strategy | s/step | vs eager | compile |
+|---|---:|---:|---|
+| eager | 1.28 | — | — |
+| **per-block** | **1.09** | **1.18×** | 26 s first, **3 s cached** |
+| whole-model | — | — | **MemoryError after 40+ min** |
+
+**The tuning knobs do nothing.** `realize_opcount_threshold=8` and `epilogue_fusion=False` both
+land at *exactly* eager's 1.28 s — they do not compile anything useful. Only splitting the graph
+works. (`scripts/test_compile_strategies.py` runs each strategy in a fresh process, because a
+failed Inductor compile leaves cache state that flatters the next attempt.)
+
+**Why this matters more at scale, not less.** The failure is quadratic in depth, so a 24-layer or
+6B model would fail *harder*. Any plan to rent a multi-GPU box and enable `--fast` needs this —
+whole-model compile would burn an hour per launch and then die. Per-layer compilation is what
+large-model training frameworks do, for exactly this reason.
+
+**A correction worth recording.** This was nearly dismissed: an early cross-harness comparison
+suggested compile was worth ~1%, and that number was used to argue the whole question was not
+worth chasing. The maintainer rejected it — *"1% on a 6B model is huge"* — and insisted it be made
+to work. Measured properly, it is **18%**, which on a 9.5-day run is **~1.7 days**. The lesson is
+the repo's own rule: a number from a different harness is not a measurement of this one.
+
 ### `--fast` — the EdgeHVN equivalent, and what every real run here actually used
 
 `train.py`'s `--full` has a counterpart in `train_edge_conversational.py`: **`--fast`**, which
