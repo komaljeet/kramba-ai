@@ -1,0 +1,14 @@
+{
+  "issue": 157,
+  "corpus": "data_cache/code_corpus/stack_code.txt",
+  "corpus_bytes": 12028509871,
+  "slice_bytes": 211368398,
+  "slice_tokens": 65978404,
+  "seconds": 29.444736899997224,
+  "mb_per_s": 6.845930162566784,
+  "tokens_per_s": 2240753.728725157,
+  "tokens_per_byte": 0.31214885774930273,
+  "projected_full_tokens": 3754685616.6588626,
+  "projected_hours": 0.4654541967193624,
+  "verdict": "28 min -- small enough to run inline."
+}
