@@ -1,0 +1,10 @@
+﻿REAL shape: seq 4096 x accum 8 = 32,768 tokens/step, grad-checkpoint ON
+production today = eager_full at 8.66 s/step
+
+=== compiled_none ===
+  21.42 s/step | 1,530 tok/s | GPU 36% (max 96%) | warmup 96s | VRAM 4394M
+
+arm                  s/step     tok/s   GPU%    VRAM
+compiled_none         21.42     1,530     36   4394M
+
+wrote results\compile_diagnosis\compiled_none.json

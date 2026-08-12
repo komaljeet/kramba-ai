@@ -57,10 +57,11 @@ Model policy (strict):
 
 ## Hard-won gotchas that cost hours (read before touching training)
 
-- **Compile the BLOCKS, not the model.** `torch.compile(model)` raises
-  `InductorError: MemoryError` at 16 layers — `compute_ancestors` is O(N²) in graph nodes.
-  Compile each block: +18%, and it is already wired into `build_model_and_config`.
-  Full finding: docs/training.md § "COMPILE THE BLOCKS, NOT THE MODEL" (#158).
+- **Do NOT use `torch.compile` on this architecture.** Measured in the real training loop it is
+  **2.4x SLOWER** (20.72 vs 8.66 s/step, GPU 35% vs 98%), and disabling the fused kernels does not
+  help. Whole-model compile additionally MemoryErrors at 16 layers (`compute_ancestors` is O(N^2)).
+  `--fast` keeps bf16 + TF32 + Triton scan + megakernel and skips compile. Fourth time compile has
+  lost here -- see docs/training.md (#158).
 - **`tokenizer.vocab_size` EXCLUDES added tokens.** Use `len(tokenizer)`. Sizing an embedding
   table from `vocab_size` with a FIM tokenizer builds it 3 rows short and the sentinels index
   out of bounds — a bare CUDA device-side assert with no hint of the cause (#155).

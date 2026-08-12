@@ -1,0 +1,26 @@
+{
+  "issue": 158,
+  "config": {
+    "arms": [
+      "compiled_none"
+    ],
+    "seq_len": 4096,
+    "accum": 8,
+    "steps": 3,
+    "timeout": 5400,
+    "repo": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai",
+    "out": "results\\compile_diagnosis\\compiled_none.json"
+  },
+  "results": {
+    "compiled_none": {
+      "arm": "compiled_none",
+      "ok": true,
+      "warmup_s": 96.05967579999924,
+      "steady_s": 21.418244500000583,
+      "tokens_per_s": 1529.9106329652325,
+      "gpu_util_mean": 36.293103448275865,
+      "gpu_util_max": 96,
+      "peak_vram_mib": 4394.0
+    }
+  }
+}

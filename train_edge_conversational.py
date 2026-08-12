@@ -1643,49 +1643,38 @@ def apply_fast_stack(model, triton_scan: bool = True,
               "(the sequential forward must already be the scan).")
 
     if compile_model:
-        # Issue #158: compile each BLOCK, not the whole model.
+        # Issue #158: torch.compile is a NET LOSS on this architecture. Measured
+        # in the REAL training loop (seq 4096, grad_accum 8, grad-checkpoint on):
         #
-        # Whole-model compile does not scale. Inductor's `compute_ancestors`
-        # (scheduler.py) keeps a complete ancestor set for EVERY node alive at
-        # once, so its memory is O(N^2) in graph nodes. At 16 layers with
-        # gradient checkpointing that exceeded 15.3 GB of system RAM and raised
-        # `InductorError: MemoryError` after 40+ minutes -- reproduced three
-        # times, at seq 4096 AND 2048, with a browser closed and on a fresh
-        # boot with 6.9 GB free. It is not memory pressure: it failed with ~24
-        # GB of commit headroom left.
+        #     eager + triton scan + megakernel   8.66 s/step   GPU 98%
+        #     per-block compile + those kernels 20.72 s/step   GPU 35%
+        #     per-block compile, kernels OFF    21.42 s/step   GPU 36%
         #
-        # 16 graphs of N/16 nodes cost 16*(N/16)^2 = N^2/16 -- a 16x reduction
-        # -- while keeping nearly all the benefit, because fusion opportunities
-        # are WITHIN a block (norm -> projection -> gate -> scan -> FFN), not
-        # across block boundaries. Measured on the 157M config at seq 4096:
+        # 2.4x SLOWER, and removing the fused kernels does not help -- so it is
+        # not the graph-break interaction #129 documented, it is compile itself.
+        # The GPU signature is the tell: 36% mean but 96% MAX, i.e. it bursts to
+        # full and then stalls. That is a gap BETWEEN kernels, not slow kernels.
+        # Unverified hypothesis: recomputation under `--grad-checkpoint` forces a
+        # sync per checkpointed segment, which at 16 blocks x 8 micro-batches is
+        # 128 stalls per step -- invisible at 1 micro-batch, dominant at 8.
         #
-        #     eager            1.28 s/step
-        #     per-block        1.09 s/step   (1.18x, compile 26s once, 3s cached)
-        #     whole-model      MemoryError after 40+ min
+        # A 4-step, 1-micro-batch microbenchmark said per-block compile was
+        # +18%. It measured a shape training never runs. The real loop inverted
+        # it. This comment exists so the microbenchmark is not trusted again.
         #
-        # Tuning knobs were tried and do nothing: realize_opcount_threshold=8
-        # and epilogue_fusion=False both land at exactly eager's 1.28. Only
-        # splitting the graph works.
+        # Whole-model compile is separately impossible here: Inductor's
+        # `compute_ancestors` is O(N^2) in graph nodes and MemoryErrors at 16
+        # layers (3 reproductions, seq 4096 and 2048, 6.9-9 GB free).
         #
-        # The model keeps its own forward(), so grad_checkpoint, block_plan and
-        # the doc_ids path are untouched -- only the blocks become
-        # OptimizedModules. `_save_edge_checkpoint` unwraps `_orig_mod`, and the
-        # blocks are reached through `model.blocks`, so checkpoints are
-        # unaffected.
-        blocks = getattr(model, "blocks", None)
-        if blocks is not None and len(blocks) > 0:
-            for i in range(len(blocks)):
-                blocks[i] = torch.compile(blocks[i])
-            if verbose:
-                print(f"\n  Compiled {len(blocks)} blocks individually (#158) -- "
-                      f"whole-model compile OOMs Inductor at this depth.")
-        else:
-            # shared_weights=True has no `blocks` list; fall back rather than
-            # silently skipping compile.
-            if verbose:
-                print("\n  Compiling model with torch.compile (no block list to "
-                      "split -- watch for InductorError at depth)...")
-            model = torch.compile(model)
+        # This is the FOURTH independent time compile has lost on this project:
+        # #129 (megakernel breaks fusion, 2 graph breaks), state.md:558
+        # (--block-coordinate conflict, 6.73 vs 4.41 s/step at 355M), the OOM
+        # above, and this. `--fast` therefore keeps bf16 + TF32 + Triton scan +
+        # megakernel and SKIPS torch.compile.
+        if verbose:
+            print("\n  torch.compile SKIPPED (#158): measured 2.4x slower in "
+                  "the real loop (20.72 vs 8.66 s/step). bf16 + TF32 + Triton "
+                  "scan + megakernel are still on.")
     return model
 
 

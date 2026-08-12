@@ -93,9 +93,10 @@ the wind tunnel, not the aircraft.
 5. **Distributed-training readiness.** No single-GPU assumptions baked into the model or
    training loop. DDP/FSDP + tensor parallelism is the critical open dependency (see
    [roadmap.md](roadmap.md) Phase 7).
-6. **Compile per block, never whole-model.** `torch.compile(model)` raises
-   `InductorError: MemoryError` at 16 layers: Inductor's `compute_ancestors` is **O(N²)** in
-   graph nodes, so the failure gets *worse* with depth — a 24-layer or 6B model fails harder.
-   Compiling each block costs N²/16 and measured **+18%** (#158, docs/training.md).
+6. **`torch.compile` is a net loss on this architecture — do not assume it helps.** Measured
+   2.4x SLOWER in the real training loop (20.72 vs 8.66 s/step, GPU 35% vs 98%), with the fused
+   kernels on OR off; whole-model compile also MemoryErrors at 16 layers because Inductor's
+   `compute_ancestors` is O(N²) in graph nodes. Four independent losses now (#129, #112, #158).
+   The speed here comes from the hand-written Triton scan + megakernel, not from Inductor.
 7. **Defaults that scale.** The documented default should be the variant that wins *at
    scale*, hence the #39 recommendation to make `--use_deltanet` the default block.
