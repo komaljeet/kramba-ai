@@ -55,6 +55,25 @@ Model policy (strict):
 > **repo-reader** (Haiku) more aggressively — **not** to let coding or "small" debugging
 > drift back to a cheaper model, which is what this policy exists to prevent.
 
+## Hard-won gotchas that cost hours (read before touching training)
+
+- **Compile the BLOCKS, not the model.** `torch.compile(model)` raises
+  `InductorError: MemoryError` at 16 layers — `compute_ancestors` is O(N²) in graph nodes.
+  Compile each block: +18%, and it is already wired into `build_model_and_config`.
+  Full finding: docs/training.md § "COMPILE THE BLOCKS, NOT THE MODEL" (#158).
+- **`tokenizer.vocab_size` EXCLUDES added tokens.** Use `len(tokenizer)`. Sizing an embedding
+  table from `vocab_size` with a FIM tokenizer builds it 3 rows short and the sentinels index
+  out of bounds — a bare CUDA device-side assert with no hint of the cause (#155).
+- **A tokenized `.bin` cache is keyed on the string "code", not the corpus.** Pointing
+  `--code-corpus` at a different file silently reused the old cache — a run announced 11.2 GB
+  and trained on 121M tokens. Now guarded, loudly (#157).
+- **Bare `--no-fast` reverts to fp32** (74.6 s/step vs 8.66). Re-add
+  `--precision bf16 --tf32 --triton-scan --megakernel-scan` by hand.
+- **Nothing prints until step 50** (`log_every_steps` is hardcoded). A shorter smoke run looks
+  hung when it is working. Watch `training_log.csv`, which flushes per row.
+- **A number from a different harness is not a measurement of this one.** Every wrong call in
+  the 2026-08-11/12 session came from quoting one setup's result at another.
+
 ## Where knowledge lives — read ON DEMAND, don't preload all of it
 - Doc hub / map of everything → docs/index.md
 - Architecture & project structure → docs/architecture.md

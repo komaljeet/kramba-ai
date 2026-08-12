@@ -51,7 +51,27 @@ Loss trajectory (healthy): step 50 **9.098** (ppl 8,934) -> 200 **5.157** (174) 
    `data_cache/tokenizer_32k_fim` and `data_cache	okenizer_32k_fim` read as different
    tokenizers, rejecting a valid cache.
 
-### `torch.compile` cannot be used at this size on this machine
+### `torch.compile` works — but ONLY per-block (Issue #158)
+
+**Whole-model compile is dead at this depth; per-block is worth +18%.** See
+[training.md](training.md) § "COMPILE THE BLOCKS, NOT THE MODEL" for the full finding.
+
+| | s/step | vs eager |
+|---|---:|---:|
+| eager | 1.28 | — |
+| **per-block** | **1.09** | **1.18×** |
+| whole-model | — | `InductorError: MemoryError` after 40+ min |
+
+Inductor's `compute_ancestors` keeps an ancestor set for every node alive at once — **O(N²)** in
+graph nodes — and gradient checkpointing adds the recomputation graph on top. 16 graphs of N/16
+nodes cost N²/16 instead. Wired into `build_model_and_config`, so `--fast` now compiles blocks
+individually.
+
+**This was nearly dismissed on a bad number.** A cross-harness comparison suggested ~1%; the
+maintainer refused it (*"1% on a 6B model is huge"*) and it turned out to be 18% — ~1.7 days on
+a 9.5-day run. The original claim below is left for the record.
+
+#### (superseded) `torch.compile` cannot be used at this size on this machine
 
 `--fast` dies in **host RAM**, not VRAM:
 

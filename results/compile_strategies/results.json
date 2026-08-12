@@ -1,0 +1,36 @@
+{
+  "issue": 158,
+  "config": {
+    "strategies": [
+      "eager",
+      "per_block"
+    ],
+    "seq_len": 4096,
+    "steps": 4,
+    "timeout": 1800,
+    "repo": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai",
+    "out": "results\\compile_strategies\\results.json"
+  },
+  "results": {
+    "eager": {
+      "strategy": "eager",
+      "ok": true,
+      "first_step_s": 1.8824698999997054,
+      "steady_step_s": 1.2844389000001684,
+      "tokens_per_s": 3188.941101051567,
+      "peak_rss_mib": 0.0,
+      "peak_vram_mib": 3808.0,
+      "process_wall_s": 10.315297800000735
+    },
+    "per_block": {
+      "strategy": "per_block",
+      "ok": true,
+      "first_step_s": 26.34051559999989,
+      "steady_step_s": 1.0887305000005654,
+      "tokens_per_s": 3762.1798966758743,
+      "peak_rss_mib": 0.0,
+      "peak_vram_mib": 3818.0,
+      "process_wall_s": 35.140911999999844
+    }
+  }
+}
