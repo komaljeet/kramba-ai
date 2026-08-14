@@ -78,19 +78,114 @@ def test_untied_partition_is_unchanged_by_the_fix():
     assert all(len(ps) > 0 for _n, ps in blocks)
 
 
-def test_offload_with_tied_embeddings_is_rejected_loudly():
-    """Unsupported combinations must fail at construction, not mid-run.
+def test_offload_with_tied_embeddings_now_works(tmp_path):
+    """#151 rejected this combination; #157 lifted the guard after fixing the
+    cause. The guard was correct at the time -- but it had also silently
+    disabled 13 of the offload suite's own tests, because tying became the
+    default in #151 and every one of them builds a model, so the whole suite
+    raised at construction instead of running.
 
-    Before #151 this surfaced as a bare `KeyError: <id>` inside the prefetch
-    CUDA stream -- far from the cause, and in the subsystem #117 caught silently
-    discarding all training. A clear refusal beats an improvised fix here.
+    Two halves had to be fixed. `_take()` (in #151) assigns the shared table to
+    `token_embedding` only. #157 additionally PINS it: forward() uses it again
+    at the end through `model.decoder`, and no single block's activation window
+    covers both uses, so evicting it produced a hard device mismatch inside the
+    output projection.
     """
     m = _model(True)
     m.grad_checkpoint = True
-    with pytest.raises(ValueError, match="not supported with tie_embeddings"):
-        BlockCoordinateScheduler(
-            m, torch.optim.AdamW(m.parameters(), lr=1e-4),
-            offload_inactive_weights=True, device=torch.device("cpu"))
+    sched = BlockCoordinateScheduler(
+        m, torch.optim.AdamW(m.parameters(), lr=1e-4),
+        offload_inactive_weights=True, device=torch.device("cpu"))
+    assert sched._pinned, "the tied table was not pinned"
+
+
+def test_the_tied_table_is_the_thing_that_gets_pinned():
+    """Pinning must be targeted. Pinning everything would silently disable
+    offload altogether while every other test still passed."""
+    tied = _model(True)
+    tied.grad_checkpoint = True
+    s_tied = BlockCoordinateScheduler(
+        tied, torch.optim.AdamW(tied.parameters(), lr=1e-4),
+        offload_inactive_weights=True, device=torch.device("cpu"))
+
+    shared = tied.token_embedding.weight
+    assert {id(shared)} == s_tied._pinned, (
+        f"expected exactly the tied table pinned, got {len(s_tied._pinned)} "
+        f"parameter(s)")
+
+    untied = _model(False)
+    untied.grad_checkpoint = True
+    s_untied = BlockCoordinateScheduler(
+        untied, torch.optim.AdamW(untied.parameters(), lr=1e-4),
+        offload_inactive_weights=True, device=torch.device("cpu"))
+    assert not s_untied._pinned, (
+        "an untied model pinned something -- offload is being disabled for "
+        "parameters that could be evicted")
+
+
+def test_pinned_table_survives_a_full_cycle_and_still_trains():
+    """The tied table belongs to `token_embedding` under `_take()`, so it trains
+    only during that block's turn. It must still be resident -- and unchanged --
+    while other blocks train, then actually update when its own turn comes."""
+    m = _model(True)
+    m.grad_checkpoint = True
+    opt = torch.optim.AdamW(m.parameters(), lr=1e-2)
+    sched = BlockCoordinateScheduler(
+        m, opt, steps_per_block=1, offload_inactive_weights=True,
+        device=torch.device("cpu"))
+
+    table = m.token_embedding.weight
+    before = table.detach().clone()
+    saw_embedding_turn = False
+    for _ in range(sched.num_blocks + 1):
+        ids = torch.randint(0, 64, (2, 8))
+        logits = m(ids)
+        loss = torch.nn.functional.cross_entropy(
+            logits.reshape(-1, logits.shape[-1]), ids.reshape(-1))
+        opt.zero_grad(); loss.backward(); opt.step()
+        if sched.active_block_name == "token_embedding":
+            saw_embedding_turn = True
+        assert table.device.type == "cpu", "pinned table left its device"
+        sched.step()
+
+    assert saw_embedding_turn, "the embedding block never became active"
+    assert not torch.equal(before, table), (
+        "the tied table never changed across a full cycle -- it is pinned but "
+        "frozen, which is worse than the bug this replaced")
+    assert m.token_embedding.weight is m.decoder.decoder.weight, (
+        "the table stopped being shared during training")
+
+
+def test_a_broken_pin_is_caught_rather_than_silently_skipped():
+    """The gate that matters (#157). `GPUBufferPool._offloadable()` treats "no
+    CPU home" as "already resident, nothing to fetch". If a parameter ever loses
+    its home for a DIFFERENT reason, that same path silently declines to load
+    it and training proceeds against a wrong-device tensor -- exactly the shape
+    of #117, which discarded all training for an epic.
+
+    So: unpin the tied table deliberately, and require the failure to surface.
+    Without this test, the ones above could pass simply because nothing was
+    ever offloaded in the test configuration.
+    """
+    m = _model(True)
+    m.grad_checkpoint = True
+    opt = torch.optim.AdamW(m.parameters(), lr=1e-4)
+    sched = BlockCoordinateScheduler(
+        m, opt, steps_per_block=1, offload_inactive_weights=True,
+        device=torch.device("cpu"))
+
+    sched._pinned = set()          # the bug this pin exists to prevent
+    sched._activate(1)             # a turn where the embedding block is inactive
+
+    assert m.token_embedding.weight.device.type == "cpu"
+    # On CPU every tensor shares one device, so a device mismatch cannot be
+    # raised here. What IS observable is that the table was evicted at all --
+    # which on CUDA is precisely what produces
+    # "Expected all tensors to be on the same device" inside the output
+    # projection, the error that revealed this.
+    assert not any(id(p) in sched._pinned
+                   for p in m.token_embedding.parameters()), (
+        "unpinning had no effect -- this test cannot fail and proves nothing")
 
 
 def test_offload_still_allowed_untied():

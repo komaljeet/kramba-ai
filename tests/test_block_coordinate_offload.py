@@ -29,6 +29,25 @@ Run:  python -m pytest tests/test_block_coordinate_offload.py -q
 """
 from __future__ import annotations
 
+
+def _pinned_ok(sched, p, name):
+    """#157: is `p` a deliberately-resident parameter, and is it where it must be?
+
+    A parameter reachable from two modules -- the tied embedding/decoder table --
+    is never evicted, because forward() uses it at both ends and no single
+    block's activation window covers both uses. Returns True if the caller
+    should skip its usual device/dtype expectation, and ASSERTS the parameter is
+    actually resident, so the exemption cannot quietly hide a leak.
+    """
+    if id(p) not in getattr(sched, "_pinned", ()):
+        return False
+    assert p.device.type == "cuda", (
+        f"pinned parameter in {name!r} was evicted to {p.device}; "
+        f"forward() will fail at its far use")
+    return True
+
+
+
 import os
 import sys
 
@@ -161,6 +180,16 @@ else:
              list(m_on.final_norm.parameters()) + list(m_on.decoder.parameters())),
         ]:
             for p in blk_params:
+                if id(p) in sched_on._pinned:
+                    # #157: a parameter reachable from two modules (the tied
+                    # embedding/decoder table) is deliberately never evicted --
+                    # forward() uses it at both ends, so no single block's
+                    # activation window covers both uses. Assert that instead
+                    # of skipping, or this exemption could hide a real leak.
+                    assert p.device.type == "cuda", (
+                        f"pinned parameter in {name!r} was evicted to "
+                        f"{p.device}; forward() will fail at the far use")
+                    continue
                 expected = "cuda" if name == active_name else "cpu"
                 assert p.device.type == expected, (
                     f"block {name!r} (active={active_name!r}) on {p.device}, "
@@ -215,6 +244,8 @@ else:
                 continue
             expected = "cuda" if name == "blocks.0" else "cpu"
             for p in params:
+                if _pinned_ok(sched, p, name):
+                    continue
                 assert p.device.type == expected, (
                     f"block {name!r} on {p.device} immediately after forward "
                     f"(before backward) -- expected {expected}. Downstream "
@@ -498,6 +529,8 @@ else:
              list(model.final_norm.parameters()) + list(model.decoder.parameters())),
         ]:
             for p in blk_params:
+                if _pinned_ok(sched, p, name):
+                    continue
                 expected = "cuda" if name == active_name else "cpu"
                 assert p.device.type == expected, (
                     f"block {name!r} (active={active_name!r}) on {p.device} "
@@ -608,6 +641,17 @@ else:
             for name, params in sched.blocks:
                 expected = torch.float32 if name == sched.active_block_name else torch.bfloat16
                 for p in params:
+                    if id(p) in getattr(sched, "_pinned", ()):
+                        # #157: a pinned (two-module) parameter is never parked,
+                        # so it keeps its native dtype. Assert that rather than
+                        # skipping -- a pinned param silently demoted to bf16
+                        # would change the tied table's precision for the whole
+                        # run with nothing else failing.
+                        assert p.dtype == torch.float32, (
+                            f"pinned parameter in {name!r} was parked to "
+                            f"{p.dtype}; it is never evicted and must keep its "
+                            f"native dtype")
+                        continue
                     assert p.dtype == expected, (
                         f"after a switch, block {name!r} "
                         f"(active={sched.active_block_name!r}) is {p.dtype}, "
