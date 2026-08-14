@@ -64,7 +64,12 @@ def test_first_tokenize_writes_a_sidecar(corpus):
     n = tec._tokenize_text_to_bin(txt, binp, gpt2())
     assert n > 0
     with open(binp + ".tokenizer", encoding="utf-8") as fh:
-        assert fh.read().strip() == "gpt2/50257"
+        sig = fh.read().strip()
+    # #164 appended a corpus fingerprint (name:size:mtime) to the signature: a
+    # run once announced an 11.2 GB corpus and silently consumed a 4%-sized
+    # cache, because tokenizer identity alone could not tell them apart.
+    assert sig.startswith("gpt2/50257"), sig
+    assert "src=" in sig, f"corpus fingerprint missing from the sidecar: {sig}"
 
 
 def test_same_tokenizer_hits_the_cache(corpus):
@@ -80,7 +85,7 @@ def test_different_tokenizer_refuses_rather_than_reusing(corpus):
     """The whole point: a silent reuse here poisons an entire training run."""
     txt, binp = corpus
     tec._tokenize_text_to_bin(txt, binp, gpt2())
-    with pytest.raises(RuntimeError, match="wrong vocabulary|tokenized by"):
+    with pytest.raises(RuntimeError, match="different tokenizer|wrong vocabulary|tokenized by"):
         tec._tokenize_text_to_bin(txt, binp, FakeTokenizer())
 
 
@@ -97,7 +102,12 @@ def test_legacy_cache_without_a_sidecar_is_adopted_as_gpt2(corpus):
     n = tec._tokenize_text_to_bin(txt, binp, gpt2())   # must NOT raise
     assert n > 0
     with open(binp + ".tokenizer", encoding="utf-8") as fh:
-        assert fh.read().strip() == "gpt2/50257"
+        sig = fh.read().strip()
+    # Adoption compares the TOKENIZER part only. #164 added a corpus
+    # fingerprint the legacy cache cannot have, and comparing the whole
+    # signature rejected every pre-#139 cache -- a multi-hour re-tokenize
+    # this branch exists to avoid.
+    assert sig.startswith("gpt2/50257"), sig
 
 
 def test_legacy_cache_with_a_custom_tokenizer_still_refuses(corpus):
@@ -115,7 +125,9 @@ def test_custom_tokenizer_writes_its_own_signature(tmp_path):
     binp = str(tmp_path / "c.bin")
     tec._tokenize_text_to_bin(str(txt), binp, FakeTokenizer())
     with open(binp + ".tokenizer", encoding="utf-8") as fh:
-        assert fh.read().strip() == "custom32k/32000"
+        sig = fh.read().strip()
+    assert sig.startswith("custom32k/32000"), sig
+    assert "src=" in sig, f"corpus fingerprint missing: {sig}"
 
 
 # --------------------------------------------------------------------------

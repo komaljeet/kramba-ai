@@ -293,6 +293,20 @@ class GPUBufferPool:
             self._release(oldest)
         return buffers
 
+    def _offloadable(self, params: list[nn.Parameter]) -> list[nn.Parameter]:
+        """Params that actually have a CPU home, i.e. ones that get offloaded.
+
+        A param with no registered home was never evicted and is already
+        GPU-resident, so there is nothing to fetch. This is not a rare edge
+        case: with tied embeddings (#106) the decoder's weight IS
+        token_embedding.weight, which lives in the embedding block and stays
+        resident while that block is active -- so the tail block's parameter
+        list contains a tensor the pool has never owned. Before this,
+        prefetching the tail raised KeyError and the two features could not be
+        combined at all.
+        """
+        return [q for q in params if id(q) in self._cpu_home]
+
     def load(self, key: str, params: list[nn.Parameter]) -> None:
         """Move `params` onto `self.device`, keyed by `key` (the block's
         stable name). If `key` is already resident (a cache hit -- e.g.
@@ -330,6 +344,9 @@ class GPUBufferPool:
                 event.synchronize()
                 self._release_staging(key)
             return
+        params = self._offloadable(params)
+        if not params:
+            return
         buffers = self._acquire_buffers(key, params)
         for p, buf in zip(params, buffers):
             buf.copy_(self._cpu_home[id(p)], non_blocking=True)
@@ -362,6 +379,9 @@ class GPUBufferPool:
         """
         self.register_cpu_home(params)
         if self._prefetch_stream is None or key in self._resident:
+            return
+        params = self._offloadable(params)
+        if not params:
             return
         buffers = self._acquire_buffers(key, params)
         staging_bufs = []

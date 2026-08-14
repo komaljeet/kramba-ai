@@ -177,10 +177,22 @@ class EdgeHVN(nn.Module):
                 )
             raise ValueError(f"unknown block type {t!r} at layer {i}")
 
-        if shared_weights:
-            # Degenerate for hybrid (shares one block type); hybrid uses
-            # shared_weights=False. Uses plan[0] for the shared block, unchanged
-            # for the existing shared-weight HVN path.
+        # Does the plan mix block types? A hybrid stack does; a plain one does not.
+        _plan_types = {plan[i] for i in range(num_layers)} if plan else set()
+
+        if shared_weights and len(_plan_types) > 1:
+            # #155: share PER TYPE so the hybrid plan survives. Collapsing a
+            # hybrid to one repeated block (the branch below) would train a
+            # different architecture than the flags describe -- silently, since
+            # it loads and runs perfectly well. See hvn/edge/shared.py.
+            from hvn.edge.shared import share_blocks_by_type
+            self.blocks, self._shared_canonical = share_blocks_by_type(
+                [_make_block(i) for i in range(num_layers)],
+                [plan[i] for i in range(num_layers)],
+            )
+            self.shared_block = None
+        elif shared_weights:
+            # Uniform stack: the original ALBERT path, one block for every layer.
             self.shared_block = SharedWeightHVN(_make_block(0), num_layers)
             self.blocks = None
         else:

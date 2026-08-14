@@ -221,3 +221,124 @@ def test_sizing_guard_is_not_vacuous():
     tok = _AddedTokenTokenizer()
     assert resolve_vocab_size(tokenizer=tok) != tok.vocab_size, \
         "resolve_vocab_size returned the base vocab_size, ignoring added tokens"
+
+
+# ---------------------------------------------------------------------------
+# Gap DENSITY (#164).
+#
+# The 48M code run reached 63% of its token budget at exactly 0.0% exact-match
+# because only ONE token per document -- the first after <|fim_middle|> -- teaches
+# the model to jump back to the cursor, and with a 237-token median middle that
+# token was 1 in 4,813 corpus tokens. Never learning it costs +0.0006 nats on the
+# aggregate curve, so the training loss looked healthy throughout.
+#
+# Nothing in the round-trip tests above can fail when the density is wrong: a
+# transform with one enormous gap per file reconstructs perfectly. These tests
+# exist to fail in that case, because the loss curve will not.
+# ---------------------------------------------------------------------------
+
+def _jump_back_density(text, seed=0, **kw):
+    """(jump-back tokens, total chars) for the real training path."""
+    import re
+    rng = random.Random(seed)
+    out = transform_stream([text], fim_rate=1.0, seed=seed, **kw)
+    joined = "".join(out)
+    return joined.count(FIM_MIDDLE), len(text)
+
+
+def test_middle_is_a_small_fraction_of_its_unit():
+    """A gap must be a SMALL hole, not a third of the file.
+
+    Guards the property directly: with two uniform cuts E[middle] = n/3, so a
+    regression to that implementation drives this mean to ~0.33 and fails.
+    """
+    text = "".join(f"line_{i} = compute({i})\n" for i in range(400))
+    fracs = []
+    for seed in range(300):
+        _, m, _ = split_document(text, random.Random(seed))
+        fracs.append(len(m) / len(text))
+    mean = sum(fracs) / len(fracs)
+    assert mean < 0.25, (
+        f"mean middle is {mean:.1%} of the document -- gaps this large give one "
+        f"jump-back token per hundreds of ordinary ones, which is what made the "
+        f"48M run score 0% (#164)")
+
+
+def test_long_file_produces_many_gaps_not_one():
+    """The unit split. One gap per file is too sparse to learn from."""
+    text = "".join(f"def f_{i}(a, b):\n    return a + b + {i}\n" for i in range(900))
+    gaps, n_chars = _jump_back_density(text, seed=0)
+    assert n_chars > 20000, "test corpus too small to distinguish the cases"
+    assert gaps >= 8, (
+        f"a {n_chars:,}-character file produced {gaps} gap(s); the transform is "
+        f"still gapping whole documents (#164)")
+
+
+def test_density_beats_the_configuration_that_failed():
+    """The quantitative gate: characters of code per jump-back token.
+
+    The v1 transform delivered one jump-back per ~19,000 characters of this
+    corpus (~4,800 tokens). This asserts a large margin below that, so a partial
+    revert -- short middles but no unit split, or vice versa -- still fails.
+    """
+    text = "".join(f"class C{i}:\n    x = {i}\n    def m(self):\n        return self.x\n"
+                   for i in range(600))
+    gaps, n_chars = _jump_back_density(text, seed=1)
+    chars_per_gap = n_chars / max(1, gaps)
+    assert chars_per_gap < 4000, (
+        f"one jump-back per {chars_per_gap:,.0f} characters; v1 was ~19,000 and "
+        f"scored 0%. The density fix is not in effect (#164)")
+
+
+def test_most_gaps_start_on_a_line_boundary():
+    """Line-aligned starts are learnable; mid-word BPE fragments largely are not
+    (measured first-middle-token NLL 3.749 aligned vs 6.230 character-cut)."""
+    text = "".join(f"    value_{i} = helper({i})\n" for i in range(300))
+    aligned = 0
+    trials = 300
+    for seed in range(trials):
+        p, m, _ = split_document(text, random.Random(seed))
+        if m and (not p or p.endswith("\n")):
+            aligned += 1
+    assert aligned / trials > 0.6, (
+        f"only {aligned/trials:.0%} of gaps start on a line boundary")
+
+
+def test_character_level_cuts_still_happen():
+    """The counterpart. Aligning EVERY gap would leave the model helpless
+    mid-identifier, which is where a real cursor usually sits -- so the fix must
+    not become 'line-aligned only'."""
+    text = "".join(f"some_identifier_{i} = {i}\n" for i in range(300))
+    mid_word = 0
+    for seed in range(300):
+        p, m, _ = split_document(text, random.Random(seed))
+        if p and m and p[-1].isalnum() and m[0].isalnum():
+            mid_word += 1
+    assert mid_word > 0, "no gap ever starts mid-word -- character cuts are gone"
+
+
+def test_unit_split_preserves_every_byte():
+    """The units must partition the text exactly; a dropped newline here would
+    train the model on subtly wrong indentation with nothing failing."""
+    from hvn.fim import iter_fim_units
+    text = "".join(f"row {i}\n" for i in range(2000))
+    assert "".join(iter_fim_units(text, random.Random(0))) == text
+
+
+def test_density_test_would_catch_a_revert():
+    """Meta-test: re-runs the OLD transform and asserts the gate above rejects it.
+
+    Without this, the density gates could be silently satisfied by a change in
+    the test corpus rather than in the code -- the 'test that cannot fail' the
+    repo has shipped before (#138).
+    """
+    def old_split(text, rng):
+        n = len(text)
+        a, b = sorted(rng.randint(0, n) for _ in range(2))
+        return text[:a], text[a:b], text[b:]
+
+    text = "".join(f"line_{i} = compute({i})\n" for i in range(400))
+    fracs = [len(old_split(text, random.Random(s))[1]) / len(text)
+             for s in range(300)]
+    assert sum(fracs) / len(fracs) > 0.25, \
+        "the v1 transform now passes the density gate -- the gate is vacuous"
