@@ -1,0 +1,63 @@
+{
+  "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "total_vram_mb": 6140.5,
+  "config": {
+    "configs": [
+      "768x16"
+    ],
+    "steps": 8,
+    "warmup": 3,
+    "batch_size": 4,
+    "seq_len": 512,
+    "out": "results/size_sweep_smoke.json"
+  },
+  "tokens_per_param": 20,
+  "rows": [
+    {
+      "label": "gpt2-untied",
+      "vocab": 50257,
+      "tied": false,
+      "d_model": 768,
+      "num_layers": 16,
+      "params": 171841217,
+      "vocab_params": 77194752,
+      "body_params": 94646465,
+      "vocab_share_pct": 44.922139954350996,
+      "sec_per_step": 1.6766494999974384,
+      "step_cv": 0.0038651770982417177,
+      "tok_per_s": 1221.483679208522,
+      "peak_reserved_mb": 6840.0,
+      "peak_alloc_mb": 6257.8720703125,
+      "vram_pct": 111.39158049018809,
+      "chinchilla_tokens": 3436824340,
+      "chinchilla_days": 32.56536306446232,
+      "verdict": "SUSPECT: reserved 111% of VRAM",
+      "warnings": [
+        "reserved 111% of VRAM"
+      ]
+    },
+    {
+      "label": "32k-tied",
+      "vocab": 32000,
+      "tied": true,
+      "d_model": 768,
+      "num_layers": 16,
+      "params": 119204208,
+      "vocab_params": 24576000,
+      "body_params": 94628208,
+      "vocab_share_pct": 20.616721852637955,
+      "sec_per_step": 1.1299566000016057,
+      "step_cv": 0.06859914730056735,
+      "tok_per_s": 1812.4589917852506,
+      "peak_reserved_mb": 5380.0,
+      "peak_alloc_mb": 5122.9365234375,
+      "vram_pct": 87.61501506391987,
+      "chinchilla_tokens": 2384084160,
+      "chinchilla_days": 15.224381236613432,
+      "verdict": "SUSPECT: reserved 88% of VRAM",
+      "warnings": [
+        "reserved 88% of VRAM"
+      ]
+    }
+  ]
+}
