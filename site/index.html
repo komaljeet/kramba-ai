@@ -216,11 +216,54 @@
   fully beats a large one trained to 10%.
 </p>
 
-<div class="pending">
-  <strong>Results pending.</strong> This section will carry the completion-gate numbers
-  when the run finishes &mdash; measured against two floors that must be beaten to claim
-  anything: inserting nothing at all, and copying the previous line.
+<h3>What the run found</h3>
+
+<p>
+  The first attempt reached 63% of its training budget at <strong>exactly 0% correct
+  completions</strong> &mdash; while its loss curve looked healthy. The cause was that the
+  one skill being measured was 0.02% of the training signal: a single token per document
+  asks the model to jump back to the cursor instead of continuing the text it just read.
+  Never learning it costs 0.0006 on the loss curve. No amount of watching that curve could
+  have found this.
+</p>
+
+<p>
+  After fixing the data recipe &mdash; ten times more of that one signal, same compute:
+</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Filling a gap in real code</th><th class="num">Before</th><th class="num">After</th></tr></thead>
+  <tbody>
+    <tr><td>First token correct</td><td class="num">2.2%</td><td class="num win">59.8%</td></tr>
+    <tr><td>Does the code after the cursor help?</td><td class="num loss">hurts</td><td class="num win">helps</td></tr>
+    <tr><td>Whole two-line gap correct</td><td class="num">0%</td><td class="num">1.3%</td></tr>
+  </tbody>
+</table>
 </div>
+
+<p>
+  <strong>The mechanism works; the model is too small.</strong> It reliably knows where to
+  start writing, and it now genuinely reads the code on both sides of the gap. It cannot
+  hold the thread for a whole line &mdash; one wrong token fails the entire fill, so 60%
+  per token becomes 1.3% per span. That 1.3% sits against a 1.0% floor for simply copying
+  the previous line, which is to say: at the floor.
+</p>
+
+<p>
+  This is reported rather than buried because it is the point. A 48M-parameter model is
+  roughly 100&times; smaller than the code models this task is built for. Perplexity of
+  4.13 looks excellent and is not evidence of anything &mdash; the gate is, and the gate
+  says no.
+</p>
+
+<blockquote>
+  <p>
+    An earlier reading of this same model, on 50 cases instead of 300, showed 4%
+    &mdash; two correct answers. It did not survive the larger sample. It is recorded
+    here because it was briefly believed.
+  </p>
+</blockquote>
 
 <footer>
   <p>
