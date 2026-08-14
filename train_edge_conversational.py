@@ -764,6 +764,22 @@ def _tokenize_text_to_bin(
         if os.path.exists(sig_path):
             with open(sig_path, encoding="utf-8") as fh:
                 prev = fh.read().strip()
+        # A sidecar written before the corpus fingerprint existed carries only
+        # the tokenizer/FIM part. Comparing it against the full signature marks
+        # every pre-#164 cache as a corpus mismatch and forces a multi-hour
+        # re-tokenize of data that is perfectly valid -- slimpajama.bin (2.6 GB)
+        # and wikitext.bin among them. The fingerprint cannot be checked for
+        # those: nothing recorded which file produced them. So compare only the
+        # part the sidecar actually has, and upgrade it in place so the check
+        # does apply from here on.
+        if prev is not None and "|src=" not in prev and "|src=" in sig:
+            if prev == sig.split("|src=")[0]:
+                with open(sig_path, "w", encoding="utf-8") as fh:
+                    fh.write(sig)
+                print(f"    (sidecar for {os.path.basename(bin_path)} predates "
+                      f"corpus fingerprinting; adopted and upgraded)")
+                prev = sig
+
         if prev is not None and prev != sig:
             same_tok = prev.split("|src=")[0] == sig.split("|src=")[0]
             what = ("a DIFFERENT SOURCE CORPUS" if same_tok
