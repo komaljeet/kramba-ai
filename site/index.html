@@ -265,6 +265,43 @@
   </p>
 </blockquote>
 
+<h3>What it can do</h3>
+
+<p>
+  Failing at whole spans is not the same as failing. The task an editor actually performs
+  is predicting the <em>next</em> token as you type, and that was measured separately, with
+  the thresholds fixed in writing before the run.
+</p>
+
+<div class="tw">
+<table>
+  <thead>
+    <tr><th>Predicting the next token</th><th class="num">cases</th><th class="num">model</th><th class="num">best floor</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Names &amp; keywords</strong></td><td class="num">354</td><td class="num win">50.8%</td><td class="num">0.0%</td></tr>
+    <tr><td>Punctuation, brackets, spacing</td><td class="num">414</td><td class="num">79.7%</td><td class="num">&mdash;</td></tr>
+    <tr><td>Everything together</td><td class="num">768</td><td class="num">66.4%</td><td class="num">9.8%</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  The split is the point. Most tokens in source code are brackets, commas and indentation,
+  and a model that predicted nothing else would still score respectably overall. So the
+  headline is the <strong>substantive</strong> row &mdash; identifiers and keywords &mdash;
+  where the two floors, always guessing the commonest token and repeating the previous one,
+  both score <strong>zero</strong>. Every correct answer there came from reading the code.
+</p>
+
+<p>
+  In practice: type <code>for item in </code> and about half the time its next suggestion is
+  the right variable. That is ghost-text autocomplete, one token at a time. It is not
+  &ldquo;write this function&rdquo; &mdash; the gap-filling result above already says no to
+  that &mdash; and the difference between those two claims is the whole reason both were
+  measured.
+</p>
+
 <footer>
   <p>
     kramba-ai &mdash; HVN architecture research. Built and measured on a single
