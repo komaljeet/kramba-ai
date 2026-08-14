@@ -1,0 +1,38 @@
+[
+  {
+    "label": "1.0B  seq 512",
+    "params": 1074214851,
+    "body": 1008672707,
+    "seq": 512,
+    "tokens_per_step": 512,
+    "s_step": 1.5726633000012953,
+    "tok_s": 325.56237562075637,
+    "alloc_gib": 4.001770496368408,
+    "reserved_gib": 4.00390625,
+    "days_to_chinchilla": 717.1868435383481
+  },
+  {
+    "label": "1.0B  seq 2048",
+    "params": 1074214851,
+    "body": 1008672707,
+    "seq": 2048,
+    "tokens_per_step": 2048,
+    "s_step": 2.8341664999898057,
+    "tok_s": 722.6110392622898,
+    "alloc_gib": 4.017639636993408,
+    "reserved_gib": 4.05078125,
+    "days_to_chinchilla": 323.11857951224243
+  },
+  {
+    "label": "1.0B  seq 4096",
+    "params": 1074214851,
+    "body": 1008672707,
+    "seq": 4096,
+    "tokens_per_step": 4096,
+    "s_step": 4.646664600004442,
+    "tok_s": 881.4925010933831,
+    "alloc_gib": 4.017639636993408,
+    "reserved_gib": 4.05078125,
+    "days_to_chinchilla": 264.8792272840459
+  }
+]

@@ -631,31 +631,61 @@ class BlockCoordinateScheduler:
                 raise ValueError(
                     "offload_inactive_weights=True requires model.grad_checkpoint=True"
                 )
-            # Issue #151: CPU weight offload is NOT compatible with tied
-            # embeddings. The tied table is one nn.Parameter reachable from two
-            # modules; the partition (correctly) assigns it to `token_embedding`
-            # only, but the offload bookkeeping still meets it through
-            # `model.decoder` and looks it up in `_cpu_home` by id, where it was
-            # never registered -- surfacing as a bare `KeyError: <id>` inside the
-            # prefetch stream, far from the cause.
+            # Issue #151 rejected tied embeddings here rather than patch this
+            # subsystem blind -- correctly: it is the one #117 found silently
+            # discarding all training for an epic. #157 lifts that guard, having
+            # found and fixed the actual cause rather than the symptom.
             #
-            # Rejected loudly rather than patched blind: this is the subsystem
-            # #117 found silently discarding ALL training for a whole epic, so an
-            # improvised fix here is worse than an unsupported combination. See
-            # docs/state.md; #112 also records `--optimizer adafactor` as removing
-            # the need for BCD at 355M entirely, which is the recommended path.
-            if getattr(model, "tie_embeddings", False):
-                raise ValueError(
-                    "offload_inactive_weights=True is not supported with "
-                    "tie_embeddings=True (Issue #151): the shared embedding/decoder "
-                    "parameter is reachable from two modules and the offload "
-                    "bookkeeping registers it under one, failing later with an "
-                    "opaque KeyError. Use --no-tie-embeddings for offload runs, or "
-                    "--optimizer adafactor, which #112 measured as removing the need "
-                    "for block-coordinate descent at 355M."
-                )
+            # The cause was in two halves. The partition half is already fixed:
+            # `_take()` above assigns the shared table to `token_embedding` only.
+            # The remaining half is that the model's forward still meets the same
+            # tensor through `model.decoder` when loading/prefetching the tail
+            # block, and looked it up in `_cpu_home` by id -- where it was never
+            # registered, because it stays resident with the embedding block.
+            # `GPUBufferPool._offloadable()` now filters to params that actually
+            # have a home: no home means never evicted, therefore already on the
+            # device, therefore nothing to fetch.
+            #
+            # What makes this safe to enable rather than merely non-crashing is
+            # that the guard had ALSO silently disabled 13 of this subsystem's own
+            # tests -- every one of them builds a model, and tying became the
+            # default in #151, so the entire offload suite raised at construction
+            # instead of running. Those tests (gradient parity across cycles,
+            # device residency per block, LRU reconciliation, convergence) are the
+            # evidence #151 asked for, and they now execute against the tied
+            # configuration. tests/test_bcd_tied_embeddings.py adds the
+            # tied-specific cases, including one that breaks a CPU home on purpose
+            # and requires the suite to catch it -- without that, these tests
+            # could pass simply by never offloading anything.
         self.model = model
         self.blocks = partition_named_blocks(model)
+        # #157: parameters reachable from more than one module must never be
+        # evicted. The tied table is the case that matters: `_take()` assigns it
+        # to `token_embedding`, but forward() uses it AGAIN at the end through
+        # `model.decoder`, so a step where the embedding block is inactive would
+        # otherwise find it parked on CPU. That is not hypothetical -- it is a
+        # hard `Expected all tensors to be on the same device` from inside the
+        # output projection, which is how this was found.
+        #
+        # Filtering the buffer pool's fetches (GPUBufferPool._offloadable) is NOT
+        # sufficient on its own and was the first attempt: it stops the KeyError
+        # but leaves the tensor wherever eviction put it. The tensor has to stay
+        # resident, because there is no single block whose activation window
+        # covers both of its uses.
+        #
+        # Cost is bounded and known: one vocab x d_model table, 250 MB at 1B.
+        self._pinned: set[int] = set()
+        _counts: dict[int, int] = {}
+        _mods = [getattr(model, "token_embedding", None),
+                 getattr(model, "decoder", None),
+                 getattr(model, "final_norm", None)]
+        _mods += list(getattr(model, "blocks", None) or [])
+        for _mod in _mods:
+            if _mod is None:
+                continue
+            for _p in dict.fromkeys(_mod.parameters()):   # unique within a module
+                _counts[id(_p)] = _counts.get(id(_p), 0) + 1
+        self._pinned = {k for k, v in _counts.items() if v > 1}
         self.optimizer = optimizer
         self.steps_per_block = steps_per_block
         # Issue #152: park outgoing optimizer state on CPU and restore it when
@@ -848,6 +878,7 @@ class BlockCoordinateScheduler:
                 # a valid home (see its docstring for the bug this order
                 # fixes: registering before the move captured the stale
                 # GPU tensor instead).
+                params = [p for p in params if id(p) not in self._pinned]
                 for p in params:
                     # Issue #113: park at this param's park_dtype (bf16 if
                     # offload_park_dtype=torch.bfloat16 and native dtype is

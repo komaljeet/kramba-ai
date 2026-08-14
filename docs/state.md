@@ -3233,7 +3233,11 @@ mistake would produce another wrong envelope), reporting `max_memory_reserved` r
 
 The s/micro column is the spill penalty, not optimizer speed — the two that fit nothing run
 12-16x slower because of host-RAM backing. **`--optimizer adafactor` removes the need for BCD
-at 355M entirely**, at the same step time as the BCD config, without the 4x handicap. It has
+at 355M entirely**  
+> **Does NOT generalise — see "Adafactor does NOT scale to 1B" (#157, 2026-08-14) at the end
+> of this file.** At 1B it reserves 9.42 GiB on a 6 GiB card (a spill, 10.4x slower). Adafactor
+> shrinks optimizer state, which is the deciding term at 355M and not at 1B, where weights and
+> gradients alone exceed the card.**, at the same step time as the BCD config, without the 4x handicap. It has
 been wired since #85; that issue's own closing note records its VRAM benchmark being deferred
 "since the GPU is currently busy", and it was closed without the benchmark ever running.
 
@@ -4330,3 +4334,52 @@ the sweep does not exercise.
 
 Until this is understood, **the 9.1-day plan is not launchable** -- and that is
 the honest status, not the "ready to pretrain" heading above.
+
+## Adafactor does NOT scale to 1B — offload stays mandatory (#157, 2026-08-14)
+
+The #112 entry above concludes **"`--optimizer adafactor` removes the need for BCD at
+355M entirely"**. That is correct at 355M and does **not** generalise. The wording invites
+the extrapolation, and it was made — this issue was opened partly on the assumption that
+Adafactor might make the whole offload path unnecessary at 1B, and priced that first.
+
+Measured, 1B (d=2048, 24L), seq 4096, tied embeddings, ternary, grad-checkpoint, on the
+5.9966 GiB card (`results/adafactor_1b/results.json`):
+
+| arm | peak alloc | peak reserved | s/step | tok/s |
+|---|---:|---:|---:|---:|
+| **adafactor**, no BCD, no offload | 9.08 GiB | **9.42 GiB** | 48.50 | 84 |
+| **muon**, no BCD, no offload | — | — | **OOM** | — |
+| adafactor + BCD + offload | — | — | **blocked by the #151 guard** | — |
+| BCD + offload, untied (reference) | 1.15 GiB | **4.05 GiB** | **4.68** | **875** |
+
+**9.42 GiB reserved on a 6 GiB card is a spill, not a fit.** It ran only because WDDM
+silently backs the overflow with host RAM — no OOM, just 4-15x slower, the failure mode
+this repo has documented before. Here the penalty is **10.4x**: 48.50 s/step against 4.68
+with offload.
+
+**Why it does not carry.** Adafactor shrinks *optimizer state* (row+column summary instead
+of a full second moment). It does nothing about weights or gradients. At 355M those two are
+~2.8 GB combined, so optimizer state was the deciding term and Adafactor won by 2.8 GiB. At
+1B they are ~4.3 GB **each** — over the card before the optimizer is counted at all. The
+lever that mattered at 355M is not the binding one at 1B.
+
+**Consequence: at 1B, BCD + CPU weight offload is mandatory, not optional.** It is the only
+configuration measured to fit (4.05 GiB, 875 tok/s). Which makes the tied-embeddings
+incompatibility (#151's guard, #157) a real blocker rather than an inconvenience: a 1B run
+today must pass `--no-tie-embeddings`, costing 70M parameters and 250 MB of VRAM, and giving
+up a lever #139 measured as *better* as well as smaller (held-out 5.50681 tied vs 5.56450
+untied at 31% fewer params).
+
+**Still time-bound, not memory-bound.** At the measured 875 tok/s a 1B model needs ~267 days
+for a Chinchilla-optimal 21.4B tokens. A 1B model **fits and trains** on this 6 GB card —
+the ceiling is arithmetic, not memory, and offload does not touch arithmetic.
+
+**Also corrected here:** `docs/training.md`'s offload table reports 1.04B at 1.73 s/step,
+measured at batch 4 x seq 128 = **512 tokens/step**. Real training runs 4096-token sequences.
+At the sequence length actually used the same config is 4.68 s/step — but **2.8x better
+throughput** (875 vs 313 tok/s), because per-step offload overhead amortises over more
+tokens. Do not read the small-batch step time as a throughput figure in either direction.
+
+Prediction was recorded in the benchmark's docstring before it ran, along with the
+falsifiability check: a fit and a spill are both visible, so this measurement could have
+closed #157 rather than confirming it.
