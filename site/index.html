@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HVN — a language model architecture with constant-cost memory</title>
+<meta name="description" content="HVN replaces the KV cache with a fixed-size state: 19% of attention's compute per token and memory that does not grow with context.">
+<style>
+  :root{
+    --bg:#fbfaf8; --panel:#ffffff; --ink:#16150f; --muted:#5d5a4e;
+    --line:#e4e0d6; --accent:#7a3b12; --accent-soft:#f3ebe3;
+    --good:#1f5c3d; --bad:#8c2f1d; --code:#f5f2ec;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --bg:#12110f; --panel:#1a1917; --ink:#ece8df; --muted:#9d978a;
+      --line:#2c2a26; --accent:#e0925a; --accent-soft:#241d16;
+      --good:#6fbf94; --bad:#e08a72; --code:#1f1e1b;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#12110f; --panel:#1a1917; --ink:#ece8df; --muted:#9d978a;
+    --line:#2c2a26; --accent:#e0925a; --accent-soft:#241d16;
+    --good:#6fbf94; --bad:#e08a72; --code:#1f1e1b;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--sans); line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:52rem; margin:0 auto; padding:0 1.25rem}
+  header{padding:4.5rem 0 2.5rem; border-bottom:1px solid var(--line)}
+  .eyebrow{
+    font-family:var(--mono); font-size:.75rem; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--accent); margin:0 0 1rem;
+  }
+  h1{font-size:clamp(2rem,5.5vw,3.1rem); line-height:1.1; margin:0 0 1rem; letter-spacing:-.02em}
+  .lede{font-size:1.15rem; color:var(--muted); margin:0; max-width:40rem}
+  h2{
+    font-size:1.5rem; margin:3.5rem 0 .35rem; letter-spacing:-.01em;
+    padding-top:1.5rem; border-top:1px solid var(--line);
+  }
+  h2:first-of-type{border-top:none}
+  h3{font-size:1.05rem; margin:2rem 0 .5rem}
+  .sub{color:var(--muted); margin:0 0 1.25rem; font-size:.95rem}
+  p{margin:0 0 1rem}
+  a{color:var(--accent)}
+  .tw{overflow-x:auto; margin:1.25rem 0; border:1px solid var(--line); border-radius:10px; background:var(--panel)}
+  table{border-collapse:collapse; width:100%; font-size:.94rem; min-width:24rem}
+  th,td{text-align:left; padding:.7rem .9rem; border-bottom:1px solid var(--line)}
+  th{font-weight:600; font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted)}
+  tr:last-child td{border-bottom:none}
+  td.num,th.num{text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums}
+  .win{color:var(--good); font-weight:600}
+  .loss{color:var(--bad); font-weight:600}
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:1rem; margin:1.5rem 0}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:1.1rem}
+  .card .k{font-family:var(--mono); font-size:1.7rem; color:var(--accent); line-height:1.1}
+  .card .l{font-size:.85rem; color:var(--muted); margin-top:.35rem}
+  blockquote{
+    margin:1.5rem 0; padding:1rem 1.25rem; background:var(--accent-soft);
+    border-left:3px solid var(--accent); border-radius:0 8px 8px 0;
+  }
+  blockquote p:last-child{margin:0}
+  code{font-family:var(--mono); font-size:.88em; background:var(--code); padding:.15em .4em; border-radius:4px}
+  .pending{
+    border:1px dashed var(--line); border-radius:10px; padding:1.25rem;
+    background:var(--panel); color:var(--muted);
+  }
+  .pending strong{color:var(--ink)}
+  footer{margin-top:4rem; padding:2rem 0 4rem; border-top:1px solid var(--line); color:var(--muted); font-size:.9rem}
+  ul{margin:0 0 1rem; padding-left:1.25rem}
+  li{margin-bottom:.4rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Architecture research · single 6&nbsp;GB GPU</p>
+  <h1>A language model whose memory doesn&rsquo;t grow.</h1>
+  <p class="lede">
+    Transformers remember by keeping every token they have read. HVN keeps a
+    fixed-size state instead &mdash; so the cost of the next token is the same
+    at 100,000 tokens as at 100.
+  </p>
+</header>
+
+<h2>The idea</h2>
+<p class="sub">Why constant-cost memory is worth chasing</p>
+
+<p>
+  A standard model&rsquo;s KV cache grows with every token. Double the context and you
+  double the memory and the work. That is the reason long-context inference is expensive,
+  and it is structural &mdash; not an implementation detail you can optimise away.
+</p>
+<p>
+  HVN replaces that cache with a <strong>fixed-size state</strong> that each new token
+  updates in place, drawing on two ideas: tokens as vortex particles in a velocity field
+  (Lagrangian fluid dynamics), and a state matrix that absorbs new information while
+  discarding noise modes (quantum matrix-product states). The model still reads strictly
+  left to right. It simply stops accumulating.
+</p>
+
+<div class="tw">
+<table>
+  <caption class="sr-only">Cost per token at 100,000 tokens of context</caption>
+  <thead><tr><th>At 100,000 tokens</th><th class="num">Attention + KV cache</th><th class="num">HVN</th></tr></thead>
+  <tbody>
+    <tr><td>Compute per token</td><td class="num">2,474M</td><td class="num win">463M &mdash; 19%</td></tr>
+    <tr><td>Inference memory</td><td class="num">2.46 GB</td><td class="num win">6.29 MB &mdash; 0.26%</td></tr>
+    <tr><td>Growth with context</td><td class="num">O(N)</td><td class="num win">O(1)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>What was actually built</h2>
+<p class="sub">Six weeks, 432 commits, one laptop GPU</p>
+
+<div class="cards">
+  <div class="card"><div class="k">2.3&times;</div><div class="l">smaller weights via ternary quantisation (&minus;1&thinsp;/&thinsp;0&thinsp;/&thinsp;+1)</div></div>
+  <div class="card"><div class="k">5.17&times;</div><div class="l">cheaper per real token after sequence packing</div></div>
+  <div class="card"><div class="k">1.6&times;</div><div class="l">fewer steps to target loss with the Muon optimiser</div></div>
+  <div class="card"><div class="k">0 &rarr; 22.5%</div><div class="l">factual recall once retrieval was added</div></div>
+</div>
+
+<p>
+  Alongside the architecture: custom Triton GPU kernels, a hybrid block plan that mixes a
+  few sliding-window attention layers into the recurrent stack for exact token recall,
+  gradient checkpointing and accumulation to fit a 6&nbsp;GB card, an OpenAI-compatible
+  local server, and a VS&nbsp;Code integration.
+</p>
+
+<h2>The finding that reshaped the project</h2>
+<p class="sub">Fitting in memory was never the constraint</p>
+
+<blockquote>
+  <p>
+    Training cost grows as <code>6 &times; params &times; tokens</code>, and a
+    well-trained model needs roughly 20 tokens per parameter. So doubling the model
+    quadruples the work. Memory tricks address about 2&times; of that gap.
+  </p>
+</blockquote>
+
+<p>
+  Measured honestly, this hardware&rsquo;s ceiling is about <strong>142M parameters</strong>
+  &mdash; not because larger models fail to load, but because they cannot be trained to the
+  point of being worth their size. Every sizing decision since has started from arithmetic
+  rather than from whether the model fits.
+</p>
+
+<h2>The results that did not work</h2>
+<p class="sub">Kept in the record on purpose</p>
+
+<p>
+  Most of this project&rsquo;s written history is negative results, several of them
+  retractions of its own earlier conclusions.
+</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Approach</th><th>Outcome</th></tr></thead>
+  <tbody>
+    <tr><td>Mixture of experts</td><td class="loss">Lost to simply scaling the dense model</td></tr>
+    <tr><td>Looped early exit</td><td class="loss">All results retracted &mdash; they were measuring a one-line bug</td></tr>
+    <tr><td>Predicted &ldquo;phase transition&rdquo;</td><td class="loss">Does not exist; the detector worked, the phenomenon didn&rsquo;t</td></tr>
+    <tr><td>Weight-delta extrapolation</td><td class="loss">Measurably worse than doing nothing</td></tr>
+    <tr><td>Selective token training</td><td class="loss">No gain at this scale</td></tr>
+    <tr><td><code>torch.compile</code></td><td class="loss">2.4&times; <em>slower</em> in the real loop, despite a microbenchmark promising +18%</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>The recurring lesson</h2>
+<p class="sub">The number you are watching is usually not the number that matters</p>
+
+<p>
+  The same failure has appeared five separate times, each time with a healthy-looking
+  metric hiding a broken system:
+</p>
+
+<ul>
+  <li>A cache served untrained weights for weeks while aggregate loss kept falling.</li>
+  <li>A GPU-graph optimisation published a 6.8&times; speedup from a test that compared one
+      step against itself &mdash; it could not have failed.</li>
+  <li>A verdict was retracted for grading on training loss, which measures memorisation.</li>
+  <li>A code model reached excellent perplexity and scored <strong>0%</strong> at actually
+      completing code &mdash; the one skill it was built for was 0.02% of its training
+      signal, far too little to register on the curve.</li>
+  <li>A learning rate silently halved on every restart, compounding, invisible to every
+      chart being watched.</li>
+</ul>
+
+<p>
+  The practical rule that came out of it, now enforced before any measurement is taken:
+  <strong>if the thing being tested were broken, would this test catch it?</strong>
+  Answer it before seeing the result, not after. A test that cannot fail is worse than no
+  test, because it turns a bug into a published number.
+</p>
+
+<h2>Current work</h2>
+<p class="sub">A code-completion model, trained end to end on one laptop</p>
+
+<p>
+  A 48M-parameter model trained on 3.86 billion tokens of source code, using
+  fill-in-the-middle &mdash; the model sees the code before <em>and</em> after the cursor
+  and fills the gap, which is what an editor actually needs.
+</p>
+
+<p>
+  Model size was chosen by measuring time-to-convergence rather than by ambition: a
+  157M model needs 6.5 days on this hardware, a 48M model 22 hours. A small model trained
+  fully beats a large one trained to 10%.
+</p>
+
+<h3>What the run found</h3>
+
+<p>
+  The first attempt reached 63% of its training budget at <strong>exactly 0% correct
+  completions</strong> &mdash; while its loss curve looked healthy. The cause was that the
+  one skill being measured was 0.02% of the training signal: a single token per document
+  asks the model to jump back to the cursor instead of continuing the text it just read.
+  Never learning it costs 0.0006 on the loss curve. No amount of watching that curve could
+  have found this.
+</p>
+
+<p>
+  After fixing the data recipe &mdash; ten times more of that one signal, same compute:
+</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Filling a gap in real code</th><th class="num">Before</th><th class="num">After</th></tr></thead>
+  <tbody>
+    <tr><td>First token correct</td><td class="num">2.2%</td><td class="num win">59.8%</td></tr>
+    <tr><td>Does the code after the cursor help?</td><td class="num loss">hurts</td><td class="num win">helps</td></tr>
+    <tr><td>Whole two-line gap correct</td><td class="num">0%</td><td class="num">1.3%</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  <strong>The mechanism works; the model is too small.</strong> It reliably knows where to
+  start writing, and it now genuinely reads the code on both sides of the gap. It cannot
+  hold the thread for a whole line &mdash; one wrong token fails the entire fill, so 60%
+  per token becomes 1.3% per span. That 1.3% sits against a 1.0% floor for simply copying
+  the previous line, which is to say: at the floor.
+</p>
+
+<p>
+  This is reported rather than buried because it is the point. A 48M-parameter model is
+  roughly 100&times; smaller than the code models this task is built for. Perplexity of
+  4.13 looks excellent and is not evidence of anything &mdash; the gate is, and the gate
+  says no.
+</p>
+
+<blockquote>
+  <p>
+    An earlier reading of this same model, on 50 cases instead of 300, showed 4%
+    &mdash; two correct answers. It did not survive the larger sample. It is recorded
+    here because it was briefly believed.
+  </p>
+</blockquote>
+
+<footer>
+  <p>
+    kramba-ai &mdash; HVN architecture research. Built and measured on a single
+    RTX&nbsp;4050 (6&nbsp;GB). Every figure on this page is measured, not projected.
+  </p>
+</footer>
+
+</div>
+</body>
+</html>

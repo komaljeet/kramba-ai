@@ -71,7 +71,12 @@ def test_fim_cache_is_not_reused_for_a_non_fim_run(tmp_path):
     b = str(tmp_path / "out.bin")
     fim = {"rate": 1.0, "spm_rate": 0.0, "seed": 0, "separator": SEP}
     tec._tokenize_text_to_bin(text, b, FakeTok(), fim=fim)
-    with pytest.raises(RuntimeError, match="tokenized by"):
+    # Wording changed when the corpus fingerprint was added to the signature
+    # (#164); the behaviour under test -- refusing to reuse FIM data for a
+    # non-FIM run -- is unchanged. Matching several phrasings so a future
+    # message edit does not fail a test about cache safety.
+    with pytest.raises(RuntimeError,
+                       match="different tokenizer/FIM setting|tokenized by"):
         tec._tokenize_text_to_bin(text, b, FakeTok(), fim=None)
 
 

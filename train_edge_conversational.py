@@ -73,6 +73,11 @@ def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
         first_block = model.shared_block.block
     elif hasattr(model, 'blocks') and len(model.blocks) > 0:
         first_block = model.blocks[0]
+        # #155: under per-type sharing each entry is a SharedBlockRef wrapper
+        # holding the real block. n_heads and the other architecture fields live
+        # on the block, and getattr(wrapper, 'n_heads', 4) would silently record
+        # 4 -- a checkpoint that rebuilds as a different model with no error.
+        first_block = getattr(first_block, 'block', first_block)
     else:
         first_block = None
 
@@ -120,17 +125,28 @@ RESUME_STATE_FILENAME = "resume_state.pt"
 
 
 def _save_resume_state(checkpoint_dir: str, global_step: int, optimizer,
-                       bcd_scheduler=None) -> None:
-    """Persist optimizer + BCD-cycle state so a restart continues rather than restarts.
+                       bcd_scheduler=None, lr_scheduler=None) -> None:
+    """Persist optimizer + BCD-cycle + LR-schedule state so a restart continues.
 
     Written atomically (temp file + os.replace) because this file is overwritten in
     place — a crash mid-write would otherwise corrupt the only copy, and surviving
     crashes is the entire point of it.
+
+    ``lr_scheduler`` state is saved as of #165. Without it the resume path
+    reconstructed the schedule by replaying ``scheduler.step()``, which anchored
+    the cosine on the LR that ``optimizer.load_state_dict`` had just restored —
+    the already-decayed value — so the entire cosine curve was applied again on
+    every resume. It compounded multiplicatively: two resumes in the 48M code run
+    left the LR at 41% of intended by step 20000, and the training curve showed
+    nothing. Saving the scheduler's own ``last_epoch`` removes the replay
+    entirely.
     """
     state = {
         "global_step": global_step,
         "optimizer_state_dict": optimizer.state_dict(),
         "bcd_state_dict": bcd_scheduler.state_dict() if bcd_scheduler is not None else None,
+        "sched_state_dict": (lr_scheduler.state_dict()
+                             if lr_scheduler is not None else None),
     }
     path = os.path.join(checkpoint_dir, RESUME_STATE_FILENAME)
     tmp = path + ".tmp"
@@ -611,9 +627,16 @@ def _fim_signature(fim: dict | None) -> str:
     """
     if not fim:
         return ""
+    # ``v2`` is the gap-density fix (#164): short, mostly line-aligned middles,
+    # one gap per ~2000-character unit instead of one per document. A v1 cache
+    # has the SAME rate/spm/seed and is silently the old shape -- the very
+    # substitution this signature exists to prevent -- so the version is part of
+    # the key, and must be bumped by anything that changes the transform.
+    from hvn.fim import FIM_TRANSFORM_VERSION
     return (f"|fim{fim.get('rate', 0.5)}"
             f"-spm{fim.get('spm_rate', 0.5)}"
-            f"-seed{fim.get('seed', 0)}")
+            f"-seed{fim.get('seed', 0)}"
+            f"-{FIM_TRANSFORM_VERSION}")
 
 
 def _fim_blockwise(text: str, fim: dict, rng) -> str:
@@ -622,17 +645,29 @@ def _fim_blockwise(text: str, fim: dict, rng) -> str:
     Documents are separated by the corpus separator (``<|endoftext|>``). The
     transform is meaningless applied to a 4 MB slab of many files -- it would
     teach the model to relocate whole files, not to fill a gap in one.
+
+    Each document is further cut into ~1200-character UNITS, each gapped
+    independently (#164). One gap per file gave one jump-back token per ~4,800
+    corpus tokens, too sparse for the model to learn from -- see
+    ``hvn.fim.split_document``. Units are joined with the plain separator so the
+    byte content of the corpus is unchanged; only where the gaps fall differs.
     """
-    from hvn.fim import apply_fim
+    from hvn.fim import apply_fim, iter_fim_units
     sep = fim.get("separator", "<|endoftext|>")
     parts = text.split(sep)
     out = []
     for part in parts:
-        if part and rng.random() < fim.get("rate", 0.5):
-            out.append(apply_fim(part, rng,
-                                 spm=rng.random() < fim.get("spm_rate", 0.5)))
-        else:
+        if not part:
             out.append(part)
+            continue
+        units = []
+        for unit in iter_fim_units(part, rng):
+            if rng.random() < fim.get("rate", 0.5):
+                units.append(apply_fim(
+                    unit, rng, spm=rng.random() < fim.get("spm_rate", 0.5)))
+            else:
+                units.append(unit)
+        out.append("".join(units))
     return sep.join(out)
 
 
@@ -729,6 +764,22 @@ def _tokenize_text_to_bin(
         if os.path.exists(sig_path):
             with open(sig_path, encoding="utf-8") as fh:
                 prev = fh.read().strip()
+        # A sidecar written before the corpus fingerprint existed carries only
+        # the tokenizer/FIM part. Comparing it against the full signature marks
+        # every pre-#164 cache as a corpus mismatch and forces a multi-hour
+        # re-tokenize of data that is perfectly valid -- slimpajama.bin (2.6 GB)
+        # and wikitext.bin among them. The fingerprint cannot be checked for
+        # those: nothing recorded which file produced them. So compare only the
+        # part the sidecar actually has, and upgrade it in place so the check
+        # does apply from here on.
+        if prev is not None and "|src=" not in prev and "|src=" in sig:
+            if prev == sig.split("|src=")[0]:
+                with open(sig_path, "w", encoding="utf-8") as fh:
+                    fh.write(sig)
+                print(f"    (sidecar for {os.path.basename(bin_path)} predates "
+                      f"corpus fingerprinting; adopted and upgraded)")
+                prev = sig
+
         if prev is not None and prev != sig:
             same_tok = prev.split("|src=")[0] == sig.split("|src=")[0]
             what = ("a DIFFERENT SOURCE CORPUS" if same_tok
@@ -747,9 +798,17 @@ def _tokenize_text_to_bin(
             # forcing a needless multi-hour re-tokenize, but say so.
             print(f"    (unlabelled cache {os.path.basename(bin_path)} assumed "
                   f"GPT-2; writing sidecar)")
+            # Compare only the TOKENIZER part. #164 appended a corpus
+            # fingerprint (|src=name:size:mtime) and a FIM fragment to the
+            # signature; a pre-#139 cache has neither, so comparing the whole
+            # string would reject every legacy cache and force a multi-hour
+            # re-tokenize that this branch exists specifically to avoid. The
+            # fingerprint cannot be checked here in any case -- there is no
+            # record of which corpus produced an unlabelled .bin.
+            tok_part = sig.split("|", 1)[0]
             with open(sig_path, "w", encoding="utf-8") as fh:
-                fh.write("gpt2/50257")
-            if sig != "gpt2/50257":
+                fh.write(sig)
+            if tok_part != "gpt2/50257":
                 raise RuntimeError(
                     f"{bin_path} predates tokenizer tracking and is GPT-2, but "
                     f"this run uses {sig!r}. Delete it to re-tokenize.")
@@ -1728,6 +1787,7 @@ def build_model_and_config(
     attn_window: int | None = None,
     grad_checkpoint: bool = False,
     tie_embeddings: bool = False,
+    shared_weights: bool = False,
     optimizer: str = "muon",
     precision: str = "bf16",
     lr: float = 3e-4,
@@ -1844,6 +1904,7 @@ def build_model_and_config(
         attn_window=attn_window,
         grad_checkpoint=grad_checkpoint,
         tie_embeddings=tie_embeddings,
+        shared_weights=shared_weights,
         # #139 gave EdgeHVN an eos_token_id and main() has passed one ever since,
         # but this function never accepted the argument -- so every call through
         # main() raised TypeError at model construction. It went unnoticed
@@ -2088,6 +2149,12 @@ def pre_training_audit(
                 attn_window=ckpt.get("attn_window", None),
                 tie_embeddings=ckpt.get("tie_embeddings", False),
                 eos_token_id=ckpt.get("eos_token_id", GPT2_EOS_ID),
+                # #155: the fourth field to be forgotten here. A shared model's
+                # parameters live at blocks.N.block.* plus two per-layer scalars,
+                # so rebuilding dense makes load_state_dict report every key as
+                # missing AND unexpected -- the audit failing on its own rebuild
+                # rather than on the model.
+                shared_weights=ckpt.get("shared_weights", False),
             )
             # Apply ternary to rebuilt model (same layers as original) — only if the
             # checkpoint was ternary (fp32 A/B runs skip it).
@@ -2101,6 +2168,28 @@ def pre_training_audit(
             rebuilt = rebuilt.to(device)
             rebuilt.load_state_dict(ckpt["model_state_dict"])
             print(f"    ✓ State dict loads into rebuilt model")
+
+            # #155: a strict load CANNOT verify sharing. A model whose wrappers
+            # each hold their OWN block has identical key names and an identical
+            # state_dict size -- it loads perfectly clean while being a dense
+            # model wearing shared clothing (measured: 184,020 unique params vs
+            # 100,044 correct, both reporting 200,404 in the state dict). The
+            # #117/#164 shape exactly. Counting DISTINCT block objects against
+            # distinct plan types is what actually separates them; the
+            # unique-vs-total parameter inequality is too weak and passes on the
+            # broken model.
+            if ckpt.get("shared_weights", False) and rebuilt.blocks is not None:
+                plan = ckpt.get("block_plan") or []
+                n_types = len(set(plan))
+                n_objs = len({id(getattr(b, "block", b)) for b in rebuilt.blocks})
+                if n_types and n_objs != n_types:
+                    raise AssertionError(
+                        f"shared_weights=True but {n_objs} distinct block objects "
+                        f"exist for {n_types} block type(s) -- sharing did not "
+                        f"engage; this model would train dense while reporting "
+                        f"as shared")
+                print(f"    ✓ Sharing verified: {n_objs} block object(s) for "
+                      f"{n_types} type(s) across {len(plan)} layers")
 
             # Clean up test checkpoint
             os.remove(test_ckpt_path)
@@ -2242,6 +2331,11 @@ def load_checkpoint_for_resume(
         tie_embeddings=ckpt.get("tie_embeddings", False),
         eos_token_id=ckpt.get("eos_token_id", 50256),
         grad_checkpoint=ckpt.get("grad_checkpoint", False),
+        # #155: a shared checkpoint rebuilt as dense (or the reverse) loads
+        # with a shape mismatch at best and trains a different architecture at
+        # worst, so it is read back from the checkpoint like every other
+        # structural field rather than taken from the current flags.
+        shared_weights=ckpt.get("shared_weights", False),
     )
 
     # Apply ternary to match the saved model — only if it was ternary. Older
@@ -2503,10 +2597,36 @@ def train(
 
     # --- Cosine LR schedule with warmup ---
     total_steps = max_steps if max_steps is not None else 10_000
-    scheduler = build_cosine_scheduler(optimizer, total_steps, resume_step)
-    if resume_step > 0:
-        print(f"  [resume] cosine schedule continued at step {resume_step}/{total_steps} "
-              f"(lr {optimizer.param_groups[0]['lr']:.3e}), not restarted")
+    sched_sd = resume_state.get("sched_state_dict") if resume_state else None
+    if resume_step > 0 and sched_sd is not None:
+        # #165: restore the schedule's OWN position. optimizer.load_state_dict
+        # above has already put the exact save-time LR back into param_groups,
+        # and last_epoch says where on the cosine that value sits, so the
+        # recursion continues from the right anchor with no replay.
+        scheduler = build_cosine_scheduler(optimizer, total_steps, 0)
+        scheduler.load_state_dict(sched_sd)
+        print(f"  [resume] LR schedule restored at step {resume_step}/{total_steps} "
+              f"(lr {optimizer.param_groups[0]['lr']:.3e}, "
+              f"cosine position {scheduler.last_epoch})")
+    else:
+        if resume_step > 0:
+            # Legacy checkpoint written before #165 -- no saved schedule. Replaying
+            # is only correct from the PEAK LR, so reset the groups first;
+            # otherwise the cosine anchors on the decayed value and is applied
+            # twice (the bug itself). Replay excludes the warmup steps, during
+            # which the original run never advanced the cosine.
+            for pg, base in zip(optimizer.param_groups, base_lrs):
+                pg["lr"] = base
+            replay = max(0, resume_step - warmup_steps + 1)
+            print(f"  [resume] no saved LR schedule (pre-#165 checkpoint) — "
+                  f"rebuilding from peak, replaying {replay} steps")
+        else:
+            replay = 0
+        scheduler = build_cosine_scheduler(optimizer, total_steps, replay)
+        if resume_step > 0:
+            print(f"  [resume] cosine schedule continued at step "
+                  f"{resume_step}/{total_steps} "
+                  f"(lr {optimizer.param_groups[0]['lr']:.3e}), not restarted")
 
     # --- Dynamic phase-aware LR multiplier (Issue #133) ---
     # A GLOBAL multiplier layered on top of the warmup+cosine LR above, chosen
@@ -2806,7 +2926,8 @@ def train(
             if global_step % config["save_every_steps"] == 0:
                 ckpt_path = os.path.join(checkpoint_dir, f"edge_conversational_step{global_step}.pt")
                 _save_edge_checkpoint(model, ckpt_path, global_step=global_step)
-                _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler)
+                _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler,
+                       lr_scheduler=scheduler)
                 print(f"  ✓ Checkpoint saved: {ckpt_path}")
 
             loss_accum_t.zero_()
@@ -2814,7 +2935,8 @@ def train(
     # --- Final checkpoint ---
     final_ckpt_path = os.path.join(checkpoint_dir, "edge_conversational.pt")
     _save_edge_checkpoint(model, final_ckpt_path, global_step=global_step)
-    _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler)
+    _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler,
+                       lr_scheduler=scheduler)
 
     if dyn_lr is not None:
         dyn_lr.close()
@@ -2900,10 +3022,14 @@ def main():
                              "three sentinels: build one with "
                              "scripts/build_fim_tokenizer.py and pass "
                              "--tokenizer data_cache/tokenizer_32k_fim.")
-    parser.add_argument("--fim-rate", type=float, default=0.5,
-                        help="Fraction of documents transformed. Below 1.0 on "
+    parser.add_argument("--fim-rate", type=float, default=0.9,
+                        help="Fraction of UNITS transformed (a unit is ~1200 "
+                             "characters, not a whole file). Below 1.0 on "
                              "purpose: the model must still generate forward "
-                             "from a cursor with nothing after it.")
+                             "from a cursor with nothing after it. Raised from "
+                             "0.5 to 0.9 in #164 -- Bavarian et al. report up to "
+                             "0.9 is harmless to left-to-right ability, and at "
+                             "0.5 half the units carried no jump-back at all.")
     parser.add_argument("--fim-spm-rate", type=float, default=0.5,
                         help="Fraction of FIM documents using SPM (suffix "
                              "first) rather than PSM.")
@@ -3102,6 +3228,18 @@ def main():
                              "Composes with --block-coordinate (that shrinks optimizer-"
                              "state memory; this shrinks activation memory -- "
                              "independent axes). Default: off.")
+    parser.add_argument("--shared-weights", action="store_true", default=False,
+                        help="ALBERT-style weight sharing: all layers of the same "
+                             "block type reuse ONE block's weights (#155). On a "
+                             "12-layer hybrid this stores 2 blocks instead of 12 "
+                             "-- measured 5.98x fewer body params at d=512. The "
+                             "block plan is preserved: attention layers still "
+                             "share only with attention layers. Each virtual "
+                             "layer keeps its own RoPE offset and residual scale. "
+                             "Sharing costs ~29%% PPL at FIXED width (measured "
+                             "2026-08-02), so it only wins if the saved "
+                             "parameters are spent on a WIDER model -- compare "
+                             "at equal params, never at equal width.")
     parser.add_argument("--tie-embeddings", action=argparse.BooleanOptionalAction,
                         default=True,
                         help="Tie token_embedding and the decoder output projection "
@@ -3300,6 +3438,7 @@ def main():
         attn_window=args.attn_window,
         grad_checkpoint=args.grad_checkpoint,
         tie_embeddings=args.tie_embeddings,
+        shared_weights=args.shared_weights,
         vocab_size=vocab_size,
         eos_token_id=eos_token_id,
         optimizer=args.optimizer,

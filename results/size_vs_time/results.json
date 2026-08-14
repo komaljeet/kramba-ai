@@ -1,0 +1,103 @@
+{
+  "issue": 163,
+  "config": {
+    "seq_len": 4096,
+    "grad_accum": 8,
+    "vocab_size": 32003,
+    "steps": 3,
+    "corpus_tokens": 3830000000.0,
+    "out": "results\\size_vs_time\\results.json"
+  },
+  "results": [
+    {
+      "name": "896x16",
+      "d_model": 896,
+      "layers": 16,
+      "heads": 28,
+      "params": 157670155,
+      "body": 128995467,
+      "vocab_share": 18.186503336665076,
+      "s_step": 7.11888750000071,
+      "tok_s": 4602.966404511481,
+      "vram_mib": 4314.0,
+      "chinchilla_tokens": 2579909340,
+      "hours_to_chinchilla": 155.6912261255992,
+      "corpus_headroom": 1.4845482903674436
+    },
+    {
+      "name": "768x14",
+      "d_model": 768,
+      "layers": 14,
+      "heads": 24,
+      "params": 107526947,
+      "body": 82948643,
+      "vocab_share": 22.85780884302425,
+      "s_step": 5.307215400000132,
+      "tok_s": 6174.235927940514,
+      "vram_mib": 3490.0,
+      "chinchilla_tokens": 1658972860,
+      "hours_to_chinchilla": 74.63689431740877,
+      "corpus_headroom": 2.308657418301587
+    },
+    {
+      "name": "640x12",
+      "d_model": 640,
+      "layers": 12,
+      "heads": 20,
+      "params": 69878603,
+      "body": 49396683,
+      "vocab_share": 29.310717616950644,
+      "s_step": 3.7706257999998343,
+      "tok_s": 8690.334638881812,
+      "vram_mib": 3150.0,
+      "chinchilla_tokens": 987933660,
+      "hours_to_chinchilla": 31.578302570633475,
+      "corpus_headroom": 3.876778527821392
+    },
+    {
+      "name": "512x12",
+      "d_model": 512,
+      "layers": 12,
+      "heads": 16,
+      "params": 48024483,
+      "body": 31638947,
+      "vocab_share": 34.119130444361055,
+      "s_step": 3.135538299997279,
+      "tok_s": 10450.518177382313,
+      "vram_mib": 2602.0,
+      "chinchilla_tokens": 632778940,
+      "hours_to_chinchilla": 16.819446155138483,
+      "corpus_headroom": 6.052666670606958
+    },
+    {
+      "name": "512x8",
+      "d_model": 512,
+      "layers": 8,
+      "heads": 16,
+      "params": 37481315,
+      "body": 21095779,
+      "vocab_share": 43.71654516390367,
+      "s_step": 2.167135800002143,
+      "tok_s": 15120.418388163584,
+      "vram_mib": 2470.0,
+      "chinchilla_tokens": 421915580,
+      "hours_to_chinchilla": 7.751027069063552,
+      "corpus_headroom": 9.07764534317505
+    },
+    {
+      "name": "384x8",
+      "d_model": 384,
+      "layers": 8,
+      "heads": 12,
+      "params": 24177611,
+      "body": 11888459,
+      "vocab_share": 50.828644732517205,
+      "s_step": 1.7850309000023117,
+      "tok_s": 18357.105190704297,
+      "vram_mib": 2354.0,
+      "chinchilla_tokens": 237769180,
+      "hours_to_chinchilla": 3.597898130359325,
+      "corpus_headroom": 16.108059084865413
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "config": {
+    "checkpoint": "checkpoints/code_48m_v2/edge_conversational.pt",
+    "tokenizer": "data_cache/tokenizer_32k_fim",
+    "corpus": "data_cache/code_corpus/stack_code.txt",
+    "separator": "<|endoftext|>",
+    "n_cases": 300,
+    "span_lines": 2,
+    "min_tokens": 200,
+    "max_ctx": 768,
+    "max_new": 40,
+    "tail_bytes": 20000000,
+    "validator": "balanced",
+    "seed": 11,
+    "out": "results/fim_gate/code48m_v2_final300.json"
+  },
+  "cases": 300,
+  "gate_broken": false,
+  "results": {
+    "floor_empty": {
+      "n": 300,
+      "exact_pct": 0.6666666666666667,
+      "valid_pct": 50.66666666666667
+    },
+    "floor_copy_prev_line": {
+      "n": 300,
+      "exact_pct": 1.0,
+      "valid_pct": 40.0
+    },
+    "known_answer": {
+      "n": 300,
+      "exact_pct": 100.0,
+      "valid_pct": 100.0
+    },
+    "model": {
+      "n": 300,
+      "exact_pct": 1.3333333333333335,
+      "valid_pct": 48.66666666666667
+    },
+    "verdict": "exact 1.3%, valid 48.7% against a 1.0% floor. Run eval/coding.py's executable pass@k for the behavioural tier before calling it real."
+  }
+}

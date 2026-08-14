@@ -168,3 +168,147 @@ def test_cosine_resume_beyond_total_steps_does_not_hang_or_crash():
     opt = torch.optim.SGD(model.parameters(), lr=0.1)
     build_cosine_scheduler(opt, total_steps=100, resume_step=5000)
     assert opt.param_groups[0]["lr"] >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# LR continuity across CHAINED resumes (#165).
+#
+# The 48M code run lost 26% of its intended learning rate this way. On resume,
+# optimizer.load_state_dict() restores the already-DECAYED lr into param_groups,
+# and the cosine scheduler was then built on top of that value -- so the whole
+# curve was applied again, multiplicatively, once per resume:
+#
+#     step 5050  after resume 1:  0.016614 (intended 0.018372)   -9.7%
+#     step 12050 after resume 2:  0.005167 (intended 0.009781)  -47%
+#
+# test_cosine_schedule_continues_rather_than_restarting above CANNOT catch this:
+# it builds the resumed scheduler on a FRESH optimizer sitting at peak LR, so it
+# never creates the condition. It also resumes only once, and the error only
+# becomes obvious when it compounds.
+#
+# So these tests go through the real save/load path, chain TWO resumes, and
+# compare the whole LR SEQUENCE against an uninterrupted reference.
+# ---------------------------------------------------------------------------
+
+TOTAL, PEAK, WARMUP = 25_000, 0.02, 500
+
+
+def _fresh_opt():
+    return torch.optim.SGD(_tiny_model().parameters(), lr=PEAK)
+
+
+def _reference_lrs(total=TOTAL, warmup=WARMUP):
+    """LR at every step of a run that is never interrupted.
+
+    Warmup is modelled because the production loop overrides the LR for the
+    first ``warmup`` steps and does NOT advance the cosine during them. Leaving
+    it out shifts the whole curve by ~500 steps and the reproduction no longer
+    matches the values the incident actually logged.
+    """
+    opt = _fresh_opt()
+    sched = build_cosine_scheduler(opt, total, 0)
+    out = []
+    for step in range(total):
+        if step < warmup:
+            lr = PEAK * step / warmup
+            for pg in opt.param_groups:
+                pg["lr"] = lr
+            out.append(lr)
+        else:
+            out.append(opt.param_groups[0]["lr"])
+            sched.step()
+    return out
+
+
+def _run_with_resumes(tmp_path, breaks, total=TOTAL, restore_sched=True):
+    """Run to ``total`` steps, saving and reloading at each step in ``breaks``.
+
+    Mirrors the production path: save via _save_resume_state, then on resume
+    build a fresh optimizer, load the optimizer state (which restores the
+    decayed LR -- the trigger), then restore the schedule.
+    """
+    opt = _fresh_opt()
+    sched = build_cosine_scheduler(opt, total, 0)
+    lrs, step = [], 0
+    for stop in list(breaks) + [total]:
+        while step < stop:
+            if step < WARMUP:
+                lr = PEAK * step / WARMUP
+                for pg in opt.param_groups:
+                    pg["lr"] = lr
+                lrs.append(lr)
+            else:
+                lrs.append(opt.param_groups[0]["lr"])
+                sched.step()
+            step += 1
+        if stop == total:
+            break
+        _save_resume_state(str(tmp_path), step, opt, None, lr_scheduler=sched)
+        state = _load_resume_state(str(tmp_path), expected_step=step)
+        opt = _fresh_opt()
+        opt.load_state_dict(state["optimizer_state_dict"])   # restores decayed lr
+        sched = build_cosine_scheduler(opt, total, 0)
+        if restore_sched and state.get("sched_state_dict") is not None:
+            sched.load_state_dict(state["sched_state_dict"])
+        else:
+            for _ in range(step):        # the old path: replays warmup steps too
+                sched.step()
+    return lrs
+
+
+def test_two_chained_resumes_reproduce_the_uninterrupted_lr_exactly(tmp_path):
+    """The real gate: a SEQUENCE, not one step.
+
+    Compares every step from the first break to the end. Comparing only the
+    step after a resume would pass even if the curve's shape were wrong.
+    """
+    ref = _reference_lrs()
+    got = _run_with_resumes(tmp_path, breaks=[5000, 12000])
+    assert len(got) == len(ref)
+    worst = max(abs(a - b) for a, b in zip(got[5000:], ref[5000:]))
+    assert worst == 0.0, f"LR diverged after resume, max |delta| = {worst:.3e}"
+
+
+def test_the_error_compounds_so_one_resume_is_not_enough_to_test(tmp_path):
+    """Anti-vacuity: the OLD path must fail this suite, and fail worse with each
+    resume. If replaying ever stops diverging, these tests are measuring nothing
+    and should be deleted rather than trusted."""
+    ref = _reference_lrs()
+    one = _run_with_resumes(tmp_path, breaks=[5000], restore_sched=False)
+    two = _run_with_resumes(tmp_path, breaks=[5000, 12000], restore_sched=False)
+
+    err_one = abs(one[12050] - ref[12050]) / ref[12050]
+    err_two = abs(two[12050] - ref[12050]) / ref[12050]
+    assert err_one > 0.01, "the old replay path no longer diverges at all"
+    assert err_two > err_one * 2, (
+        f"error did not compound across resumes ({err_one:.1%} -> {err_two:.1%}); "
+        f"a single-resume test would be enough and this one is redundant")
+
+
+def test_reproduces_the_lr_actually_logged_by_the_broken_48m_run(tmp_path):
+    """Pins the fix to the observed failure, not to a theory of it.
+
+    These are the values from checkpoints/code_48m/training_log.csv. If a future
+    change reintroduces the bug, this says so in the same numbers we debugged.
+    """
+    broken = _run_with_resumes(tmp_path, breaks=[5000, 12000], restore_sched=False)
+    assert broken[12050] == pytest.approx(0.00516675, rel=1e-4), (
+        f"expected the logged broken value 0.00516675, got {broken[12050]:.8f} "
+        f"-- the reproduction no longer matches the incident")
+    fixed = _run_with_resumes(tmp_path, breaks=[5000, 12000])
+    assert fixed[12050] == pytest.approx(_reference_lrs()[12050], rel=1e-12)
+
+
+def test_scheduler_state_is_actually_persisted(tmp_path):
+    """The plumbing. Without this key the code silently takes the legacy path,
+    which is the bug -- and every other test here would still pass by falling
+    back to it."""
+    opt = _fresh_opt()
+    sched = build_cosine_scheduler(opt, TOTAL, 0)
+    for _ in range(10):
+        sched.step()
+    _save_resume_state(str(tmp_path), 10, opt, None, lr_scheduler=sched)
+    state = _load_resume_state(str(tmp_path), expected_step=10)
+    assert state.get("sched_state_dict") is not None, \
+        "_save_resume_state did not persist the LR schedule"
+    assert state["sched_state_dict"]["last_epoch"] == 10
