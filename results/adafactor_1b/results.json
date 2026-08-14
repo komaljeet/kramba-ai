@@ -1,0 +1,24 @@
+[
+  {
+    "arm": "adafactor, no BCD, no offload",
+    "optimizer": "adafactor",
+    "offload": false,
+    "params": 1074214851,
+    "alloc_gib": 9.083264350891113,
+    "reserved_gib": 9.419921875,
+    "s_step": 48.496712399995886,
+    "tok_s": 84.45933337123172
+  },
+  {
+    "arm": "muon, no BCD, no offload",
+    "optimizer": "muon",
+    "offload": false,
+    "result": "OOM"
+  },
+  {
+    "arm": "adafactor + BCD + offload",
+    "optimizer": "adafactor",
+    "offload": true,
+    "result": "ValueError: offload_inactive_weights=True is not supported with tie_embeddings=True (Issue #151): the shared emb"
+  }
+]
