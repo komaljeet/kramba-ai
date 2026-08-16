@@ -4383,3 +4383,83 @@ tokens. Do not read the small-batch step time as a throughput figure in either d
 Prediction was recorded in the benchmark's docstring before it ran, along with the
 falsifiability check: a fit and a spill are both visible, so this measurement could have
 closed #157 rather than confirming it.
+
+## HVN beats a matched transformer at equal compute — the first real head-to-head (#160 Phase 0, 2026-08-16)
+
+The only architecture comparison this repo had was §8.12: 5M tokens, WikiText, single seed,
+perplexity only. Everything since has been HVN-only — `results/size_vs_time/results.json`
+has six HVN configs and no baseline. The 48M code model proved the architecture *functions*;
+it proved nothing about *better*, because the opponent was never run.
+
+**Setup.** 384x8, `--arch hvn-hybrid` (attn at 2,6) vs `--arch transformer`. Parameters match
+to 0.4% (body 11.89M vs 11.84M). Identical corpus, tokenizer, FIM version, sequence length,
+precision, optimizer, seed (1234), constant LR, and held-out slice. **Matched WALL CLOCK,
+7.4 h each** — hours are what you spend, and each architecture converts them into tokens at
+its own rate.
+
+| arm | held-out NLL | tokens seen | tokens/param |
+|---|---:|---:|---:|
+| **HVN hybrid** | **1.9654** | 475M | 40.0 |
+| transformer | 1.9814 | **672M** | 56.7 |
+
+**HVN wins by +0.0160 against a pre-registered noise threshold of ±0.011** — and it wins
+while seeing **40% LESS data**, because the transformer runs 1.41x faster per step at this
+size (1.29 vs 1.82 s/step, the first time a transformer baseline has been timed here).
+
+At matched tokens the gap is much larger — roughly 4x the noise floor at every point:
+
+| tokens/param | HVN | transformer |
+|---|---:|---:|
+| 20 | **2.0509** | 2.1361 |
+| 30 | **1.9841** | 2.0703 |
+| 40 | **1.9613** | 2.0163 |
+
+So: HVN extracts more from the same data, and enough more to absorb a 40% data deficit.
+
+**Two things this does NOT say.** Nothing above a 12M body — both models are small enough
+that the capability gates read at the floor for both, so this is a loss comparison, not a
+capability one. And it is a single seed: same-seed removes *between-arm* luck but both arms
+share whatever that seed favours. #86's A/B used the same compromise.
+
+**A correction to a claim made earlier in the week.** HVN is *not* cheaper to train. At
+384 wide / 4096 long the transformer is 1.41x faster per step; the recurrent scan, not
+attention, is the bottleneck at this size. The compute win is at INFERENCE (6.29 MB vs
+2.46 GB of context memory at 100K tokens, O(1) vs O(N)) and that is settled separately.
+Training-speed parity should not be claimed.
+
+**Next:** #160 Phase 1, the 48M pair, both arms fresh and seeded, 22 h each — launched
+2026-08-16 05:51. That answers the question Phase 0 cannot: whether the lead grows or
+shrinks with size, and whether it shows up in capability rather than only in loss.
+
+## Tokens-per-parameter for HVN: ~30, not 20 — but the size trend is unresolved (#159, 2026-08-16)
+
+Every sizing decision in this repo divides by Chinchilla's 20 tokens/param, fitted on
+transformers and never checked here. Measured on three sizes with a constant LR (so every
+checkpoint is a valid "trained to X tokens" model rather than a snapshot partway through a
+cosine — the bias Hoffmann et al. had to re-run to avoid), scored on a fixed held-out slice
+via `eval/heldout_loss.py`:
+
+| tokens/param | 12M body | 21M body | 32M body |
+|---|---:|---:|---:|
+| 20 | 2.0509 | 1.8619 | 1.6397 |
+| 30 | 1.9841 | 1.8264 | — |
+| 40 | 1.9613 | 1.8037 | — |
+
+Going 20 -> 30 buys 1.9-3.3%; 30 -> 40 buys ~1.1% for 33% more time. **~30 is where the
+trade turns**, and 20 is too low.
+
+**What is NOT resolved: how the ratio moves with size.** The elbow detector returns 24.8,
+9.3 and 19.7 for the three sizes — not ordered by size, which is the question. The 21M curve
+is twice as noisy as the others (±0.0097 vs ±0.0035-0.0053), and the 32M curve is truncated
+at 25.9 tokens/param, still improving, because it was never trained further.
+
+**Fitting a scaling law to the 120 points does not rescue it, and the failure is recorded
+rather than hidden.** The standard parametric form returns optimal ratios of 10.6 / 4.2 /
+1.2 / 0.3 tokens-per-param at 12M / 32M / 129M / 1B — i.e. it claims a 1B model needs less
+data than it has parameters, contradicting every raw curve, with a fit error (±0.038) larger
+than the effects being measured. Five free parameters, three sizes, one truncated: the fit
+is degenerate. **Use ~30 as a working number; do not extrapolate it across scale.**
+
+Consequence for sizing at 30 tokens/param, using measured step times: 48M in 1.1 days, 70M
+in 2.0, 108M in 4.7, 157M in 9.7. The 157M launched at 25,000 steps on 2026-08-14 would have
+reached 0.32x Chinchilla — the #112 trap — and was stopped for this study.

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HVN — a language model architecture with constant-cost memory</title>
-<meta name="description" content="HVN replaces the KV cache with a fixed-size state: 19% of attention's compute per token and memory that does not grow with context.">
+<title>A language model architecture with constant-cost memory</title>
+<meta name="description" content="Measured: 19% of attention's compute per token, and inference memory that does not grow with context.">
 <style>
   :root{
     --bg:#fbfaf8; --panel:#ffffff; --ink:#16150f; --muted:#5d5a4e;
@@ -83,32 +83,28 @@
   <p class="eyebrow">Architecture research · single 6&nbsp;GB GPU</p>
   <h1>A language model whose memory doesn&rsquo;t grow.</h1>
   <p class="lede">
-    Transformers remember by keeping every token they have read. HVN keeps a
-    fixed-size state instead &mdash; so the cost of the next token is the same
-    at 100,000 tokens as at 100.
+    Transformers remember by keeping every token they have read, so their cost
+    climbs with the length of what they are reading. This one&rsquo;s does not &mdash;
+    the next token costs the same at 100,000 as at 100.
   </p>
 </header>
 
-<h2>The idea</h2>
-<p class="sub">Why constant-cost memory is worth chasing</p>
+<h2>What it does</h2>
+<p class="sub">The result, stated as a measurement</p>
 
 <p>
-  A standard model&rsquo;s KV cache grows with every token. Double the context and you
-  double the memory and the work. That is the reason long-context inference is expensive,
-  and it is structural &mdash; not an implementation detail you can optimise away.
+  A standard model&rsquo;s memory grows with every token it reads. Double the context and you
+  double the memory and the work &mdash; which is why long-context inference is expensive,
+  and it is structural rather than an implementation detail anyone can optimise away.
 </p>
 <p>
-  HVN replaces that cache with a <strong>fixed-size state</strong> that each new token
-  updates in place, drawing on two ideas: tokens as vortex particles in a velocity field
-  (Lagrangian fluid dynamics), and a state matrix that absorbs new information while
-  discarding noise modes (quantum matrix-product states). The model still reads strictly
-  left to right. It simply stops accumulating.
+  This one doesn&rsquo;t grow. The cost of the next token is the same at 100,000 tokens as
+  at 100.
 </p>
 
 <div class="tw">
 <table>
-  <caption class="sr-only">Cost per token at 100,000 tokens of context</caption>
-  <thead><tr><th>At 100,000 tokens</th><th class="num">Attention + KV cache</th><th class="num">HVN</th></tr></thead>
+  <thead><tr><th>At 100,000 tokens</th><th class="num">Standard transformer</th><th class="num">This architecture</th></tr></thead>
   <tbody>
     <tr><td>Compute per token</td><td class="num">2,474M</td><td class="num win">463M &mdash; 19%</td></tr>
     <tr><td>Inference memory</td><td class="num">2.46 GB</td><td class="num win">6.29 MB &mdash; 0.26%</td></tr>
@@ -117,21 +113,56 @@
 </table>
 </div>
 
-<h2>What was actually built</h2>
-<p class="sub">Six weeks, 432 commits, one laptop GPU</p>
+<h2>Head to head against a transformer</h2>
+<p class="sub">Same size, same hours, same data pipeline</p>
 
-<div class="cards">
-  <div class="card"><div class="k">2.3&times;</div><div class="l">smaller weights via ternary quantisation (&minus;1&thinsp;/&thinsp;0&thinsp;/&thinsp;+1)</div></div>
-  <div class="card"><div class="k">5.17&times;</div><div class="l">cheaper per real token after sequence packing</div></div>
-  <div class="card"><div class="k">1.6&times;</div><div class="l">fewer steps to target loss with the Muon optimiser</div></div>
-  <div class="card"><div class="k">0 &rarr; 22.5%</div><div class="l">factual recall once retrieval was added</div></div>
+<p>
+  The comparison that decides whether any of this is worth doing: an identically-sized
+  transformer, trained on the same corpus with the same tokenizer, sequence length,
+  precision, optimiser and random seed, given the <em>same number of GPU hours</em>.
+  Parameters matched to within 0.4%.
+</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>7.4 hours each</th><th class="num">Held-out loss</th><th class="num">Tokens seen</th></tr></thead>
+  <tbody>
+    <tr><td><strong>This architecture</strong></td><td class="num win">1.9654</td><td class="num">475M</td></tr>
+    <tr><td>Transformer</td><td class="num">1.9814</td><td class="num">672M</td></tr>
+  </tbody>
+</table>
 </div>
 
 <p>
-  Alongside the architecture: custom Triton GPU kernels, a hybrid block plan that mixes a
-  few sliding-window attention layers into the recurrent stack for exact token recall,
-  gradient checkpointing and accumulation to fit a 6&nbsp;GB card, an OpenAI-compatible
-  local server, and a VS&nbsp;Code integration.
+  It wins &mdash; <strong>while seeing 40% less data</strong>, because the transformer runs
+  faster per step and therefore gets more tokens for the same hours. Compared at equal
+  tokens instead, the margin is roughly four times the measurement noise at every point:
+</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Tokens per parameter</th><th class="num">This architecture</th><th class="num">Transformer</th></tr></thead>
+  <tbody>
+    <tr><td>20</td><td class="num win">2.0509</td><td class="num">2.1361</td></tr>
+    <tr><td>30</td><td class="num win">1.9841</td><td class="num">2.0703</td></tr>
+    <tr><td>40</td><td class="num win">1.9613</td><td class="num">2.0163</td></tr>
+  </tbody>
+</table>
+</div>
+
+<blockquote>
+  <p>
+    Stated against the project&rsquo;s own interest: it is <strong>not</strong> cheaper to
+    train. The transformer runs 1.41&times; faster per step at this size. The efficiency
+    claim is about inference, and only inference.
+  </p>
+</blockquote>
+
+<p>
+  The margin threshold was fixed in writing before the run, from the measured
+  step-to-step noise, so the verdict could not be chosen after seeing the number. Both
+  models here are small; a larger pair is running to establish whether the lead grows or
+  shrinks with size.
 </p>
 
 <h2>The finding that reshaped the project</h2>
@@ -162,14 +193,11 @@
 
 <div class="tw">
 <table>
-  <thead><tr><th>Approach</th><th>Outcome</th></tr></thead>
+  <thead><tr><th>Category</th><th class="num">Count</th></tr></thead>
   <tbody>
-    <tr><td>Mixture of experts</td><td class="loss">Lost to simply scaling the dense model</td></tr>
-    <tr><td>Looped early exit</td><td class="loss">All results retracted &mdash; they were measuring a one-line bug</td></tr>
-    <tr><td>Predicted &ldquo;phase transition&rdquo;</td><td class="loss">Does not exist; the detector worked, the phenomenon didn&rsquo;t</td></tr>
-    <tr><td>Weight-delta extrapolation</td><td class="loss">Measurably worse than doing nothing</td></tr>
-    <tr><td>Selective token training</td><td class="loss">No gain at this scale</td></tr>
-    <tr><td><code>torch.compile</code></td><td class="loss">2.4&times; <em>slower</em> in the real loop, despite a microbenchmark promising +18%</td></tr>
+    <tr><td>Ideas tested and rejected on measurement</td><td class="num">6</td></tr>
+    <tr><td>Of those, conclusions this project retracted itself</td><td class="num loss">3</td></tr>
+    <tr><td>Optimisations that measured <em>slower</em> than doing nothing</td><td class="num loss">2</td></tr>
   </tbody>
 </table>
 </div>
