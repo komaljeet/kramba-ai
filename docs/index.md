@@ -37,32 +37,59 @@ source of truth; these files are the reorganized, linkable view.
 
 ## 1. Overview
 
-HVN is a novel, untrained language model architecture that achieves **long-range
-associative recall at <20% of the computational cost of standard Attention**, scaling
-at **O(1) constant time per token during inference** — without a traditional KV Cache.
+> **Corrected 2026-08-16.** This section previously opened with "HVN is a novel,
+> untrained language model architecture". That was written on 2026-07-02 and was true
+> of the ORIGINAL block. It stopped being true on 2026-07-04, when
+> `Fix PPL gap via Gated-DeltaNet readout/update dynamics (closes #34)` replaced that
+> block, and it was never revised. Every session since read "novel" off this line and
+> repeated it for six weeks. The measurements underneath were honest; this headline
+> was not.
 
-### How It Works
+**What this project actually is today:** a training and evaluation stack that runs
+modern linear-attention models on a single 6 GB consumer GPU, plus the measurements
+that back that up.
 
-HVN fuses two theoretical frameworks (see [theory.md](theory.md)):
+**The architecture in use is not original.** `hvn/core/deltanet.py` is a
+reimplementation of published work and says so in its own docstring — a canonical
+**gated DeltaNet** update, a **GLA / Mamba-2** style per-channel decay gate, and an
+output gate plus short causal conv from **Mamba / RWKV-7**. The default model
+(`--arch hvn-hybrid`) is 10 such blocks with 2 sliding-window attention layers, which
+places it in the same family as published hybrids.
 
-1. **Lagrangian Vortex Fluid Dynamics** — Each token is mapped to a vortex particle
-   whose velocity is computed via a *modified Biot-Savart law* against a fixed-size
-   velocity field (the Hamiltonian). This replaces the O(N) attention scan with an
-   O(d²) matrix-vector product.
-2. **Quantum Matrix Product State Entanglement** — A fixed-size Hamiltonian matrix
-   evolves via *Quantum Entanglement Renormalization*, absorbing each new vortex
-   vector through a deterministic update rule (no gradient descent at inference time).
-   SVD truncation discards noise modes, preserving only the most entangled associations.
+**The original block (`HVNBlock`) is original, and it lost.** It framed tokens as
+Lagrangian vortex particles read out against a fixed-size "entanglement Hamiltonian"
+(see [theory.md](theory.md)). Measured at d=768 it reached PPL 194.3 against a
+transformer's 150.8, and #34 replaced it rather than repairing it. `deltanet.py`'s own
+analysis is blunter: *"stripped of the fluid/quantum framing, HVN is a linear-attention
+fast-weight net"* whose update rule was "ill-conditioned". So the original was novel in
+**framing**, not in **class**.
 
-The result: **O(d²) per-token inference cost, constant in sequence length N.**
+**Constant-memory inference is not a differentiator.** O(1) state and no KV cache are
+the defining property of the whole linear-attention / SSM family — Mamba, RWKV, RetNet,
+DeltaNet. Comparisons against a vanilla transformer (see state.md) show that property
+working; they do not distinguish this work from that family, and no comparison against
+Mamba or RWKV has ever been run.
 
-### Key Results (N = 100,000 tokens, d = 512, L = 12 layers)
+### What IS measured and defensible
 
-| Metric | Standard MHA (KV cache) | HVN (SVD r=128) | Ratio |
-|--------|------------------------|------------------|-------|
-| FLOPs/token | 2,474M | 463M | **18.7%** ✓ |
-| Inference memory | 2.46 GB | 6.29 MB | **0.26%** |
-| Scaling in N | O(Nd) | O(d²r) = O(1) | — |
+| claim | status |
+|---|---|
+| 1.07B-parameter model **trains in 4.05 GB** on a 6 GB card, 875 tok/s | measured 2026-08-14 |
+| flat ms/token from N=256→4096 (O(1) in time) | measured, benchmarks_speed.md |
+| beats a **matched vanilla transformer** at equal compute, 12M body | measured 2026-08-16, single seed |
+| ~30 tokens/param, not Chinchilla's 20 | measured 2026-08-16, size trend unresolved |
+| 6.29 MB vs 2.46 GB of context memory at 100K tokens | **CALCULATED, never measured** |
+
+The stack — block-coordinate descent, CPU weight offload, ternary quantisation, tied
+embeddings, and the fixes making them work together — is assembled from published
+components. The working, measured integration on consumer hardware is the contribution.
+
+### Open question worth naming
+
+`HVNBlock` was benchmarked **once**, early, at a 5M-token budget, before the data-recipe
+fix (#164), the LR-resume fix (#165), tied embeddings, and the tokens-per-parameter
+work. Nobody retested it after the stack matured. Whether it would still lose is
+**unknown**.
 
 ### 1.1 North Star: Frontier-Scale Training
 

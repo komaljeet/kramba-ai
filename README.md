@@ -38,9 +38,16 @@
 > 3. **Later — push toward frontier scale.** Harder, and gated on real compute — a separate,
 >    funded phase after (2) is proven, not a precondition for shipping something useful.
 
-HVN is a novel, untrained language-model architecture that achieves **long-range
-associative recall at <20% of the computational cost of standard Attention**, scaling at
-**O(1) constant time per token during inference** — without a traditional KV cache.
+kramba-ai is a **training and evaluation stack for linear-attention language models on a
+single 6 GB consumer GPU** — measured, not projected: a 1.07B-parameter model trains in
+4.05 GB at 875 tok/s.
+
+> **Correction (2026-08-16).** This line previously read "HVN is a novel, untrained
+> language-model architecture". True when written on 2026-07-02; false from 2026-07-04,
+> when #34 replaced the original block with a reimplementation of published gated-DeltaNet
+> dynamics. The architecture in use is **not original**, and the original block was
+> measured once, lost, and shelved. See [docs/index.md](docs/index.md) §1 for the full
+> correction and for what IS measured and defensible.
 
 > **📚 The full documentation now lives in [`docs/`](docs/index.md).** This README is a short
 > landing page; the former single-file "Complete Compendium" has been split into topic-focused
