@@ -1,0 +1,85 @@
+RITISH NON-COMMERCIAL LICENSE v1.0
+
+Copyright (c) 2026 Rambarun Komaljeet
+
+DEFINITIONS
+
+"Software" means the source code, documentation, data, and research
+materials in this repository.
+
+"Commercial Use" means any use intended for or directed toward
+commercial advantage or monetary compensation, including but not
+limited to:
+  - Selling, licensing, or sublicensing the Software or derivatives
+  - Using the Software in a product or service that generates revenue
+  - Using the Software as part of paid consulting or contracting work
+  - Receiving grants, funding, or any compensation where this Software
+    contributed to the deliverable
+
+"Non-Commercial Entity" means:
+  - A registered non-profit organization (501(c)(3) or equivalent)
+  - An individual using the Software purely for personal, educational,
+    or research purposes with no monetary gain derived from such use
+  - An academic institution using it for non-funded research
+
+PERMISSIONS
+
+You are granted the right to:
+  - View, copy, modify, and distribute the Software
+  - Use the Software for research, education, or personal projects
+  provided that you meet ALL conditions below.
+
+CONDITIONS
+
+1. NON-COMMERCIAL ONLY — You may not use this Software for Commercial
+   Use as defined above. If you are unsure whether your use qualifies,
+   contact the author.
+
+2. NO COMPENSATION — You must not have received, be receiving, or
+   intend to receive any form of payment, grant, or compensation
+   where this Software or its outputs contributed, directly or
+   indirectly.
+
+3. ATTRIBUTION — Any use or distribution must retain this license
+   and clearly credit: Rambarun Komaljeet —
+   https://gitlab.com/komalbarun/kramba-ai
+
+4. SHARE-ALIKE — Any modified version must be distributed under
+   this same license.
+
+5. NO SUBLICENSING — You may not grant others rights beyond what
+   this license permits.
+
+COMMERCIAL LICENSING
+
+If you wish to use this Software commercially, contact the author
+to obtain a separate commercial license:
+  komalbarun@gmail.com
+
+DISCLAIMER
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+THE AUTHOR SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY ARISING FROM USE OF THIS SOFTWARE.
+
+
+---------------------------------------------------------------------
+THIRD-PARTY WORK IMPLEMENTED HERE
+---------------------------------------------------------------------
+
+This license covers the code in this repository. It does not, and
+cannot, claim the published algorithms that code implements. The
+following are reimplementations of work by others, attributed in the
+source files that implement them:
+
+  - Gated DeltaNet — the recurrent update rule in hvn/core/deltanet.py
+  - GLA / Mamba-2 — the per-channel data-dependent decay gate
+  - Mamba / RWKV-7 — the output gate and short causal depthwise conv
+  - BitNet b1.58 — ternary weight quantisation, hvn/edge/ternary.py
+  - BAdam — block-coordinate descent, hvn/core/block_coordinate.py
+  - ALBERT — cross-layer weight sharing, hvn/edge/shared.py
+  - Chinchilla (Hoffmann et al.) — the tokens-per-parameter framing
+  - Fill-in-the-Middle (Bavarian et al.) — hvn/fim.py
+
+Anyone is free to implement those papers themselves; this license
+restricts only this particular implementation of them.
