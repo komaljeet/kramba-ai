@@ -4463,3 +4463,69 @@ is degenerate. **Use ~30 as a working number; do not extrapolate it across scale
 Consequence for sizing at 30 tokens/param, using measured step times: 48M in 1.1 days, 70M
 in 2.0, 108M in 4.7, 157M in 9.7. The 157M launched at 25,000 steps on 2026-08-14 would have
 reached 0.32x Chinchilla — the #112 trap — and was stopped for this study.
+
+## Chunked cross-entropy: -1436 MB at 48M, nothing at 1B (#158, 2026-08-17)
+
+The loss was the largest single VRAM consumer -- larger than the model. Measured on a
+live 48M run (3.27 GB in use): cross-entropy ~1500 MB, CUDA context ~400 MB, weights
+183 MB, optimizer 183 MB, layer activations ~50 MB. Gradient checkpointing had already
+reduced activations to nothing; nothing had been done about the loss.
+
+Chunking the CE alone would save nothing -- `model(x)` materialises the full
+[B, S, vocab] logits before the loss is called. So `EdgeHVN.forward(return_hidden=True)`
+returns [B, S, d_model] (4 MB vs ~500 MB) and `hvn/edge/chunked_loss.py` projects and
+scores a slice at a time, each slice wrapped in `torch.utils.checkpoint` so backward
+recomputes one slice's logits rather than holding all of them.
+
+| 48M, seq 4096, accum 8 | alloc | reserved | s/step |
+|---|---:|---:|---:|
+| unchunked | 2275 MB | 2584 MB | 3.21 |
+| **chunk 512** | **1003 MB** | **1148 MB** | 3.43 |
+
+**-1436 MB for 1.07x step time.**
+
+**It does NOT help at 1B.** Same-scan comparison at d=2048/24L with offload:
+4.004 GiB unchunked vs 4.037 GiB chunked -- **+33 MB**, i.e. it costs a little. At that
+size peak memory is set by weights plus optimizer state; the logits are no longer the
+binding term. So this is a lever for SMALL models on small cards, which is where the
+logits dominate, and neutral at the top of the range.
+
+Exactness: bit-identical in fp32 (losses and every gradient, including into the tied
+table). Under bf16 autocast the value differs by 3.8e-03 on a loss of 10.5 -- 3.6e-04
+relative -- because slices reduce separately. Do not call it bit-identical without
+saying "in fp32".
+
+**A benchmark error worth recording, because it nearly became a published number.**
+A first pass reported chunked+offload at 19.90 s/step against 4.68 unchunked and was
+reported as "4.25x slower, needs a fix". It was the benchmark: `ceiling.py` never set
+`use_triton_scan`/`use_megakernel_scan`, so it ran the eager chunked scan while the
+baseline ran the Triton path. The 2x2 that isolates it, at the full 1.07B shape:
+
+| scan | loss | s/step |
+|---|---|---:|
+| ON | unchunked | 4.75 |
+| ON | chunked | 4.85 |
+| OFF | unchunked | 20.18 |
+| OFF | chunked | 20.40 |
+
+The scan flag is the 4.25x; the chunked loss is 1.02x. The stated hypothesis -- that the
+decoder was being reloaded from CPU once per chunk -- was also wrong: instrumenting
+`GPUBufferPool` showed byte-identical traffic in all four arms (2 loads, 0 misses,
+0.3 MB). Same shape as every sibling-script divergence in this repo: two scripts that
+look equivalent, one missing a flag.
+
+## Measured size ceiling on the 6 GB card (2026-08-17)
+
+With BCD + CPU offload + ternary + tied embeddings, seq 4096, single micro-batch:
+
+| config | params | reserved | note |
+|---|---|---:|---|
+| 2048x24 | 1.07B | 4.00 GB | fits comfortably |
+| 2048x36 | 1.58B | 5.92 GB | at the edge of a 5.9966 GiB card |
+| 2560x36 | 2.45B | 9.39 GB | **spills to host RAM** (no OOM -- the WDDM failure mode) |
+
+**~1.6B is the honest ceiling.** Note these were measured WITHOUT the scan kernels
+(see the benchmark error above), so the memory figures are ~0.4 GB pessimistic and the
+step times are ~4x pessimistic. Fitting is not training: at 875 tok/s a 1B model needs
+~267 days for a Chinchilla-optimal budget, so the practical range remains a few hundred
+million parameters.
