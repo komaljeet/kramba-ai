@@ -1,4 +1,4 @@
-# Live handoff — read this first (written 2026-08-16 11:05)
+# Handoff — read this first (updated 2026-08-17 08:10)
 
 Author: Rambarun Komaljeet
 
@@ -7,63 +7,42 @@ context reset. Everything below is measured unless it says otherwise.
 
 ---
 
-## 1. What is running RIGHT NOW
+## 1. Nothing is running
 
-**Issue #160 Phase 1 — the 48M architecture head-to-head.** A detached PowerShell
-runner drives both arms sequentially and scores them; it survives this session
-ending. Script: `scratchpad/phase1_48m.ps1` (in the session temp dir), log:
-`logs/phase1.log`.
+The GPU is idle. The #160 Phase 1 pair was killed deliberately on 2026-08-16: once the
+architecture turned out to be a reimplementation of published gated DeltaNet, that
+comparison became a reproduction of someone else's result rather than a finding.
 
-| arm | checkpoint dir | budget | ends |
-|---|---|---|---|
-| HVN (`--arch hvn-hybrid`, attn 3,9) | `checkpoints/p1_hvn_48m` | 22 h wall clock | **17 Aug 03:51** |
-| transformer (`--arch transformer`) | `checkpoints/p1_tf_48m` | 22 h wall clock | **18 Aug 01:55** |
-| both scored to `results/scaling/p1_*.json` | — | ~50 min | **18 Aug ~02:45** |
+## 2. What was settled on 2026-08-16/17, and it changes the project
 
-Both arms: `--seed 1234`, `--lr-schedule constant`, d_model 512, 12 layers,
-16 heads, seq 4096, grad-accum 8, `--max-steps 60000` (never reached; the runner
-stops each arm on the clock). Matched on **wall clock**, not step count, because
-the two architectures have different step times and hours are the real budget.
+**The architecture is not original.** `hvn/core/deltanet.py` reimplements published work
+and says so in its own docstring: canonical gated DeltaNet, GLA/Mamba-2 decay gate,
+Mamba/RWKV-7 output gate and causal conv. The README and docs/index.md called it novel
+for six weeks after #34 replaced the original block on 2026-07-04; both are corrected.
 
-**Do not run anything else on the GPU while these are training.** The arms are
-timed, so contention silently steals steps from whichever arm is running and
-biases the comparison.
+**The original block was retested properly and lost.** `--arch hvn-original-hybrid`,
+448x8 so body params match DeltaNet's within 0.9%, same seed, same corpus, same constant
+LR, both arms keeping 2 attention layers so only the recurrent block differs. Held-out
+NLL at matched tokens per parameter:
 
-### When it finishes
+| tok/param | HVNBlock | DeltaNet | gap |
+|---|---:|---:|---:|
+| 4 | 2.7679 | 2.6715 | +0.096 |
+| 10 | 2.3645 | 2.2428 | +0.122 |
 
-Compare `results/scaling/p1_hvn_48m.json` vs `p1_tf_48m.json` on final held-out
-NLL, exactly as Phase 0 was compared. Then run the capability gates on the final
-checkpoint of each — this is the part Phase 0 could not do:
+Noise floor is ±0.011, so the gap is 8-20x noise. Closer than July's ~29% (this is ~13%
+in perplexity), so the stack's fixes did help -- not enough. The gap is flat to slightly
+widening with more data, so "needs more training" is not the explanation. It only reached
+9.6 tok/param because the block has NO kernel support (`hvn/core/hvn_block.py` has zero
+triton/megakernel references) and runs 4x slower; the comparison is at matched tokens, so
+that does not affect the verdict.
 
-```
-python -m eval.next_token_gate                 # substantive slice + both floors
-python -m eval.fim_completion_gate --checkpoint <ckpt> --n-cases 300 ...
-```
+**Constant-memory inference is not a differentiator.** It defines the whole
+linear-attention/SSM family. No comparison against Mamba or RWKV has ever been run.
 
-**Pre-registered thresholds (fixed before the run, do not move them):**
-noise floor is ±0.011 held-out NLL. Inside that = tie. HVN worse by >0.05 = a
-real problem needing explanation before any scale-up.
-
----
-
-## 2. Queued next, in order
-
-1. **100K-token memory measurement (~1 h, laptop only).** The page's headline —
-   6.29 MB vs 2.46 GB at 100K tokens — is **calculated** (`docs/theory.md:129`),
-   not measured. What IS measured (`docs/benchmarks_speed.md:44`) is flat
-   ms/token from N=256→4096 and a 20% memory edge at N=4096. The 390× figure at
-   100K has never been observed. Build both architectures at matched size, feed
-   100K tokens incrementally, report peak VRAM at 1K/10K/50K/100K so the curve is
-   visible rather than two endpoints. Weights do not matter — memory follows the
-   shapes, so random init is fine. Runs on the desktop 4060 in principle; the
-   maintainer wants it on the laptop because the desktop has no battery.
-2. **Publish `site/index.html`** once the 48M result and the 100K measurement are
-   in. Do not publish before: the Phase 0 margin (+0.016) is above the noise floor
-   but not comfortably, so a reversal at 48M would mean correcting a public claim.
-3. **#158 chunked + recomputed cross-entropy** — ~1 GB, the largest unclaimed VRAM
-   on the card. The loss uses more memory than the whole model.
-
----
+**What remains defensible:** the training stack. 1.07B trains in 4.00 GB on a 6 GB card;
+~1.6B is the measured ceiling; the chunked loss returns 1436 MB at 48M. That is
+engineering, not a research claim, and `site/index.html` is written around it.
 
 ## 3. Decisions already made — do not relitigate
 
