@@ -1,59 +1,89 @@
-RITISH NON-COMMERCIAL LICENSE v1.0
+RITISH HOME-GPU LICENSE v1.1
 
 Copyright (c) 2026 Rambarun Komaljeet
+
+PURPOSE
+
+This research exists so that people can train and run language models on
+hardware they already own — a laptop, a gaming GPU, a single consumer card.
+It is deliberately available to those people, including for work that earns
+them a living. It is deliberately NOT available to the organisations whose
+scale this work exists as an alternative to.
 
 DEFINITIONS
 
 "Software" means the source code, documentation, data, and research
 materials in this repository.
 
-"Commercial Use" means any use intended for or directed toward
-commercial advantage or monetary compensation, including but not
-limited to:
-  - Selling, licensing, or sublicensing the Software or derivatives
-  - Using the Software in a product or service that generates revenue
-  - Using the Software as part of paid consulting or contracting work
-  - Receiving grants, funding, or any compensation where this Software
-    contributed to the deliverable
+"Large Entity" means any organisation, or any group of affiliated
+organisations under common control, that meets ANY of the following:
 
-"Non-Commercial Entity" means:
-  - A registered non-profit organization (501(c)(3) or equivalent)
-  - An individual using the Software purely for personal, educational,
-    or research purposes with no monetary gain derived from such use
-  - An academic institution using it for non-funded research
+  (a) is primarily engaged in developing, training, hosting, or selling
+      foundation models or large language models — including but not
+      limited to OpenAI, Anthropic, Google/DeepMind, Meta, Microsoft,
+      Amazon, Apple, xAI, Mistral, Cohere, DeepSeek, Alibaba, ByteDance,
+      Baidu, Tencent, and NVIDIA;
+
+  (b) has more than 100 employees or contractors;
+
+  (c) has annual gross revenue exceeding USD 5,000,000;
+
+  (d) has raised more than USD 5,000,000 in cumulative equity or
+      debt financing;
+
+  (e) operates, rents, or has access to more than 64 datacentre-class
+      GPU accelerators (A100/H100-class or equivalent) for the purposes
+      of the use in question.
+
+"Permitted User" means anyone who is not a Large Entity, and who is not
+acting for, on behalf of, or at the direction of a Large Entity. This
+expressly includes individuals in salaried employment, freelancers, small
+studios and startups below the thresholds above, students, hobbyists,
+educators, non-profits, and academic researchers.
 
 PERMISSIONS
 
-You are granted the right to:
+A Permitted User is granted the right to:
+
   - View, copy, modify, and distribute the Software
-  - Use the Software for research, education, or personal projects
-  provided that you meet ALL conditions below.
+  - Use the Software for personal, educational, research, hobby, and
+    commercial purposes, including in paid work and in products or
+    services that generate revenue
+
+provided that ALL conditions below are met.
+
+Employment by a Large Entity does not by itself disqualify you. Using the
+Software for that employer's benefit does.
 
 CONDITIONS
 
-1. NON-COMMERCIAL ONLY — You may not use this Software for Commercial
-   Use as defined above. If you are unsure whether your use qualifies,
-   contact the author.
+1. NO LARGE-ENTITY USE — A Large Entity may not use, run, train with,
+   evaluate with, incorporate, or distribute the Software or any
+   derivative of it, for any purpose, including internal research and
+   evaluation. If you are unsure whether an entity qualifies, contact
+   the author.
 
-2. NO COMPENSATION — You must not have received, be receiving, or
-   intend to receive any form of payment, grant, or compensation
-   where this Software or its outputs contributed, directly or
-   indirectly.
+2. NO TRAINING-DATA USE — The Software, and any text or code derived
+   from this repository, may not be used as training data, fine-tuning
+   data, evaluation data, or benchmark material for any model produced
+   by or for a Large Entity.
 
-3. ATTRIBUTION — Any use or distribution must retain this license
-   and clearly credit: Rambarun Komaljeet —
+3. ATTRIBUTION — Any use or distribution must retain this license and
+   clearly credit: Rambarun Komaljeet —
    https://gitlab.com/komalbarun/kramba-ai
 
-4. SHARE-ALIKE — Any modified version must be distributed under
-   this same license.
+4. SHARE-ALIKE — Any modified version must be distributed under this
+   same license, with these restrictions intact.
 
-5. NO SUBLICENSING — You may not grant others rights beyond what
-   this license permits.
+5. NO SUBLICENSING — You may not grant others rights beyond what this
+   license permits, and you may not relicense the Software or a
+   derivative in a way that would make it available to a Large Entity.
 
-COMMERCIAL LICENSING
+LICENSING FOR LARGE ENTITIES
 
-If you wish to use this Software commercially, contact the author
-to obtain a separate commercial license:
+A Large Entity wishing to use this Software must obtain a separate
+written license from the author:
+
   komalbarun@gmail.com
 
 DISCLAIMER
@@ -83,3 +113,24 @@ source files that implement them:
 
 Anyone is free to implement those papers themselves; this license
 restricts only this particular implementation of them.
+
+
+---------------------------------------------------------------------
+NOTE ON WHAT THIS LICENSE CAN AND CANNOT DO
+---------------------------------------------------------------------
+
+Stated plainly rather than left to be discovered:
+
+  - This is not an OSI-approved "open source" license. Repository hosts
+    will label it as non-standard, and some users and package indexes
+    avoid non-standard licenses on principle.
+
+  - Restrictions of this kind are difficult to enforce in practice
+    against a large organisation, and enforcement would require the
+    author's own time and money. The main practical effect is to make
+    unauthorised use visible and indefensible rather than to prevent it.
+
+  - The thresholds are deliberately generous to small users. If you are
+    a person with a gaming GPU, a student, a freelancer, or a small
+    company, this license is written to let you use this freely,
+    including to earn a living.
