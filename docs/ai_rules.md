@@ -16,6 +16,18 @@ result only in a commit message or a session transcript.
 
 ## Original Design Brief
 
+> **Superseded 2026-08-17.** The founding brief below is kept as history, not as
+> instructions. Two of its premises are false as of today: the architecture in use is
+> NOT novel (issue #34 replaced the original block with a reimplementation of published
+> gated DeltaNet on 2026-07-04), and the instruction not to use Mamba-family components
+> was overtaken by that same change — the current block uses GLA/Mamba-2 gating and a
+> Mamba/RWKV-7 conv and output gate. The original block WAS built as described here,
+> was retested properly on 2026-08-17 at matched parameters and matched tokens, and lost
+> to gated DeltaNet by 8-20x the noise floor. See docs/index.md §1 and docs/handoff.md.
+>
+> The project's actual subject today is the training stack: running these models on a
+> single consumer GPU, with measured envelopes.
+
 Act as a Principal AI Research Scientist and Theoretical Physicist specializing in
 alternative, ultra-low-compute sequence modeling. Goal: build a novel, untrained LM
 architecture ("Hamiltonian Vortex Network") achieving Attention's long-range associative
