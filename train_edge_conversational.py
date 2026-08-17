@@ -154,7 +154,8 @@ def _save_resume_state(checkpoint_dir: str, global_step: int, optimizer,
     os.replace(tmp, path)
 
 
-def build_cosine_scheduler(optimizer, total_steps: int, resume_step: int = 0):
+def build_cosine_scheduler(optimizer, total_steps: int, resume_step: int = 0,
+                           schedule: str = "cosine"):
     """Cosine schedule that CONTINUES across a resume instead of restarting (Issue #112).
 
     The old behaviour built a fresh cosine over the *remaining* steps, so every
@@ -170,6 +171,19 @@ def build_cosine_scheduler(optimizer, total_steps: int, resume_step: int = 0):
     reproduces the uninterrupted trajectory, and ~100K cheap iterations is nothing
     against a multi-week run.
     """
+    if schedule == "constant":
+        # #159: a scaling-ratio study reads held-out loss off checkpoints taken
+        # DURING a run. Under a cosine fitted to the run's end, the checkpoint at
+        # 20 tokens/param is not "a model trained on a 20x budget" -- it is one
+        # partway through a 40x schedule, still at a high LR and mid-descent,
+        # so every intermediate point is biased against the properly-annealed
+        # model it is standing in for, and the small budgets are biased most.
+        # Hoffmann et al. hit the same trap and had to re-run with matched
+        # schedules. A constant LR makes every checkpoint a valid "trained to X
+        # tokens" model at the cost of slightly worse absolute loss.
+        # factor=1.0 leaves the LR untouched; step() stays a no-op.
+        return torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1.0,
+                                                   total_iters=0)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
     if resume_step > 0:
         import warnings
@@ -1788,6 +1802,8 @@ def build_model_and_config(
     grad_checkpoint: bool = False,
     tie_embeddings: bool = False,
     shared_weights: bool = False,
+    lr_schedule: str = "cosine",
+    chunked_loss: int = 0,
     optimizer: str = "muon",
     precision: str = "bf16",
     lr: float = 3e-4,
@@ -1848,6 +1864,8 @@ def build_model_and_config(
         "weight_decay": 0.01,
         "warmup_steps": 500,
         "cosine_schedule": True,
+        "lr_schedule": lr_schedule,
+        "chunked_loss": chunked_loss,
         "save_every_steps": 500,
         "log_every_steps": 50,
         "checkpoint_dir": checkpoint_dir,
@@ -1871,9 +1889,9 @@ def build_model_and_config(
     # Build the model
     print(f"\n  Building EdgeHVN model (arch={arch})...")
     block_plan = None
-    if arch == "hvn-hybrid":
+    if arch in ("hvn-hybrid", "hvn-original-hybrid"):
         if not attn_layers:
-            raise SystemExit("--arch hvn-hybrid requires --attn-layers (e.g. '3,10')")
+            raise SystemExit(f"--arch {arch} requires --attn-layers (e.g. '3,10')")
         attn_set = sorted(set(int(x) for x in attn_layers))
         for li in attn_set:
             if not 0 <= li < settings["num_layers"]:
@@ -1881,8 +1899,13 @@ def build_model_and_config(
                     f"--attn-layers position {li} out of range for "
                     f"num_layers={settings['num_layers']}"
                 )
+        # #166: hvn-original-hybrid swaps ONLY the recurrent block -- the
+        # original HVNBlock instead of the published gated-DeltaNet one -- so a
+        # comparison against hvn-hybrid isolates that single variable rather
+        # than also changing whether attention layers are present.
+        recurrent = "hvn" if arch == "hvn-original-hybrid" else "deltanet"
         block_plan = [
-            "transformer" if i in attn_set else "deltanet"
+            "transformer" if i in attn_set else recurrent
             for i in range(settings["num_layers"])
         ]
         config["attn_layers"] = attn_set
@@ -2521,6 +2544,9 @@ def train(
     lr = config["lr"]
     weight_decay = config["weight_decay"]
     warmup_steps = config["warmup_steps"]
+    # #158: 0/absent = the original single-shot loss, so nothing changes for any
+    # existing caller or config.
+    chunked_loss_size = int(config.get("chunked_loss", 0) or 0)
     grad_accum = config["grad_accum"]
 
     # Issue #86: pluggable optimizer (adamw | muon | lion). Training-time only —
@@ -2595,7 +2621,8 @@ def train(
         elif bcd_sd is None and bcd_scheduler is not None:
             print("  [resume] no saved BCD state — cycle starts at block 0")
 
-    # --- Cosine LR schedule with warmup ---
+    # --- LR schedule (cosine by default) with warmup ---
+    _lr_schedule = config.get("lr_schedule", "cosine")
     total_steps = max_steps if max_steps is not None else 10_000
     sched_sd = resume_state.get("sched_state_dict") if resume_state else None
     if resume_step > 0 and sched_sd is not None:
@@ -2603,7 +2630,8 @@ def train(
         # above has already put the exact save-time LR back into param_groups,
         # and last_epoch says where on the cosine that value sits, so the
         # recursion continues from the right anchor with no replay.
-        scheduler = build_cosine_scheduler(optimizer, total_steps, 0)
+        scheduler = build_cosine_scheduler(optimizer, total_steps, 0,
+                                           schedule=_lr_schedule)
         scheduler.load_state_dict(sched_sd)
         print(f"  [resume] LR schedule restored at step {resume_step}/{total_steps} "
               f"(lr {optimizer.param_groups[0]['lr']:.3e}, "
@@ -2622,7 +2650,8 @@ def train(
                   f"rebuilding from peak, replaying {replay} steps")
         else:
             replay = 0
-        scheduler = build_cosine_scheduler(optimizer, total_steps, replay)
+        scheduler = build_cosine_scheduler(optimizer, total_steps, replay,
+                                           schedule=_lr_schedule)
         if resume_step > 0:
             print(f"  [resume] cosine schedule continued at step "
                   f"{resume_step}/{total_steps} "
@@ -2774,12 +2803,28 @@ def train(
         # — this drops the redundant second full-vocab CE pass the per-source
         # tracking used to run every micro-batch.
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
-            logits = model(batch_x)
-            tok_loss = torch.nn.functional.cross_entropy(
-                logits.reshape(-1, logits.size(-1)),
-                batch_y.reshape(-1),
-                reduction="none",
-            )
+            if chunked_loss_size:
+                # #158: the [B, S, vocab] logits and their gradient are ~1.5 GB at
+                # 4096x32003 -- three times the weights, and the single largest
+                # consumer on the card. Ask the model for hidden states instead
+                # (4 MB) and project+score a slice of positions at a time, with
+                # each slice's logits recomputed in backward rather than kept.
+                # Exact, not approximate: tests/test_chunked_loss.py asserts
+                # bit-identical per-token losses and gradients.
+                from hvn.edge.chunked_loss import chunked_cross_entropy
+                hidden = model(batch_x, return_hidden=True)
+                tok_loss = chunked_cross_entropy(
+                    hidden, batch_y,
+                    getattr(model, "_orig_mod", model).decoder,
+                    chunk=chunked_loss_size,
+                )
+            else:
+                logits = model(batch_x)
+                tok_loss = torch.nn.functional.cross_entropy(
+                    logits.reshape(-1, logits.size(-1)),
+                    batch_y.reshape(-1),
+                    reduction="none",
+                )
             loss = tok_loss.mean() / grad_accum
 
         # Backward pass
@@ -3068,7 +3113,8 @@ def main():
                         help="HuggingFace cache directory for tokenizer/dataset downloads. "
                              "If not set, uses the default HF cache (~/.cache/huggingface).")
     parser.add_argument("--arch", type=str, default="hvn",
-                        choices=["hvn", "transformer", "hvn-hybrid"],
+                        choices=["hvn", "transformer", "hvn-hybrid",
+                                 "hvn-original-hybrid"],
                         help="Block architecture: 'hvn' (DeltaNet, default), "
                              "'transformer' (matched causal-MHA baseline for the A/B, #73), "
                              "or 'hvn-hybrid' (DeltaNet trunk + a few sliding-window "
@@ -3228,6 +3274,28 @@ def main():
                              "Composes with --block-coordinate (that shrinks optimizer-"
                              "state memory; this shrinks activation memory -- "
                              "independent axes). Default: off.")
+    parser.add_argument("--chunked-loss", type=int, nargs="?", const=512, default=0,
+                        metavar="POSITIONS",
+                        help="Compute the loss POSITIONS at a time (default 512 "
+                             "when given without a value; 0 = off) and recompute "
+                             "each slice in backward (#158). The cross-entropy "
+                             "over the vocabulary is ~1.5 GB at seq 4096 x 32K "
+                             "vocab -- three times the weights and the largest "
+                             "single consumer on a 6 GB card. Measured: -1436 MB "
+                             "reserved at seq 4096, 1.07x step time. Exact in "
+                             "fp32 (tests assert bit-identical losses AND "
+                             "gradients); under bf16 autocast the value differs "
+                             "in the 4th decimal from accumulation order alone "
+                             "-- 3.8e-03 on a loss of 10.5, i.e. 3.6e-04 "
+                             "relative -- because slices reduce separately.")
+    parser.add_argument("--lr-schedule", choices=["cosine", "constant"],
+                        default="cosine",
+                        help="LR shape after warmup. 'constant' exists for #159: "
+                             "a study that reads held-out loss off MID-RUN "
+                             "checkpoints cannot use a cosine fitted to the "
+                             "run's end, because those checkpoints are partway "
+                             "through a schedule rather than finished models. "
+                             "Use cosine for anything you intend to keep.")
     parser.add_argument("--shared-weights", action="store_true", default=False,
                         help="ALBERT-style weight sharing: all layers of the same "
                              "block type reuse ONE block's weights (#155). On a "
@@ -3439,6 +3507,8 @@ def main():
         grad_checkpoint=args.grad_checkpoint,
         tie_embeddings=args.tie_embeddings,
         shared_weights=args.shared_weights,
+        lr_schedule=args.lr_schedule,
+        chunked_loss=args.chunked_loss,
         vocab_size=vocab_size,
         eos_token_id=eos_token_id,
         optimizer=args.optimizer,

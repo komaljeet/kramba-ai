@@ -370,7 +370,8 @@ class EdgeHVN(nn.Module):
         return out
 
     def forward(self, input_ids: torch.Tensor, position_ids: Optional[torch.Tensor] = None,
-                doc_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+                doc_ids: Optional[torch.Tensor] = None,
+                return_hidden: bool = False) -> torch.Tensor:
         """Forward the full stack.
 
         ``doc_ids`` ([B, S], Issue #132) marks which packed document each
@@ -497,6 +498,11 @@ class EdgeHVN(nn.Module):
                     x = block(x_in, position_ids=position_ids, **blk_kw)
 
         if offload:
+            if return_hidden:
+                return self._offload_wrap_plain(
+                    "final_norm+decoder", [self.final_norm],
+                    lambda: self.final_norm(x), input_tensor=x,
+                )
             return self._offload_wrap_plain(
                 "final_norm+decoder", [self.final_norm, self.decoder],
                 lambda: self.decoder(self.final_norm(x)),
@@ -504,6 +510,14 @@ class EdgeHVN(nn.Module):
             )
 
         x = self.final_norm(x)
+        # #158: with return_hidden the caller does the vocabulary projection
+        # itself, one slice of positions at a time. The full [B, S, vocab] logits
+        # are ~500 MB at 4096x32003 and their gradient the same again -- three
+        # times the size of the weights on this card. Returning [B, S, d_model]
+        # instead (4 MB) lets hvn.edge.chunked_loss project and score in slices,
+        # so only one slice's logits ever exist.
+        if return_hidden:
+            return x
         return self.decoder(x)
 
     # ------------------------------------------------------------------

@@ -1,0 +1,26 @@
+[
+  {
+    "label": "unchunked (baseline)",
+    "chunk": 0,
+    "alloc_mib": 2274.66650390625,
+    "reserved_mib": 2584.0,
+    "s_step": 3.2080434000235982,
+    "loss": 10.475488662719727
+  },
+  {
+    "label": "chunked 512",
+    "chunk": 512,
+    "alloc_mib": 1002.66259765625,
+    "reserved_mib": 1148.0,
+    "s_step": 3.4262558999471366,
+    "loss": 10.479299545288086
+  },
+  {
+    "label": "chunked 256",
+    "chunk": 256,
+    "alloc_mib": 1005.66552734375,
+    "reserved_mib": 1056.0,
+    "s_step": 3.5342530999914743,
+    "loss": 10.478918075561523
+  }
+]

@@ -4383,3 +4383,149 @@ tokens. Do not read the small-batch step time as a throughput figure in either d
 Prediction was recorded in the benchmark's docstring before it ran, along with the
 falsifiability check: a fit and a spill are both visible, so this measurement could have
 closed #157 rather than confirming it.
+
+## HVN beats a matched transformer at equal compute — the first real head-to-head (#160 Phase 0, 2026-08-16)
+
+The only architecture comparison this repo had was §8.12: 5M tokens, WikiText, single seed,
+perplexity only. Everything since has been HVN-only — `results/size_vs_time/results.json`
+has six HVN configs and no baseline. The 48M code model proved the architecture *functions*;
+it proved nothing about *better*, because the opponent was never run.
+
+**Setup.** 384x8, `--arch hvn-hybrid` (attn at 2,6) vs `--arch transformer`. Parameters match
+to 0.4% (body 11.89M vs 11.84M). Identical corpus, tokenizer, FIM version, sequence length,
+precision, optimizer, seed (1234), constant LR, and held-out slice. **Matched WALL CLOCK,
+7.4 h each** — hours are what you spend, and each architecture converts them into tokens at
+its own rate.
+
+| arm | held-out NLL | tokens seen | tokens/param |
+|---|---:|---:|---:|
+| **HVN hybrid** | **1.9654** | 475M | 40.0 |
+| transformer | 1.9814 | **672M** | 56.7 |
+
+**HVN wins by +0.0160 against a pre-registered noise threshold of ±0.011** — and it wins
+while seeing **40% LESS data**, because the transformer runs 1.41x faster per step at this
+size (1.29 vs 1.82 s/step, the first time a transformer baseline has been timed here).
+
+At matched tokens the gap is much larger — roughly 4x the noise floor at every point:
+
+| tokens/param | HVN | transformer |
+|---|---:|---:|
+| 20 | **2.0509** | 2.1361 |
+| 30 | **1.9841** | 2.0703 |
+| 40 | **1.9613** | 2.0163 |
+
+So: HVN extracts more from the same data, and enough more to absorb a 40% data deficit.
+
+**Two things this does NOT say.** Nothing above a 12M body — both models are small enough
+that the capability gates read at the floor for both, so this is a loss comparison, not a
+capability one. And it is a single seed: same-seed removes *between-arm* luck but both arms
+share whatever that seed favours. #86's A/B used the same compromise.
+
+**A correction to a claim made earlier in the week.** HVN is *not* cheaper to train. At
+384 wide / 4096 long the transformer is 1.41x faster per step; the recurrent scan, not
+attention, is the bottleneck at this size. The compute win is at INFERENCE (6.29 MB vs
+2.46 GB of context memory at 100K tokens, O(1) vs O(N)) and that is settled separately.
+Training-speed parity should not be claimed.
+
+**Next:** #160 Phase 1, the 48M pair, both arms fresh and seeded, 22 h each — launched
+2026-08-16 05:51. That answers the question Phase 0 cannot: whether the lead grows or
+shrinks with size, and whether it shows up in capability rather than only in loss.
+
+## Tokens-per-parameter for HVN: ~30, not 20 — but the size trend is unresolved (#159, 2026-08-16)
+
+Every sizing decision in this repo divides by Chinchilla's 20 tokens/param, fitted on
+transformers and never checked here. Measured on three sizes with a constant LR (so every
+checkpoint is a valid "trained to X tokens" model rather than a snapshot partway through a
+cosine — the bias Hoffmann et al. had to re-run to avoid), scored on a fixed held-out slice
+via `eval/heldout_loss.py`:
+
+| tokens/param | 12M body | 21M body | 32M body |
+|---|---:|---:|---:|
+| 20 | 2.0509 | 1.8619 | 1.6397 |
+| 30 | 1.9841 | 1.8264 | — |
+| 40 | 1.9613 | 1.8037 | — |
+
+Going 20 -> 30 buys 1.9-3.3%; 30 -> 40 buys ~1.1% for 33% more time. **~30 is where the
+trade turns**, and 20 is too low.
+
+**What is NOT resolved: how the ratio moves with size.** The elbow detector returns 24.8,
+9.3 and 19.7 for the three sizes — not ordered by size, which is the question. The 21M curve
+is twice as noisy as the others (±0.0097 vs ±0.0035-0.0053), and the 32M curve is truncated
+at 25.9 tokens/param, still improving, because it was never trained further.
+
+**Fitting a scaling law to the 120 points does not rescue it, and the failure is recorded
+rather than hidden.** The standard parametric form returns optimal ratios of 10.6 / 4.2 /
+1.2 / 0.3 tokens-per-param at 12M / 32M / 129M / 1B — i.e. it claims a 1B model needs less
+data than it has parameters, contradicting every raw curve, with a fit error (±0.038) larger
+than the effects being measured. Five free parameters, three sizes, one truncated: the fit
+is degenerate. **Use ~30 as a working number; do not extrapolate it across scale.**
+
+Consequence for sizing at 30 tokens/param, using measured step times: 48M in 1.1 days, 70M
+in 2.0, 108M in 4.7, 157M in 9.7. The 157M launched at 25,000 steps on 2026-08-14 would have
+reached 0.32x Chinchilla — the #112 trap — and was stopped for this study.
+
+## Chunked cross-entropy: -1436 MB at 48M, nothing at 1B (#158, 2026-08-17)
+
+The loss was the largest single VRAM consumer -- larger than the model. Measured on a
+live 48M run (3.27 GB in use): cross-entropy ~1500 MB, CUDA context ~400 MB, weights
+183 MB, optimizer 183 MB, layer activations ~50 MB. Gradient checkpointing had already
+reduced activations to nothing; nothing had been done about the loss.
+
+Chunking the CE alone would save nothing -- `model(x)` materialises the full
+[B, S, vocab] logits before the loss is called. So `EdgeHVN.forward(return_hidden=True)`
+returns [B, S, d_model] (4 MB vs ~500 MB) and `hvn/edge/chunked_loss.py` projects and
+scores a slice at a time, each slice wrapped in `torch.utils.checkpoint` so backward
+recomputes one slice's logits rather than holding all of them.
+
+| 48M, seq 4096, accum 8 | alloc | reserved | s/step |
+|---|---:|---:|---:|
+| unchunked | 2275 MB | 2584 MB | 3.21 |
+| **chunk 512** | **1003 MB** | **1148 MB** | 3.43 |
+
+**-1436 MB for 1.07x step time.**
+
+**It does NOT help at 1B.** Same-scan comparison at d=2048/24L with offload:
+4.004 GiB unchunked vs 4.037 GiB chunked -- **+33 MB**, i.e. it costs a little. At that
+size peak memory is set by weights plus optimizer state; the logits are no longer the
+binding term. So this is a lever for SMALL models on small cards, which is where the
+logits dominate, and neutral at the top of the range.
+
+Exactness: bit-identical in fp32 (losses and every gradient, including into the tied
+table). Under bf16 autocast the value differs by 3.8e-03 on a loss of 10.5 -- 3.6e-04
+relative -- because slices reduce separately. Do not call it bit-identical without
+saying "in fp32".
+
+**A benchmark error worth recording, because it nearly became a published number.**
+A first pass reported chunked+offload at 19.90 s/step against 4.68 unchunked and was
+reported as "4.25x slower, needs a fix". It was the benchmark: `ceiling.py` never set
+`use_triton_scan`/`use_megakernel_scan`, so it ran the eager chunked scan while the
+baseline ran the Triton path. The 2x2 that isolates it, at the full 1.07B shape:
+
+| scan | loss | s/step |
+|---|---|---:|
+| ON | unchunked | 4.75 |
+| ON | chunked | 4.85 |
+| OFF | unchunked | 20.18 |
+| OFF | chunked | 20.40 |
+
+The scan flag is the 4.25x; the chunked loss is 1.02x. The stated hypothesis -- that the
+decoder was being reloaded from CPU once per chunk -- was also wrong: instrumenting
+`GPUBufferPool` showed byte-identical traffic in all four arms (2 loads, 0 misses,
+0.3 MB). Same shape as every sibling-script divergence in this repo: two scripts that
+look equivalent, one missing a flag.
+
+## Measured size ceiling on the 6 GB card (2026-08-17)
+
+With BCD + CPU offload + ternary + tied embeddings, seq 4096, single micro-batch:
+
+| config | params | reserved | note |
+|---|---|---:|---|
+| 2048x24 | 1.07B | 4.00 GB | fits comfortably |
+| 2048x36 | 1.58B | 5.92 GB | at the edge of a 5.9966 GiB card |
+| 2560x36 | 2.45B | 9.39 GB | **spills to host RAM** (no OOM -- the WDDM failure mode) |
+
+**~1.6B is the honest ceiling.** Note these were measured WITHOUT the scan kernels
+(see the benchmark error above), so the memory figures are ~0.4 GB pessimistic and the
+step times are ~4x pessimistic. Fitting is not training: at 875 tok/s a 1B model needs
+~267 days for a Chinchilla-optimal budget, so the practical range remains a few hundred
+million parameters.

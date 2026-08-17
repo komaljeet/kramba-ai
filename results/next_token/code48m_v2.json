@@ -1,0 +1,37 @@
+{
+  "checkpoint": "checkpoints/code_48m_v2/edge_conversational.pt",
+  "step": 25000,
+  "all": [
+    510,
+    768
+  ],
+  "substantive": [
+    180,
+    354
+  ],
+  "trivial": [
+    330,
+    414
+  ],
+  "floor_most_frequent": {
+    "all": [
+      75,
+      768
+    ],
+    "sub": [
+      0,
+      354
+    ]
+  },
+  "floor_prev_token": {
+    "all": [
+      15,
+      768
+    ],
+    "sub": [
+      0,
+      354
+    ]
+  },
+  "verdict": "DEMOABLE: 50.8% on names and keywords, both floors beaten."
+}

@@ -38,9 +38,16 @@
 > 3. **Later — push toward frontier scale.** Harder, and gated on real compute — a separate,
 >    funded phase after (2) is proven, not a precondition for shipping something useful.
 
-HVN is a novel, untrained language-model architecture that achieves **long-range
-associative recall at <20% of the computational cost of standard Attention**, scaling at
-**O(1) constant time per token during inference** — without a traditional KV cache.
+kramba-ai is a **training and evaluation stack for linear-attention language models on a
+single 6 GB consumer GPU** — measured, not projected: a 1.07B-parameter model trains in
+4.05 GB at 875 tok/s.
+
+> **Correction (2026-08-16).** This line previously read "HVN is a novel, untrained
+> language-model architecture". True when written on 2026-07-02; false from 2026-07-04,
+> when #34 replaced the original block with a reimplementation of published gated-DeltaNet
+> dynamics. The architecture in use is **not original**, and the original block was
+> measured once, lost, and shelved. See [docs/index.md](docs/index.md) §1 for the full
+> correction and for what IS measured and defensible.
 
 > **📚 The full documentation now lives in [`docs/`](docs/index.md).** This README is a short
 > landing page; the former single-file "Complete Compendium" has been split into topic-focused
@@ -118,3 +125,21 @@ All training, benchmarking, and evaluation **must run on GPU, never CPU** (RTX 4
 Verify `torch.cuda.is_available()` before running. See [`docs/ai_rules.md`](docs/ai_rules.md).
 
 GitLab project: https://gitlab.com/komalbarun/kramba-ai
+
+## License
+
+[`LICENSE`](LICENSE) — **Ritish License v2.0**. Use it, learn from it, modify it, publish
+about it, reproduce or criticise the results. Making money from it needs a separate
+license: komalbarun@gmail.com
+
+**This is source-available, not open source.** It restricts a field of use (commercial
+gain), so it is not OSI-approved and repository hosts will label it non-standard. Said
+plainly here rather than left for someone to discover.
+
+Reproduction and criticism are explicitly permitted for **anyone**, including commercial
+organisations, because a result nobody may check is worth nothing.
+
+The license covers this implementation, not the published algorithms it implements —
+gated DeltaNet, GLA/Mamba-2 gating, Mamba/RWKV-7 conv and output gate, BitNet b1.58,
+BAdam, ALBERT weight sharing, Chinchilla, and Bavarian et al.'s fill-in-the-middle are
+other people's work, attributed in the files that implement them and listed in `LICENSE`.
