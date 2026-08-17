@@ -159,9 +159,30 @@
 <p>
   The largest consumer is <strong>not the model</strong>. It is the cross-entropy over the
   vocabulary &mdash; roughly three times the size of the weights. That cost scales with
-  vocabulary &times; sequence length and is <em>independent of model size</em>: a 48M and a
-  1B model with the same vocabulary and context pay the same ~1.5&nbsp;GB. Chunking and
-  recomputing it should return about a gigabyte. That work is specified and not yet done.
+  vocabulary &times; sequence length, so a small model with a large vocabulary pays nearly as
+  much as a big one.
+</p>
+<p>
+  <strong>Chunking and recomputing it returns 1,436&nbsp;MB</strong> &mdash; measured, at a
+  cost of 7% step time. The loss is scored a slice of positions at a time and each slice is
+  recomputed during the backward pass rather than kept, which is exactly what gradient
+  checkpointing already does for every other layer and had simply never been applied here.
+</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>48M, 4,096 context</th><th class="num">Allocated</th><th class="num">Reserved</th><th class="num">s/step</th></tr></thead>
+  <tbody>
+    <tr><td>whole-sequence loss</td><td class="num">2,275 MB</td><td class="num">2,584 MB</td><td class="num">3.21</td></tr>
+    <tr><td><strong>512 positions at a time</strong></td><td class="num win">1,003 MB</td><td class="num win">1,148 MB</td><td class="num">3.43</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  It helps <em>small</em> models most, which is the point: at 1B the peak is set by weights
+  and optimiser state instead, and the same change buys nothing there (+33&nbsp;MB). The
+  smaller your GPU and your model, the more this returns.
 </p>
 
 <h2>What it costs</h2>
@@ -177,6 +198,22 @@
     <tr><td>108M</td><td class="num win">yes</td><td class="num">~5 days</td></tr>
     <tr><td>157M</td><td class="num win">yes</td><td class="num">~10 days</td></tr>
     <tr><td>1B</td><td class="num win">yes &mdash; 4.05 GB</td><td class="num loss">~267 days</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  How large a model will <em>fit</em> is a different question from how large one you can
+  usefully train. Measured, same card, one micro-batch at 4,096 context:
+</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Model</th><th class="num">Peak VRAM</th><th class="num">Verdict</th></tr></thead>
+  <tbody>
+    <tr><td>1.07B</td><td class="num">4.00 GB</td><td class="num win">fits comfortably</td></tr>
+    <tr><td><strong>1.58B</strong></td><td class="num">5.92 GB</td><td class="num">at the edge of 6 GB</td></tr>
+    <tr><td>2.45B</td><td class="num loss">9.39 GB</td><td class="num loss">spills to system RAM</td></tr>
   </tbody>
 </table>
 </div>
@@ -224,7 +261,7 @@
     <tr><td>Ideas tested and rejected on measurement</td><td class="num">7</td></tr>
     <tr><td>Of those, conclusions this project retracted itself</td><td class="num loss">4</td></tr>
     <tr><td>Optimisations that measured <em>slower</em> than doing nothing</td><td class="num loss">2</td></tr>
-    <tr><td>Silent bugs caught only by a test designed to fail</td><td class="num loss">5</td></tr>
+    <tr><td>Silent bugs caught only by a test designed to fail</td><td class="num loss">6</td></tr>
   </tbody>
 </table>
 </div>

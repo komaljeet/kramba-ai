@@ -1,0 +1,111 @@
+RITISH LICENSE v2.0
+
+Copyright (c) 2026 Rambarun Komaljeet
+
+PURPOSE
+
+Use this freely. Learn from it, run it, modify it, build on it, publish
+about it. What you may not do is make money from it without asking.
+
+DEFINITIONS
+
+"Software" means the source code, documentation, data, and research
+materials in this repository.
+
+"Monetary Gain" means receiving, or acting in order to receive, money or
+anything of monetary value where the Software or a derivative of it is a
+component of what is provided. This includes:
+
+  - selling, licensing, or sublicensing the Software or a derivative
+  - offering the Software or a derivative as a paid or ad-supported
+    product, service, API, or hosted endpoint
+  - including it in paid consulting, contracting, or support work
+  - using it to produce a deliverable for which you are paid or funded
+
+It does NOT include:
+
+  - being employed, salaried, or funded for work that is unrelated to
+    the Software, even if you use the Software to learn
+  - academic research, teaching, coursework, and publication
+  - personal projects, experiments, and hobby use of any size
+  - reproducing, verifying, or criticising the results in this
+    repository, by anyone, including commercial organisations
+
+PERMISSIONS
+
+Anyone is granted the right to view, copy, modify, distribute, and use
+the Software for any purpose that does not involve Monetary Gain,
+provided the conditions below are met.
+
+CONDITIONS
+
+1. NO MONETARY GAIN — You may not use the Software, or any derivative of
+   it, for Monetary Gain without a separate written license from the
+   author. If you are unsure whether your use qualifies, ask; the answer
+   will usually be yes.
+
+2. ATTRIBUTION — Any use or distribution must retain this license and
+   credit: Rambarun Komaljeet — https://gitlab.com/komalbarun/kramba-ai
+
+3. SHARE-ALIKE — Any modified version must be distributed under this
+   same license, with these conditions intact.
+
+4. NO SUBLICENSING — You may not grant others rights beyond what this
+   license permits.
+
+COMMERCIAL LICENSING
+
+To use this Software for Monetary Gain, contact the author for a
+separate license:
+
+  komalbarun@gmail.com
+
+DISCLAIMER
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+THE AUTHOR SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY ARISING FROM USE OF THIS SOFTWARE.
+
+
+---------------------------------------------------------------------
+THIRD-PARTY WORK IMPLEMENTED HERE
+---------------------------------------------------------------------
+
+This license covers the code in this repository. It does not, and
+cannot, claim the published algorithms that code implements. The
+following are reimplementations of work by others, attributed in the
+source files that implement them:
+
+  - Gated DeltaNet — the recurrent update rule in hvn/core/deltanet.py
+  - GLA / Mamba-2 — the per-channel data-dependent decay gate
+  - Mamba / RWKV-7 — the output gate and short causal depthwise conv
+  - BitNet b1.58 — ternary weight quantisation, hvn/edge/ternary.py
+  - BAdam — block-coordinate descent, hvn/core/block_coordinate.py
+  - ALBERT — cross-layer weight sharing, hvn/edge/shared.py
+  - Chinchilla (Hoffmann et al.) — the tokens-per-parameter framing
+  - Fill-in-the-Middle (Bavarian et al.) — hvn/fim.py
+
+Anyone is free to implement those papers themselves; this license
+restricts only this particular implementation of them.
+
+
+---------------------------------------------------------------------
+NOTE ON WHAT THIS LICENSE CAN AND CANNOT DO
+---------------------------------------------------------------------
+
+Stated plainly rather than left to be discovered:
+
+  - This is not an OSI-approved "open source" license, because it
+    restricts a field of use. Repository hosts will label it as
+    non-standard, and some users and package indexes avoid such
+    licenses on principle. That is the cost of the restriction.
+
+  - Restrictions of this kind are hard to enforce in practice without
+    the author's own time and money. The practical effect is to make
+    unauthorised commercial use visible and indefensible rather than
+    to prevent it outright.
+
+  - Nothing here restricts reading, testing, or disagreeing with the
+    results. Reproduction and criticism are explicitly permitted for
+    anyone, deliberately, because a result nobody may check is worth
+    nothing.
