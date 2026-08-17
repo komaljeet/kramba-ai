@@ -1,0 +1,90 @@
+{
+  "heldout_tokens": 400000,
+  "seq_len": 1024,
+  "rows": [
+    {
+      "heldout_nll": 4.683426446635242,
+      "heldout_ppl": 108.13996887207031,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 500,
+      "checkpoint": "checkpoints/hvnblock_retest\\edge_conversational_step500.pt",
+      "params": 26332515,
+      "body": 11995171,
+      "tokens_seen": 16384000,
+      "tokens_per_body_param": 1.3658829874121845
+    },
+    {
+      "heldout_nll": 3.3164080692597895,
+      "heldout_ppl": 27.561176300048828,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 1000,
+      "checkpoint": "checkpoints/hvnblock_retest\\edge_conversational_step1000.pt",
+      "params": 26332515,
+      "body": 11995171,
+      "tokens_seen": 32768000,
+      "tokens_per_body_param": 2.731765974824369
+    },
+    {
+      "heldout_nll": 2.7678853418646767,
+      "heldout_ppl": 15.92492389678955,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 1500,
+      "checkpoint": "checkpoints/hvnblock_retest\\edge_conversational_step1500.pt",
+      "params": 26332515,
+      "body": 11995171,
+      "tokens_seen": 49152000,
+      "tokens_per_body_param": 4.097648962236553
+    },
+    {
+      "heldout_nll": 2.5636501448505293,
+      "heldout_ppl": 12.983120918273926,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 2000,
+      "checkpoint": "checkpoints/hvnblock_retest\\edge_conversational_step2000.pt",
+      "params": 26332515,
+      "body": 11995171,
+      "tokens_seen": 65536000,
+      "tokens_per_body_param": 5.463531949648738
+    },
+    {
+      "heldout_nll": 2.501509469770401,
+      "heldout_ppl": 12.200896263122559,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 2500,
+      "checkpoint": "checkpoints/hvnblock_retest\\edge_conversational_step2500.pt",
+      "params": 26332515,
+      "body": 11995171,
+      "tokens_seen": 81920000,
+      "tokens_per_body_param": 6.829414937060922
+    },
+    {
+      "heldout_nll": 2.4304133687458096,
+      "heldout_ppl": 11.363579750061035,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 3000,
+      "checkpoint": "checkpoints/hvnblock_retest\\edge_conversational_step3000.pt",
+      "params": 26332515,
+      "body": 11995171,
+      "tokens_seen": 98304000,
+      "tokens_per_body_param": 8.195297924473106
+    },
+    {
+      "heldout_nll": 2.3644662731753994,
+      "heldout_ppl": 10.638358116149902,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 3500,
+      "checkpoint": "checkpoints/hvnblock_retest\\edge_conversational_step3500.pt",
+      "params": 26332515,
+      "body": 11995171,
+      "tokens_seen": 114688000,
+      "tokens_per_body_param": 9.561180911885291
+    }
+  ]
+}
