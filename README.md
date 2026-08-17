@@ -145,7 +145,7 @@ If you measure it, I would like to know the number.
 
 ## License
 
-[`LICENSE`](LICENSE) — **Ritish License v2.0**. Use it, learn from it, modify it, publish
+[`LICENSE`](LICENSE) — **Rambarun Komaljeet License v2.0**. Use it, learn from it, modify it, publish
 about it, reproduce or criticise the results. Making money from it needs a separate
 license: komalbarun@gmail.com
 

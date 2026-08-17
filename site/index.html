@@ -66,11 +66,6 @@
   }
   blockquote p:last-child{margin:0}
   code{font-family:var(--mono); font-size:.88em; background:var(--code); padding:.15em .4em; border-radius:4px}
-  .pending{
-    border:1px dashed var(--line); border-radius:10px; padding:1.25rem;
-    background:var(--panel); color:var(--muted);
-  }
-  .pending strong{color:var(--ink)}
   footer{margin-top:4rem; padding:2rem 0 4rem; border-top:1px solid var(--line); color:var(--muted); font-size:.9rem}
   ul{margin:0 0 1rem; padding-left:1.25rem}
   li{margin-bottom:.4rem}
@@ -139,6 +134,52 @@
   became the default, because every one of them builds a tied model and hit the guard at
   construction.
 </p>
+
+<h2>What you get without any of this</h2>
+<p class="sub">The same card, a standard training script &mdash; measured, both columns</p>
+
+<p>
+  A normal setup &mdash; AdamW, bf16 autocast, gradient checkpointing on, nothing else
+  &mdash; is not helpless. It is just capped much lower:
+</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Model</th><th class="num">Standard script</th><th class="num">With this stack</th></tr></thead>
+  <tbody>
+    <tr><td>157M</td><td class="num win">3.38 GB &mdash; fits</td><td class="num win">fits</td></tr>
+    <tr><td>243M</td><td class="num win">4.80 GB &mdash; fits</td><td class="num win">fits</td></tr>
+    <tr><td>434M</td><td class="num loss">9.04 GB &mdash; spills</td><td class="num win">fits</td></tr>
+    <tr><td>1.07B <em>(recurrent)</em></td><td class="num loss">far past the card</td><td class="num win">4.00 GB</td></tr>
+    <tr><td>1.07B <em>(plain transformer)</em></td><td class="num loss">far past the card</td><td class="num win">4.04 GB</td></tr>
+    <tr><td><strong>1.58B</strong></td><td class="num loss">far past the card</td><td class="num win">5.92 GB &mdash; the ceiling</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  <strong>~243M on a standard script, ~1.58B with the stack &mdash; about 6.5&times;.</strong>
+  Both numbers measured on the same 6&nbsp;GB card at 4,096 context, stopping at the first
+  spill into system RAM rather than the first crash, because on Windows an over-subscribed
+  GPU does not error &mdash; it silently gets four to fifteen times slower.
+</p>
+
+<p>
+  Worth noting what the table does <em>not</em> show: a transformer and the recurrent hybrid
+  need almost identical memory at these sizes (4.80 GB vs 5.09 GB at 243M), and a plain
+  1.07B transformer runs under the same stack in 4.04 GB. The 6.5&times; comes from the
+  training stack, <strong>not from the architecture</strong> &mdash; so it applies to
+  whatever model you are training, including an ordinary transformer.
+</p>
+
+<blockquote>
+  <p>
+    Fitting is still not finishing. That 1.07B transformer runs at 1,160 tokens/sec, and a
+    properly trained 1B model needs about 20 billion of them &mdash; roughly
+    <strong>200 days</strong>. The ceiling this stack raises is what you can <em>hold</em>;
+    the wall it does not touch is arithmetic.
+  </p>
+</blockquote>
 
 <h2>Where the memory actually goes</h2>
 <p class="sub">Measured on a live 48M training run, 3.27&nbsp;GB in use</p>

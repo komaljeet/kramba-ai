@@ -1,0 +1,98 @@
+[
+  {
+    "kind": "transformer",
+    "d": 512,
+    "L": 12,
+    "params": 47906563,
+    "reserved": 2.068359375,
+    "ok": true
+  },
+  {
+    "kind": "transformer",
+    "d": 640,
+    "L": 12,
+    "params": 69705603,
+    "reserved": 2.091796875,
+    "ok": true
+  },
+  {
+    "kind": "transformer",
+    "d": 768,
+    "L": 14,
+    "params": 107240963,
+    "reserved": 2.357421875,
+    "ok": true
+  },
+  {
+    "kind": "transformer",
+    "d": 896,
+    "L": 16,
+    "params": 157230723,
+    "reserved": 3.380859375,
+    "ok": true
+  },
+  {
+    "kind": "transformer",
+    "d": 1024,
+    "L": 20,
+    "params": 242622723,
+    "reserved": 4.8046875,
+    "ok": true
+  },
+  {
+    "kind": "transformer",
+    "d": 1280,
+    "L": 24,
+    "params": 434368003,
+    "reserved": 9.04296875,
+    "ok": false
+  },
+  {
+    "kind": "deltanet-hybrid",
+    "d": 512,
+    "L": 12,
+    "params": 48024483,
+    "reserved": 2.17578125,
+    "ok": true
+  },
+  {
+    "kind": "deltanet-hybrid",
+    "d": 640,
+    "L": 12,
+    "params": 69878603,
+    "reserved": 2.224609375,
+    "ok": true
+  },
+  {
+    "kind": "deltanet-hybrid",
+    "d": 768,
+    "L": 14,
+    "params": 107526947,
+    "reserved": 2.5703125,
+    "ok": true
+  },
+  {
+    "kind": "deltanet-hybrid",
+    "d": 896,
+    "L": 16,
+    "params": 157670155,
+    "reserved": 3.6171875,
+    "ok": true
+  },
+  {
+    "kind": "deltanet-hybrid",
+    "d": 1024,
+    "L": 20,
+    "params": 243342147,
+    "reserved": 5.08984375,
+    "ok": true
+  },
+  {
+    "kind": "deltanet-hybrid",
+    "d": 1280,
+    "L": 24,
+    "params": 435692403,
+    "reserved": 9.51953125,
+    "ok": false
+  }
+]
