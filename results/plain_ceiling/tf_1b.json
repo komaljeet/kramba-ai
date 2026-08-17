@@ -1,0 +1,17 @@
+[
+  {
+    "label": "transformer 2048x24",
+    "params": 1072456963,
+    "reserved": 4.04296875,
+    "s_step": 3.5309036999824457,
+    "fits": true
+  },
+  {
+    "label": "hybrid 2048x24 (ref)",
+    "params": 1074214851,
+    "reserved": 4.376953125,
+    "s_step": 21.54749600001378,
+    "fits": true,
+    "INVALID": "scan kernels not enabled in the probe script; this arm ran the eager path. Correct hybrid value with use_triton_scan + use_megakernel_scan: 4.68 s/step at 4.05 GB (results/offload_1b/real_seq_tied_157.json). Do not cite the s_step here."
+  }
+]

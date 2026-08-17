@@ -66,6 +66,13 @@ engineering, not a research claim, and `site/index.html` is written around it.
 
 ## 4. Gotchas that have already cost time
 
+- **Every new benchmark script MUST set the scan kernels.** Three separate scripts
+  this week omitted `use_triton_scan` / `use_megakernel_scan` after `.to(device)` (or
+  the equivalent constructor args) and ran the eager path against a Triton baseline.
+  One of them produced a "4.25x regression" that was entirely the missing flag, and
+  another produced a hybrid reference 4.6x too slow. Both defaults are `False`. Copy the
+  four-line block from `scripts/size_vs_time_for_code.py` into any new probe, and if two
+  sibling scripts disagree by more than ~20%, diff their setup before believing either.
 - **Check the clock every reply** (`Get-Date`). Extrapolating it has been wrong by
   2 hours and by 7 hours in this session alone.
 - **Background watchers get killed.** Five in a row died mid-session. The detached

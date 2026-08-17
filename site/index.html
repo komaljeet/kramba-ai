@@ -155,7 +155,8 @@
     <tr><td>157M</td><td class="num win">3.38 GB &mdash; fits</td><td class="num win">fits</td></tr>
     <tr><td>243M</td><td class="num win">4.80 GB &mdash; fits</td><td class="num win">fits</td></tr>
     <tr><td>434M</td><td class="num loss">9.04 GB &mdash; spills</td><td class="num win">fits</td></tr>
-    <tr><td>1.07B</td><td class="num loss">far past the card</td><td class="num win">4.00 GB</td></tr>
+    <tr><td>1.07B <em>(recurrent)</em></td><td class="num loss">far past the card</td><td class="num win">4.00 GB</td></tr>
+    <tr><td>1.07B <em>(plain transformer)</em></td><td class="num loss">far past the card</td><td class="num win">4.04 GB</td></tr>
     <tr><td><strong>1.58B</strong></td><td class="num loss">far past the card</td><td class="num win">5.92 GB &mdash; the ceiling</td></tr>
   </tbody>
 </table>
@@ -170,10 +171,20 @@
 
 <p>
   Worth noting what the table does <em>not</em> show: a transformer and the recurrent hybrid
-  need almost identical memory at these sizes (4.80 GB vs 5.09 GB at 243M). The 6.5&times;
-  comes from the training stack, not from the architecture. Anyone can apply it to whatever
-  model they are training.
+  need almost identical memory at these sizes (4.80 GB vs 5.09 GB at 243M), and a plain
+  1.07B transformer runs under the same stack in 4.04 GB. The 6.5&times; comes from the
+  training stack, <strong>not from the architecture</strong> &mdash; so it applies to
+  whatever model you are training, including an ordinary transformer.
 </p>
+
+<blockquote>
+  <p>
+    Fitting is still not finishing. That 1.07B transformer runs at 1,160 tokens/sec, and a
+    properly trained 1B model needs about 20 billion of them &mdash; roughly
+    <strong>200 days</strong>. The ceiling this stack raises is what you can <em>hold</em>;
+    the wall it does not touch is arithmetic.
+  </p>
+</blockquote>
 
 <h2>Where the memory actually goes</h2>
 <p class="sub">Measured on a live 48M training run, 3.27&nbsp;GB in use</p>
