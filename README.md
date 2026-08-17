@@ -126,6 +126,23 @@ Verify `torch.cuda.is_available()` before running. See [`docs/ai_rules.md`](docs
 
 GitLab project: https://gitlab.com/komalbarun/kramba-ai
 
+## Something to try on your own rig
+
+One question this project never answered, deliberately left for whoever runs this on their
+own hardware: **is the effective batch size right, or just what fit in VRAM?**
+
+`hardware_scan()` picks it to fit memory, and it became a constant nobody revisited. A
+critical batch size exists and is well studied, but where it sits depends on your model and
+your data, so it cannot be looked up — and the default optimiser here (Muon) is much less
+characterised for large batches than Adam is.
+
+Varying `--grad-accum` costs **no extra VRAM**, so a gaming GPU can answer it: three arms at
+8 / 16 / 32, graded at matched *tokens* rather than matched steps, scored with
+`eval/heldout_loss.py`. Full design, including the fixed-LR confound to state in any
+writeup, is in [issue #152](https://gitlab.com/komalbarun/kramba-ai/-/issues/152).
+
+If you measure it, I would like to know the number.
+
 ## License
 
 [`LICENSE`](LICENSE) — **Ritish License v2.0**. Use it, learn from it, modify it, publish
