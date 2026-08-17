@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>A language model architecture with constant-cost memory</title>
-<meta name="description" content="Measured: 19% of attention's compute per token, and inference memory that does not grow with context.">
+<title>Training a 1B model on a 6 GB laptop GPU</title>
+<meta name="description" content="Measured envelopes for training language models on consumer GPUs: 1.07B parameters in 4.05 GB on a 6 GB card.">
 <style>
   :root{
     --bg:#fbfaf8; --panel:#ffffff; --ink:#16150f; --muted:#5d5a4e;
@@ -80,261 +80,190 @@
 <div class="wrap">
 
 <header>
-  <p class="eyebrow">Rambarun Komaljeet · single 6&nbsp;GB GPU</p>
-  <h1>A language model whose memory doesn&rsquo;t grow.</h1>
+  <p class="eyebrow">Rambarun Komaljeet &middot; measured on one 6&nbsp;GB laptop GPU</p>
+  <h1>A 1B model trains in 4&nbsp;GB.</h1>
   <p class="lede">
-    Transformers remember by keeping every token they have read, so their cost
-    climbs with the length of what they are reading. This one&rsquo;s does not &mdash;
-    the next token costs the same at 100,000 as at 100.
+    Your GPU probably holds a much larger model than you have been told. This is the
+    stack that does it, the measured numbers, and the honest cost.
   </p>
 </header>
 
-<h2>What it does</h2>
-<p class="sub">The result, stated as a measurement</p>
+<h2>The headline number</h2>
+<p class="sub">RTX 4050 laptop, 6&nbsp;GB &mdash; measured 2026-08-14</p>
 
-<p>
-  A standard model&rsquo;s memory grows with every token it reads. Double the context and you
-  double the memory and the work &mdash; which is why long-context inference is expensive,
-  and it is structural rather than an implementation detail anyone can optimise away.
-</p>
-<p>
-  This one doesn&rsquo;t grow. The cost of the next token is the same at 100,000 tokens as
-  at 100.
-</p>
-
-<div class="tw">
-<table>
-  <thead><tr><th>At 100,000 tokens</th><th class="num">Standard transformer</th><th class="num">This architecture</th></tr></thead>
-  <tbody>
-    <tr><td>Compute per token</td><td class="num">2,474M</td><td class="num win">463M &mdash; 19%</td></tr>
-    <tr><td>Inference memory</td><td class="num">2.46 GB</td><td class="num win">6.29 MB &mdash; 0.26%</td></tr>
-    <tr><td>Growth with context</td><td class="num">O(N)</td><td class="num win">O(1)</td></tr>
-  </tbody>
-</table>
+<div class="cards">
+  <div class="card"><div class="k">1.07B</div><div class="l">parameters, training &mdash; not inference</div></div>
+  <div class="card"><div class="k">4.05 GB</div><div class="l">peak VRAM, 1.9&nbsp;GB to spare</div></div>
+  <div class="card"><div class="k">875</div><div class="l">tokens/sec at 4,096 context</div></div>
 </div>
 
-<h2>Head to head against a transformer</h2>
-<p class="sub">Same size, same hours, same data pipeline</p>
+<p>
+  A 1B-parameter model normally wants roughly 10&nbsp;GB before it has processed a single
+  token &mdash; about 4&nbsp;GB of weights, 4&nbsp;GB of gradients, and optimiser state on
+  top. On a 6&nbsp;GB card the standard advice is to rent an A100.
+</p>
+
+<h2>How it is done</h2>
+<p class="sub">Five published techniques, one working integration</p>
 
 <p>
-  The comparison that decides whether any of this is worth doing: an identically-sized
-  transformer, trained on the same corpus with the same tokenizer, sequence length,
-  precision, optimiser and random seed, given the <em>same number of GPU hours</em>.
-  Parameters matched to within 0.4%.
+  Nothing here is a new algorithm. Every piece is published and attributed; the contribution
+  is making them work together and measuring what the combination actually costs.
 </p>
 
 <div class="tw">
 <table>
-  <thead><tr><th>7.4 hours each</th><th class="num">Held-out loss</th><th class="num">Tokens seen</th></tr></thead>
+  <thead><tr><th>Technique</th><th>What it removes</th><th class="num">Saving</th></tr></thead>
   <tbody>
-    <tr><td><strong>This architecture</strong></td><td class="num win">1.9654</td><td class="num">475M</td></tr>
-    <tr><td>Transformer</td><td class="num">1.9814</td><td class="num">672M</td></tr>
+    <tr><td><strong>Block-coordinate descent</strong> (BAdam)</td><td>optimiser state for every block but the active one</td><td class="num">~8&times; on state</td></tr>
+    <tr><td><strong>CPU weight offload</strong></td><td>inactive blocks leave the GPU entirely</td><td class="num">scales with depth</td></tr>
+    <tr><td><strong>Ternary weights</strong> (BitNet b1.58)</td><td>32-bit weights become &minus;1 / 0 / +1</td><td class="num">2.33&times;</td></tr>
+    <tr><td><strong>Tied embeddings</strong></td><td>one vocabulary table instead of two</td><td class="num">70M params at 1B</td></tr>
+    <tr><td><strong>Gradient checkpointing</strong></td><td>stored activations &mdash; recomputed instead</td><td class="num">activations to ~50 MB</td></tr>
   </tbody>
 </table>
 </div>
 
 <p>
-  It wins &mdash; <strong>while seeing 40% less data</strong>, because the transformer runs
-  faster per step and therefore gets more tokens for the same hours. Compared at equal
-  tokens instead, the margin is roughly four times the measurement noise at every point:
+  Two of these did not previously work together. Tied embeddings share one tensor between the
+  input lookup and the output layer, and the offload system rejected that outright: it
+  assigns every parameter to exactly one block, and this tensor belongs to two. The
+  combination was guarded off as unsupported.
 </p>
+<p>
+  The fix is to <strong>pin it</strong> &mdash; a parameter reachable from two modules is
+  never evicted, because the forward pass uses it at both ends and no single block&rsquo;s
+  residency window covers both uses. The cost is one vocabulary table held resident,
+  250&nbsp;MB at 1B scale. Lifting that guard also re-enabled <strong>13 of the
+  subsystem&rsquo;s own tests</strong>, which had been silently skipped ever since tying
+  became the default, because every one of them builds a tied model and hit the guard at
+  construction.
+</p>
+
+<h2>Where the memory actually goes</h2>
+<p class="sub">Measured on a live 48M training run, 3.27&nbsp;GB in use</p>
 
 <div class="tw">
 <table>
-  <thead><tr><th>Tokens per parameter</th><th class="num">This architecture</th><th class="num">Transformer</th></tr></thead>
+  <thead><tr><th>Item</th><th class="num">Size</th></tr></thead>
   <tbody>
-    <tr><td>20</td><td class="num win">2.0509</td><td class="num">2.1361</td></tr>
-    <tr><td>30</td><td class="num win">1.9841</td><td class="num">2.0703</td></tr>
-    <tr><td>40</td><td class="num win">1.9613</td><td class="num">2.0163</td></tr>
+    <tr><td><strong>Computing the loss</strong> &mdash; 4,096 positions &times; 32,003 vocabulary</td><td class="num loss">~1,500 MB</td></tr>
+    <tr><td>CUDA context, kernels, workspaces</td><td class="num">~400 MB</td></tr>
+    <tr><td>Weights</td><td class="num">183 MB</td></tr>
+    <tr><td>Optimiser state</td><td class="num">183 MB</td></tr>
+    <tr><td>Layer activations</td><td class="num win">~50 MB</td></tr>
   </tbody>
 </table>
 </div>
 
-<blockquote>
-  <p>
-    Stated against the project&rsquo;s own interest: it is <strong>not</strong> cheaper to
-    train. The transformer runs 1.41&times; faster per step at this size. The efficiency
-    claim is about inference, and only inference.
-  </p>
-</blockquote>
-
 <p>
-  The margin threshold was fixed in writing before the run, from the measured
-  step-to-step noise, so the verdict could not be chosen after seeing the number. Both
-  models here are small; a larger pair is running to establish whether the lead grows or
-  shrinks with size.
+  The largest consumer is <strong>not the model</strong>. It is the cross-entropy over the
+  vocabulary &mdash; roughly three times the size of the weights. That cost scales with
+  vocabulary &times; sequence length and is <em>independent of model size</em>: a 48M and a
+  1B model with the same vocabulary and context pay the same ~1.5&nbsp;GB. Chunking and
+  recomputing it should return about a gigabyte. That work is specified and not yet done.
 </p>
 
-<h2>The finding that reshaped the project</h2>
-<p class="sub">Fitting in memory was never the constraint</p>
+<h2>What it costs</h2>
+<p class="sub">The part usually left out</p>
 
-<blockquote>
-  <p>
-    Training cost grows as <code>6 &times; params &times; tokens</code>, and a
-    well-trained model needs roughly 20 tokens per parameter. So doubling the model
-    quadruples the work. Memory tricks address about 2&times; of that gap.
-  </p>
-</blockquote>
+<p>Fitting is not training. Compute is the wall, and no memory technique touches it.</p>
 
-<p>
-  Measured honestly, this hardware&rsquo;s ceiling is about <strong>142M parameters</strong>
-  &mdash; not because larger models fail to load, but because they cannot be trained to the
-  point of being worth their size. Every sizing decision since has started from arithmetic
-  rather than from whether the model fits.
-</p>
-
-<h2>The results that did not work</h2>
-<p class="sub">Kept in the record on purpose</p>
+<div class="tw">
+<table>
+  <thead><tr><th>Model</th><th class="num">Fits on 6&nbsp;GB?</th><th class="num">Time to train properly</th></tr></thead>
+  <tbody>
+    <tr><td>48M</td><td class="num win">yes</td><td class="num">~1 day</td></tr>
+    <tr><td>108M</td><td class="num win">yes</td><td class="num">~5 days</td></tr>
+    <tr><td>157M</td><td class="num win">yes</td><td class="num">~10 days</td></tr>
+    <tr><td>1B</td><td class="num win">yes &mdash; 4.05 GB</td><td class="num loss">~267 days</td></tr>
+  </tbody>
+</table>
+</div>
 
 <p>
-  Most of this project&rsquo;s written history is negative results, several of them
-  retractions of its own earlier conclusions.
+  So the practical range on a 6&nbsp;GB card is <strong>up to a few hundred million
+  parameters</strong>, trained properly, in days. On a 16&ndash;24&nbsp;GB card the same
+  techniques move that range up several times over. Anyone told their GPU cannot train
+  anything worth having is being sold something.
 </p>
+
+<h2>Two findings worth stealing</h2>
+
+<h3>Twenty tokens per parameter is too low</h3>
+<p>
+  Measured across three model sizes at a constant learning rate &mdash; so every checkpoint
+  is genuinely a model trained to that many tokens, rather than a snapshot part-way through a
+  decaying schedule. Going from 20 to 30 tokens per parameter buys 1.9&ndash;3.3%. Going from
+  30 to 40 buys about 1.1% for 33% more time. <strong>Thirty is where the trade turns.</strong>
+</p>
+<p>
+  How that number moves with model size is <strong>unresolved</strong>. Fitting the standard
+  scaling form to all 120 measured points gives a degenerate answer &mdash; it implies a 1B
+  model needs less data than it has parameters, contradicting every raw curve. Three model
+  sizes are not enough to separate the terms. That failure is published here rather than
+  quietly dropped.
+</p>
+
+<h3>Perplexity can look excellent while the model cannot do its job</h3>
+<p>
+  A code model reached perplexity 4.13 and scored <strong>0%</strong> at filling gaps in real
+  code &mdash; the task it was built for. The cause: that one skill was 0.02% of the training
+  signal, and never learning it costs 0.0006 on the loss curve. Invisible. After fixing the
+  data recipe, first-token accuracy went from <strong>2.2% to 59.8%</strong> on identical
+  compute.
+</p>
+
+<h2>The record of things that failed</h2>
+<p class="sub">Kept on purpose</p>
 
 <div class="tw">
 <table>
   <thead><tr><th>Category</th><th class="num">Count</th></tr></thead>
   <tbody>
-    <tr><td>Ideas tested and rejected on measurement</td><td class="num">6</td></tr>
-    <tr><td>Of those, conclusions this project retracted itself</td><td class="num loss">3</td></tr>
+    <tr><td>Ideas tested and rejected on measurement</td><td class="num">7</td></tr>
+    <tr><td>Of those, conclusions this project retracted itself</td><td class="num loss">4</td></tr>
     <tr><td>Optimisations that measured <em>slower</em> than doing nothing</td><td class="num loss">2</td></tr>
-  </tbody>
-</table>
-</div>
-
-<h2>The recurring lesson</h2>
-<p class="sub">The number you are watching is usually not the number that matters</p>
-
-<p>
-  The same failure has appeared five separate times, each time with a healthy-looking
-  metric hiding a broken system:
-</p>
-
-<ul>
-  <li>A cache served untrained weights for weeks while aggregate loss kept falling.</li>
-  <li>A GPU-graph optimisation published a 6.8&times; speedup from a test that compared one
-      step against itself &mdash; it could not have failed.</li>
-  <li>A verdict was retracted for grading on training loss, which measures memorisation.</li>
-  <li>A code model reached excellent perplexity and scored <strong>0%</strong> at actually
-      completing code &mdash; the one skill it was built for was 0.02% of its training
-      signal, far too little to register on the curve.</li>
-  <li>A learning rate silently halved on every restart, compounding, invisible to every
-      chart being watched.</li>
-</ul>
-
-<p>
-  The practical rule that came out of it, now enforced before any measurement is taken:
-  <strong>if the thing being tested were broken, would this test catch it?</strong>
-  Answer it before seeing the result, not after. A test that cannot fail is worse than no
-  test, because it turns a bug into a published number.
-</p>
-
-<h2>Current work</h2>
-<p class="sub">A code-completion model, trained end to end on one laptop</p>
-
-<p>
-  A 48M-parameter model trained on 3.86 billion tokens of source code, using
-  fill-in-the-middle &mdash; the model sees the code before <em>and</em> after the cursor
-  and fills the gap, which is what an editor actually needs.
-</p>
-
-<p>
-  Model size was chosen by measuring time-to-convergence rather than by ambition: a
-  157M model needs 6.5 days on this hardware, a 48M model 22 hours. A small model trained
-  fully beats a large one trained to 10%.
-</p>
-
-<h3>What the run found</h3>
-
-<p>
-  The first attempt reached 63% of its training budget at <strong>exactly 0% correct
-  completions</strong> &mdash; while its loss curve looked healthy. The cause was that the
-  one skill being measured was 0.02% of the training signal: a single token per document
-  asks the model to jump back to the cursor instead of continuing the text it just read.
-  Never learning it costs 0.0006 on the loss curve. No amount of watching that curve could
-  have found this.
-</p>
-
-<p>
-  After fixing the data recipe &mdash; ten times more of that one signal, same compute:
-</p>
-
-<div class="tw">
-<table>
-  <thead><tr><th>Filling a gap in real code</th><th class="num">Before</th><th class="num">After</th></tr></thead>
-  <tbody>
-    <tr><td>First token correct</td><td class="num">2.2%</td><td class="num win">59.8%</td></tr>
-    <tr><td>Does the code after the cursor help?</td><td class="num loss">hurts</td><td class="num win">helps</td></tr>
-    <tr><td>Whole two-line gap correct</td><td class="num">0%</td><td class="num">1.3%</td></tr>
+    <tr><td>Silent bugs caught only by a test designed to fail</td><td class="num loss">5</td></tr>
   </tbody>
 </table>
 </div>
 
 <p>
-  <strong>The mechanism works; the model is too small.</strong> It reliably knows where to
-  start writing, and it now genuinely reads the code on both sides of the gap. It cannot
-  hold the thread for a whole line &mdash; one wrong token fails the entire fill, so 60%
-  per token becomes 1.3% per span. That 1.3% sits against a 1.0% floor for simply copying
-  the previous line, which is to say: at the floor.
-</p>
-
-<p>
-  This is reported rather than buried because it is the point. A 48M-parameter model is
-  roughly 100&times; smaller than the code models this task is built for. Perplexity of
-  4.13 looks excellent and is not evidence of anything &mdash; the gate is, and the gate
-  says no.
+  Including the largest one. This project began as an original architecture. It was
+  eventually benchmarked against the published alternative under matched conditions, lost by
+  13% at equal data, and had already been replaced in the code months earlier &mdash; while
+  the front page went on calling it novel. Both facts are now in the repository.
 </p>
 
 <blockquote>
   <p>
-    An earlier reading of this same model, on 50 cases instead of 300, showed 4%
-    &mdash; two correct answers. It did not survive the larger sample. It is recorded
-    here because it was briefly believed.
+    The rule that came out of all this, applied before any measurement is taken:
+    <strong>if the thing being tested were broken, would this test catch it?</strong>
+    Answer that before seeing the result. A test that cannot fail is worse than no test,
+    because it turns a bug into a published number.
   </p>
 </blockquote>
 
-<h3>What it can do</h3>
+<h2>Honest limits</h2>
 
-<p>
-  Failing at whole spans is not the same as failing. The task an editor actually performs
-  is predicting the <em>next</em> token as you type, and that was measured separately, with
-  the thresholds fixed in writing before the run.
-</p>
-
-<div class="tw">
-<table>
-  <thead>
-    <tr><th>Predicting the next token</th><th class="num">cases</th><th class="num">model</th><th class="num">best floor</th></tr>
-  </thead>
-  <tbody>
-    <tr><td><strong>Names &amp; keywords</strong></td><td class="num">354</td><td class="num win">50.8%</td><td class="num">0.0%</td></tr>
-    <tr><td>Punctuation, brackets, spacing</td><td class="num">414</td><td class="num">79.7%</td><td class="num">&mdash;</td></tr>
-    <tr><td>Everything together</td><td class="num">768</td><td class="num">66.4%</td><td class="num">9.8%</td></tr>
-  </tbody>
-</table>
-</div>
-
-<p>
-  The split is the point. Most tokens in source code are brackets, commas and indentation,
-  and a model that predicted nothing else would still score respectably overall. So the
-  headline is the <strong>substantive</strong> row &mdash; identifiers and keywords &mdash;
-  where the two floors, always guessing the commonest token and repeating the previous one,
-  both score <strong>zero</strong>. Every correct answer there came from reading the code.
-</p>
-
-<p>
-  In practice: type <code>for item in </code> and about half the time its next suggestion is
-  the right variable. That is ghost-text autocomplete, one token at a time. It is not
-  &ldquo;write this function&rdquo; &mdash; the gap-filling result above already says no to
-  that &mdash; and the difference between those two claims is the whole reason both were
-  measured.
-</p>
+<ul>
+  <li>The architecture is a reimplementation of published work &mdash; gated DeltaNet,
+      GLA/Mamba-2 gating, Mamba/RWKV-7 convolution and output gate. The code is original;
+      the design is not.</li>
+  <li>Constant-memory inference is a property of that entire model family, not of this work.</li>
+  <li>Nothing above 48M has been trained to convergence here. Every scaling statement is
+      measured below that size and should not be extrapolated past it.</li>
+  <li>The 100,000-token inference memory figure quoted in the repository is
+      <strong>calculated, not measured</strong>, and is therefore not quoted on this page.</li>
+  <li>Comparisons are single-seed: that removes luck between arms, not luck shared by both.</li>
+</ul>
 
 <footer>
   <p>
-    <strong>Rambarun Komaljeet</strong> &mdash; kramba-ai, language model architecture
-    research. Built and measured on a single RTX&nbsp;4050 (6&nbsp;GB). Every figure on
-    this page is measured, not projected.
+    <strong>Rambarun Komaljeet</strong> &mdash; kramba-ai. Built and measured on a single
+    RTX&nbsp;4050 (6&nbsp;GB). Every figure here is measured rather than projected, and the
+    ones that are not are labelled as such.
   </p>
 </footer>
 
