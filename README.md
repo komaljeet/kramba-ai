@@ -125,3 +125,21 @@ All training, benchmarking, and evaluation **must run on GPU, never CPU** (RTX 4
 Verify `torch.cuda.is_available()` before running. See [`docs/ai_rules.md`](docs/ai_rules.md).
 
 GitLab project: https://gitlab.com/komalbarun/kramba-ai
+
+## License
+
+[`LICENSE`](LICENSE) — **Ritish License v2.0**. Use it, learn from it, modify it, publish
+about it, reproduce or criticise the results. Making money from it needs a separate
+license: komalbarun@gmail.com
+
+**This is source-available, not open source.** It restricts a field of use (commercial
+gain), so it is not OSI-approved and repository hosts will label it non-standard. Said
+plainly here rather than left for someone to discover.
+
+Reproduction and criticism are explicitly permitted for **anyone**, including commercial
+organisations, because a result nobody may check is worth nothing.
+
+The license covers this implementation, not the published algorithms it implements —
+gated DeltaNet, GLA/Mamba-2 gating, Mamba/RWKV-7 conv and output gate, BitNet b1.58,
+BAdam, ALBERT weight sharing, Chinchilla, and Bavarian et al.'s fill-in-the-middle are
+other people's work, attributed in the files that implement them and listed in `LICENSE`.
