@@ -1,0 +1,66 @@
+{
+  "heldout_text": "data_cache/heldout_fineweb.txt",
+  "heldout_tokens": 200000,
+  "seq_len": 512,
+  "recipe": "fixed-N loops, final-loop-only (deep_supervise=False)",
+  "results": {
+    "ft_fixed_n": {
+      "checkpoint": "checkpoints/hybrid_looped_ft_fixed/hybrid_looped_step2000.pt",
+      "step": 2000,
+      "params": 83079329,
+      "by_n": {
+        "1": {
+          "heldout_nll": 4.925734789288105,
+          "heldout_ppl": 137.7905731201172,
+          "tokens_scored": 199290,
+          "windows": 390,
+          "seconds": 10.1
+        },
+        "2": {
+          "heldout_nll": 5.0379693076436975,
+          "heldout_ppl": 154.1566162109375,
+          "tokens_scored": 199290,
+          "windows": 390,
+          "seconds": 16.3
+        },
+        "4": {
+          "heldout_nll": 5.445216386703069,
+          "heldout_ppl": 231.64735412597656,
+          "tokens_scored": 199290,
+          "windows": 390,
+          "seconds": 30.3
+        }
+      },
+      "guard_max_logit_delta_n1_vs_n2": 9.32421875
+    },
+    "baseline": {
+      "checkpoint": "checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt",
+      "step": 8000,
+      "params": 83079329,
+      "by_n": {
+        "1": {
+          "heldout_nll": 4.80117318948086,
+          "heldout_ppl": 121.65306091308594,
+          "tokens_scored": 199290,
+          "windows": 390,
+          "seconds": 10.0
+        },
+        "2": {
+          "heldout_nll": 4.979743483041555,
+          "heldout_ppl": 145.43707275390625,
+          "tokens_scored": 199290,
+          "windows": 390,
+          "seconds": 16.4
+        },
+        "4": {
+          "heldout_nll": 5.512108027442734,
+          "heldout_ppl": 247.67263793945312,
+          "tokens_scored": 199290,
+          "windows": 390,
+          "seconds": 30.3
+        }
+      },
+      "guard_max_logit_delta_n1_vs_n2": 9.90625
+    }
+  }
+}
