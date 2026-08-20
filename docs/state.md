@@ -2015,6 +2015,52 @@ up again, not a variation on anything tried here. Full results:
 `results/looped_early_exit/validate_looped_ft_fixed_step2000.json`,
 `checkpoints/hybrid_looped_ft_fixed/hybrid_looped_step2000.pt`.
 
+## Fixed-N looping, finally graded on held-out LOSS — the negative holds, and is now properly supported (Issue #122, 2026-08-20)
+
+**The gap this closes.** The fixed-N recipe's only positive result was a *loss* win in the
+~780K sandbox (N=4 4.9621 vs N=1 5.0050). The real-scale check above then graded it on
+*recall* only — `results/looped_early_exit/validate_looped_ft_fixed_step2000.json` contains
+nothing but `by_n` recall percentages. So "the sandbox signal did not transfer" rested on a
+different metric than the one that produced the signal, and held-out loss under fixed-N
+looping at 83M had never been measured. It has now been
+(`scripts/eval_looped_heldout_loss.py`, 199,290 tokens of `data_cache/heldout_fineweb.txt`,
+seq_len 512, final-loop-only, both checkpoints, no retraining — the checkpoints already existed):
+
+| N | FT (trained at fixed N=4) | frozen baseline |
+|---|---:|---:|
+| 1 | **4.9257** (ppl 138) | **4.8012** (ppl 122) |
+| 2 | 5.0380 (+0.112) | 4.9797 (+0.179) |
+| 4 | 5.4452 (+0.520) | 5.5121 (+0.711) |
+
+**Verdict: looping monotonically WORSENS held-out loss at real scale, on both checkpoints.**
+The negative from the recall check stands, now confirmed on the metric that actually showed
+the sandbox win.
+
+**The sharpest fact here: the FT checkpoint was trained with fixed N=4, and N=4 is its worst
+setting.** It was optimised for the exact configuration it performs worst in. The +0.520 nats
+it loses at its own training depth is **12x larger, and opposite in sign, to** the 0.043 nats
+the sandbox gained. Note also the FT arm is worse than the frozen baseline at N=1 as well
+(4.9257 vs 4.8012) — the same "real cost, zero offsetting benefit" shape the recall table
+showed, so this is not a metric artifact.
+
+**Guards, because a flat result here would have read as "looping is neutral".**
+`enable_looped_early_exit` patches only `forward_step`; `eval/heldout_loss.py` calls
+`model(x)`. Wiring those two together returns byte-identical logits at every N — a test that
+cannot fail, the #138 shape. The script therefore uses `looped_forward_train` (the
+full-sequence path the FT actually trained with) and **asserts** `max|logits(N=1) −
+logits(N=2)| > 0` (measured 9.32 / 9.91, so the loop is genuinely running) and that every arm
+scored an identical token count. It aborts rather than reporting a flat curve.
+
+**Limits, stated because they bound the claim.** One held-out set, and FineWeb is
+out-of-distribution for a conversational model (the absolute NLL ~4.8 reflects that); the
+N-comparison is within-model on identical tokens, which is what the question needs, but the
+absolute values are not a quality figure for these checkpoints. **This does not touch option
+(a).** Both arms are continued fine-tunes of a checkpoint pretrained single-pass, looping an
+already-full-depth 12-layer stack. A genuinely weight-shared, deliberately-smaller,
+looped-from-scratch model (`EdgeHVN(shared_weights=True)`) remains untested — this result
+closes "fixed-N looping on this architecture", not "looped LLMs". Full results:
+`results/looped_early_exit/heldout_loss_fixed_n.json`.
+
 ## Mechanism diagnostic — the input-injection/skip-attention hypothesis is REFUTED (2026-08-02)
 
 All four training recipes above failed identically (recall → 0% the instant N>1, general loss
