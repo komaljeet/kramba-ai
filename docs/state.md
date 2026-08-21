@@ -2015,6 +2015,101 @@ up again, not a variation on anything tried here. Full results:
 `results/looped_early_exit/validate_looped_ft_fixed_step2000.json`,
 `checkpoints/hybrid_looped_ft_fixed/hybrid_looped_step2000.pt`.
 
+## Option (a) BUILT AND MEASURED — a small looped model loses to a deep one (Issue #122, 2026-08-21)
+
+**This closes the last open looping direction.** Every earlier result looped an
+already-full-depth 12-layer stack pretrained single-pass, and the docs' remaining
+direction was a deliberately *small* stack trained from scratch to be run many times. Built
+(`scripts/ab_looped_small.py`) and run. Both arms unroll to a structurally identical
+12-layer network — same depth, same block order, attention at positions 0/3/6/9 in both —
+differing only in whether the weights repeat. Both drive `looped_forward_train` (the deep
+arm at k=1), so they share one code path. d_model 384, 13,000 steps, batch 4, seq 512
+(26.6M tokens), Muon, identical seed and pre-materialised batches, from scratch:
+
+| arm | effective depth | body params | held-out | steps/s | wall |
+|---|---:|---:|---:|---:|---:|
+| looped3x4 (3 layers x 4) | 12 | **4,490,461** | 5.37096 | 5.60 | 38.7 min |
+| deep12 (12 layers x 1) | 12 | 17,808,769 | **5.27038** | 4.32 | 50.2 min |
+| deep12_twin | 12 | 17,808,769 | 5.27956 | 4.27 | 50.7 min |
+
+| comparison | gap | vs noise floor |
+|---|---:|---:|
+| matched steps (13,000) | **+0.10057** nats | 11.0x |
+| matched wall clock (38.7 min) | **+0.05699** nats | 6.2x |
+
+**Verdict: looping loses both ways.** 3.97x fewer body params costs 0.101 nats at matched
+steps. The looped arm *is* 1.30x faster per step (fewer matrices for Muon), which halves the
+gap on a wall-clock budget — but does not close it.
+
+**Why this is the strong direction of evidence.** Both arms saw the same tokens while
+deep12 had 4x more body params to fit with them, so deep12 is the MORE undertrained arm and
+the bias favoured looping. Looping lost anyway. (Had it won, that would have been weak
+evidence needing a longer run — the asymmetry was stated before the run, not after.)
+
+**Methodological gotcha, and it cost the earlier estimate.** The `deep12_twin` known-answer
+cell drifted **9.171e-03** at 13,000 steps, against **1.8e-04** measured on the same code at
+20 steps in smoke. **Drift accumulates: a short determinism check understates the real noise
+floor by ~50x.** Any A/B here that sets its significance band from a smoke-length twin is
+setting it far too low. Both gaps above still clear the true floor by 6-11x.
+
+**Limits, including one that bounds the agentic-coding question specifically.** One seed,
+d_model 384, 26.6M tokens — both arms are undertrained (this bounds early-training quality,
+not convergence). Ternary QAT deliberately not applied, since quantising 3 shared blocks and
+12 independent ones are not the same operation. **Recall was NOT measured, deliberately:** at
+ppl ~194 these from-scratch models cannot recall anything, so the near-window probe would
+floor at 0% for both arms and discriminate nothing — a vacuous test, the exact failure this
+file keeps recording. So this settles the *quality-per-parameter* question and leaves the
+*recall/agentic-coding* question at this size unanswered; answering it needs a model trained
+far enough to have recall at all. Full results:
+`results/looped_small/ab_looped_small.json` (carries the full per-arm trajectory and
+training curve; `logs/` is gitignored, so the console log is local-only).
+
+## Fixed-N looping, finally graded on held-out LOSS — the negative holds, and is now properly supported (Issue #122, 2026-08-20)
+
+**The gap this closes.** The fixed-N recipe's only positive result was a *loss* win in the
+~780K sandbox (N=4 4.9621 vs N=1 5.0050). The real-scale check above then graded it on
+*recall* only — `results/looped_early_exit/validate_looped_ft_fixed_step2000.json` contains
+nothing but `by_n` recall percentages. So "the sandbox signal did not transfer" rested on a
+different metric than the one that produced the signal, and held-out loss under fixed-N
+looping at 83M had never been measured. It has now been
+(`scripts/eval_looped_heldout_loss.py`, 199,290 tokens of `data_cache/heldout_fineweb.txt`,
+seq_len 512, final-loop-only, both checkpoints, no retraining — the checkpoints already existed):
+
+| N | FT (trained at fixed N=4) | frozen baseline |
+|---|---:|---:|
+| 1 | **4.9257** (ppl 138) | **4.8012** (ppl 122) |
+| 2 | 5.0380 (+0.112) | 4.9797 (+0.179) |
+| 4 | 5.4452 (+0.520) | 5.5121 (+0.711) |
+
+**Verdict: looping monotonically WORSENS held-out loss at real scale, on both checkpoints.**
+The negative from the recall check stands, now confirmed on the metric that actually showed
+the sandbox win.
+
+**The sharpest fact here: the FT checkpoint was trained with fixed N=4, and N=4 is its worst
+setting.** It was optimised for the exact configuration it performs worst in. The +0.520 nats
+it loses at its own training depth is **12x larger, and opposite in sign, to** the 0.043 nats
+the sandbox gained. Note also the FT arm is worse than the frozen baseline at N=1 as well
+(4.9257 vs 4.8012) — the same "real cost, zero offsetting benefit" shape the recall table
+showed, so this is not a metric artifact.
+
+**Guards, because a flat result here would have read as "looping is neutral".**
+`enable_looped_early_exit` patches only `forward_step`; `eval/heldout_loss.py` calls
+`model(x)`. Wiring those two together returns byte-identical logits at every N — a test that
+cannot fail, the #138 shape. The script therefore uses `looped_forward_train` (the
+full-sequence path the FT actually trained with) and **asserts** `max|logits(N=1) −
+logits(N=2)| > 0` (measured 9.32 / 9.91, so the loop is genuinely running) and that every arm
+scored an identical token count. It aborts rather than reporting a flat curve.
+
+**Limits, stated because they bound the claim.** One held-out set, and FineWeb is
+out-of-distribution for a conversational model (the absolute NLL ~4.8 reflects that); the
+N-comparison is within-model on identical tokens, which is what the question needs, but the
+absolute values are not a quality figure for these checkpoints. **This does not touch option
+(a).** Both arms are continued fine-tunes of a checkpoint pretrained single-pass, looping an
+already-full-depth 12-layer stack. A genuinely weight-shared, deliberately-smaller,
+looped-from-scratch model (`EdgeHVN(shared_weights=True)`) remains untested — this result
+closes "fixed-N looping on this architecture", not "looped LLMs". Full results:
+`results/looped_early_exit/heldout_loss_fixed_n.json`.
+
 ## Mechanism diagnostic — the input-injection/skip-attention hypothesis is REFUTED (2026-08-02)
 
 All four training recipes above failed identically (recall → 0% the instant N>1, general loss
