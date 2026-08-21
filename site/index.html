@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Training a 1B model on a 6 GB laptop GPU</title>
-<meta name="description" content="Measured envelopes for training language models on consumer GPUs: 1.07B parameters in 4.05 GB on a 6 GB card.">
+<title>Trainable 1.07B model on a 6 GB VRAM card</title>
+<meta name="description" content="Trainable 1.07B model on a 6 GB VRAM card — measured envelopes for training language models on consumer GPUs: 1.07B parameters in 4.05 GB. Open source, Apache-2.0.">
 <style>
   :root{
     --bg:#fbfaf8; --panel:#ffffff; --ink:#16150f; --muted:#5d5a4e;
@@ -68,6 +68,17 @@
   code{font-family:var(--mono); font-size:.88em; background:var(--code); padding:.15em .4em; border-radius:4px}
   footer{margin-top:4rem; padding:2rem 0 4rem; border-top:1px solid var(--line); color:var(--muted); font-size:.9rem}
   ul{margin:0 0 1rem; padding-left:1.25rem}
+  .repo{
+    display:inline-flex; align-items:center; gap:.5rem; margin-top:1.5rem;
+    font-family:var(--mono); font-size:.85rem; text-decoration:none;
+    border:1px solid var(--line); background:var(--panel);
+    padding:.55rem .9rem; border-radius:8px;
+  }
+  .repo:hover{border-color:var(--accent)}
+  .repo .tag{
+    font-size:.7rem; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--muted); border-left:1px solid var(--line); padding-left:.6rem;
+  }
   li{margin-bottom:.4rem}
 </style>
 </head>
@@ -81,6 +92,10 @@
     Your GPU probably holds a much larger model than you have been told. This is the
     stack that does it, the measured numbers, and the honest cost.
   </p>
+  <a class="repo" href="https://gitlab.com/komalbarun/kramba-ai">
+    gitlab.com/komalbarun/kramba-ai
+    <span class="tag">open source &middot; Apache-2.0</span>
+  </a>
 </header>
 
 <h2>The headline number</h2>
@@ -339,9 +354,15 @@
 
 <footer>
   <p>
-    <strong>Rambarun Komaljeet</strong> &mdash; kramba-ai. Built and measured on a single
-    RTX&nbsp;4050 (6&nbsp;GB). Every figure here is measured rather than projected, and the
-    ones that are not are labelled as such.
+    <strong>Rambarun Komaljeet</strong> &mdash; Trainable 1.07B model on a 6&nbsp;GB VRAM
+    card. Built and measured on a single RTX&nbsp;4050 (6&nbsp;GB). Every figure here is
+    measured rather than projected, and the ones that are not are labelled as such.
+  </p>
+  <p>
+    Source, data recipes, benchmark harnesses and the full record of what failed:
+    <a href="https://gitlab.com/komalbarun/kramba-ai">gitlab.com/komalbarun/kramba-ai</a>
+    &mdash; released under the Apache&nbsp;License&nbsp;2.0. Free to use, modify and sell,
+    with attribution and a patent grant.
   </p>
 </footer>
 
