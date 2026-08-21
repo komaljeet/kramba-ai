@@ -1,0 +1,50 @@
+kramba-ai — Trainable 1.07B model on a 6 GB VRAM card
+Copyright 2026 Rambarun Komaljeet
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+Project home: https://gitlab.com/komalbarun/kramba-ai
+
+
+---------------------------------------------------------------------
+THIRD-PARTY WORK IMPLEMENTED HERE
+---------------------------------------------------------------------
+
+This license covers the code in this repository. It does not, and
+cannot, claim the published algorithms that code implements. The
+following are reimplementations of work by others, attributed in the
+source files that implement them:
+
+  - Gated DeltaNet — the recurrent update rule in hvn/core/deltanet.py
+  - GLA / Mamba-2 — the per-channel data-dependent decay gate
+  - Mamba / RWKV-7 — the output gate and short causal depthwise conv
+  - BitNet b1.58 — ternary weight quantisation, hvn/edge/ternary.py
+  - BAdam — block-coordinate descent, hvn/core/block_coordinate.py
+  - ALBERT — cross-layer weight sharing, hvn/edge/shared.py
+  - Chinchilla (Hoffmann et al.) — the tokens-per-parameter framing
+  - Fill-in-the-Middle (Bavarian et al.) — hvn/fim.py
+
+Anyone is free to implement those papers themselves. Nothing in the
+Apache-2.0 grant above extends to third-party rights in those
+published algorithms.
+
+
+---------------------------------------------------------------------
+ON REPRODUCTION AND CRITICISM
+---------------------------------------------------------------------
+
+Reproducing, verifying, testing and criticising the results in this
+repository is explicitly welcome, from anyone, including commercial
+organisations — deliberately, because a result nobody may check is
+worth nothing. Where a published number here is calculated rather
+than measured, it is labelled as such.

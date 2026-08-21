@@ -145,18 +145,27 @@ If you measure it, I would like to know the number.
 
 ## License
 
-[`LICENSE`](LICENSE) — **Rambarun Komaljeet License v2.0**. Use it, learn from it, modify it, publish
-about it, reproduce or criticise the results. Making money from it needs a separate
-license: komalbarun@gmail.com
+[`LICENSE`](LICENSE) — **Apache License 2.0**. Open source, OSI-approved. Use it, modify
+it, redistribute it, build a product on it, sell it. Two conditions only: keep the
+attribution and the [`NOTICE`](NOTICE) file, and state what you changed. The licence also
+carries an explicit patent grant from every contributor.
 
-**This is source-available, not open source.** It restricts a field of use (commercial
-gain), so it is not OSI-approved and repository hosts will label it non-standard. Said
-plainly here rather than left for someone to discover.
+> **Changed 2026-08-21.** This repository was previously under the *Rambarun Komaljeet
+> License v2.0*, a source-available licence that forbade commercial use. It has been
+> relicensed to Apache-2.0 by the sole copyright holder. Commercial use no longer needs
+> a separate licence and no longer needs to ask.
 
-Reproduction and criticism are explicitly permitted for **anyone**, including commercial
-organisations, because a result nobody may check is worth nothing.
+Reproduction and criticism were always explicitly permitted for anyone, and still are,
+because a result nobody may check is worth nothing.
 
-The license covers this implementation, not the published algorithms it implements —
+The licence covers this implementation, not the published algorithms it implements —
 gated DeltaNet, GLA/Mamba-2 gating, Mamba/RWKV-7 conv and output gate, BitNet b1.58,
 BAdam, ALBERT weight sharing, Chinchilla, and Bavarian et al.'s fill-in-the-middle are
-other people's work, attributed in the files that implement them and listed in `LICENSE`.
+other people's work, attributed in the files that implement them and listed in
+[`NOTICE`](NOTICE).
+
+## Read the summary page
+
+A single measured-numbers write-up of the whole result — what fits, what it costs, and
+what failed — is published at **<https://ai-research.rambarun.com>** and lives in
+[`site/index.html`](site/index.html).
