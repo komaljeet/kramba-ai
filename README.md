@@ -1,4 +1,11 @@
-# Hamiltonian Vortex Network (HVN)
+# kramba-ai — training linear-attention LMs on one 6 GB GPU
+
+> **On the name.** The `hvn/` package, `--arch hvn-hybrid`, and this repository are named
+> after the **Hamiltonian Vortex Network**, the original block this project started from.
+> That block was replaced on 2026-07-04 and, retested properly on 2026-08-17, **lost**. The
+> name is kept because it is wired through the code; it is not a description of the model in
+> use, and it is not what this project is about. See
+> [What this is, concretely](#what-this-is-concretely).
 
 > ## 🌟 The Dream — frontier-class LLMs on edge devices
 >
@@ -9,12 +16,14 @@
 > - **Keep inference VRAM flat over long, agentic-length context** → a **recurrence +
 >   windowed-attention hybrid** (no KV cache that grows with the conversation).
 >
-> **The path is native, from-scratch training of this ternary-hybrid architecture — not
-> distillation of an existing model.** That is *why* HVN exists as its own research program
-> rather than a fine-tune of something already released: BitNet b1.58 shows ternary trained
-> from scratch matches fp16 at scale, so the recipe is real, not a compromise. Distillation of
-> an existing strong model into this format remains an optional accelerator for later, not the
-> primary road.
+> **The path is native, from-scratch training of a ternary-hybrid model — not distillation of
+> an existing one.** BitNet b1.58 shows ternary trained from scratch matches fp16 at scale, so
+> the recipe is real, not a compromise. Distillation of an existing strong model into this
+> format remains an optional accelerator for later, not the primary road.
+>
+> **This is a bet on the training recipe, not on a novel architecture.** The block in use is
+> published work (see below). Whatever advantage exists here is in getting the recipe to run
+> on hardware this small.
 >
 > **⚠️ Reality check (2026-08-02) — read before planning around the sequencing below.**
 > Training cost is `~6 · params · tokens`, and Chinchilla scales tokens with params, so it grows
@@ -24,7 +33,7 @@
 > forward+backward on a 6 GB card at ~1 GiB peak — and that is **not the same as being able to
 > train it**: 6B at Chinchilla is ~33 years on this hardware, ~30× out of reach even with every
 > known lever stacked. **The honest local ceiling is ~142M** (3.6 days). Everything above that
-> needs rented compute, and no architecture — HVN or otherwise — changes that. See
+> needs rented compute, and no architecture — this one or any other — changes that. See
 > [`docs/training.md`](docs/training.md) § "The compute wall". The *inference* half of the dream
 > below is intact and measured; the *training-it-yourself* half is not achievable on this
 > hardware.
@@ -98,19 +107,23 @@ and the fixes that make them work together.
 | beats a **matched vanilla transformer** at equal compute, 12M body (+0.016 nats) | measured 2026-08-16, single seed |
 | **~30 tokens/param**, not Chinchilla's 20 — the size trend is unresolved | measured 2026-08-16 |
 | chunked cross-entropy saves **1436 MB at 48M**, nothing at 1B | measured 2026-08-17 |
-| **HVN is not cheaper to train** — a transformer is 1.41× faster per step | measured; the compute win is at inference only |
-| 6.29 MB vs 2.46 GB of context memory at 100K tokens (below) | **CALCULATED, never measured** |
+| **This architecture is not cheaper to train** — a transformer is 1.41× faster per step | measured; the compute win is at inference only |
+| 6.29 MB vs 2.46 GB of context memory at 100K tokens | **CALCULATED for the retired block; never measured, and not carried forward** |
 
-### Projected inference cost (N = 100,000 tokens, d = 512, L = 12 layers)
+### The "18.7% of MHA FLOPs" table is gone, deliberately
 
-These are analytic FLOP / memory counts from [`docs/theory.md`](docs/theory.md), **not a
-benchmark**. The O(1) behaviour in *time* has been measured separately; these two rows have not.
+Earlier versions of this README led with an analytic table — 463M vs 2,474M FLOPs/token,
+6.29 MB vs 2.46 GB of memory at N = 100,000. Two problems, and both are disqualifying for a
+headline number:
 
-| Metric | Standard MHA (KV cache) | HVN (SVD r=128) | Ratio |
-|--------|------------------------|------------------|-------|
-| FLOPs/token | 2,474M | 463M | **18.7%** |
-| Inference memory | 2.46 GB | 6.29 MB | **0.26%** |
-| Scaling in N | O(Nd) | O(d²r) = O(1) | — |
+1. **It was never measured.** Those are hand-derived counts, not a benchmark.
+2. **It describes the wrong model.** The `SVD r=128` rank truncation it assumes lives in
+   `hvn/core/hamiltonian_memory.py` — the **original** block, the one that lost. The block
+   actually in use, `hvn/core/deltanet.py`, contains no SVD at all.
+
+The analysis is kept in [`docs/theory.md`](docs/theory.md), attached to the block it actually
+describes. What *is* measured about inference cost — flat ms/token from N = 256 to 4096 — is in
+the table above and in [`benchmarks_speed.md`](docs/benchmarks_speed.md).
 
 ## Quick start
 
