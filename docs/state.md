@@ -77,6 +77,19 @@ corpus scale.
 scheduling-side lever has nothing to reclaim; the one exact win available is raising the
 micro-batch from 1 to 2 at ~478M, worth +7.1%.**
 
+> **⚠️ Corrected 2026-08-27, same day.** The throughput figures in this section and the one
+> below were measured with a **data race live** in `GPUBufferPool.prefetch` (the side stream
+> never waited for the main stream, so weight copies overwrote in-flight activations). The
+> race is exactly the transfer/compute overlap being timed, so the numbers were **~4%
+> optimistic**: **1,014 tok/s is really ~975**, **1,911 is really ~1,830**, and 4.02 s/step is
+> ~4.16 s. Fixed in `block_coordinate.py`.
+>
+> **What survives unchanged:** every VRAM figure and %-of-card verdict (identical to 0.01 GB),
+> the **98.7% GPU-busy** measurement, and every *relative* conclusion — batch 2 wins at 478M
+> and spills at 1.21B, chunk size does nothing, cache size does nothing — because both arms of
+> each comparison ran under the same race. The days-to-train figures shift ~4% (413 -> ~430 at
+> 1.21B, 87 -> ~91 at 478M).
+
 ### Where the 4.02 s goes (`scripts/profile_1b_step.py`, d=2048/24L, seq 4096, batch 1)
 
 | phase | seconds | share |
