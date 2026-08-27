@@ -1,0 +1,77 @@
+{
+  "config": {
+    "d_model": 1216,
+    "n_heads": 19,
+    "num_layers": 24,
+    "seq": 4096,
+    "batch": 1,
+    "loss_chunk": 512,
+    "iters": 3,
+    "vocab_size": 50257,
+    "skips": [
+      0,
+      2,
+      4,
+      6,
+      8,
+      12
+    ],
+    "out": "results/partial_checkpoint.json"
+  },
+  "results": [
+    {
+      "n_skip": 0,
+      "sec_per_step": 2.1350517999999283,
+      "tok_per_sec": 1918.4546248480424,
+      "peak_reserved_gb": 4.576171875,
+      "pct_of_card": 76.31277515592168,
+      "verdict": "FITS",
+      "ckpt_calls": 24
+    },
+    {
+      "n_skip": 2,
+      "sec_per_step": 2.0992616999974416,
+      "tok_per_sec": 1951.1621633477102,
+      "peak_reserved_gb": 5.025390625,
+      "pct_of_card": 83.80399934963145,
+      "verdict": "FITS",
+      "ckpt_calls": 24
+    },
+    {
+      "n_skip": 4,
+      "sec_per_step": 2.5110181999989436,
+      "tok_per_sec": 1631.2107972780616,
+      "peak_reserved_gb": 5.5390625,
+      "pct_of_card": 92.37005136243872,
+      "verdict": "SUSPECT",
+      "ckpt_calls": 24
+    },
+    {
+      "n_skip": 6,
+      "sec_per_step": 2.750070499998401,
+      "tok_per_sec": 1489.4163622359433,
+      "peak_reserved_gb": 6.05078125,
+      "pct_of_card": 100.90353283527332,
+      "verdict": "SPILLS",
+      "ckpt_calls": 24
+    },
+    {
+      "n_skip": 8,
+      "sec_per_step": 2.938119300000835,
+      "tok_per_sec": 1394.0890691534669,
+      "peak_reserved_gb": 6.5625,
+      "pct_of_card": 109.43701430810793,
+      "verdict": "SPILLS",
+      "ckpt_calls": 24
+    },
+    {
+      "n_skip": 12,
+      "sec_per_step": 6.610237400000187,
+      "tok_per_sec": 619.6449162324917,
+      "peak_reserved_gb": 7.666015625,
+      "pct_of_card": 127.83936939265584,
+      "verdict": "SPILLS",
+      "ckpt_calls": 24
+    }
+  ]
+}

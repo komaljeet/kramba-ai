@@ -134,12 +134,53 @@ smuggled in behind a throughput fix (the #142/#143 discipline).
   weight is finished with a token — and backward needs them again regardless, which is the
   same coupling that forces grad-checkpointing above.
 
+### PARTIAL checkpointing: the right idea, worth +1.7%, and it loses to a bigger batch
+
+The recompute is *arithmetic*, not waiting, so keeping some blocks' activations resident
+instead of recomputing them is the one lever aimed at the actual bottleneck — unlike caching
+weights (`offload_cache_blocks`, +0.3%), which saves transfers that were never the cost.
+Measured by intercepting the checkpoint calls so the last N of 24 blocks keep their
+activations (`scripts/probe_partial_checkpoint.py`, 478M, no offload — the offload path
+forbids it, `model.py:413`):
+
+| blocks kept resident | s/step | tok/s | peak | % card | verdict |
+|---:|---:|---:|---:|---:|---|
+| 0 (baseline) | 2.14 | 1,918 | 4.58 GB | 76% | FITS |
+| **2** | **2.10** | **1,951** | 5.03 GB | 84% | **FITS — +1.7%** |
+| 4 | 2.51 | 1,631 | 5.54 GB | 92% | SUSPECT |
+| 6 | 2.75 | 1,489 | 6.05 GB | 101% | SPILLS |
+| 12 | 6.61 | 620 | 7.67 GB | 128% | SPILLS |
+
+**+1.7%, and only 2 of 24 blocks fit.** Activations cost ~225 MB per block (5.03−4.58 over
+two), and without offload the baseline already sits at 76%, leaving ~0.5 GB usable under the
+85% rule. Skipping 2 of 24 recomputes is 8% of a term worth 25% of the step ≈ 2% — which is
+what came out. The arithmetic was right; the estimate of available headroom was not (an
+earlier guess of ~13% used the 3.3 GB free in the *offload* config, which is precisely the
+config that forbids this).
+
+**Past 2 blocks it gets SLOWER while doing LESS work** — 12 blocks resident is 3.1x slower
+than the baseline. Spilling costs more than the recompute ever saved. A clean illustration
+that on this card, memory pressure dominates arithmetic savings.
+
+**Verdict: do not build it.** It competes with micro-batch 2 for the same spare VRAM and
+loses 1.7% to 7.1%, while needing a scheduler change and a rewrite of the offload eviction
+logic to be usable in the config that matters.
+
 ### The honest summary
 
 **There is no large exact speedup available on this hardware.** The GPU is saturated doing
-arithmetic that has to happen plus one recompute that cannot be removed. The available levers
-are +7.1% (micro-batch 2 at 478M) and nothing else above noise. Anything bigger has to come
-from **fewer FLOPs** — i.e. a smaller model, which is the 478M-vs-1.21B decision (1,911 vs
+arithmetic that has to happen plus one recompute that cannot profitably be removed. Everything
+measured, best first:
+
+| lever | gain | cost |
+|---|---:|---|
+| **micro-batch 2 (478M only)** | **+7.1%** | none — two flags, halve `grad_accum` |
+| partial checkpointing, 2 blocks | +1.7% | a scheduler change; competes for the same VRAM |
+| bigger block cache (1→8) | +0.3% | +0.21 GB |
+| chunked-loss chunk size | 0.0% | +1.56 GB for nothing |
+| micro-batch 2 **at 1.21B** | **−21%** | spills |
+
+Anything bigger has to come from **fewer FLOPs** — the 478M-vs-1.21B decision (1,911 vs
 1,020 tok/s, 87 vs 413 days at 30 tokens/param) — or from different hardware.
 
 Artifacts: `scripts/profile_1b_step.py`, `results/profile_1b_step.json`,
