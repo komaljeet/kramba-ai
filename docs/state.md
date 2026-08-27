@@ -4767,11 +4767,38 @@ recomputes one slice's logits rather than holding all of them.
 
 **-1436 MB for 1.07x step time.**
 
-**It does NOT help at 1B.** Same-scan comparison at d=2048/24L with offload:
-4.004 GiB unchunked vs 4.037 GiB chunked -- **+33 MB**, i.e. it costs a little. At that
-size peak memory is set by weights plus optimizer state; the logits are no longer the
-binding term. So this is a lever for SMALL models on small cards, which is where the
-logits dominate, and neutral at the top of the range.
+> ## ⚠️ RETRACTED (2026-08-27) — "it does NOT help at 1B" is WRONG, and acting on it spills the card
+>
+> The paragraph below concluded the chunked loss is "neutral at the top of the range" and a
+> lever for **small** models only. Re-measured at d=2048/24L with BCD+offload at **seq 4096**,
+> the length real training actually uses:
+>
+> | 1.21B, seq 4096, batch 1, grad-ckpt | peak reserved | s/step | verdict |
+> |---|---:|---:|---|
+> | unchunked | **6.18 GB** | 4.58 | ❌ 103% of the card — SPILLS |
+> | **chunk 512** | **4.40 GB** | 4.02 | ✅ 73% — fits |
+>
+> **-1.79 GB, and it is the difference between fitting and spilling.** It is also *faster*
+> (4.02 vs 4.58 s/step), because the spilled arm is paying WDDM host-RAM traffic.
+>
+> **Root cause of the wrong number: the original 1B comparison was run at a short sequence.**
+> The logits tensor is `[B, S, vocab]`, so its size is linear in sequence length: 785 MB at
+> seq 4096 against 98 MB at seq 512. At a short sequence the logits are genuinely not the
+> binding term and chunking looks pointless — which is exactly what "+33 MB" records. At the
+> sequence length training runs at, they are ~1.8 GB with gradients and they dominate.
+>
+> This is the same shape as every other retraction in this file: **a measurement taken in a
+> configuration the real run never uses.** The 48M row above was measured at seq 4096 and is
+> correct; the 1B row was not, and the two were reported side by side as if comparable.
+>
+> **Consequence: the chunked loss is MANDATORY at 1B, not optional.** Anyone sizing a 1B run
+> from the retracted sentence would switch it off and silently spill. Verified 2026-08-27 by
+> `scripts/probe_tt_1b_no_offload.py`'s baseline arm (4.38 GB with chunking) and a direct
+> chunked-vs-unchunked pair at the same config.
+
+**(superseded — see the retraction above)** ~~It does NOT help at 1B.~~ Same-scan comparison at
+d=2048/24L with offload: 4.004 GiB unchunked vs 4.037 GiB chunked -- +33 MB. **That pair was
+measured at a short sequence and does not describe training at seq 4096.**
 
 Exactness: bit-identical in fp32 (losses and every gradient, including into the tied
 table). Under bf16 autocast the value differs by 3.8e-03 on a loss of 10.5 -- 3.6e-04

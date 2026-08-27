@@ -1011,7 +1011,25 @@ That is a 3,300× gap. It decomposes as:
 |---|---:|---|
 | 42× more params (FLOPs per token) | 42× | only by changing architecture |
 | 42× more tokens (Chinchilla scales D with N) | 42× | only by accepting undertraining |
-| **offload / PCIe inefficiency** | **~2×** | yes — and it is the SMALLEST term |
+| **offload / PCIe inefficiency** | ~~**~2×**~~ **see correction** | yes — and it is the SMALLEST term |
+
+> **⚠️ The ~2× offload figure is STALE (corrected 2026-08-27).** It was measured before #115
+> (prefetch/transfer overlap, −25%) and #113 (bf16 parking of inactive blocks, −25%), both of
+> which landed afterwards and both of which attack exactly this term. Re-measured on this card
+> at the real training shape (d=2048/24L, **seq 4096**, batch 1, grad-checkpoint, chunked
+> loss), the offload path runs at **1,014 tok/s / 4.04 s per step** at 1.21B — better than the
+> 875 tok/s recorded in #157, and comfortably inside the card at 4.38 GB (73%).
+>
+> **Read the direction of this correction carefully: it makes offload look BETTER, which makes
+> the section's conclusion STRONGER, not weaker.** If PCIe overhead is smaller than ~2×, then
+> even less of the 3,300× gap is recoverable by memory engineering, and the N² argument below
+> holds harder. Do not read "offload is faster than we thought" as "big models are closer than
+> we thought".
+>
+> A practical consequence worth stating separately: **offload is not a tax to be escaped.** It
+> is what keeps VRAM free for activations, which are the binding term at seq 4096. #161 tested
+> the opposite hypothesis directly — a compressed model held resident on the card, avoiding
+> PCIe entirely — and it was 2.6× SLOWER and spilled at 113%. See docs/state.md.
 
 **Making PCIe transfer free would take 33 years to 16 years.** The memory engineering was real
 and necessary to *fit* the model, but it was never where the training cost lived. Training cost

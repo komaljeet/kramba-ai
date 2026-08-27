@@ -29,7 +29,9 @@
 > Training cost is `~6 · params · tokens`, and Chinchilla scales tokens with params, so it grows
 > as **N²**. Decomposing this project's own measured throughput (142M at 9,102 tok/s vs 6B at
 > 116 tok/s), the 3,300× gap is 42× more params × 42× more tokens × **only ~2× offload
-> inefficiency**. The extensive memory engineering (#99–#118) genuinely got a 6B model to run
+> inefficiency** (that ~2× is now stale and the real figure is *smaller* — see
+> [`docs/training.md`](docs/training.md); it makes this conclusion stronger, not weaker).
+> The extensive memory engineering (#99–#118) genuinely got a 6B model to run
 > forward+backward on a 6 GB card at ~1 GiB peak — and that is **not the same as being able to
 > train it**: 6B at Chinchilla is ~33 years on this hardware, ~30× out of reach even with every
 > known lever stacked. **The honest local ceiling is ~142M** (3.6 days). Everything above that
