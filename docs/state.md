@@ -70,19 +70,75 @@ described and irrelevant to the implementation that should have been written.
   fails if `apply_ternary_to_model` stopped doing anything at all. `ternary_cores=True` is an
   explicit opt-in for measuring the composition later.
 
-### What this does NOT settle
+### Quality: MEASURED, and TT does not pay at this scale (2026-08-27, same day)
 
-**Whether TT-compressed weights learn as well is unmeasured.** Everything above is size and
-cost. The run that would settle it is a held-out A/B at matched tokens — TT vs dense at equal
-*parameter count* (i.e. TT wider) and at equal *width* — with a **full-length** twin arm for
-the noise floor, since #122 measured that a smoke-length twin understates drift ~50x.
+The section above said quality was unmeasured. It has now been measured
+(`scripts/ab_tt_vs_dense.py`, 4 arms x 5,000 steps, d_model 384/512, 12 layers, batch 4 x
+seq 512, Muon, identical seed and pre-materialised batches, held-out loss):
 
-The honest comparison is also against **ternary**, not fp32: ternary already gives ~10.7x
-storage and is likewise speed-neutral. The open question is whether TT buys anything ternary
-does not, and whether the two compose (TT 3.96x x ternary 10.7x, if quality survives).
+| arm | d | body params | held-out | VRAM reserved | min | steps/s |
+|---|---:|---:|---:|---:|---:|---:|
+| dense | 384 | 17,808,769 | **5.75208** | 2,920 MiB | 19.8 | 4.21 |
+| dense_twin | 384 | 17,808,769 | 5.75443 | 2,862 MiB | 19.5 | 4.27 |
+| tt | 384 | 9,813,377 | 5.95041 | 2,842 MiB | 18.0 | 4.63 |
+| tt_wide | 512 | 16,920,721 | 5.76436 | 3,254 MiB | 20.1 | 4.14 |
 
-Artifacts: `hvn/edge/tt_linear.py`, `scripts/probe_tt_cost.py`, `tests/test_tt_linear.py`
-(24/24), `tests/test_tt_deltanet.py` (33/33). Full suite 575/575 unaffected.
+Noise floor (twin cell): **2.347e-03**.
+
+**Equal width — TT is 0.19833 nats WORSE, 9.9x the band.** 1.81x fewer body parameters costs
+a fifth of a nat. Not marginal.
+
+**Matched parameters — INCONCLUSIVE, +0.01228 at matched steps and +0.01336 at matched wall
+clock.** Both are above the 2.3e-03 noise floor but inside the pre-registered 0.02 band, so
+the run refuses to call it. The honest reading is "TT-wider is very slightly behind
+dense-narrower and one seed at this size cannot separate them," not "they are equal".
+
+### The finding that decides it, and it is about memory rather than loss
+
+**At matched parameters TT uses MORE VRAM, not less: 3,254 MiB against 2,920 — +334 MiB,
++11.4%.** Width drives activations, and TT does not touch activations. So spending the saved
+parameters on width to recover the quality hands the memory back with interest.
+
+And at equal width, where TT *is* smaller, the VRAM saving is **78 MiB — 2.7%** for 1.81x
+fewer body parameters. That is the whole answer to "what does TT mean for VRAM" at this
+scale: almost nothing, because weights and optimiser state are not the binding term. #158
+measured a live 48M run at CE ~1500 MB, CUDA context ~400 MB, weights 183 MB, optimiser
+183 MB — TT attacks the 11% and leaves the rest alone.
+
+**So both configurations lose:** compress and you pay 0.198 nats to save 2.7% of memory;
+widen back to matched parameters and you pay 11.4% more memory to land on the same loss.
+
+**TT was FASTER, which was not predicted.** 4.63 vs 4.21 steps/s at equal width (1.10x) --
+fewer and smaller matrices for Muon's Newton-Schulz iteration. Same mechanism as #122's
+looped arm (1.30x). The #161 probe measured the *layer* as speed-neutral; in the real loop
+with a real optimiser it is slightly positive.
+
+### What this does and does not settle
+
+**Settled:** at d=384-512 for 5,000 from-scratch steps, TT is not a win in either
+configuration, and its VRAM benefit is far smaller than its parameter ratio.
+
+**NOT settled, and these are real:**
+- **Scale.** Block-level compression *improves* with width (3.07x at d=384, 3.96x at d=896,
+  4.41x at d=2048), and at sizes where weights and optimiser state actually dominate VRAM
+  the arithmetic changes. This run is at the size where they provably do not.
+- **The model-level ratio is diluted by the hybrid.** The block compresses 3.07x but the
+  model body only 1.81x, because 4 of the 12 layers are attention and are never TT'd. A
+  pure-DeltaNet stack would sit much closer to the block figure.
+- **Ternary was applied in NO arm.** This is TT against dense fp32, not against the ~10.7x
+  ternary baseline TT would have to beat for adoption. Ternary is also speed-neutral and
+  needs no width compensation, so on this evidence it remains the better lever.
+- One seed, one corpus, 5,000 steps, early training. Bounds early quality, not convergence.
+
+**Recommendation: do not adopt TT for training at this scale.** The code is landed, tested
+and opt-in (default off), so it costs nothing to leave in place for the size regime where
+weights dominate — which is the edge-inference case it was always aimed at, and which this
+run does not reach.
+
+Artifacts: `results/tt/ab_tt_vs_dense.json` (full per-arm trajectories),
+`scripts/ab_tt_vs_dense.py`, `hvn/edge/tt_linear.py`, `scripts/probe_tt_cost.py`,
+`tests/test_tt_linear.py` (24/24), `tests/test_tt_deltanet.py` (33/33). Full suite 575/575.
+`logs/` is gitignored, so the console log is local-only.
 
 ## LIVE RUN — 157M code model, FIM, in progress (2026-08-12)
 
