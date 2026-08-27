@@ -47,6 +47,28 @@ linear-attention/SSM family. No comparison against Mamba or RWKV has ever been r
 card). That is
 engineering, not a research claim, and `site/index.html` is written around it.
 
+## 2b. READ BEFORE LAUNCHING ANY PRETRAIN (added 2026-08-27)
+
+**The default `--pretrain-mix` caps the token budget at 134,784,617 tokens** — enough for a
+~7M-param model. OpenAssistant holds only 15.7M tokens and takes a 35% share, so it binds the
+whole budget via `max_repeat=3`. Meanwhile **233 GB of FineWeb-Edu (~127B tokens) is already
+downloaded** and gets a 0.0 share.
+
+A 1.21B run on defaults gets **270x less data than it needs**. The loss curve would look
+healthy the whole way while the model re-read a 134M-token budget — memorisation, not
+training.
+
+    --pretrain-mix 0.0,0.0,0.0,1.0     # FineWeb-Edu only; ~127B tokens
+
+FineWeb-Edu is downloaded but **not tokenized** (no `fineweb_edu.bin` in
+`data_cache/tokenized/`) — budget a one-time pass over the portion you will consume (~66 GB
+of parquet for 36B tokens, not all 233 GB). Full numbers in [state.md](state.md).
+
+**Also settled 2026-08-27:** the 1B step is **98.7% GPU-bound**, so there is no free speed in
+transfer/prefetch/cache tuning. Micro-batch 2 is worth +7.1% **at ~478M only** (halve
+`grad_accum` alongside); at 1.21B batch 2 **spills** and loses 21%, so batch 1 is already
+optimal there. Do not inherit #141's batch-size conclusion from 83M.
+
 ## 3. Decisions already made — do not relitigate
 
 - **Tokens per parameter ≈ 30 for this architecture, not Chinchilla's 20** (#159).

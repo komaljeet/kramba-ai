@@ -5,6 +5,72 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## ⚠️ The DEFAULT data mix caps a pretrain at 0.13B tokens — 270x short for 1B (2026-08-27)
+
+**One line: 233 GB of FineWeb-Edu (~127B tokens) is downloaded and sitting on disk, the
+default `--pretrain-mix` gives it a 0.0 share, and the resulting budget caps at 134,784,617
+tokens — enough for a ~7M-param model. A 1.21B run on defaults gets 270x less data than it
+needs, with 127B tokens unused three directories away.**
+
+This is the #119 mechanism firing on the live default, not a hypothetical. The warning prints
+on every run and it is correct; it had simply never been checked against the 1B target.
+
+### The arithmetic (`max_repeat=3`, tokens as counted by the GPT-2 tokenizer)
+
+| source | tokens on disk | share | budget it can support |
+|---|---:|---:|---:|
+| SlimPajama | 1,318,230,992 | 0.50 | 7,909,385,952 |
+| **OpenAssistant** | **15,724,872** | **0.35** | **134,784,617 ← binds** |
+| WikiText-103 | 119,073,409 | 0.15 | 2,381,468,180 |
+| FineWeb-Edu | ~127,000,000,000 | **0.00** | **unused** |
+| | **1.45B unique** | | **CAP: 0.13B** |
+
+OpenAssistant holds 15.7M tokens. At a 35% share it can stretch to 47M before hitting
+`max_repeat=3`, and for 47M to *be* 35% the whole budget must stop at 134M. The largest
+corpus on the machine contributes nothing because its share is zero.
+
+| target | tokens needed | vs the 0.13B cap | vs ALL 1.45B unique |
+|---|---:|---:|---:|
+| 478M @ 20 tok/param | 9,559,940,860 | **71x** | 6.6x |
+| 478M @ 30 (#159) | 14,339,911,290 | **106x** | 9.9x |
+| 1.21B @ 20 | 24,290,872,660 | **180x** | 16.7x |
+| 1.21B @ 30 | 36,436,308,990 | **270x** | 25.1x |
+
+**Even ignoring the mix cap entirely, every unique token on disk outside FineWeb-Edu is 25x
+short for a 1.21B model.** The non-FineWeb corpora cannot pretrain anything at this scale.
+
+### The fix is one flag, and this repo already wrote it down
+
+    --pretrain-mix 0.0,0.0,0.0,1.0
+
+FineWeb-Edu only, which #120 already recommended for "4B+ pretrain runs" — the recommendation
+was correct and simply never became the default. The default is hardcoded at
+`train_edge_conversational.py:1011` and `:1502` as `(0.50, 0.35, 0.15, 0.0)`, described in the
+help text as "the original conversational mix". It is a **fine-tuning** mix that is also the
+**pretraining** default, and nothing warns that the two want different things.
+
+That takes the budget from 0.13B to ~127B — 3.5x more than a 1.21B model needs at 30
+tokens/param, and 8.9x what a 478M needs.
+
+**One cost to plan:** the parquet files are downloaded but NOT tokenized — there is no
+`fineweb_edu.bin` in `data_cache/tokenized/`. That is a one-time pass, and only the portion
+actually consumed needs it (~66 GB of parquet for 36B tokens, not all 233 GB).
+
+### Why this matters more than any of the compression work
+
+The three blockers on a 1B run, as they actually stand:
+
+| | status |
+|---|---|
+| **memory** | **solved** — 1.21B fits at 73% of the card (4.38 GB), measured |
+| **data** | **solved but OFF BY DEFAULT** — 127B tokens on disk, one flag away |
+| **time** | **not solved** — 413 days at 1.21B, 87 at 478M |
+
+Two of the three are done. The default mix is the one that would have silently wasted a
+multi-week run: the loss curve would look entirely healthy while the model repeated a 134M
+token budget over and over, which is memorisation, not training — the #132 failure mode at
+corpus scale.
+
 ## The 1B step is COMPUTE-bound at 98.7% GPU — the only free speed left is +7% (2026-08-27)
 
 **One line: profiled the 1B training step, the GPU is 98.7% busy, so every transfer- and
