@@ -203,3 +203,77 @@ def test_fineweb_only_mix_clears_the_guard():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ---------------------------------------------------------------------------
+# 4. the uncapped re-extraction hole (2026-08-27)
+# ---------------------------------------------------------------------------
+def test_extraction_disk_guard_refuses_when_it_would_fill_the_disk():
+    """An extraction that would not leave `min_free_gb` must RAISE.
+
+    On 2026-08-27 an uncapped extraction took this machine to 4.2 GB free
+    (100% full). A run that hits that mid-flight loses the run and, if the disk
+    fills while a checkpoint is being written, the ability to resume.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        free = __import__("shutil").disk_usage(d).free
+        # Ask for slightly more than exists -> must refuse.
+        with pytest.raises(RuntimeError, match="REFUSING to extract"):
+            tec._guard_extraction_disk(d, max_bytes=free, min_free_gb=25.0)
+
+
+def test_extraction_disk_guard_allows_a_reasonable_request():
+    """It must not be so strict that a legitimate extraction cannot run --
+    a guard that always fires would just be turned off."""
+    with tempfile.TemporaryDirectory() as d:
+        tec._guard_extraction_disk(d, max_bytes=1024 * 1024, min_free_gb=0.001)
+
+
+def test_bytes_per_token_constant_is_sane():
+    """The guard sizes itself from this. If it drifts far from reality the
+    error message's suggested cap would be wrong."""
+    assert 3.0 < tec._FINEWEB_BYTES_PER_TOKEN < 7.0
+
+
+@pytest.mark.skipif(
+    not os.path.exists("data_cache/tokenized/fineweb_edu.bin"),
+    reason="needs the real tokenized cache")
+def test_existing_bin_means_no_extraction_is_attempted():
+    """The actual hole: with the .bin present, nothing may touch the extractor.
+
+    Deleting the ~157 GB intermediate .txt is the correct way to reclaim that
+    space. Before this fix it silently armed a full re-extraction on the next
+    run -- to build a file _tokenize_text_to_bin would then ignore, because it
+    caches on the .bin. It filled this disk to 100% on 2026-08-27.
+
+    REAL test: the extractor and the disk guard are both replaced with
+    functions that RAISE, and the dataset is genuinely constructed with a
+    FineWeb-only mix. A regression calls one of them and fails with that
+    message.
+
+    An earlier draft patched the same two functions and then never invoked the
+    code path -- it asserted nothing and passed regardless. That is the exact
+    failure mode this file exists to catch, so it is recorded rather than
+    quietly corrected.
+
+    Runs against the real data_cache because every source loader executes even
+    at a 0.0 mix share, so a temp dir would fail on SlimPajama before reaching
+    the branch under test. All sources are cache hits, so this is read-only.
+    """
+    import unittest.mock as mock
+
+    def _explode(*a, **k):
+        raise AssertionError(
+            "the FineWeb extractor / disk guard was reached even though the "
+            ".bin exists -- the uncapped re-extraction hole is back")
+
+    tokenizer = tec.load_tokenizer("gpt2")
+    with mock.patch.object(tec, "_load_fineweb_edu", _explode),          mock.patch.object(tec, "_guard_extraction_disk", _explode):
+        ds = tec.MixedLocalDataset(
+            tokenizer=tokenizer, seq_len=4096, cache_dir="data_cache",
+            mix=(0.0, 0.0, 0.0, 1.0),
+        )
+    assert len(ds) > 0, "dataset built from the cached .bin is empty"
+    assert ds.effective_tokens > 30e9, (
+        f"expected >30B tokens from the cached FineWeb bin, got "
+        f"{ds.effective_tokens:,}")

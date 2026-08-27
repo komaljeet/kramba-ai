@@ -30,6 +30,7 @@ import csv
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -538,6 +539,53 @@ def _download_language_foundation(max_bytes: int, cache_dir: str, slimpajama_dir
             print(f"      {bytes_seen / 1024**3:.2f} GB extracted so far...")
     print(f"    SlimPajama saved: {out_path} ({os.path.getsize(out_path) / 1024**2:.1f} MB)")
     return out_path
+
+
+#: Text bytes per GPT-2 token, measured on 400 real FineWeb-Edu documents
+#: (2026-08-27). Used only to size the disk guard below.
+_FINEWEB_BYTES_PER_TOKEN = 4.59
+
+
+def _guard_extraction_disk(cache_dir: str, max_bytes: int | None,
+                           min_free_gb: float = 25.0) -> None:
+    """Refuse a parquet extraction that would fill the disk.
+
+    The intermediate .txt is ~4.6 bytes per token, so a 1B run's budget is
+    ~157 GB and an UNCAPPED extraction is the size of the whole download --
+    227 GB here. On 2026-08-27 an uncapped run took this machine to 4.2 GB free
+    (100%). A training run that hits this mid-flight loses the run AND, if the
+    disk fills while a checkpoint is being written, the ability to resume.
+
+    Raises rather than warns: there is no good outcome from continuing, and a
+    warning during a multi-hour extraction is a warning nobody is watching.
+    """
+    free = shutil.disk_usage(cache_dir).free
+    need = max_bytes if max_bytes else None
+    if need is None:
+        # Uncapped: size it from what is actually on disk to extract.
+        parquet_dir = os.path.join(cache_dir, "fineweb_edu")
+        src = 0
+        for root, _dirs, files in os.walk(parquet_dir):
+            for f in files:
+                if f.endswith(".parquet"):
+                    src += os.path.getsize(os.path.join(root, f))
+        # Extracted text runs larger than the compressed parquet it came from.
+        need = int(src * 1.05) if src else 0
+    if need and free - need < min_free_gb * 2**30:
+        raise RuntimeError(
+            f"\n\nREFUSING to extract FineWeb-Edu -- it would fill the disk.\n\n"
+            f"  extraction needs   ~{need / 2**30:.0f} GB of intermediate .txt\n"
+            f"  free now            {free / 2**30:.0f} GB\n"
+            f"  would leave         {(free - need) / 2**30:.0f} GB "
+            f"(minimum {min_free_gb:.0f} GB)\n\n"
+            f"{'  The extraction is UNCAPPED, so it extracts the ENTIRE download.' if not max_bytes else ''}\n"
+            f"  Cap it with --fineweb-edu-token-bytes N, where N is "
+            f"tokens x {_FINEWEB_BYTES_PER_TOKEN:g}.\n"
+            f"  For a 1.21B model at 30 tokens/param that is ~167000000000 "
+            f"(~156 GB);\n"
+            f"  for a 478M model, ~66000000000 (~61 GB).\n\n"
+            f"  If data_cache/tokenized/fineweb_edu.bin already exists, no "
+            f"extraction is\n  needed at all -- check why it is being asked for.")
 
 
 def _load_fineweb_edu(
@@ -1170,11 +1218,32 @@ class MixedLocalDataset(Dataset):
         slim_r, oasst_r, wt_r, fineweb_r = self.mix
         fineweb_bin = None
         if fineweb_r > 0:
-            fineweb_path = _load_fineweb_edu(cache_dir, fineweb_edu_dir, max_bytes=fineweb_edu_token_bytes)
-            if fineweb_path is not None:
-                print(f"    Tokenizing FineWeb-Edu...")
-                fineweb_bin = _bin("fineweb_edu")
-                _tokenize_text_to_bin(fineweb_path, fineweb_bin, enc, max_bytes=fineweb_edu_token_bytes)
+            fineweb_bin = _bin("fineweb_edu")
+            # If the .bin is already there we need NOTHING from the .txt, so do
+            # not touch the extractor. This ordering was a real hazard: the
+            # intermediate .txt is ~4.6 bytes per token (157 GB for a 1B run's
+            # budget) and deleting it to reclaim that space is the obvious,
+            # correct thing to do -- but it silently armed a full
+            # re-extraction on the next run, to build a file that would then be
+            # thrown away unused because _tokenize_text_to_bin caches on the
+            # .bin. It filled this disk to 100% (4.2 GB free) on 2026-08-27.
+            #
+            # Guarding on the .bin makes deleting the .txt safe, which is what
+            # makes the space reclaimable at all.
+            if os.path.exists(fineweb_bin):
+                _n = os.path.getsize(fineweb_bin) // 2   # uint16
+                print(f"    Tokenized cache hit: {fineweb_bin} ({_n:,} tokens)"
+                      f" -- skipping parquet extraction")
+            else:
+                _guard_extraction_disk(cache_dir, fineweb_edu_token_bytes)
+                fineweb_path = _load_fineweb_edu(
+                    cache_dir, fineweb_edu_dir, max_bytes=fineweb_edu_token_bytes)
+                if fineweb_path is None:
+                    fineweb_bin = None
+                else:
+                    print(f"    Tokenizing FineWeb-Edu...")
+                    _tokenize_text_to_bin(fineweb_path, fineweb_bin, enc,
+                                          max_bytes=fineweb_edu_token_bytes)
 
         # --- Memory-map each tokenized source (read-only, paged on demand) ---
         # Source mix (SlimPajama, OpenAssistant, WikiText-103, FineWeb-Edu).
