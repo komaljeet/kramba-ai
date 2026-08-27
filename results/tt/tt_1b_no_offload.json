@@ -1,0 +1,16 @@
+{
+  "tt_1b": {
+    "name": "tt_1b",
+    "params": 947900529,
+    "tt": true,
+    "offload": true,
+    "d_model": 3072,
+    "sec_per_step": 7.113443199999892,
+    "tok_per_sec": 575.8111627291917,
+    "peak_alloc_gb": 5.0343427658081055,
+    "peak_reserved_gb": 6.560546875,
+    "pct_of_card": 109.40444376813528,
+    "verdict": "SPILLS",
+    "optimizer": "Muon (muon_lr=0.02 on 78 matrices / 607,223,808 params; AdamW aux lr=2e-05 / 340,676,721 params)"
+  }
+}

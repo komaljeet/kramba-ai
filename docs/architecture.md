@@ -204,8 +204,28 @@ something else.
 **Relationship to ternary.** `apply_ternary_to_model` targets `nn.Linear` and `TTLinear`
 deliberately does not subclass it, so ternary **skips** TT layers rather than stacking two
 compression schemes on one weight. `ternary_cores=True` is an explicit opt-in for measuring
-the composition. The honest benchmark for TT is ternary (~10.7x storage, also speed-neutral),
-not fp32 — and **whether TT weights learn as well is not yet measured.**
+the composition.
+
+> ### ⛔ MEASURED AND NOT RECOMMENDED (2026-08-27)
+>
+> **Do not enable this.** It is kept because it is tested, opt-in and default-off, not
+> because it is a good idea. Measured at both scales it is **dominated by plain dense**:
+>
+> | comparison | result |
+> |---|---|
+> | equal width, d=384 | TT **0.198 nats worse** (~22% worse perplexity) for 1.81x fewer params |
+> | matched params, d=384/512 | inconclusive on quality, but TT uses **11.4% MORE** VRAM |
+> | matched params at the 1B target | dense 478M does **1,911 tok/s in 2.64 GB**; TT 499M does **1,033 tok/s in 4.29 GB** |
+> | genuine ~1B TT + offload | 576 tok/s, **spills** at 109% of the card, vs dense 1.21B at 1,014 tok/s and 73% |
+>
+> **The mechanism, and why no larger run is expected to reverse it:** TT trades parameters
+> for **width**. Width costs d² compute per token and larger activations, while the PCIe
+> transfer cost TT was meant to avoid scales with **parameter count, not width**. So a TT
+> model pays width's costs and collects none of the transfer saving. That argument is not
+> size-dependent.
+>
+> Full numbers and the refuted "TT removes the need for offload" hypothesis are in
+> [state.md](state.md).
 
 ## Mixture-of-Experts FFN (Issue #123, 2026-08-02) — implemented, opt-in, default off
 

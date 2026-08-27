@@ -140,6 +140,59 @@ Artifacts: `results/tt/ab_tt_vs_dense.json` (full per-arm trajectories),
 `tests/test_tt_linear.py` (24/24), `tests/test_tt_deltanet.py` (33/33). Full suite 575/575.
 `logs/` is gitignored, so the console log is local-only.
 
+### At the 1B target itself, TT is dominated on every axis (2026-08-27)
+
+The A/B above was at d=384-512, and the fair objection to it is that TT is aimed at the size
+where weights dominate VRAM — the 1B-on-6GB goal this project exists for. **Measured there,
+directly** (`scripts/probe_tt_1b_no_offload.py`, 24 layers, seq 4096, batch 1,
+grad-checkpoint, #158 chunked loss, this card):
+
+| arm | params | s/step | tok/s | peak reserved | % of card | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| **dense 1.21B + BCD/offload** | 1,214,543,633 | 4.04 | **1,014** | 4.38 GB | 73% | **FITS** |
+| **dense 478M (d=1216) + offload** | 477,997,043 | 2.14 | **1,911** | 2.64 GB | 44% | **FITS** |
+| TT 499M (d=2048) + offload | 499,414,801 | 3.96 | 1,033 | 4.29 GB | 72% | FITS |
+| TT 948M (d=3072) + offload | 947,900,529 | 7.11 | 576 | 6.56 GB | 109% | **SPILLS** |
+| TT 396M (d=2048), NO offload | 396,488,465 | 10.45 | 392 | 6.80 GB | 113% | **SPILLS** |
+
+**The hypothesis that motivated this run: "dense 1B needs CPU offload, TT does not, therefore
+TT is faster."** It is refuted. TT resident on the card does **not** fit at seq 4096 — 6.80 GB
+against a 5.9966 GB card, and the spill is visible in the step times climbing 6.2 → 9.5 →
+10.5 → 12.3 s. It is 2.6x SLOWER than the offload path it was supposed to beat.
+
+**The matched-parameter control is the one that settles it.** Dense 478M and TT 499M are the
+same size; dense runs **1.85x faster** (1,911 vs 1,033 tok/s) in **1.6x less memory** (2.64 vs
+4.29 GB). The #161 A/B already found them equal in quality at matched parameters. So TT is
+strictly dominated: same quality, slower, larger.
+
+**Why, in one line: TT trades parameters for WIDTH, and PCIe traffic scales with PARAMETERS,
+not width.** So a TT model pays width's costs (d² compute per token, larger activations) and
+collects none of the transfer saving it was supposed to buy. At a genuine ~1B parameters
+(d=3072) it streams the same bytes as dense 1B while being 1.5x wider — 576 tok/s against
+1,014, and it spills.
+
+**Two corrections to the record fall out of this run:**
+
+- **`docs/training.md`'s "~2x offload inefficiency" is stale.** It predates #115 (prefetch
+  overlap, ~25%) and #113 (bf16 parking, ~25%). Measured today the offload path does
+  **1,014 tok/s** at 1.21B, better than the 875 recorded in #157. Offload is not a tax to be
+  escaped — it is what keeps VRAM free for activations, which is the binding term at seq 4096.
+- **A 1B model on this card is not memory-blocked, and is faster than the docs say.** 1.21B
+  trains at 73% of the card. At 1,014 tok/s a 21.4B-token budget is ~244 days; the lever that
+  actually moves that is *size* — the 478M row is nearly 2x faster — not compression.
+
+A bug fixed on the way: `TTLinear` could not be constructed under `torch.device("meta")`
+because the init rescale called `.item()`. Meta construction is how #118 established that an
+8B model needs ~32 GB to build for real, so a layer that cannot be sized on meta cannot be
+sized at the scale that matters.
+
+Artifacts: `results/tt/tt_1b_no_offload.json`, `scripts/probe_tt_1b_no_offload.py`.
+
+**Final status for #161: the code is landed, tested and opt-in (default off). Do not use it.**
+It is measured worse than dense at matched parameters at both the small scale and the 1B
+target, and the mechanism explaining why (width costs, no transfer saving) is not
+size-dependent, so no larger run is expected to reverse it.
+
 ## LIVE RUN — 157M code model, FIM, in progress (2026-08-12)
 
 > **Read this first if you are picking the project up.** A multi-day training run is underway

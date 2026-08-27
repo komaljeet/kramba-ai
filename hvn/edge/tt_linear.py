@@ -216,7 +216,16 @@ class TTLinear(nn.Module):
     # ------------------------------------------------------------------
     @torch.no_grad()
     def _rescale_cores_to_xavier(self) -> None:
-        """Scale the cores so the composed matrix matches Xavier-uniform's std."""
+        """Scale the cores so the composed matrix matches Xavier-uniform's std.
+
+        Skipped on meta tensors, which carry shape but no data. Counting a large
+        model's parameters under ``torch.device("meta")`` is how this repo sizes
+        configs it cannot afford to allocate (#118 used it to establish that an
+        8B model needs ~32 GB to construct for real) -- so a layer that cannot
+        be built on meta cannot be sized at the scale that matters.
+        """
+        if any(c.is_meta for c in self.cores):
+            return
         target_std = math.sqrt(2.0 / (self.in_features + self.out_features))
         actual = self.to_dense().std().item()
         if actual <= 0 or not math.isfinite(actual):  # pragma: no cover - degenerate init
