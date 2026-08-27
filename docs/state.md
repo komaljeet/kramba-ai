@@ -5,6 +5,80 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## The 1B step is COMPUTE-bound at 98.7% GPU — the only free speed left is +7% (2026-08-27)
+
+**One line: profiled the 1B training step, the GPU is 98.7% busy, so every transfer- and
+scheduling-side lever has nothing to reclaim; the one exact win available is raising the
+micro-batch from 1 to 2 at ~478M, worth +7.1%.**
+
+### Where the 4.02 s goes (`scripts/profile_1b_step.py`, d=2048/24L, seq 4096, batch 1)
+
+| phase | seconds | share |
+|---|---:|---:|
+| forward | 1.019 | 25.3% |
+| **backward** | **2.942** | **73.2%** |
+| optimizer | 0.059 | 1.5% |
+| **GPU busy** | | **98.7% mean, 100% max** |
+
+**98.7% busy settles the class of fix.** Only fewer FLOPs or a better kernel can help;
+PCIe/prefetch/cache tuning is chasing a cost that is already ~0. #153 measured 97.2% at 83M
+with everything resident — this confirms the same holds at 1B with weights streaming from
+CPU, which nobody had checked and which is a genuinely different regime.
+
+**Backward is 2.9x forward where ~2x is normal.** The extra ~1.0 s (~25% of the step) is
+gradient checkpointing recomputing the forward. That recompute is bit-identical (#49/#100),
+so removing it would be free quality-wise — **and it cannot be removed.**
+`BlockCoordinateScheduler` raises `offload_inactive_weights=True requires
+model.grad_checkpoint=True`: offload evicts a block's weights after its forward and relies on
+the checkpoint recompute to bring them back. Measured without it at ~478M: **10.69 GB, 178%
+of the card, 340 tok/s** — a 5.6x slowdown. The coupling is structural, not a flag to flip.
+
+### Micro-batch: the only real win, and it inverts between sizes
+
+| config | batch | s/step | tok/s | peak | % card | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| 1.21B | 1 | 4.02 | **1,020** | 4.38 GB | 73% | FITS |
+| 1.21B | 2 | 10.12 | 810 | 7.07 GB | 118% | **SPILLS** |
+| 1.21B | 4 | 41.80 | 392 | 10.89 GB | 182% | **SPILLS** |
+| 478M | 1 | 2.16 | 1,900 | 2.63 GB | 44% | FITS |
+| **478M** | **2** | 4.03 | **2,035** | 4.33 GB | 72% | **FITS** |
+| 478M | 3 | 6.00 | 2,049 | 5.24 GB | 87% | SUSPECT |
+
+**At 1.21B, batch 1 is already optimal and raising it is actively harmful** — batch 2 spills
+and loses 21%. This is worth stating loudly because #141 measured batch size as a *large* win
+at 83M (batch 2 x 8 heads at 9,087 tok/s against batch 1 x 16 heads at 5,882, a 55% gap), and
+inheriting that conclusion at 1B costs a silently-spilled run.
+
+**At 478M, batch 2 is worth +7.1%** and still fits at 72%. Batch 3 reaches 87%, above the
+#136 SUSPECT threshold, for a further +0.7% — not worth it. **`grad_accum` must be halved
+alongside**, so the effective batch is unchanged; otherwise this is a training-dynamics change
+smuggled in behind a throughput fix (the #142/#143 discipline).
+
+### Two levers measured at zero, one of them predicted first
+
+- **Chunked-loss chunk size does nothing**: 512 / 2048 / 4096 give 1,902 / 1,900 / 1,906
+  tok/s at 478M. Bigger chunks cost VRAM (2.63 -> 4.19 GB) for no speed. Leave it at 512.
+- **A larger resident block cache does nothing**: `offload_cache_blocks` 1 -> 8 gives
+  2,047 -> 2,053 tok/s, **+0.3%**, for +0.21 GB. **Predicted before running** from the 98.7%
+  figure — a cache exists to avoid transfers, and transfers are not what the step is waiting
+  on. This also answers the recurring "keep a small parameter cache in VRAM and free each
+  parameter once it is done" idea: that cache is `GPUBufferPool` and it already exists, at
+  BLOCK granularity. Per-*token* granularity is not implementable, because a layer's weights
+  are used by every token in the sequence inside one matmul — there is no instant at which a
+  weight is finished with a token — and backward needs them again regardless, which is the
+  same coupling that forces grad-checkpointing above.
+
+### The honest summary
+
+**There is no large exact speedup available on this hardware.** The GPU is saturated doing
+arithmetic that has to happen plus one recompute that cannot be removed. The available levers
+are +7.1% (micro-batch 2 at 478M) and nothing else above noise. Anything bigger has to come
+from **fewer FLOPs** — i.e. a smaller model, which is the 478M-vs-1.21B decision (1,911 vs
+1,020 tok/s, 87 vs 413 days at 30 tokens/param) — or from different hardware.
+
+Artifacts: `scripts/profile_1b_step.py`, `results/profile_1b_step.json`,
+`scripts/probe_1b_throughput.py`.
+
 ## Tensor-Train projections: 3.96x fewer parameters at 1.05x step time (Issue #161, 2026-08-27)
 
 **One line: TT factorisation of the DeltaNet projections is now a real trainable layer, and
