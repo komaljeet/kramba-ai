@@ -173,59 +173,36 @@ numbers and the retraction). The corrected picture:
 **Decision:** the 83M R&D probe **passes** — go-signal for the next staged milestone (README's
 "The Dream": ~20B-class native ternary-hybrid), not a reason to invoke the capacity/scale-up
 fallback (#84 GaLore was the fallback for a *failed* gate; the gate passed).
-## Tensor-Train projections (Issue #161, 2026-08-27) — implemented, opt-in, default off
 
-`hvn/edge/tt_linear.py::TTLinear` stores a projection's weight as a Tensor-Train (Novikov et
-al. 2015) instead of a dense matrix: the TT cores **are** the parameters. Opt-in via
-`DeltaNetBlock(tt_targets=..., tt_rank=...)` and the same arguments on `EdgeHVN`; unset leaves
-both byte-identical to the pre-#161 block.
+## Tensor-Train projections (Issue #161, 2026-08-27) — BUILT, MEASURED, REMOVED
 
-**Targets: `"qkv"`, `"out"`, `"ffn"`** — ~8d² of the block's ~10d². Measured 3.96x fewer block
-parameters at d=896, rank 32, for **1.05x** step time (see [state.md](state.md) for the table
-and for the corrected speed claim).
+`TTLinear` factorised the DeltaNet projections as a Tensor-Train (Novikov et al. 2015) with
+the cores as trainable parameters. **It was measured worse than plain dense at every setting
+tried and the code has been deleted** (recoverable from git history: commits `807b8b9`
+through `c20dc86` on `issue-161-tensor-train-deltanet`). The findings are kept because the
+question is now closed rather than untried.
 
-**`alpha_proj` and `beta_proj` are excluded by design and refused by name.** Both are
-zero-initialised. TT-SVD of a zero matrix gives zero cores, and because the cores enter the
-output *multiplicatively*, those cores also have zero **gradient** — the decay gate would be
-permanently dead and the loss curve would look perfectly healthy. This is the same class of
-silent-wrong-answer failure as #117's stale cache and #138's frozen context.
+| comparison | result |
+|---|---|
+| equal width, d=384, 5,000 steps | TT **0.198 nats worse** (~22% worse perplexity) for 1.81x fewer params |
+| matched params, d=384/512 | quality inconclusive, but TT used **11.4% MORE** VRAM |
+| matched params at the 1B target | dense 478M: **1,911 tok/s in 2.64 GB**; TT 499M: **1,033 tok/s in 4.29 GB** |
+| genuine ~1B TT + offload | 576 tok/s, **spills** at 109% of the card, vs dense 1.21B at 1,014 tok/s and 73% |
 
-**Two contraction orders**, selected by `tt_contract`:
+**The mechanism, which is why no larger run should be expected to reverse it:** TT trades
+parameters for **width**. Width costs d² compute per token and larger activations, while the
+PCIe transfer cost TT was meant to avoid scales with **parameter count, not width**. So a TT
+model pays width's costs and collects none of the transfer saving. That argument has no size
+dependence.
 
-| order | what it does | when |
-|---|---|---|
-| `"fused"` (default) | folds the cores together first (batch-independent), then one cuBLAS GEMM | training — 1.05x dense |
-| `"direct"` | streams the batch through the cores, never forms the `[d,d]` matrix | memory-constrained inference — 2.34x dense, and worse with rank |
+A specific trap found while building it, worth remembering for any future factorisation of
+this block: **`alpha_proj` and `beta_proj` are zero-initialised.** A factorisation of a zero
+matrix has zero cores, and because cores enter the output *multiplicatively* those cores also
+have zero **gradient** — the decay gate would be permanently dead while the loss curve looked
+perfectly healthy.
 
-A known-answer test asserts the two are the same function in forward and in the gradients
-into the cores; without it, a divergence would surface only as an A/B arm quietly computing
-something else.
-
-**Relationship to ternary.** `apply_ternary_to_model` targets `nn.Linear` and `TTLinear`
-deliberately does not subclass it, so ternary **skips** TT layers rather than stacking two
-compression schemes on one weight. `ternary_cores=True` is an explicit opt-in for measuring
-the composition.
-
-> ### ⛔ MEASURED AND NOT RECOMMENDED (2026-08-27)
->
-> **Do not enable this.** It is kept because it is tested, opt-in and default-off, not
-> because it is a good idea. Measured at both scales it is **dominated by plain dense**:
->
-> | comparison | result |
-> |---|---|
-> | equal width, d=384 | TT **0.198 nats worse** (~22% worse perplexity) for 1.81x fewer params |
-> | matched params, d=384/512 | inconclusive on quality, but TT uses **11.4% MORE** VRAM |
-> | matched params at the 1B target | dense 478M does **1,911 tok/s in 2.64 GB**; TT 499M does **1,033 tok/s in 4.29 GB** |
-> | genuine ~1B TT + offload | 576 tok/s, **spills** at 109% of the card, vs dense 1.21B at 1,014 tok/s and 73% |
->
-> **The mechanism, and why no larger run is expected to reverse it:** TT trades parameters
-> for **width**. Width costs d² compute per token and larger activations, while the PCIe
-> transfer cost TT was meant to avoid scales with **parameter count, not width**. So a TT
-> model pays width's costs and collects none of the transfer saving. That argument is not
-> size-dependent.
->
-> Full numbers and the refuted "TT removes the need for offload" hypothesis are in
-> [state.md](state.md).
+Full numbers, the refuted "TT removes the need for offload" hypothesis, and the two wrong
+claims corrected along the way are in [state.md](state.md).
 
 ## Mixture-of-Experts FFN (Issue #123, 2026-08-02) — implemented, opt-in, default off
 

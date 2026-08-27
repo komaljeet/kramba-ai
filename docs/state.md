@@ -188,10 +188,40 @@ sized at the scale that matters.
 
 Artifacts: `results/tt/tt_1b_no_offload.json`, `scripts/probe_tt_1b_no_offload.py`.
 
-**Final status for #161: the code is landed, tested and opt-in (default off). Do not use it.**
-It is measured worse than dense at matched parameters at both the small scale and the 1B
-target, and the mechanism explaining why (width costs, no transfer saving) is not
-size-dependent, so no larger run is expected to reverse it.
+**Final status for #161: measured worse than dense at every setting tried, and the CODE HAS
+BEEN DELETED.** `hvn/edge/tt_linear.py`, its wiring into `DeltaNetBlock`/`EdgeHVN`, its two
+test files and the two TT-specific harnesses are gone; `deltanet.py` and `edge/model.py` are
+byte-identical to before #161. Recoverable from git history (commits `807b8b9` .. `c20dc86`
+on `issue-161-tensor-train-deltanet`) if anyone wants to re-run it.
+
+Kept rather than deleted, because they answer questions that outlive TT:
+
+- **`scripts/probe_1b_throughput.py`** — the size-vs-throughput probe for the 1B goal,
+  stripped of its TT arms. It is what produced the 1,014 and 1,911 tok/s figures.
+- **`results/throughput_1b_measured.json`**, `results/tt/ab_tt_vs_dense.json` — the evidence
+  behind the numbers above.
+
+**Why deleted rather than left opt-in:** the MoE precedent (#123) kept a losing lever because
+its verdict was scale-dependent — it lost to *dense scaling at this size*, and might not at
+another. TT's verdict is **mechanistic**: it trades parameters for width, width costs d²
+compute and activations, and PCIe traffic scales with parameters not width. That argument has
+no size dependence, so there is no regime to come back for, and ~1,700 lines carrying a
+"do not use" sign is a liability rather than an option.
+
+### The one number worth taking from this whole issue
+
+Measured while establishing the TT baseline, and it has nothing to do with TT
+(`scripts/probe_1b_throughput.py`, seq 4096, grad-checkpoint, chunked loss, BCD+offload):
+
+| config | params | s/step | tok/s | peak | % card | days @ 30 tok/param |
+|---|---:|---:|---:|---:|---:|---:|
+| d=2048, 24L | 1,214,543,633 | 4.02 | 1,020 | 4.38 GB | 73% | **413** |
+| **d=1216, 24L** | **477,997,043** | **2.14** | **1,911** | **2.65 GB** | **44%** | **87** |
+
+**A 478M model is 1.88x the throughput at 60% of the memory, and 4.7x less wall clock to a
+30-tokens-per-parameter budget** (#159's measured ratio, not Chinchilla's 20). If the 1B run
+is time-blocked rather than memory-blocked — and it is, at 413 days — this row is where the
+time actually is. Size is the lever; compression was not.
 
 ## LIVE RUN — 157M code model, FIM, in progress (2026-08-12)
 

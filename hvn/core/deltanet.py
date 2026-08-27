@@ -149,12 +149,6 @@ class DeltaNetBlock(nn.Module):
         moe_experts: int = 1,
         moe_top_k: int = 2,
         moe_aux_loss_weight: float = 0.01,
-        # Issue #161: Tensor-Train factorised projections. None = dense
-        # (byte-identical to the pre-#161 block).
-        tt_targets: tuple[str, ...] | None = None,
-        tt_rank: int = 32,
-        tt_ternary_cores: bool = False,
-        tt_contract: str = "fused",
         # Accepted for interface compatibility with HVNBlock construction
         # (ignored — DeltaNet defines its own dynamics):
         bond_dimension: int | None = None,
@@ -286,66 +280,6 @@ class DeltaNetBlock(nn.Module):
             )
 
         self.dropout = nn.Dropout(dropout)
-
-        # Issue #161: swap the targeted dense projections for Tensor-Train ones.
-        # Done AFTER dense construction so every untargeted layer keeps its exact
-        # existing initialisation, rather than duplicating that logic in two places.
-        self.tt_targets = tuple(tt_targets) if tt_targets else ()
-        self.tt_rank = int(tt_rank)
-        self.tt_contract = tt_contract
-        if self.tt_targets:
-            self._apply_tensor_train(self.tt_rank, bool(tt_ternary_cores),
-                                     use_swiglu, moe_experts, tt_contract)
-
-    # ------------------------------------------------------------------
-    def _apply_tensor_train(self, rank: int, ternary_cores: bool,
-                            use_swiglu: bool, moe_experts: int,
-                            contract: str = "fused") -> None:
-        """Replace the targeted projections with :class:`TTLinear` (Issue #161).
-
-        ``alpha_proj`` is deliberately NOT a valid target. It is zero-initialised
-        (with bias 3.0 so the decay gate starts near 0.95), and a TT of a zero
-        matrix has zero cores -- which, because the cores enter the output
-        *multiplicatively*, also have zero gradient. The gate would be
-        permanently dead and the loss curve would look perfectly healthy. Same
-        applies to ``beta_proj``, which is zero-initialised and is [d, n_heads]
-        anyway (too small and too lopsided to factor usefully).
-        """
-        from ..edge.tt_linear import TTLinear
-
-        valid = {"qkv", "out", "ffn"}
-        unknown = set(self.tt_targets) - valid
-        if unknown:
-            raise ValueError(
-                f"unknown tt_targets {sorted(unknown)}; valid are {sorted(valid)}. "
-                f"alpha_proj/beta_proj are excluded by design -- both are "
-                f"zero-initialised, and zero TT cores have zero gradient, so the "
-                f"gate would be silently dead."
-            )
-
-        def swap(dense: nn.Linear) -> TTLinear:
-            return TTLinear(dense.in_features, dense.out_features,
-                            bias=dense.bias is not None, rank=rank,
-                            ternary_cores=ternary_cores, contract=contract)
-
-        if "qkv" in self.tt_targets:
-            self.q_proj = swap(self.q_proj)
-            self.k_proj = swap(self.k_proj)
-            self.v_proj = swap(self.v_proj)
-        if "out" in self.tt_targets:
-            self.out_proj = swap(self.out_proj)
-        if "ffn" in self.tt_targets:
-            # SwiGLU and MoE carry their own internal structure; silently
-            # skipping them would make a "tt-ffn" arm secretly measure the dense
-            # incumbent -- the #140 failure mode.
-            if use_swiglu or (moe_experts or 1) > 1:
-                raise ValueError(
-                    f"tt_targets includes 'ffn' but the FFN is "
-                    f"{'SwiGLU' if use_swiglu else 'MoE'}; TT is only wired for "
-                    f"the plain FFN. Drop 'ffn' from tt_targets or use the dense FFN."
-                )
-            self.ffn[0] = swap(self.ffn[0])
-            self.ffn[3] = swap(self.ffn[3])
 
     # ------------------------------------------------------------------
     # Shared projection / gating helpers

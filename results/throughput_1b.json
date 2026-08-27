@@ -1,0 +1,30 @@
+{
+  "dense_1b": {
+    "name": "dense_1b",
+    "d_model": 2048,
+    "n_heads": 32,
+    "params": 1214543633,
+    "offload": true,
+    "sec_per_step": 4.015528100000665,
+    "tok_per_sec": 1020.0401785257887,
+    "peak_alloc_gb": 3.393120765686035,
+    "peak_reserved_gb": 4.384765625,
+    "pct_of_card": 73.12086223860187,
+    "verdict": "FITS",
+    "optimizer": "Muon (muon_lr=0.02 on 210 matrices / 1,008,074,752 params; AdamW aux lr=2e-05 / 206,468,881 params)"
+  },
+  "dense_478m": {
+    "name": "dense_478m",
+    "d_model": 1216,
+    "n_heads": 19,
+    "params": 477997043,
+    "offload": true,
+    "sec_per_step": 2.1430857999985164,
+    "tok_per_sec": 1911.2627221937803,
+    "peak_alloc_gb": 1.996716022491455,
+    "peak_reserved_gb": 2.646484375,
+    "pct_of_card": 44.13308166294233,
+    "verdict": "FITS",
+    "optimizer": "Muon (muon_lr=0.02 on 210 matrices / 355,385,728 params; AdamW aux lr=2e-05 / 122,611,315 params)"
+  }
+}
