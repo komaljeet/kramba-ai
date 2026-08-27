@@ -173,6 +173,40 @@ numbers and the retraction). The corrected picture:
 **Decision:** the 83M R&D probe **passes** — go-signal for the next staged milestone (README's
 "The Dream": ~20B-class native ternary-hybrid), not a reason to invoke the capacity/scale-up
 fallback (#84 GaLore was the fallback for a *failed* gate; the gate passed).
+## Tensor-Train projections (Issue #161, 2026-08-27) — implemented, opt-in, default off
+
+`hvn/edge/tt_linear.py::TTLinear` stores a projection's weight as a Tensor-Train (Novikov et
+al. 2015) instead of a dense matrix: the TT cores **are** the parameters. Opt-in via
+`DeltaNetBlock(tt_targets=..., tt_rank=...)` and the same arguments on `EdgeHVN`; unset leaves
+both byte-identical to the pre-#161 block.
+
+**Targets: `"qkv"`, `"out"`, `"ffn"`** — ~8d² of the block's ~10d². Measured 3.96x fewer block
+parameters at d=896, rank 32, for **1.05x** step time (see [state.md](state.md) for the table
+and for the corrected speed claim).
+
+**`alpha_proj` and `beta_proj` are excluded by design and refused by name.** Both are
+zero-initialised. TT-SVD of a zero matrix gives zero cores, and because the cores enter the
+output *multiplicatively*, those cores also have zero **gradient** — the decay gate would be
+permanently dead and the loss curve would look perfectly healthy. This is the same class of
+silent-wrong-answer failure as #117's stale cache and #138's frozen context.
+
+**Two contraction orders**, selected by `tt_contract`:
+
+| order | what it does | when |
+|---|---|---|
+| `"fused"` (default) | folds the cores together first (batch-independent), then one cuBLAS GEMM | training — 1.05x dense |
+| `"direct"` | streams the batch through the cores, never forms the `[d,d]` matrix | memory-constrained inference — 2.34x dense, and worse with rank |
+
+A known-answer test asserts the two are the same function in forward and in the gradients
+into the cores; without it, a divergence would surface only as an A/B arm quietly computing
+something else.
+
+**Relationship to ternary.** `apply_ternary_to_model` targets `nn.Linear` and `TTLinear`
+deliberately does not subclass it, so ternary **skips** TT layers rather than stacking two
+compression schemes on one weight. `ternary_cores=True` is an explicit opt-in for measuring
+the composition. The honest benchmark for TT is ternary (~10.7x storage, also speed-neutral),
+not fp32 — and **whether TT weights learn as well is not yet measured.**
+
 ## Mixture-of-Experts FFN (Issue #123, 2026-08-02) — implemented, opt-in, default off
 
 `hvn/core/moe.py::MoEFFN` routes a DeltaNet block's **feed-forward sub-layer** through `E`

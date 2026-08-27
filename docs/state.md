@@ -5,6 +5,85 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Tensor-Train projections: 3.96x fewer parameters at 1.05x step time (Issue #161, 2026-08-27)
+
+**One line: TT factorisation of the DeltaNet projections is now a real trainable layer, and
+it costs essentially nothing in speed — 3.96x fewer block parameters at d=896 for 1.05x step
+time. Quality is NOT measured yet, so this is a capability that landed, not a win that was
+demonstrated.**
+
+`hvn/edge/decomposition.py::TTMatrix` had implemented TT-SVD since #32 Phase 2.3 but could
+not be put in a model: plain class rather than `nn.Module`, cores not `nn.Parameter`,
+`from_dense`/`to_dense` both `@torch.no_grad()`, and `matvec` taking a single vector with no
+batch dimension (falling back to `to_dense()` for d>2, which would silently break gradients).
+Nothing imported it. `hvn/edge/tt_linear.py::TTLinear` is the trainable counterpart, opt-in
+via `tt_targets` on `DeltaNetBlock` / `EdgeHVN`; unset leaves both byte-identical.
+
+### Measured (`scripts/probe_tt_cost.py`, idle GPU, batch 4 x seq 512, full block fwd+bwd)
+
+| d_model | rank | dense params | TT params | smaller | fused s/it vs dense | direct vs dense |
+|---|---:|---:|---:|---:|---:|---:|
+| 384 | 32 | 1,481,478 | 482,054 | 3.07x | **1.09x** | 1.69x |
+| 896 | 32 | 8,051,470 | 2,032,398 | **3.96x** | **1.05x** | 2.34x |
+| 896 | 64 | 8,051,470 | 2,435,854 | 3.31x | 1.04x | 3.86x |
+| 2048 | 32 | 42,033,184 | 9,527,328 | 4.41x | not timed | not timed |
+
+Compression **improves with size**, which is the right direction for the edge-inference
+thesis. Because the parameters stay compressed, optimiser state shrinks by the same factor —
+that is the real VRAM term, since Muon/AdamW state is proportional to parameter count.
+
+### A wrong claim, published and then corrected within the session
+
+The first commit stated "TT is not a speed lever — 1.5-3.3x more FLOPs", from the arithmetic
+for streaming a batch through the cores: `B*r*n1*m2*(n2+m1)` against dense `B*d^2`, giving
+3.3x at d=384 and 2.1x at d=896, i.e. relatively **better** as d grows.
+
+Measured, that order came out 1.69x at d=384 and 2.34x at d=896 — **worse at the larger
+width, the opposite ordering to the prediction.** A measurement that disagrees with the
+prediction's *direction* is not noise, so it was chased rather than published. Cause: the
+batch-streaming order builds a `[B*S, m1, r, rest]` intermediate `r` times larger than the
+output, making it bandwidth-bound rather than FLOP-bound — which also explains why its
+penalty scales with rank (3.86x at r=64) while the fused path does not (1.04x).
+
+Folding the cores into each other **first** is batch-independent: one small core contraction,
+then an ordinary cuBLAS GEMM. The FLOP argument dissolves because it was never about the
+right algorithm. Both orders are kept and selectable (`tt_contract`, default `"fused"`;
+`"direct"` for memory-constrained inference where never forming the `[d,d]` matrix is the
+point), with a known-answer test asserting they are the same function in forward (2.6e-06)
+and in the gradients into the cores (3.8e-05).
+
+**The transferable lesson is the repo's own rule in a new place:** a number derived on paper
+is not a measurement of this code. The arithmetic was correct about the implementation it
+described and irrelevant to the implementation that should have been written.
+
+### Two traps closed by construction
+
+- **`alpha_proj` is refused by name.** It is zero-initialised (bias 3.0, so decay starts
+  ~0.95). TT-SVD of a zero matrix gives zero cores, and because cores enter the output
+  *multiplicatively* those cores also have zero **gradient** — the decay gate would be
+  permanently dead while the loss curve looked perfectly healthy. `beta_proj` likewise.
+  `'ffn'` on a SwiGLU/MoE block raises rather than silently skipping, which would have made a
+  "tt-ffn" arm secretly measure the dense incumbent (#140's failure mode).
+- **Ternary does not silently stack.** `apply_ternary_to_model` targets `nn.Linear`, and
+  `TTLinear` deliberately does not subclass it, so TT layers are skipped rather than carrying
+  two compression schemes on one weight and confounding both. Asserted, with a control that
+  fails if `apply_ternary_to_model` stopped doing anything at all. `ternary_cores=True` is an
+  explicit opt-in for measuring the composition later.
+
+### What this does NOT settle
+
+**Whether TT-compressed weights learn as well is unmeasured.** Everything above is size and
+cost. The run that would settle it is a held-out A/B at matched tokens — TT vs dense at equal
+*parameter count* (i.e. TT wider) and at equal *width* — with a **full-length** twin arm for
+the noise floor, since #122 measured that a smoke-length twin understates drift ~50x.
+
+The honest comparison is also against **ternary**, not fp32: ternary already gives ~10.7x
+storage and is likewise speed-neutral. The open question is whether TT buys anything ternary
+does not, and whether the two compose (TT 3.96x x ternary 10.7x, if quality survives).
+
+Artifacts: `hvn/edge/tt_linear.py`, `scripts/probe_tt_cost.py`, `tests/test_tt_linear.py`
+(24/24), `tests/test_tt_deltanet.py` (33/33). Full suite 575/575 unaffected.
+
 ## LIVE RUN — 157M code model, FIM, in progress (2026-08-12)
 
 > **Read this first if you are picking the project up.** A multi-day training run is underway
