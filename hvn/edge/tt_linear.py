@@ -15,22 +15,41 @@ ever materialising the dense ``[out, in]`` matrix, and it is a drop-in for
 
 What this is for
 ----------------
-TT is **not** a training-speed lever at the sizes this repo can train. For a
-``[d, d]`` matrix with two cores at rank ``r``, the contraction costs
-``B*r*n1*m2*(n2+m1)`` against dense ``B*d^2``:
+TT is a **parameter / storage** lever, and with the default contraction order it
+is **speed-neutral**. Measured on an idle RTX 4050, batch 4 x seq 512, a full
+DeltaNet block forward+backward (``scripts/probe_tt_cost.py``):
 
-===========  ===================
-``d_model``  TT vs dense FLOPs
-===========  ===================
-384          3.3x MORE
-2048         1.5x MORE
-4096         break-even
-===========  ===================
+===========  ======  =================  ================
+``d_model``  rank    params vs dense    time vs dense
+===========  ======  =================  ================
+384          32      3.07x smaller      1.04x
+896          32      **3.96x smaller**  **1.03x**
+896          64      3.31x smaller      1.04x
+2048         32      4.41x smaller      (not timed)
+===========  ======  =================  ================
 
-and #153 measured the training pipeline at 97.2% GPU-busy, so there is no idle
-time for a cheaper layer to reclaim. TT is a **weight-storage / parameter-
-efficiency** lever, which is on-thesis for the edge-inference goal but has to be
-graded against ternary (~10.7x storage at *zero* extra FLOPs), not against fp32.
+**A correction worth keeping, because the first version of this file published
+the wrong claim.** The FLOP arithmetic for streaming a batch through the cores
+says TT costs ``B*r*n1*m2*(n2+m1)`` against dense ``B*d^2`` -- 3.3x more at
+d=384, 2.1x at d=896 -- and that was written here as "TT is not a speed lever".
+Measured, the ``direct`` path was *worse* than that arithmetic (2.27x wall at
+d=896) and, diagnostically, worse at d=896 than d=384 -- the opposite of what
+the FLOP ratio predicts. Cause: the direct order builds a
+``[B*S, m1, r, rest]`` intermediate ``r`` times larger than the output, so it is
+bandwidth-bound, not FLOP-bound.
+
+Folding the cores into each other *first* is batch-independent, so the whole
+argument dissolves: one small core contraction plus one ordinary cuBLAS GEMM.
+The arithmetic was right about the code it described and irrelevant to the code
+that should have been written.
+
+Because the parameters stay compressed, **optimiser state shrinks by the same
+factor** -- which is the real VRAM win, since Muon/AdamW state is proportional
+to parameter count.
+
+This still has to be graded against ternary (~10.7x storage, also speed-neutral)
+rather than against fp32, and **nothing here measures whether TT weights LEARN
+as well.** That needs a held-out A/B at matched tokens.
 
 Interaction with ternary
 ------------------------
@@ -113,6 +132,21 @@ class TTLinear(nn.Module):
         (straight-through). Default ``False``: TT and ternary compress the same
         weight, so stacking them silently would confound any measurement of
         either. Per-tensor scale only.
+    contract
+        How the forward pass contracts the cores.
+
+        ``"fused"`` (default) contracts the **cores with each other** first --
+        cost independent of batch -- then does one cuBLAS GEMM. The dense matrix
+        exists only as a transient activation, never as a stored parameter, so
+        the storage saving is unchanged. This is the right choice for training.
+
+        ``"direct"`` streams the batch through the cores and never forms the
+        dense matrix at all. Lower peak memory, but it builds a
+        ``[B*S, m1, r, rest]`` intermediate that is ``r``x larger than the
+        output, which makes it bandwidth-bound: measured 2.27x slower than
+        dense at d=896 against a predicted 2.14x *FLOP* ratio, i.e. worse than
+        the arithmetic, and getting worse with rank. Use it for
+        memory-constrained inference, not for training.
     allow_expansion
         Permit a rank at which the cores are *larger* than the dense weight.
         Only exact-reconstruction parity tests should set this: for a square
@@ -134,8 +168,12 @@ class TTLinear(nn.Module):
                  row_factors: tuple[int, ...] | None = None,
                  col_factors: tuple[int, ...] | None = None,
                  ternary_cores: bool = False,
+                 contract: str = "fused",
                  allow_expansion: bool = False):
         super().__init__()
+        if contract not in ("fused", "direct"):
+            raise ValueError(f"contract must be 'fused' or 'direct', got {contract!r}")
+        self.contract = contract
         self.in_features = int(in_features)
         self.out_features = int(out_features)
         self.rank = int(rank)
@@ -187,16 +225,18 @@ class TTLinear(nn.Module):
         for c in self.cores:
             c.mul_(factor)
 
-    def to_dense(self) -> torch.Tensor:
-        """Materialise the effective ``[out_features, in_features]`` matrix.
+    def to_dense(self, cores: list[torch.Tensor] | None = None) -> torch.Tensor:
+        """Contract the cores into the effective ``[out_features, in_features]`` matrix.
 
-        For inspection, parity tests and checkpoint conversion -- **not** used by
-        :meth:`forward`, which is the whole point of the layer.
+        Differentiable: under ``contract="fused"`` this is on the forward path,
+        and gradients flow back through it into the cores. The result is a
+        transient activation -- the stored parameters remain the cores.
         """
+        cores = list(self.cores) if cores is None else cores
         d = len(self.row_factors)
-        result = self.cores[0].squeeze(0)  # [m1, n1, r1]
+        result = cores[0].squeeze(0)  # [m1, n1, r1]
         for k in range(1, d):
-            core = self.cores[k]
+            core = cores[k]
             r_prev, m_k, n_k, r_k = core.shape
             combined = torch.einsum("rcp,pmnk->rcmnk", result, core)
             R_rows, R_cols = combined.shape[0], combined.shape[1]
@@ -219,8 +259,20 @@ class TTLinear(nn.Module):
             raise ValueError(
                 f"expected last dim {self.in_features}, got {tuple(x.shape)}"
             )
-        lead = x.shape[:-1]
         cores = self._effective_cores()
+
+        if self.contract == "fused":
+            # Contract cores together first (batch-independent), then one GEMM.
+            # The direct path below builds a [B*S, m1, r, rest] intermediate that
+            # is r-times larger than the output and is bandwidth-bound; folding
+            # the cores first costs r*m1*n1*m2*n2 once, regardless of batch.
+            W = self.to_dense(cores).to(x.dtype)
+            out = torch.nn.functional.linear(x, W, None)
+            if self.bias is not None:
+                out = out + self.bias.to(out.dtype)
+            return out
+
+        lead = x.shape[:-1]
         carry = x.reshape(-1, 1, 1, self.in_features)  # [B, out_so_far, r_prev, rest]
         B = carry.shape[0]
 

@@ -106,6 +106,43 @@ def test_truncated_rank_compresses_and_trains() -> None:
           f"{first:.4f} -> {loss.item():.4f}")
 
 
+def test_fused_and_direct_paths_agree() -> None:
+    """The two contraction orders must be the same function.
+
+    'fused' folds the cores then GEMMs; 'direct' streams the batch through the
+    cores. They are different code paths over the same math, so a divergence
+    here is a bug in one of them -- and would otherwise show up only as an arm
+    of an A/B quietly computing something else.
+    """
+    print("\n[4] fused and direct contraction agree")
+    torch.manual_seed(0)
+    for (out_f, in_f, rank) in [(384, 384, 32), (256, 128, 16), (768, 384, 8)]:
+        fused = TTLinear(in_f, out_f, rank=rank, bias=True, contract="fused")
+        direct = TTLinear(in_f, out_f, rank=rank, bias=True, contract="direct")
+        with torch.no_grad():
+            for a, b in zip(direct.cores, fused.cores):
+                a.copy_(b)
+            direct.bias.copy_(fused.bias)
+
+        x = torch.randn(3, 9, in_f)
+        err = (fused(x) - direct(x)).abs().max().item()
+        check(f"forward agrees [{out_f},{in_f}] r={rank}", err < 1e-4,
+              f"max|err|={err:.3e}")
+
+    # Gradients into the CORES must agree too -- forward parity alone would pass
+    # if one path's backward were wrong.
+    xg = torch.randn(2, 5, 128)
+    f2 = TTLinear(128, 128, rank=8, contract="fused")
+    d2 = TTLinear(128, 128, rank=8, contract="direct")
+    with torch.no_grad():
+        for a, b in zip(d2.cores, f2.cores):
+            a.copy_(b)
+    f2(xg).pow(2).sum().backward()
+    d2(xg).pow(2).sum().backward()
+    gerr = max((a.grad - b.grad).abs().max().item() for a, b in zip(f2.cores, d2.cores))
+    check("core gradients agree", gerr < 1e-3, f"max|err|={gerr:.3e}")
+
+
 def test_anti_vacuity_guards() -> None:
     """The guards whose only job is to fail."""
     print("\n[4] anti-vacuity: the size guard and the rank bound")
@@ -170,6 +207,7 @@ if __name__ == "__main__":
     test_known_answer_forward_matches_dense()
     test_known_answer_backward_matches_dense()
     test_truncated_rank_compresses_and_trains()
+    test_fused_and_direct_paths_agree()
     test_anti_vacuity_guards()
     test_factorisation_helpers()
     test_ternary_cores_optin()

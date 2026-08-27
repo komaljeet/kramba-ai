@@ -154,6 +154,7 @@ class DeltaNetBlock(nn.Module):
         tt_targets: tuple[str, ...] | None = None,
         tt_rank: int = 32,
         tt_ternary_cores: bool = False,
+        tt_contract: str = "fused",
         # Accepted for interface compatibility with HVNBlock construction
         # (ignored — DeltaNet defines its own dynamics):
         bond_dimension: int | None = None,
@@ -291,13 +292,15 @@ class DeltaNetBlock(nn.Module):
         # existing initialisation, rather than duplicating that logic in two places.
         self.tt_targets = tuple(tt_targets) if tt_targets else ()
         self.tt_rank = int(tt_rank)
+        self.tt_contract = tt_contract
         if self.tt_targets:
             self._apply_tensor_train(self.tt_rank, bool(tt_ternary_cores),
-                                     use_swiglu, moe_experts)
+                                     use_swiglu, moe_experts, tt_contract)
 
     # ------------------------------------------------------------------
     def _apply_tensor_train(self, rank: int, ternary_cores: bool,
-                            use_swiglu: bool, moe_experts: int) -> None:
+                            use_swiglu: bool, moe_experts: int,
+                            contract: str = "fused") -> None:
         """Replace the targeted projections with :class:`TTLinear` (Issue #161).
 
         ``alpha_proj`` is deliberately NOT a valid target. It is zero-initialised
@@ -323,7 +326,7 @@ class DeltaNetBlock(nn.Module):
         def swap(dense: nn.Linear) -> TTLinear:
             return TTLinear(dense.in_features, dense.out_features,
                             bias=dense.bias is not None, rank=rank,
-                            ternary_cores=ternary_cores)
+                            ternary_cores=ternary_cores, contract=contract)
 
         if "qkv" in self.tt_targets:
             self.q_proj = swap(self.q_proj)

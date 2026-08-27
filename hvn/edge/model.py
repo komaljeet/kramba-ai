@@ -100,6 +100,7 @@ class EdgeHVN(nn.Module):
         tt_targets: Optional[tuple] = None,
         tt_rank: int = 32,
         tt_ternary_cores: bool = False,
+        tt_contract: str = "fused",
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -154,6 +155,7 @@ class EdgeHVN(nn.Module):
         self.tt_targets = tuple(tt_targets) if tt_targets else ()
         self.tt_rank = int(tt_rank)
         self.tt_ternary_cores = bool(tt_ternary_cores)
+        self.tt_contract = tt_contract
         # Sliding-window width for transformer layers (None = full causal). Only
         # bites at inference when context > window (see TransformerBlock._attention).
         self.attn_window = attn_window
@@ -184,6 +186,7 @@ class EdgeHVN(nn.Module):
                     ffn_activation=ffn_activation,
                     tt_targets=tt_targets, tt_rank=tt_rank,
                     tt_ternary_cores=tt_ternary_cores,
+                    tt_contract=tt_contract,
                 )
             if t == "hvn":
                 return HVNBlock(

@@ -6,9 +6,13 @@ quality number -- that needs a real A/B, not a probe:
 1. **Parameter compression** of a DeltaNet block at real configs.
 2. **Measured forward+backward wall time** against the dense block.
 
-The FLOP arithmetic in ``hvn/edge/tt_linear.py`` predicts TT is *slower* below
-d=4096. This measures whether that prediction holds in the real block, because a
-number derived on paper is not a measurement of this code (the repo's own rule).
+This probe is why the layer has two contraction orders. The FLOP arithmetic said
+the batch-streaming ("direct") order costs 2.1x dense at d=896; measured, it cost
+2.27x AND was relatively worse at d=896 than at d=384, which the FLOP ratio says
+should not happen. That contradiction is what exposed the direct order as
+bandwidth-bound on an oversized intermediate. The default "fused" order (fold the
+cores first, then one GEMM) measures at 1.03x. A number derived on paper is not a
+measurement of this code -- the repo's own rule, and it paid here.
 
 Run with nothing else on the GPU -- a contended timing is an artefact, not a
 result (see docs/state.md, the code-vocab A/B).
@@ -92,13 +96,15 @@ def main() -> None:
 
     print("\n" + "=" * 78)
     print("2. MEASURED forward+backward, dense vs TT (batch 4, seq 512)")
+    print("   Both contraction orders, because the choice between them was")
+    print("   worth 2.2x and the FLOP arithmetic pointed the wrong way.")
     print("=" * 78)
-    print(f"{'d_model':>8} {'rank':>5} {'dense s/it':>12} {'TT s/it':>11} "
-          f"{'TT vs dense':>13}")
+    print(f"{'d_model':>8} {'rank':>5} {'dense s/it':>12} "
+          f"{'fused':>9} {'vs dense':>9} {'direct':>9} {'vs dense':>9}")
     B, S = 4, 512
     for d, h, label in CONFIGS:
         if d >= 2048 and dev == "cuda":
-            print(f"{d:>8} {'--':>5} {'skipped (VRAM headroom on a 6 GB card)':>40}")
+            print(f"{d:>8}  skipped (VRAM headroom on a 6 GB card)")
             continue
         x = torch.randn(B, S, d, device=dev, requires_grad=True)
         dense = DeltaNetBlock(d_model=d, n_heads=h).to(dev)
@@ -107,19 +113,24 @@ def main() -> None:
         if dev == "cuda":
             torch.cuda.empty_cache()
         for r in RANKS:
-            try:
-                tt = DeltaNetBlock(d_model=d, n_heads=h, tt_targets=TARGETS,
-                                   tt_rank=r).to(dev)
-            except ValueError:
+            row = {}
+            for order in ("fused", "direct"):
+                try:
+                    tt = DeltaNetBlock(d_model=d, n_heads=h, tt_targets=TARGETS,
+                                       tt_rank=r, tt_contract=order).to(dev)
+                except ValueError:
+                    row[order] = None
+                    continue
+                row[order] = time_block(tt, x)
+                del tt
+                if dev == "cuda":
+                    torch.cuda.empty_cache()
+            if row.get("fused") is None:
                 continue
-            t_tt = time_block(tt, x)
-            ratio = t_tt / t_dense
-            verdict = "SLOWER" if ratio > 1.05 else ("faster" if ratio < 0.95 else "~same")
-            print(f"{d:>8} {r:>5} {t_dense:>12.4f} {t_tt:>11.4f} "
-                  f"{ratio:>11.2f}x  {verdict}")
-            del tt
-            if dev == "cuda":
-                torch.cuda.empty_cache()
+            tf, td = row["fused"], row["direct"]
+            print(f"{d:>8} {r:>5} {t_dense:>12.4f} "
+                  f"{tf:>9.4f} {tf / t_dense:>8.2f}x "
+                  f"{td:>9.4f} {td / t_dense:>8.2f}x")
         del x
 
     print("\nNote: this probe measures cost and size only. Whether TT-compressed")
