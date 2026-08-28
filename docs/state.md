@@ -5,6 +5,14 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Decision: not training a 1B model on this laptop (2026-08-28)
+
+`data_cache/fineweb_edu` (233 GB parquet, ~127B tokens) has been **deleted** to free disk
+space. It was never tokenized. Everything below this line about the 1B/1.21B frontier
+run — the data-mix cap, the compute-bound step profile, the tensor-train comparison — is
+now historical context, not a live plan. If a 1B+ pretrain is picked back up later, the
+FineWeb-Edu download has to happen again first.
+
 ## ⚠️ The DEFAULT data mix caps a pretrain at 0.13B tokens — 270x short for 1B (2026-08-27)
 
 **One line: 233 GB of FineWeb-Edu (~127B tokens) is downloaded and sitting on disk, the
