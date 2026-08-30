@@ -1,0 +1,66 @@
+{
+  "question": "log-addition as a tensor-core GEMM",
+  "results": [
+    {
+      "tag": "1B proj",
+      "M": 4096,
+      "K": 2048,
+      "N": 2048,
+      "gemm_ms": 1.5193799999982125,
+      "gemm_tflops": 22.61431529179035,
+      "proposed_ms": 1.8091500000006515,
+      "proposed_tflops": 18.99219985517377,
+      "proposed_speedup_vs_gemm": 0.8398308597947464,
+      "logsumexp_ms": null,
+      "logsumexp_slowdown_vs_gemm": null,
+      "logw_precompute_ms": 0.32025333333270584,
+      "logw_share_of_gemm": 0.21077895808361477,
+      "accuracy_vs_gemm": {
+        "mean_abs": 36.135650634765625,
+        "max_abs": 258.4588623046875,
+        "mean_rel": 1.0,
+        "corr": NaN
+      },
+      "rank_proposed_term": 1,
+      "rank_true_gemm": 256,
+      "row_spread_of_proposed_term": 0.0,
+      "logsum_range": [
+        -1463.285400390625,
+        -1133.62353515625
+      ],
+      "fraction_underflowed_to_zero": 1.0,
+      "fraction_sign_wrong": 1.0
+    },
+    {
+      "tag": "48M proj",
+      "M": 2048,
+      "K": 512,
+      "N": 512,
+      "gemm_ms": 0.07037999999586948,
+      "gemm_tflops": 15.256348736331578,
+      "proposed_ms": 0.07643666666960296,
+      "proposed_tflops": 14.047470550243155,
+      "proposed_speedup_vs_gemm": 0.9207622867711726,
+      "logsumexp_ms": 88.7870333333467,
+      "logsumexp_slowdown_vs_gemm": 1261.537842264244,
+      "logw_precompute_ms": 0.05544333333394509,
+      "logw_share_of_gemm": 0.787771147161111,
+      "accuracy_vs_gemm": {
+        "mean_abs": 18.01400375366211,
+        "max_abs": 111.31893157958984,
+        "mean_rel": 1.0,
+        "corr": NaN
+      },
+      "rank_proposed_term": 1,
+      "rank_true_gemm": 256,
+      "row_spread_of_proposed_term": 0.0,
+      "logsum_range": [
+        -404.7315368652344,
+        -268.9261474609375
+      ],
+      "fraction_underflowed_to_zero": 1.0,
+      "fraction_sign_wrong": 1.0
+    }
+  ],
+  "go": false
+}

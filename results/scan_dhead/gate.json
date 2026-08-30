@@ -1,0 +1,57 @@
+{
+  "question": "scan time vs d_head at 1B shapes",
+  "config": {
+    "batch": 1,
+    "seq": 4096,
+    "d_model": 2048,
+    "chunk": 128,
+    "dtype": "bf16",
+    "out": "results/scan_dhead/gate.json"
+  },
+  "rows": [
+    {
+      "n_heads": 64,
+      "d_head": 32,
+      "N": 64,
+      "elements": 8388608,
+      "sequential": 6.916719999935594,
+      "megakernel": 6.822230000034324,
+      "chunked": 32.8616000000693
+    },
+    {
+      "n_heads": 32,
+      "d_head": 64,
+      "N": 32,
+      "elements": 8388608,
+      "sequential": 14.506149999942863,
+      "megakernel": 14.584930000091845,
+      "chunked": 30.957909999960975
+    },
+    {
+      "n_heads": 16,
+      "d_head": 128,
+      "N": 16,
+      "elements": 8388608,
+      "sequential": 25.161099999968428,
+      "megakernel": 25.151139999979932,
+      "chunked": 29.80104999987816
+    },
+    {
+      "n_heads": 8,
+      "d_head": 256,
+      "N": 8,
+      "elements": 8388608,
+      "sequential": 28.25607000013406,
+      "megakernel": 28.175000000010186,
+      "chunked": 32.427869999992254
+    }
+  ],
+  "chunked_over_sequential": {
+    "32": 4.751038064339065,
+    "64": 2.1341231133059364,
+    "128": 1.1844096641210262,
+    "256": 1.147642612714309
+  },
+  "verdict": "chunk-parallel loses at EVERY d_head tested up to 256 -- the predicted crossover is not in this range; do not build the kernel",
+  "void_reasons": []
+}
