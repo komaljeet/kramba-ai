@@ -139,6 +139,53 @@ CPU/NVMe offload (not wired).
 > alive. On Linux the same configs hard-OOM. Treat `peak < 6 GiB` as the envelope, not "it
 > didn't crash"; the >6 GiB rows in the JSON record true allocator demand (for #70).
 
+### Head count at 1B: `head_dim` 32 is the default, and the old default was the WORST case (2026-08-30)
+
+**One line: at d_model 2048 the scan's cost is linear in `head_dim`, so `--n-heads 64`
+(head_dim 32) runs the real 1B step 13% faster than 32 heads — and a 1B launched *without*
+`--n-heads` used to inherit the hardware scan's `8`, giving head_dim 256, the slowest setting
+measured.**
+
+Scan only, total work held constant (`scripts/gate_scan_vs_dhead.py`, d_model 2048, seq 4096,
+batch 1 — `n_heads × head_dim = 2048` in every row, so a faster row is faster structurally, not
+because it did less):
+
+| n_heads | head_dim | scan | vs head_dim 32 |
+|---:|---:|---:|---:|
+| 128 | 16 | **3.91 ms** | 0.56x |
+| 64 | **32** | **6.94 ms** | 1.00x |
+| 32 | 64 | 14.51 ms | 2.09x |
+| 16 | 128 | 25.16 ms | 3.64x |
+| 8 | 256 | 28.26 ms | 4.07x |
+| 256 | 8 | 32.34 ms | **4.66x — collapses** |
+
+**The mechanism.** Per-head state is `head_dim²`; the head count only rises linearly. Total
+scan work is `n_heads × head_dim² = d_model × head_dim`, so with `d_model` fixed the cost is
+**linear in head_dim**. Measured 2.09x for a 2x head_dim — the prediction, near exactly.
+
+It reverses at head_dim 8: 256 programs against 20 SMs with per-head work too small to cover
+launch overhead. **head_dim 16 is the bottom of the useful range, not a trend to keep riding.**
+
+**On the real step** (`scripts/profile_1b_step.py`, d=2048/24L, seq 4096, batch 1, offload ON):
+
+| n_heads | head_dim | s/step | tok/s | days @ 30 tok/param |
+|---:|---:|---:|---:|---:|
+| 32 | 64 | 4.227 | 969 | ~430 |
+| **64** | **32** | **3.686** | **1111** | **~375** |
+| 128 | 16 | 3.599 | 1138 | ~365 |
+
+**A 3.7x scan win is 13% of the step.** The scan was never the majority of it — backward stays
+~70% doing everything else. 128 heads adds a further 2% for a head_dim below the width #159
+called the useful floor; **64 is the recommendation.**
+
+**The default changed.** `--n-heads` unset *and* `--d-model` given now derives
+`d_model // 32`. The hardware-scan tiers are untouched: the same lever measured only 1.10x at
+83M (#144), and every existing result on this box was produced with them.
+
+**Quality is NOT settled.** #144 put the cost of narrower heads at 0.00535 nats — but a seed
+sweep on 2026-08-30 measured run-to-run spread of **0.089** from the starting seed alone, 17x
+larger. That number never established anything, in either direction.
+
 ### Launching a real large run — the flags that matter (2026-08-07, Issue #112)
 
 > **⚠️ The `N = B·H` occupancy explanation below is REFUTED by measurement (Issue #141,
@@ -616,12 +663,28 @@ projection below inherits that tool's vocab-8000 and wrong-model-class caveats).
 | d=1280, 20L (no ckpt) | 349M | 8.3 GiB | ❌ | ❌ just misses |
 | d=1280, 24L `+ckpt` | 414M | 7.0 GiB | ❌ | ✅ **recommended 4060 ceiling** |
 | d=1408, 24L `+ckpt` | 499M | 9.5 GiB | ❌ | ❌ |
-| ~1B / 10B | — | ~16 / ~160 GB | ❌ | ❌ (off by ~2× / ~20×) |
+| ~1B / 10B *(dense, no offload)* | — | ~16 / ~160 GB | ❌ | ❌ (off by ~2× / ~20×) |
+| **1.21B `+ckpt +BCD +offload`** | **1.21B** | **4.38 GiB** | ✅ **73% of card** | ✅ |
 
 **What the extra 2 GB buys:** the no-checkpoint ceiling roughly doubles (143M → ~270M) and
 the checkpointed ceiling rises ~54% (270M → ~415M, d=1280/24L bf16 `+ckpt` at 7.0 GiB) — a
-bigger comfortable config and more bf16 width headroom (#44), **not a categorical change**:
-1B and 10B remain infeasible on 8 GB.
+bigger comfortable config and more bf16 width headroom (#44), **not a categorical change**.
+
+> **⚠️ Corrected 2026-08-30 — the "1B is infeasible" line above is OBSOLETE.** This table was
+> written for the **dense, no-offload** path, and on that path its arithmetic still holds. It
+> predates block-coordinate descent (#99), CPU weight offload (#101), the reserved-memory fix
+> (#102), bf16 parking (#113), prefetch (#115) and the chunked loss (#158). With that stack
+> on, **1.21B trains in 4.38 GiB — 73% of the 6 GB card, measured**, and ~1.6B is the ceiling
+> (docs/handoff.md). A reader taking the ❌ at face value would conclude the project's own
+> headline result is impossible.
+>
+> **What actually binds a 1B run is time, not memory:** 3.686 s/step at
+> `--n-heads 64` (see the head-count section above), which is **~375 days** to 30
+> tokens/param. The extra 2 GB of an 8 GB card does not change that — it buys micro-batch 2
+> without the WDDM spill that costs 21% here, worth single-digit percent.
+>
+> 10B remains genuinely out of reach: the ~160 GB figure is against system RAM for the
+> CPU-side fp32 home tensors, and this box has ~15.3 GiB.
 
 > **"RTX 4060" caveat:** laptop and desktop 4060 are 8 GB, but the desktop **4060 Ti** ships
 > in 8 GB *or 16 GB* variants. A 16 GB Ti roughly doubles this envelope — still far short of
