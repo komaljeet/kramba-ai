@@ -37,6 +37,29 @@ import time
 
 import numpy as np
 
+# pandas is imported HERE, at module scope, and must stay ahead of `import
+# torch` below. It is only USED by the two parquet-extraction helpers
+# (_download_language_foundation and the FineWeb-Edu reader), and it used to be
+# imported lazily inside them -- which put it AFTER torch had initialised CUDA.
+#
+# On this stack (torch 2.12.1+cu126 / pyarrow 24 / Windows 11) loading pyarrow's
+# C extension once the CUDA driver is armed aborts the process with
+# 0xC0000374 (STATUS_HEAP_CORRUPTION): a native crash, no Python traceback, no
+# catchable exception. pandas pulls pyarrow in, so the lazy import was the
+# trigger. Verified boundary:
+#     torch.cuda.is_available(); import pyarrow.lib   -> 0xC0000374
+#     import pyarrow.lib; torch.randn(8, device=cuda) -> fine
+#
+# It never fired in practice because both helpers return early when their
+# extracted .txt is already cached, so the lazy import was only reached on a
+# cache MISS. That makes it a landmine rather than a bug: a run would die at
+# startup the first time the cache was absent. Found 2026-08-30 when a fresh
+# harness hit exactly that path.
+#
+# Costs ~0.5 s of startup on every invocation. That is the price of the fix;
+# do not "optimise" it back into the functions.
+import pandas as pd  # noqa: E402  (ordering is load-bearing -- see above)
+
 # Force UTF-8 stdout/stderr so the ✓/→ characters don't crash on cp1252 Windows.
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -514,7 +537,6 @@ def _download_language_foundation(max_bytes: int, cache_dir: str, slimpajama_dir
             "--include 'data/train-00002-of-00250.parquet'"
         )
 
-    import pandas as pd
     parquet_files = sorted([
         os.path.join(parquet_dir, f)
         for f in os.listdir(parquet_dir)
@@ -651,7 +673,6 @@ def _load_fineweb_edu(
               f".parquet files -- skipping")
         return None
 
-    import pandas as pd
     print(f"    Found {len(parquet_files)} FineWeb-Edu parquet files in {parquet_dir}")
     bytes_seen = 0
     with open(out_path, "w", encoding="utf-8") as f:
@@ -3722,6 +3743,46 @@ def main():
         settings["num_layers"] = args.num_layers
     if args.n_heads is not None:
         settings["n_heads"] = args.n_heads
+    elif args.d_model is not None:
+        # A widened model with no explicit --n-heads used to inherit the
+        # hardware scan's count (8, chosen for d_model=512). At d_model=2048
+        # that silently gives head_dim 256 -- the SLOWEST configuration
+        # measured, not merely a suboptimal one.
+        #
+        # Measured 2026-08-30 (scripts/gate_scan_vs_dhead.py, d_model 2048,
+        # seq 4096, batch 1, total scan work held constant):
+        #
+        #     head_dim  32 ->  6.94 ms      head_dim 128 -> 25.16 ms
+        #     head_dim  64 -> 14.51 ms      head_dim 256 -> 28.26 ms
+        #
+        # Scan cost is linear in head_dim, because per-head state is
+        # head_dim^2 while the head count only rises linearly --
+        # n_heads * head_dim^2 = d_model * head_dim.
+        #
+        # On the REAL 1B step (scripts/profile_1b_step.py, d=2048/24L):
+        #     n_heads  32 (hd 64) -> 4.227 s/step,   969 tok/s
+        #     n_heads  64 (hd 32) -> 3.686 s/step,  1111 tok/s   <- default
+        #     n_heads 128 (hd 16) -> 3.599 s/step,  1138 tok/s
+        #
+        # head_dim 32 is the floor worth taking: 128 heads buys a further 2%
+        # while going below the width #159 identified as the useful minimum,
+        # and head_dim 8 collapses outright (32.34 ms, 4.7x WORSE than 32) once
+        # per-head work stops covering launch overhead.
+        #
+        # Only applied when d_model is overridden. The hardware-scan tiers keep
+        # their own counts, because the same lever measured just 1.10x at 83M
+        # (#144) and every existing result on this box was produced with them.
+        TARGET_HEAD_DIM = 32
+        if args.d_model % TARGET_HEAD_DIM == 0:
+            derived = args.d_model // TARGET_HEAD_DIM
+            if derived != settings["n_heads"]:
+                print(f"  [heads] --d-model {args.d_model} given without "
+                      f"--n-heads: using {derived} (head_dim "
+                      f"{TARGET_HEAD_DIM}) instead of the hardware scan's "
+                      f"{settings['n_heads']} (head_dim "
+                      f"{args.d_model // settings['n_heads']}). "
+                      f"Pass --n-heads explicitly to override.")
+                settings["n_heads"] = derived
     if args.grad_accum is not None:
         settings["grad_accum"] = args.grad_accum
 

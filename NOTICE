@@ -17,6 +17,37 @@ Project home: https://gitlab.com/komalbarun/kramba-ai
 
 
 ---------------------------------------------------------------------
+WHAT THE LICENSE COVERS — AND WHAT IT DOES NOT
+---------------------------------------------------------------------
+
+The Apache 2.0 grant above covers the SOURCE CODE in this repository:
+the training stack, the evaluation harnesses, the kernels, the scripts,
+and the written research findings in docs/.
+
+It does NOT cover trained model weights. Checkpoint and parameter files
+— *.pt, *.pth, *.ckpt, *.safetensors, *.bin, and any other serialized
+model state — are a separate work. They are not licensed under Apache
+2.0, they are not placed in the public domain, and all rights in them
+are reserved by the copyright holder. This applies to any such file
+that appears in this repository now, appeared in it previously, or
+remains reachable in its git history.
+
+Two clarifications, because permissive licensing should not be
+ambiguous:
+
+  1. WEIGHTS YOU TRAIN ARE YOURS. Running this code to train a model
+     does not make the resulting weights a derivative work of it, and
+     places no obligation on you. Train what you like, keep it, sell
+     it. The carve-out above concerns only weights distributed BY this
+     project.
+
+  2. PRODUCTS BUILT ON THIS CODE ARE YOURS. Apache 2.0 is permissive
+     and carries no copyleft. You may build proprietary software on
+     this stack without releasing your source. The two conditions are
+     the ones Apache states: preserve attribution and this NOTICE, and
+     state what you changed.
+
+---------------------------------------------------------------------
 THIRD-PARTY WORK IMPLEMENTED HERE
 ---------------------------------------------------------------------
 
