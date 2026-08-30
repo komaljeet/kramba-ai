@@ -40,3 +40,11 @@ dev/null/
 # Run logs — untracked working output (kept sweeping into commits via `git add -A`)
 logs/
 scripts/logs/
+
+# Trained weights are never tracked (2026-08-30). They are a separate work,
+# not under the repo's Apache 2.0 licence (see NOTICE), and they bloat history.
+# The four that used to be tracked were untracked here; they remain on disk.
+*.pt
+*.pth
+*.ckpt
+*.safetensors

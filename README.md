@@ -187,6 +187,19 @@ This used to be a source-available licence that forbade commercial use. That cha
 2026-08-21 — the sole copyright holder relicensed it, and commercial use no longer needs to
 ask.
 
+**The licence covers the code, not trained weights.** Checkpoint files — `.pt`,
+`.safetensors`, and any other serialised model state — are a separate work, not under Apache
+2.0, all rights reserved. That holds for any such file in this repository, in its history, or
+released later.
+
+Two things that follow, stated plainly so the permissive part is not ambiguous:
+
+- **Weights you train are yours.** Running this code does not make your resulting model a
+  derivative of it. Keep it, sell it, no obligation. The carve-out is only about weights
+  distributed *by this project*.
+- **Products you build are yours.** Apache 2.0 has no copyleft, so a proprietary product on
+  top of this stack is fine — the two conditions are just attribution and stating changes.
+
 Reproduction and criticism were always explicitly permitted, and still are, because a result
 nobody may check is worth nothing.
 
