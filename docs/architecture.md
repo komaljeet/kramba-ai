@@ -173,6 +173,37 @@ numbers and the retraction). The corrected picture:
 **Decision:** the 83M R&D probe **passes** — go-signal for the next staged milestone (README's
 "The Dream": ~20B-class native ternary-hybrid), not a reason to invoke the capacity/scale-up
 fallback (#84 GaLore was the fallback for a *failed* gate; the gate passed).
+
+## Tensor-Train projections (Issue #161, 2026-08-27) — BUILT, MEASURED, REMOVED
+
+`TTLinear` factorised the DeltaNet projections as a Tensor-Train (Novikov et al. 2015) with
+the cores as trainable parameters. **It was measured worse than plain dense at every setting
+tried and the code has been deleted** (recoverable from git history: commits `807b8b9`
+through `c20dc86` on `issue-161-tensor-train-deltanet`). The findings are kept because the
+question is now closed rather than untried.
+
+| comparison | result |
+|---|---|
+| equal width, d=384, 5,000 steps | TT **0.198 nats worse** (~22% worse perplexity) for 1.81x fewer params |
+| matched params, d=384/512 | quality inconclusive, but TT used **11.4% MORE** VRAM |
+| matched params at the 1B target | dense 478M: **1,911 tok/s in 2.64 GB**; TT 499M: **1,033 tok/s in 4.29 GB** |
+| genuine ~1B TT + offload | 576 tok/s, **spills** at 109% of the card, vs dense 1.21B at 1,014 tok/s and 73% |
+
+**The mechanism, which is why no larger run should be expected to reverse it:** TT trades
+parameters for **width**. Width costs d² compute per token and larger activations, while the
+PCIe transfer cost TT was meant to avoid scales with **parameter count, not width**. So a TT
+model pays width's costs and collects none of the transfer saving. That argument has no size
+dependence.
+
+A specific trap found while building it, worth remembering for any future factorisation of
+this block: **`alpha_proj` and `beta_proj` are zero-initialised.** A factorisation of a zero
+matrix has zero cores, and because cores enter the output *multiplicatively* those cores also
+have zero **gradient** — the decay gate would be permanently dead while the loss curve looked
+perfectly healthy.
+
+Full numbers, the refuted "TT removes the need for offload" hypothesis, and the two wrong
+claims corrected along the way are in [state.md](state.md).
+
 ## Mixture-of-Experts FFN (Issue #123, 2026-08-02) — implemented, opt-in, default off
 
 `hvn/core/moe.py::MoEFFN` routes a DeltaNet block's **feed-forward sub-layer** through `E`

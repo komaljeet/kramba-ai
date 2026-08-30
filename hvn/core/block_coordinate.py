@@ -385,12 +385,35 @@ class GPUBufferPool:
             return
         buffers = self._acquire_buffers(key, params)
         staging_bufs = []
+        # CORRECTNESS, not tuning (2026-08-27). `load()` already makes the MAIN
+        # stream wait for this prefetch's event, but nothing made the PREFETCH
+        # stream wait for the main one -- so the H2D copies below started the
+        # instant the GPU reached them, while the previous block's kernels were
+        # still running.
+        #
+        # `_acquire_buffers` gets its memory from `torch.empty` on the main
+        # stream, and PyTorch's caching allocator hands back blocks freed (in
+        # Python) microseconds earlier by activation tensors whose kernels have
+        # NOT finished. The side stream then wrote weights over that memory,
+        # corrupting live activations mid-kernel. The result was NaN in the
+        # forward from roughly the third block onward -- silently, since the
+        # step still ran.
+        #
+        # Ruled in rather than guessed: waiting on a STALE event, or sleeping
+        # 5 ms before the prefetch, does NOT fix it; only real stream ordering
+        # does. `record_stream` alone does not either -- it protects future
+        # allocator reuse, not the in-flight kernels already holding the bytes.
+        self._prefetch_stream.wait_stream(torch.cuda.current_stream(self.device))
         with torch.cuda.stream(self._prefetch_stream):
             for p, buf in zip(params, buffers):
                 home = self._cpu_home[id(p)]
                 staging = self._pinned_pool.acquire(home.shape, home.dtype)
                 staging.copy_(home)
                 buf.copy_(staging, non_blocking=True)
+                # Tell the allocator this buffer is in use on the side stream,
+                # so it is not recycled out from under the copy. Necessary but
+                # NOT sufficient on its own -- see the wait_stream above.
+                buf.record_stream(self._prefetch_stream)
                 p.data = buf
                 staging_bufs.append(staging)
         event = torch.cuda.Event()

@@ -1,0 +1,531 @@
+{
+  "issue": 161,
+  "config": {
+    "arms": [
+      "dense",
+      "dense_twin",
+      "tt",
+      "tt_wide"
+    ],
+    "steps": 5000,
+    "warmup_steps": 100,
+    "eval_every": 250,
+    "batch_size": 4,
+    "seq_len": 512,
+    "num_layers": 12,
+    "d_model": 384,
+    "n_heads": 6,
+    "wide_d_model": 512,
+    "wide_n_heads": 8,
+    "tt_rank": 32,
+    "attn_window": 4096,
+    "muon_lr": 0.02,
+    "aux_lr": 2e-05,
+    "weight_decay": 0.01,
+    "probe_batches": 16,
+    "data_dir": "data_cache",
+    "seed": 7,
+    "vocab_size": 50257,
+    "tokenizer": "gpt2",
+    "inconclusive_band": 0.02,
+    "deterministic": true,
+    "out": "results/tt/ab_tt_vs_dense.json"
+  },
+  "arms": {
+    "dense": {
+      "arm": "dense",
+      "d_model": 384,
+      "n_heads": 6,
+      "tt": false,
+      "tt_rank": null,
+      "params": 37107457,
+      "body_params": 17808769,
+      "peak_alloc_mib": 2498.6201171875,
+      "peak_reserved_mib": 2920.0,
+      "wall_clock_sec": 1188.819573879242,
+      "steps_per_sec": 4.205852687708093,
+      "final_heldout_loss": 5.75207906961441,
+      "start_heldout_loss": 10.893693566322327,
+      "trajectory": [
+        {
+          "step": 0,
+          "heldout_loss": 10.893693566322327,
+          "wall_sec": 0.0
+        },
+        {
+          "step": 250,
+          "heldout_loss": 8.629027307033539,
+          "wall_sec": 65.99550223350525
+        },
+        {
+          "step": 500,
+          "heldout_loss": 7.529834866523743,
+          "wall_sec": 129.73011350631714
+        },
+        {
+          "step": 750,
+          "heldout_loss": 6.972773790359497,
+          "wall_sec": 189.69019269943237
+        },
+        {
+          "step": 1000,
+          "heldout_loss": 6.684039086103439,
+          "wall_sec": 248.8584611415863
+        },
+        {
+          "step": 1250,
+          "heldout_loss": 6.465669870376587,
+          "wall_sec": 308.29515290260315
+        },
+        {
+          "step": 1500,
+          "heldout_loss": 6.3396245539188385,
+          "wall_sec": 367.3514368534088
+        },
+        {
+          "step": 1750,
+          "heldout_loss": 6.209930092096329,
+          "wall_sec": 426.50455355644226
+        },
+        {
+          "step": 2000,
+          "heldout_loss": 6.130500078201294,
+          "wall_sec": 485.6084897518158
+        },
+        {
+          "step": 2250,
+          "heldout_loss": 6.051854431629181,
+          "wall_sec": 544.3269195556641
+        },
+        {
+          "step": 2500,
+          "heldout_loss": 5.994704753160477,
+          "wall_sec": 602.8820497989655
+        },
+        {
+          "step": 2750,
+          "heldout_loss": 5.943806558847427,
+          "wall_sec": 661.4287910461426
+        },
+        {
+          "step": 3000,
+          "heldout_loss": 5.895410180091858,
+          "wall_sec": 720.0496914386749
+        },
+        {
+          "step": 3250,
+          "heldout_loss": 5.862326934933662,
+          "wall_sec": 778.6193339824677
+        },
+        {
+          "step": 3500,
+          "heldout_loss": 5.82401117682457,
+          "wall_sec": 837.3391678333282
+        },
+        {
+          "step": 3750,
+          "heldout_loss": 5.7992823123931885,
+          "wall_sec": 895.8548092842102
+        },
+        {
+          "step": 4000,
+          "heldout_loss": 5.776500999927521,
+          "wall_sec": 954.4423396587372
+        },
+        {
+          "step": 4250,
+          "heldout_loss": 5.764406070113182,
+          "wall_sec": 1013.1534113883972
+        },
+        {
+          "step": 4500,
+          "heldout_loss": 5.757431089878082,
+          "wall_sec": 1071.7761490345001
+        },
+        {
+          "step": 4750,
+          "heldout_loss": 5.753352075815201,
+          "wall_sec": 1130.3991887569427
+        },
+        {
+          "step": 5000,
+          "heldout_loss": 5.75207906961441,
+          "wall_sec": 1188.8190894126892
+        }
+      ]
+    },
+    "dense_twin": {
+      "arm": "dense_twin",
+      "d_model": 384,
+      "n_heads": 6,
+      "tt": false,
+      "tt_rank": null,
+      "params": 37107457,
+      "body_params": 17808769,
+      "peak_alloc_mib": 2496.80517578125,
+      "peak_reserved_mib": 2862.0,
+      "wall_clock_sec": 1170.3270061016083,
+      "steps_per_sec": 4.272310195297585,
+      "final_heldout_loss": 5.754425793886185,
+      "start_heldout_loss": 10.893693566322327,
+      "trajectory": [
+        {
+          "step": 0,
+          "heldout_loss": 10.893693566322327,
+          "wall_sec": 0.0
+        },
+        {
+          "step": 250,
+          "heldout_loss": 8.632529109716415,
+          "wall_sec": 59.537081480026245
+        },
+        {
+          "step": 500,
+          "heldout_loss": 7.530648708343506,
+          "wall_sec": 118.1426682472229
+        },
+        {
+          "step": 750,
+          "heldout_loss": 6.980378180742264,
+          "wall_sec": 176.98429465293884
+        },
+        {
+          "step": 1000,
+          "heldout_loss": 6.688470721244812,
+          "wall_sec": 235.3988218307495
+        },
+        {
+          "step": 1250,
+          "heldout_loss": 6.4620093405246735,
+          "wall_sec": 293.81766867637634
+        },
+        {
+          "step": 1500,
+          "heldout_loss": 6.332759410142899,
+          "wall_sec": 352.33057022094727
+        },
+        {
+          "step": 1750,
+          "heldout_loss": 6.208078503608704,
+          "wall_sec": 410.79431676864624
+        },
+        {
+          "step": 2000,
+          "heldout_loss": 6.127627223730087,
+          "wall_sec": 469.25728702545166
+        },
+        {
+          "step": 2250,
+          "heldout_loss": 6.051693707704544,
+          "wall_sec": 527.749144077301
+        },
+        {
+          "step": 2500,
+          "heldout_loss": 5.998500555753708,
+          "wall_sec": 586.2263281345367
+        },
+        {
+          "step": 2750,
+          "heldout_loss": 5.949351042509079,
+          "wall_sec": 644.6443214416504
+        },
+        {
+          "step": 3000,
+          "heldout_loss": 5.89788156747818,
+          "wall_sec": 703.1286849975586
+        },
+        {
+          "step": 3250,
+          "heldout_loss": 5.865850389003754,
+          "wall_sec": 761.7414011955261
+        },
+        {
+          "step": 3500,
+          "heldout_loss": 5.828229546546936,
+          "wall_sec": 820.2782220840454
+        },
+        {
+          "step": 3750,
+          "heldout_loss": 5.802445471286774,
+          "wall_sec": 878.6348254680634
+        },
+        {
+          "step": 4000,
+          "heldout_loss": 5.779262959957123,
+          "wall_sec": 936.9538607597351
+        },
+        {
+          "step": 4250,
+          "heldout_loss": 5.767343133687973,
+          "wall_sec": 995.3787498474121
+        },
+        {
+          "step": 4500,
+          "heldout_loss": 5.759558022022247,
+          "wall_sec": 1053.811018705368
+        },
+        {
+          "step": 4750,
+          "heldout_loss": 5.75554983317852,
+          "wall_sec": 1112.1156985759735
+        },
+        {
+          "step": 5000,
+          "heldout_loss": 5.754425793886185,
+          "wall_sec": 1170.3264961242676
+        }
+      ]
+    },
+    "tt": {
+      "arm": "tt",
+      "d_model": 384,
+      "n_heads": 6,
+      "tt": true,
+      "tt_rank": 32,
+      "params": 29112065,
+      "body_params": 9813377,
+      "peak_alloc_mib": 2441.1220703125,
+      "peak_reserved_mib": 2842.0,
+      "wall_clock_sec": 1080.0741839408875,
+      "steps_per_sec": 4.629311647609615,
+      "final_heldout_loss": 5.950408637523651,
+      "start_heldout_loss": 10.880740880966187,
+      "trajectory": [
+        {
+          "step": 0,
+          "heldout_loss": 10.880740880966187,
+          "wall_sec": 0.0
+        },
+        {
+          "step": 250,
+          "heldout_loss": 8.695516169071198,
+          "wall_sec": 54.8265266418457
+        },
+        {
+          "step": 500,
+          "heldout_loss": 7.604255318641663,
+          "wall_sec": 108.72181391716003
+        },
+        {
+          "step": 750,
+          "heldout_loss": 7.061008125543594,
+          "wall_sec": 162.57700061798096
+        },
+        {
+          "step": 1000,
+          "heldout_loss": 6.776731938123703,
+          "wall_sec": 216.60783529281616
+        },
+        {
+          "step": 1250,
+          "heldout_loss": 6.579343944787979,
+          "wall_sec": 270.68825674057007
+        },
+        {
+          "step": 1500,
+          "heldout_loss": 6.459906458854675,
+          "wall_sec": 324.5182409286499
+        },
+        {
+          "step": 1750,
+          "heldout_loss": 6.350221395492554,
+          "wall_sec": 378.3262176513672
+        },
+        {
+          "step": 2000,
+          "heldout_loss": 6.282202124595642,
+          "wall_sec": 432.229519367218
+        },
+        {
+          "step": 2250,
+          "heldout_loss": 6.214985638856888,
+          "wall_sec": 486.32670164108276
+        },
+        {
+          "step": 2500,
+          "heldout_loss": 6.162270784378052,
+          "wall_sec": 540.3281462192535
+        },
+        {
+          "step": 2750,
+          "heldout_loss": 6.117916584014893,
+          "wall_sec": 594.276335477829
+        },
+        {
+          "step": 3000,
+          "heldout_loss": 6.0776344537734985,
+          "wall_sec": 648.2599501609802
+        },
+        {
+          "step": 3250,
+          "heldout_loss": 6.048098146915436,
+          "wall_sec": 702.2914714813232
+        },
+        {
+          "step": 3500,
+          "heldout_loss": 6.017425566911697,
+          "wall_sec": 756.4164373874664
+        },
+        {
+          "step": 3750,
+          "heldout_loss": 5.991983354091644,
+          "wall_sec": 810.3774552345276
+        },
+        {
+          "step": 4000,
+          "heldout_loss": 5.972207754850388,
+          "wall_sec": 864.2625253200531
+        },
+        {
+          "step": 4250,
+          "heldout_loss": 5.962296575307846,
+          "wall_sec": 918.1217124462128
+        },
+        {
+          "step": 4500,
+          "heldout_loss": 5.955543249845505,
+          "wall_sec": 972.0780897140503
+        },
+        {
+          "step": 4750,
+          "heldout_loss": 5.951362580060959,
+          "wall_sec": 1026.0795574188232
+        },
+        {
+          "step": 5000,
+          "heldout_loss": 5.950408637523651,
+          "wall_sec": 1080.0734176635742
+        }
+      ]
+    },
+    "tt_wide": {
+      "arm": "tt_wide",
+      "d_model": 512,
+      "n_heads": 8,
+      "tt": true,
+      "tt_rank": 32,
+      "params": 42652305,
+      "body_params": 16920721,
+      "peak_alloc_mib": 2821.92431640625,
+      "peak_reserved_mib": 3254.0,
+      "wall_clock_sec": 1208.9064464569092,
+      "steps_per_sec": 4.1359693420893855,
+      "final_heldout_loss": 5.7643619775772095,
+      "start_heldout_loss": 10.886151731014252,
+      "trajectory": [
+        {
+          "step": 0,
+          "heldout_loss": 10.886151731014252,
+          "wall_sec": 0.0
+        },
+        {
+          "step": 250,
+          "heldout_loss": 8.074332416057587,
+          "wall_sec": 61.20958971977234
+        },
+        {
+          "step": 500,
+          "heldout_loss": 7.059534013271332,
+          "wall_sec": 121.1153872013092
+        },
+        {
+          "step": 750,
+          "heldout_loss": 6.665079116821289,
+          "wall_sec": 183.10790348052979
+        },
+        {
+          "step": 1000,
+          "heldout_loss": 6.4336768090724945,
+          "wall_sec": 247.49281668663025
+        },
+        {
+          "step": 1250,
+          "heldout_loss": 6.284267991781235,
+          "wall_sec": 309.7260980606079
+        },
+        {
+          "step": 1500,
+          "heldout_loss": 6.20702189207077,
+          "wall_sec": 369.94275283813477
+        },
+        {
+          "step": 1750,
+          "heldout_loss": 6.117876082658768,
+          "wall_sec": 430.00171756744385
+        },
+        {
+          "step": 2000,
+          "heldout_loss": 6.061163485050201,
+          "wall_sec": 490.05516743659973
+        },
+        {
+          "step": 2250,
+          "heldout_loss": 6.0040082931518555,
+          "wall_sec": 550.0056188106537
+        },
+        {
+          "step": 2500,
+          "heldout_loss": 5.965605199337006,
+          "wall_sec": 609.9471776485443
+        },
+        {
+          "step": 2750,
+          "heldout_loss": 5.9278788566589355,
+          "wall_sec": 669.7735829353333
+        },
+        {
+          "step": 3000,
+          "heldout_loss": 5.886407047510147,
+          "wall_sec": 729.6504309177399
+        },
+        {
+          "step": 3250,
+          "heldout_loss": 5.86372047662735,
+          "wall_sec": 789.6263813972473
+        },
+        {
+          "step": 3500,
+          "heldout_loss": 5.831200391054153,
+          "wall_sec": 849.4435844421387
+        },
+        {
+          "step": 3750,
+          "heldout_loss": 5.807991907000542,
+          "wall_sec": 909.3435869216919
+        },
+        {
+          "step": 4000,
+          "heldout_loss": 5.787924826145172,
+          "wall_sec": 969.3101797103882
+        },
+        {
+          "step": 4250,
+          "heldout_loss": 5.777346551418304,
+          "wall_sec": 1029.1990859508514
+        },
+        {
+          "step": 4500,
+          "heldout_loss": 5.770066261291504,
+          "wall_sec": 1089.082237958908
+        },
+        {
+          "step": 4750,
+          "heldout_loss": 5.765442848205566,
+          "wall_sec": 1149.0019967556
+        },
+        {
+          "step": 5000,
+          "heldout_loss": 5.7643619775772095,
+          "wall_sec": 1208.9058203697205
+        }
+      ]
+    }
+  },
+  "noise_floor": 0.002346724271774292,
+  "verdict": {
+    "EQUAL WIDTH (tt vs dense)": "WORSE by 0.19833 nats (9.9x band)",
+    "MATCHED PARAMS, matched steps (tt_wide vs dense)": "INCONCLUSIVE (+0.01228 within 0.02000)",
+    "MATCHED WALL CLOCK": "INCONCLUSIVE"
+  },
+  "_note": "Per-step training curves stripped 2026-08-27 when the TT code was deleted. Held-out trajectories (what the verdict rests on) are kept. The harness that produced this was scripts/ab_tt_vs_dense.py, removed in the same commit and recoverable from git history at 8e20284."
+}

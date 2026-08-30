@@ -5,6 +5,426 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Decision: not training a 1B model on this laptop (2026-08-28)
+
+`data_cache/fineweb_edu` (233 GB parquet, ~127B tokens) has been **deleted** to free disk
+space. It was never tokenized. Everything below this line about the 1B/1.21B frontier
+run — the data-mix cap, the compute-bound step profile, the tensor-train comparison — is
+now historical context, not a live plan. If a 1B+ pretrain is picked back up later, the
+FineWeb-Edu download has to happen again first.
+
+## ⚠️ The DEFAULT data mix caps a pretrain at 0.13B tokens — 270x short for 1B (2026-08-27)
+
+**One line: 233 GB of FineWeb-Edu (~127B tokens) is downloaded and sitting on disk, the
+default `--pretrain-mix` gives it a 0.0 share, and the resulting budget caps at 134,784,617
+tokens — enough for a ~7M-param model. A 1.21B run on defaults gets 270x less data than it
+needs, with 127B tokens unused three directories away.**
+
+This is the #119 mechanism firing on the live default, not a hypothetical. The warning prints
+on every run and it is correct; it had simply never been checked against the 1B target.
+
+### The arithmetic (`max_repeat=3`, tokens as counted by the GPT-2 tokenizer)
+
+| source | tokens on disk | share | budget it can support |
+|---|---:|---:|---:|
+| SlimPajama | 1,318,230,992 | 0.50 | 7,909,385,952 |
+| **OpenAssistant** | **15,724,872** | **0.35** | **134,784,617 ← binds** |
+| WikiText-103 | 119,073,409 | 0.15 | 2,381,468,180 |
+| FineWeb-Edu | ~127,000,000,000 | **0.00** | **unused** |
+| | **1.45B unique** | | **CAP: 0.13B** |
+
+OpenAssistant holds 15.7M tokens. At a 35% share it can stretch to 47M before hitting
+`max_repeat=3`, and for 47M to *be* 35% the whole budget must stop at 134M. The largest
+corpus on the machine contributes nothing because its share is zero.
+
+| target | tokens needed | vs the 0.13B cap | vs ALL 1.45B unique |
+|---|---:|---:|---:|
+| 478M @ 20 tok/param | 9,559,940,860 | **71x** | 6.6x |
+| 478M @ 30 (#159) | 14,339,911,290 | **106x** | 9.9x |
+| 1.21B @ 20 | 24,290,872,660 | **180x** | 16.7x |
+| 1.21B @ 30 | 36,436,308,990 | **270x** | 25.1x |
+
+**Even ignoring the mix cap entirely, every unique token on disk outside FineWeb-Edu is 25x
+short for a 1.21B model.** The non-FineWeb corpora cannot pretrain anything at this scale.
+
+### The fix is one flag, and this repo already wrote it down
+
+    --pretrain-mix 0.0,0.0,0.0,1.0
+
+FineWeb-Edu only, which #120 already recommended for "4B+ pretrain runs" — the recommendation
+was correct and simply never became the default. The default is hardcoded at
+`train_edge_conversational.py:1011` and `:1502` as `(0.50, 0.35, 0.15, 0.0)`, described in the
+help text as "the original conversational mix". It is a **fine-tuning** mix that is also the
+**pretraining** default, and nothing warns that the two want different things.
+
+That takes the budget from 0.13B to ~127B — 3.5x more than a 1.21B model needs at 30
+tokens/param, and 8.9x what a 478M needs.
+
+**One cost to plan:** the parquet files are downloaded but NOT tokenized — there is no
+`fineweb_edu.bin` in `data_cache/tokenized/`. That is a one-time pass, and only the portion
+actually consumed needs it (~66 GB of parquet for 36B tokens, not all 233 GB).
+
+### Why this matters more than any of the compression work
+
+The three blockers on a 1B run, as they actually stand:
+
+| | status |
+|---|---|
+| **memory** | **solved** — 1.21B fits at 73% of the card (4.38 GB), measured |
+| **data** | **solved but OFF BY DEFAULT** — 127B tokens on disk, one flag away |
+| **time** | **not solved** — 413 days at 1.21B, 87 at 478M |
+
+Two of the three are done. The default mix is the one that would have silently wasted a
+multi-week run: the loss curve would look entirely healthy while the model repeated a 134M
+token budget over and over, which is memorisation, not training — the #132 failure mode at
+corpus scale.
+
+## The 1B step is COMPUTE-bound at 98.7% GPU — the only free speed left is +7% (2026-08-27)
+
+**One line: profiled the 1B training step, the GPU is 98.7% busy, so every transfer- and
+scheduling-side lever has nothing to reclaim; the one exact win available is raising the
+micro-batch from 1 to 2 at ~478M, worth +7.1%.**
+
+> **⚠️ Corrected 2026-08-27, same day.** The throughput figures in this section and the one
+> below were measured with a **data race live** in `GPUBufferPool.prefetch` (the side stream
+> never waited for the main stream, so weight copies overwrote in-flight activations). The
+> race is exactly the transfer/compute overlap being timed, so the numbers were **~4%
+> optimistic**: **1,014 tok/s is really ~975**, **1,911 is really ~1,830**, and 4.02 s/step is
+> ~4.16 s. Fixed in `block_coordinate.py`.
+>
+> **What survives unchanged:** every VRAM figure and %-of-card verdict (identical to 0.01 GB),
+> the **98.7% GPU-busy** measurement, and every *relative* conclusion — batch 2 wins at 478M
+> and spills at 1.21B, chunk size does nothing, cache size does nothing — because both arms of
+> each comparison ran under the same race. The days-to-train figures shift ~4% (413 -> ~430 at
+> 1.21B, 87 -> ~91 at 478M).
+
+### Where the 4.02 s goes (`scripts/profile_1b_step.py`, d=2048/24L, seq 4096, batch 1)
+
+| phase | seconds | share |
+|---|---:|---:|
+| forward | 1.019 | 25.3% |
+| **backward** | **2.942** | **73.2%** |
+| optimizer | 0.059 | 1.5% |
+| **GPU busy** | | **98.7% mean, 100% max** |
+
+**98.7% busy settles the class of fix.** Only fewer FLOPs or a better kernel can help;
+PCIe/prefetch/cache tuning is chasing a cost that is already ~0. #153 measured 97.2% at 83M
+with everything resident — this confirms the same holds at 1B with weights streaming from
+CPU, which nobody had checked and which is a genuinely different regime.
+
+**Backward is 2.9x forward where ~2x is normal.** The extra ~1.0 s (~25% of the step) is
+gradient checkpointing recomputing the forward. That recompute is bit-identical (#49/#100),
+so removing it would be free quality-wise — **and it cannot be removed.**
+`BlockCoordinateScheduler` raises `offload_inactive_weights=True requires
+model.grad_checkpoint=True`: offload evicts a block's weights after its forward and relies on
+the checkpoint recompute to bring them back. Measured without it at ~478M: **10.69 GB, 178%
+of the card, 340 tok/s** — a 5.6x slowdown. The coupling is structural, not a flag to flip.
+
+### Micro-batch: the only real win, and it inverts between sizes
+
+| config | batch | s/step | tok/s | peak | % card | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| 1.21B | 1 | 4.02 | **1,020** | 4.38 GB | 73% | FITS |
+| 1.21B | 2 | 10.12 | 810 | 7.07 GB | 118% | **SPILLS** |
+| 1.21B | 4 | 41.80 | 392 | 10.89 GB | 182% | **SPILLS** |
+| 478M | 1 | 2.16 | 1,900 | 2.63 GB | 44% | FITS |
+| **478M** | **2** | 4.03 | **2,035** | 4.33 GB | 72% | **FITS** |
+| 478M | 3 | 6.00 | 2,049 | 5.24 GB | 87% | SUSPECT |
+
+**At 1.21B, batch 1 is already optimal and raising it is actively harmful** — batch 2 spills
+and loses 21%. This is worth stating loudly because #141 measured batch size as a *large* win
+at 83M (batch 2 x 8 heads at 9,087 tok/s against batch 1 x 16 heads at 5,882, a 55% gap), and
+inheriting that conclusion at 1B costs a silently-spilled run.
+
+**At 478M, batch 2 is worth +7.1%** and still fits at 72%. Batch 3 reaches 87%, above the
+#136 SUSPECT threshold, for a further +0.7% — not worth it. **`grad_accum` must be halved
+alongside**, so the effective batch is unchanged; otherwise this is a training-dynamics change
+smuggled in behind a throughput fix (the #142/#143 discipline).
+
+### Two levers measured at zero, one of them predicted first
+
+- **Chunked-loss chunk size does nothing**: 512 / 2048 / 4096 give 1,902 / 1,900 / 1,906
+  tok/s at 478M. Bigger chunks cost VRAM (2.63 -> 4.19 GB) for no speed. Leave it at 512.
+- **A larger resident block cache does nothing**: `offload_cache_blocks` 1 -> 8 gives
+  2,047 -> 2,053 tok/s, **+0.3%**, for +0.21 GB. **Predicted before running** from the 98.7%
+  figure — a cache exists to avoid transfers, and transfers are not what the step is waiting
+  on. This also answers the recurring "keep a small parameter cache in VRAM and free each
+  parameter once it is done" idea: that cache is `GPUBufferPool` and it already exists, at
+  BLOCK granularity. Per-*token* granularity is not implementable, because a layer's weights
+  are used by every token in the sequence inside one matmul — there is no instant at which a
+  weight is finished with a token — and backward needs them again regardless, which is the
+  same coupling that forces grad-checkpointing above.
+
+### PARTIAL checkpointing: the right idea, worth +1.7%, and it loses to a bigger batch
+
+The recompute is *arithmetic*, not waiting, so keeping some blocks' activations resident
+instead of recomputing them is the one lever aimed at the actual bottleneck — unlike caching
+weights (`offload_cache_blocks`, +0.3%), which saves transfers that were never the cost.
+Measured by intercepting the checkpoint calls so the last N of 24 blocks keep their
+activations (`scripts/probe_partial_checkpoint.py`, 478M, no offload — the offload path
+forbids it, `model.py:413`):
+
+| blocks kept resident | s/step | tok/s | peak | % card | verdict |
+|---:|---:|---:|---:|---:|---|
+| 0 (baseline) | 2.14 | 1,918 | 4.58 GB | 76% | FITS |
+| **2** | **2.10** | **1,951** | 5.03 GB | 84% | **FITS — +1.7%** |
+| 4 | 2.51 | 1,631 | 5.54 GB | 92% | SUSPECT |
+| 6 | 2.75 | 1,489 | 6.05 GB | 101% | SPILLS |
+| 12 | 6.61 | 620 | 7.67 GB | 128% | SPILLS |
+
+**+1.7%, and only 2 of 24 blocks fit.** Activations cost ~225 MB per block (5.03−4.58 over
+two), and without offload the baseline already sits at 76%, leaving ~0.5 GB usable under the
+85% rule. Skipping 2 of 24 recomputes is 8% of a term worth 25% of the step ≈ 2% — which is
+what came out. The arithmetic was right; the estimate of available headroom was not (an
+earlier guess of ~13% used the 3.3 GB free in the *offload* config, which is precisely the
+config that forbids this).
+
+**Past 2 blocks it gets SLOWER while doing LESS work** — 12 blocks resident is 3.1x slower
+than the baseline. Spilling costs more than the recompute ever saved. A clean illustration
+that on this card, memory pressure dominates arithmetic savings.
+
+**Verdict: do not build it.** It competes with micro-batch 2 for the same spare VRAM and
+loses 1.7% to 7.1%, while needing a scheduler change and a rewrite of the offload eviction
+logic to be usable in the config that matters.
+
+### The honest summary
+
+**There is no large exact speedup available on this hardware.** The GPU is saturated doing
+arithmetic that has to happen plus one recompute that cannot profitably be removed. Everything
+measured, best first:
+
+| lever | gain | cost |
+|---|---:|---|
+| **micro-batch 2 (478M only)** | **+7.1%** | none — two flags, halve `grad_accum` |
+| partial checkpointing, 2 blocks | +1.7% | a scheduler change; competes for the same VRAM |
+| bigger block cache (1→8) | +0.3% | +0.21 GB |
+| chunked-loss chunk size | 0.0% | +1.56 GB for nothing |
+| micro-batch 2 **at 1.21B** | **−21%** | spills |
+
+Anything bigger has to come from **fewer FLOPs** — the 478M-vs-1.21B decision (1,911 vs
+1,020 tok/s, 87 vs 413 days at 30 tokens/param) — or from different hardware.
+
+Artifacts: `scripts/profile_1b_step.py`, `results/profile_1b_step.json`,
+`scripts/probe_1b_throughput.py`.
+
+## Tensor-Train projections: 3.96x fewer parameters at 1.05x step time (Issue #161, 2026-08-27)
+
+**One line: TT factorisation of the DeltaNet projections is now a real trainable layer, and
+it costs essentially nothing in speed — 3.96x fewer block parameters at d=896 for 1.05x step
+time. Quality is NOT measured yet, so this is a capability that landed, not a win that was
+demonstrated.**
+
+`hvn/edge/decomposition.py::TTMatrix` had implemented TT-SVD since #32 Phase 2.3 but could
+not be put in a model: plain class rather than `nn.Module`, cores not `nn.Parameter`,
+`from_dense`/`to_dense` both `@torch.no_grad()`, and `matvec` taking a single vector with no
+batch dimension (falling back to `to_dense()` for d>2, which would silently break gradients).
+Nothing imported it. `hvn/edge/tt_linear.py::TTLinear` is the trainable counterpart, opt-in
+via `tt_targets` on `DeltaNetBlock` / `EdgeHVN`; unset leaves both byte-identical.
+
+### Measured (`scripts/probe_tt_cost.py`, idle GPU, batch 4 x seq 512, full block fwd+bwd)
+
+| d_model | rank | dense params | TT params | smaller | fused s/it vs dense | direct vs dense |
+|---|---:|---:|---:|---:|---:|---:|
+| 384 | 32 | 1,481,478 | 482,054 | 3.07x | **1.09x** | 1.69x |
+| 896 | 32 | 8,051,470 | 2,032,398 | **3.96x** | **1.05x** | 2.34x |
+| 896 | 64 | 8,051,470 | 2,435,854 | 3.31x | 1.04x | 3.86x |
+| 2048 | 32 | 42,033,184 | 9,527,328 | 4.41x | not timed | not timed |
+
+Compression **improves with size**, which is the right direction for the edge-inference
+thesis. Because the parameters stay compressed, optimiser state shrinks by the same factor —
+that is the real VRAM term, since Muon/AdamW state is proportional to parameter count.
+
+### A wrong claim, published and then corrected within the session
+
+The first commit stated "TT is not a speed lever — 1.5-3.3x more FLOPs", from the arithmetic
+for streaming a batch through the cores: `B*r*n1*m2*(n2+m1)` against dense `B*d^2`, giving
+3.3x at d=384 and 2.1x at d=896, i.e. relatively **better** as d grows.
+
+Measured, that order came out 1.69x at d=384 and 2.34x at d=896 — **worse at the larger
+width, the opposite ordering to the prediction.** A measurement that disagrees with the
+prediction's *direction* is not noise, so it was chased rather than published. Cause: the
+batch-streaming order builds a `[B*S, m1, r, rest]` intermediate `r` times larger than the
+output, making it bandwidth-bound rather than FLOP-bound — which also explains why its
+penalty scales with rank (3.86x at r=64) while the fused path does not (1.04x).
+
+Folding the cores into each other **first** is batch-independent: one small core contraction,
+then an ordinary cuBLAS GEMM. The FLOP argument dissolves because it was never about the
+right algorithm. Both orders are kept and selectable (`tt_contract`, default `"fused"`;
+`"direct"` for memory-constrained inference where never forming the `[d,d]` matrix is the
+point), with a known-answer test asserting they are the same function in forward (2.6e-06)
+and in the gradients into the cores (3.8e-05).
+
+**The transferable lesson is the repo's own rule in a new place:** a number derived on paper
+is not a measurement of this code. The arithmetic was correct about the implementation it
+described and irrelevant to the implementation that should have been written.
+
+### Two traps closed by construction
+
+- **`alpha_proj` is refused by name.** It is zero-initialised (bias 3.0, so decay starts
+  ~0.95). TT-SVD of a zero matrix gives zero cores, and because cores enter the output
+  *multiplicatively* those cores also have zero **gradient** — the decay gate would be
+  permanently dead while the loss curve looked perfectly healthy. `beta_proj` likewise.
+  `'ffn'` on a SwiGLU/MoE block raises rather than silently skipping, which would have made a
+  "tt-ffn" arm secretly measure the dense incumbent (#140's failure mode).
+- **Ternary does not silently stack.** `apply_ternary_to_model` targets `nn.Linear`, and
+  `TTLinear` deliberately does not subclass it, so TT layers are skipped rather than carrying
+  two compression schemes on one weight and confounding both. Asserted, with a control that
+  fails if `apply_ternary_to_model` stopped doing anything at all. `ternary_cores=True` is an
+  explicit opt-in for measuring the composition later.
+
+### Quality: MEASURED, and TT does not pay at this scale (2026-08-27, same day)
+
+The section above said quality was unmeasured. It has now been measured
+(`scripts/ab_tt_vs_dense.py`, 4 arms x 5,000 steps, d_model 384/512, 12 layers, batch 4 x
+seq 512, Muon, identical seed and pre-materialised batches, held-out loss):
+
+| arm | d | body params | held-out | VRAM reserved | min | steps/s |
+|---|---:|---:|---:|---:|---:|---:|
+| dense | 384 | 17,808,769 | **5.75208** | 2,920 MiB | 19.8 | 4.21 |
+| dense_twin | 384 | 17,808,769 | 5.75443 | 2,862 MiB | 19.5 | 4.27 |
+| tt | 384 | 9,813,377 | 5.95041 | 2,842 MiB | 18.0 | 4.63 |
+| tt_wide | 512 | 16,920,721 | 5.76436 | 3,254 MiB | 20.1 | 4.14 |
+
+Noise floor (twin cell): **2.347e-03**.
+
+**Equal width — TT is 0.19833 nats WORSE, 9.9x the band.** 1.81x fewer body parameters costs
+a fifth of a nat. Not marginal.
+
+**Matched parameters — INCONCLUSIVE, +0.01228 at matched steps and +0.01336 at matched wall
+clock.** Both are above the 2.3e-03 noise floor but inside the pre-registered 0.02 band, so
+the run refuses to call it. The honest reading is "TT-wider is very slightly behind
+dense-narrower and one seed at this size cannot separate them," not "they are equal".
+
+### The finding that decides it, and it is about memory rather than loss
+
+**At matched parameters TT uses MORE VRAM, not less: 3,254 MiB against 2,920 — +334 MiB,
++11.4%.** Width drives activations, and TT does not touch activations. So spending the saved
+parameters on width to recover the quality hands the memory back with interest.
+
+And at equal width, where TT *is* smaller, the VRAM saving is **78 MiB — 2.7%** for 1.81x
+fewer body parameters. That is the whole answer to "what does TT mean for VRAM" at this
+scale: almost nothing, because weights and optimiser state are not the binding term. #158
+measured a live 48M run at CE ~1500 MB, CUDA context ~400 MB, weights 183 MB, optimiser
+183 MB — TT attacks the 11% and leaves the rest alone.
+
+**So both configurations lose:** compress and you pay 0.198 nats to save 2.7% of memory;
+widen back to matched parameters and you pay 11.4% more memory to land on the same loss.
+
+**TT was FASTER, which was not predicted.** 4.63 vs 4.21 steps/s at equal width (1.10x) --
+fewer and smaller matrices for Muon's Newton-Schulz iteration. Same mechanism as #122's
+looped arm (1.30x). The #161 probe measured the *layer* as speed-neutral; in the real loop
+with a real optimiser it is slightly positive.
+
+### What this does and does not settle
+
+**Settled:** at d=384-512 for 5,000 from-scratch steps, TT is not a win in either
+configuration, and its VRAM benefit is far smaller than its parameter ratio.
+
+**NOT settled, and these are real:**
+- **Scale.** Block-level compression *improves* with width (3.07x at d=384, 3.96x at d=896,
+  4.41x at d=2048), and at sizes where weights and optimiser state actually dominate VRAM
+  the arithmetic changes. This run is at the size where they provably do not.
+- **The model-level ratio is diluted by the hybrid.** The block compresses 3.07x but the
+  model body only 1.81x, because 4 of the 12 layers are attention and are never TT'd. A
+  pure-DeltaNet stack would sit much closer to the block figure.
+- **Ternary was applied in NO arm.** This is TT against dense fp32, not against the ~10.7x
+  ternary baseline TT would have to beat for adoption. Ternary is also speed-neutral and
+  needs no width compensation, so on this evidence it remains the better lever.
+- One seed, one corpus, 5,000 steps, early training. Bounds early quality, not convergence.
+
+**Recommendation: do not adopt TT for training at this scale.** The code is landed, tested
+and opt-in (default off), so it costs nothing to leave in place for the size regime where
+weights dominate — which is the edge-inference case it was always aimed at, and which this
+run does not reach.
+
+Artifacts: `results/tt/ab_tt_vs_dense.json` (full per-arm trajectories),
+`scripts/ab_tt_vs_dense.py`, `hvn/edge/tt_linear.py`, `scripts/probe_tt_cost.py`,
+`tests/test_tt_linear.py` (24/24), `tests/test_tt_deltanet.py` (33/33). Full suite 575/575.
+`logs/` is gitignored, so the console log is local-only.
+
+### At the 1B target itself, TT is dominated on every axis (2026-08-27)
+
+The A/B above was at d=384-512, and the fair objection to it is that TT is aimed at the size
+where weights dominate VRAM — the 1B-on-6GB goal this project exists for. **Measured there,
+directly** (`scripts/probe_tt_1b_no_offload.py`, 24 layers, seq 4096, batch 1,
+grad-checkpoint, #158 chunked loss, this card):
+
+| arm | params | s/step | tok/s | peak reserved | % of card | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| **dense 1.21B + BCD/offload** | 1,214,543,633 | 4.04 | **1,014** | 4.38 GB | 73% | **FITS** |
+| **dense 478M (d=1216) + offload** | 477,997,043 | 2.14 | **1,911** | 2.64 GB | 44% | **FITS** |
+| TT 499M (d=2048) + offload | 499,414,801 | 3.96 | 1,033 | 4.29 GB | 72% | FITS |
+| TT 948M (d=3072) + offload | 947,900,529 | 7.11 | 576 | 6.56 GB | 109% | **SPILLS** |
+| TT 396M (d=2048), NO offload | 396,488,465 | 10.45 | 392 | 6.80 GB | 113% | **SPILLS** |
+
+**The hypothesis that motivated this run: "dense 1B needs CPU offload, TT does not, therefore
+TT is faster."** It is refuted. TT resident on the card does **not** fit at seq 4096 — 6.80 GB
+against a 5.9966 GB card, and the spill is visible in the step times climbing 6.2 → 9.5 →
+10.5 → 12.3 s. It is 2.6x SLOWER than the offload path it was supposed to beat.
+
+**The matched-parameter control is the one that settles it.** Dense 478M and TT 499M are the
+same size; dense runs **1.85x faster** (1,911 vs 1,033 tok/s) in **1.6x less memory** (2.64 vs
+4.29 GB). The #161 A/B already found them equal in quality at matched parameters. So TT is
+strictly dominated: same quality, slower, larger.
+
+**Why, in one line: TT trades parameters for WIDTH, and PCIe traffic scales with PARAMETERS,
+not width.** So a TT model pays width's costs (d² compute per token, larger activations) and
+collects none of the transfer saving it was supposed to buy. At a genuine ~1B parameters
+(d=3072) it streams the same bytes as dense 1B while being 1.5x wider — 576 tok/s against
+1,014, and it spills.
+
+**Two corrections to the record fall out of this run:**
+
+- **`docs/training.md`'s "~2x offload inefficiency" is stale.** It predates #115 (prefetch
+  overlap, ~25%) and #113 (bf16 parking, ~25%). Measured today the offload path does
+  **1,014 tok/s** at 1.21B, better than the 875 recorded in #157. Offload is not a tax to be
+  escaped — it is what keeps VRAM free for activations, which is the binding term at seq 4096.
+- **A 1B model on this card is not memory-blocked, and is faster than the docs say.** 1.21B
+  trains at 73% of the card. At 1,014 tok/s a 21.4B-token budget is ~244 days; the lever that
+  actually moves that is *size* — the 478M row is nearly 2x faster — not compression.
+
+A bug fixed on the way: `TTLinear` could not be constructed under `torch.device("meta")`
+because the init rescale called `.item()`. Meta construction is how #118 established that an
+8B model needs ~32 GB to build for real, so a layer that cannot be sized on meta cannot be
+sized at the scale that matters.
+
+Artifacts: `results/tt/tt_1b_no_offload.json`, `scripts/probe_tt_1b_no_offload.py`.
+
+**Final status for #161: measured worse than dense at every setting tried, and the CODE HAS
+BEEN DELETED.** `hvn/edge/tt_linear.py`, its wiring into `DeltaNetBlock`/`EdgeHVN`, its two
+test files and the two TT-specific harnesses are gone; `deltanet.py` and `edge/model.py` are
+byte-identical to before #161. Recoverable from git history (commits `807b8b9` .. `c20dc86`
+on `issue-161-tensor-train-deltanet`) if anyone wants to re-run it.
+
+Kept rather than deleted, because they answer questions that outlive TT:
+
+- **`scripts/probe_1b_throughput.py`** — the size-vs-throughput probe for the 1B goal,
+  stripped of its TT arms. It is what produced the 1,014 and 1,911 tok/s figures.
+- **`results/throughput_1b_measured.json`**, `results/tt/ab_tt_vs_dense.json` — the evidence
+  behind the numbers above.
+
+**Why deleted rather than left opt-in:** the MoE precedent (#123) kept a losing lever because
+its verdict was scale-dependent — it lost to *dense scaling at this size*, and might not at
+another. TT's verdict is **mechanistic**: it trades parameters for width, width costs d²
+compute and activations, and PCIe traffic scales with parameters not width. That argument has
+no size dependence, so there is no regime to come back for, and ~1,700 lines carrying a
+"do not use" sign is a liability rather than an option.
+
+### The one number worth taking from this whole issue
+
+Measured while establishing the TT baseline, and it has nothing to do with TT
+(`scripts/probe_1b_throughput.py`, seq 4096, grad-checkpoint, chunked loss, BCD+offload):
+
+| config | params | s/step | tok/s | peak | % card | days @ 30 tok/param |
+|---|---:|---:|---:|---:|---:|---:|
+| d=2048, 24L | 1,214,543,633 | 4.02 | 1,020 | 4.38 GB | 73% | **413** |
+| **d=1216, 24L** | **477,997,043** | **2.14** | **1,911** | **2.65 GB** | **44%** | **87** |
+
+**A 478M model is 1.88x the throughput at 60% of the memory, and 4.7x less wall clock to a
+30-tokens-per-parameter budget** (#159's measured ratio, not Chinchilla's 20). If the 1B run
+is time-blocked rather than memory-blocked — and it is, at 413 days — this row is where the
+time actually is. Size is the lever; compression was not.
+
 ## LIVE RUN — 157M code model, FIM, in progress (2026-08-12)
 
 > **Read this first if you are picking the project up.** A multi-day training run is underway
@@ -4579,11 +4999,38 @@ recomputes one slice's logits rather than holding all of them.
 
 **-1436 MB for 1.07x step time.**
 
-**It does NOT help at 1B.** Same-scan comparison at d=2048/24L with offload:
-4.004 GiB unchunked vs 4.037 GiB chunked -- **+33 MB**, i.e. it costs a little. At that
-size peak memory is set by weights plus optimizer state; the logits are no longer the
-binding term. So this is a lever for SMALL models on small cards, which is where the
-logits dominate, and neutral at the top of the range.
+> ## ⚠️ RETRACTED (2026-08-27) — "it does NOT help at 1B" is WRONG, and acting on it spills the card
+>
+> The paragraph below concluded the chunked loss is "neutral at the top of the range" and a
+> lever for **small** models only. Re-measured at d=2048/24L with BCD+offload at **seq 4096**,
+> the length real training actually uses:
+>
+> | 1.21B, seq 4096, batch 1, grad-ckpt | peak reserved | s/step | verdict |
+> |---|---:|---:|---|
+> | unchunked | **6.18 GB** | 4.58 | ❌ 103% of the card — SPILLS |
+> | **chunk 512** | **4.40 GB** | 4.02 | ✅ 73% — fits |
+>
+> **-1.79 GB, and it is the difference between fitting and spilling.** It is also *faster*
+> (4.02 vs 4.58 s/step), because the spilled arm is paying WDDM host-RAM traffic.
+>
+> **Root cause of the wrong number: the original 1B comparison was run at a short sequence.**
+> The logits tensor is `[B, S, vocab]`, so its size is linear in sequence length: 785 MB at
+> seq 4096 against 98 MB at seq 512. At a short sequence the logits are genuinely not the
+> binding term and chunking looks pointless — which is exactly what "+33 MB" records. At the
+> sequence length training runs at, they are ~1.8 GB with gradients and they dominate.
+>
+> This is the same shape as every other retraction in this file: **a measurement taken in a
+> configuration the real run never uses.** The 48M row above was measured at seq 4096 and is
+> correct; the 1B row was not, and the two were reported side by side as if comparable.
+>
+> **Consequence: the chunked loss is MANDATORY at 1B, not optional.** Anyone sizing a 1B run
+> from the retracted sentence would switch it off and silently spill. Verified 2026-08-27 by
+> `scripts/probe_tt_1b_no_offload.py`'s baseline arm (4.38 GB with chunking) and a direct
+> chunked-vs-unchunked pair at the same config.
+
+**(superseded — see the retraction above)** ~~It does NOT help at 1B.~~ Same-scan comparison at
+d=2048/24L with offload: 4.004 GiB unchunked vs 4.037 GiB chunked -- +33 MB. **That pair was
+measured at a short sequence and does not describe training at seq 4096.**
 
 Exactness: bit-identical in fp32 (losses and every gradient, including into the tied
 table). Under bf16 autocast the value differs by 3.8e-03 on a loss of 10.5 -- 3.6e-04

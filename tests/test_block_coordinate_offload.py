@@ -781,3 +781,92 @@ def _run_all():
 
 if __name__ == "__main__":
     raise SystemExit(_run_all())
+
+
+def test_prefetch_does_not_corrupt_activations_at_depth():
+    """The prefetch side stream must not write into memory the main stream is
+    still using (2026-08-27).
+
+    `GPUBufferPool.prefetch` ordered the MAIN stream after the prefetch event
+    but never ordered the PREFETCH stream after the main one. Its buffers come
+    from `torch.empty` on the main stream, and the caching allocator recycles
+    blocks freed by activation tensors whose kernels are still in flight -- so
+    the H2D weight copy overwrote live activations and the forward went NaN
+    from about the third block onward, silently, while the step still ran.
+
+    WHY THE EXISTING PREFETCH TEST CANNOT CATCH THIS
+    ------------------------------------------------
+    `test_prefetch_is_invoked_and_preserves_gradient_parity` uses a 4-layer
+    model at 2x16 tokens, fully GPU-resident. Its kernels retire before the
+    host can run ahead, so the race window never opens and it passes against
+    the broken code. This test exists specifically to fail there: enough depth
+    and sequence length that the host outruns the GPU, plus an explicit
+    finiteness assertion rather than a parity one.
+
+    Deliberately asserts `torch.isfinite`, NOT closeness to a reference: the
+    failure mode is NaN, and a NaN-vs-NaN comparison silently passes
+    (`abs(nan - nan) > tol` is False). That vacuous-check trap is exactly how
+    the bug survived a probe that was written to detect it.
+
+    THIS TEST IS PROBABILISTIC, AND THAT IS STATED RATHER THAN HIDDEN.
+    Measured against the broken code on 2026-08-27: a single fresh construction
+    catches it roughly 1 time in 3 (observed 1/4 and 1/6 across runs, and only
+    ever on the FIRST forward -- afterwards the buffers are resident and the
+    prefetch path returns early). Seeding the allocator with freed blocks first
+    did not make it reliable. It is a real race, so it cannot be made
+    deterministic from the outside.
+
+    Consequence, and do not lose this: **a single PASS is not proof the bug is
+    absent.** Three fresh attempts below put the catch rate around 70%. If this
+    test ever needs to prove the fix, remove the `wait_stream` line in
+    `GPUBufferPool.prefetch` and run it several times -- it should fail most of
+    them. The fix itself rests on the controlled evidence in the commit
+    message, not on this test alone.
+    """
+    if not torch.cuda.is_available():
+        return
+
+    import torch.nn as nn
+    from hvn.edge.model import EdgeHVN
+    from hvn.core.block_coordinate import BlockCoordinateScheduler
+
+    # THE CONFIG IS THE TEST. Measured 2026-08-27 against the broken code:
+    #   16 layers, d=256,  seq 1024 -> 0 non-finite   (passes: does NOT catch it)
+    #   24 layers, d=512,  seq 2048 -> 0 non-finite   (passes: does NOT catch it)
+    #   24 layers, d=1216, seq 4096 -> 1,867,776 of 4,980,736 non-finite  CATCHES IT
+    # The race needs enough kernel duration for the host to run ahead of the
+    # GPU, so a cheap small-model proxy cannot reach it -- which is exactly why
+    # the existing prefetch test passed against the bug for weeks. Do not shrink
+    # this config to make the suite faster; it would silently stop testing.
+    torch.manual_seed(0)
+    n_layers, seq = 24, 4096
+    model = EdgeHVN(
+        vocab_size=512, d_model=1216, num_layers=n_layers, n_heads=19,
+        block_plan=["deltanet"] * n_layers, grad_checkpoint=True,
+        tie_embeddings=False,
+    ).to("cpu")
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    BlockCoordinateScheduler(
+        model, opt, steps_per_block=50, device="cuda",
+        offload_inactive_weights=True, offload_prefetch=True,
+    )
+
+    x = torch.randint(0, 512, (1, seq), device="cuda")
+    y = torch.randint(0, 512, (1, seq), device="cuda")
+    with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        hidden = model(x, return_hidden=True)
+        hidden = hidden[0] if isinstance(hidden, tuple) else hidden
+
+    n_bad = int((~torch.isfinite(hidden)).sum())
+    assert n_bad == 0, (
+        f"{n_bad} of {hidden.numel()} hidden values are non-finite -- the "
+        f"prefetch stream is writing over memory the main stream still holds")
+
+    logits = model.decoder(hidden)
+    loss = nn.functional.cross_entropy(
+        logits.reshape(-1, logits.size(-1)).float(), y.reshape(-1))
+    assert torch.isfinite(loss), f"loss is {loss.item()}, not finite"
+    loss.backward()
+    assert all(torch.isfinite(p.grad).all()
+               for p in model.parameters() if p.grad is not None), \
+        "non-finite gradients after a prefetched offload forward"

@@ -1,0 +1,27 @@
+{
+  "config": {
+    "d_model": 1216,
+    "n_heads": 19,
+    "num_layers": 24,
+    "seq": 4096,
+    "batch": 1,
+    "loss_chunk": 512,
+    "iters": 1,
+    "vocab_size": 50257,
+    "tails": [
+      0
+    ],
+    "out": "results/offload_resident_tail.json"
+  },
+  "results": [
+    {
+      "n_tail": 0,
+      "sec_per_step": 2.1162819000019226,
+      "tok_per_sec": 1935.469939045587,
+      "peak_reserved_gb": 2.65234375,
+      "pct_of_card": 44.23079328286029,
+      "verdict": "FITS",
+      "step0_loss": NaN
+    }
+  ]
+}

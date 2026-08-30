@@ -30,6 +30,7 @@ import csv
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -56,6 +57,52 @@ from torch.utils.data import Dataset, DataLoader
 from hvn.edge.model import EdgeHVN
 from hvn.edge.ternary import apply_ternary_to_model, TernaryLinear
 from hvn.optimizers import build_optimizer
+
+
+def _prune_checkpoints(checkpoint_dir: str, keep_last: int = 5,
+                       milestone_every: int = 0) -> list[str]:
+    """Delete old ``*_step{N}.pt`` checkpoints, keeping the newest `keep_last`.
+
+    Issue #163. Without this a long run fills the disk and dies with no
+    checkpoint at all -- the worst possible failure, because it destroys the
+    thing that would have let you resume. A 1B run is ~1.1M optimizer steps; at
+    one checkpoint per 1,000 steps that is ~1,100 files at ~4.9 GB each, about
+    **5.4 TB**. This machine has ~293 GB free, i.e. room for ~60.
+
+    `milestone_every > 0` additionally keeps every Nth step forever, so a long
+    run leaves a coarse trail (useful for #128-style end-of-run weight
+    averaging, and for going back if a run diverges) without keeping all of it.
+
+    Returns the paths deleted, so a caller or test can assert on them rather
+    than trusting the filesystem.
+    """
+    if keep_last <= 0:
+        return []
+    steps: list[tuple[int, str]] = []
+    for f in os.listdir(checkpoint_dir):
+        if not (f.endswith(".pt") and "_step" in f):
+            continue
+        try:
+            steps.append((int(f.split("_step")[-1][:-3]), f))
+        except ValueError:
+            continue          # not a step checkpoint; leave it alone
+    steps.sort()
+    doomed = steps[:-keep_last] if len(steps) > keep_last else []
+    removed = []
+    for step, fname in doomed:
+        if milestone_every > 0 and step % milestone_every == 0:
+            continue          # milestone: keep forever
+        path = os.path.join(checkpoint_dir, fname)
+        try:
+            os.remove(path)
+            removed.append(path)
+        except OSError as e:  # pragma: no cover - a locked file is not fatal
+            print(f"  [prune] could not remove {fname}: {e}")
+    if removed:
+        print(f"  [prune] removed {len(removed)} old checkpoint(s), "
+              f"keeping the newest {keep_last}"
+              + (f" + every {milestone_every} steps" if milestone_every else ""))
+    return removed
 
 
 def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
@@ -492,6 +539,53 @@ def _download_language_foundation(max_bytes: int, cache_dir: str, slimpajama_dir
             print(f"      {bytes_seen / 1024**3:.2f} GB extracted so far...")
     print(f"    SlimPajama saved: {out_path} ({os.path.getsize(out_path) / 1024**2:.1f} MB)")
     return out_path
+
+
+#: Text bytes per GPT-2 token, measured on 400 real FineWeb-Edu documents
+#: (2026-08-27). Used only to size the disk guard below.
+_FINEWEB_BYTES_PER_TOKEN = 4.59
+
+
+def _guard_extraction_disk(cache_dir: str, max_bytes: int | None,
+                           min_free_gb: float = 25.0) -> None:
+    """Refuse a parquet extraction that would fill the disk.
+
+    The intermediate .txt is ~4.6 bytes per token, so a 1B run's budget is
+    ~157 GB and an UNCAPPED extraction is the size of the whole download --
+    227 GB here. On 2026-08-27 an uncapped run took this machine to 4.2 GB free
+    (100%). A training run that hits this mid-flight loses the run AND, if the
+    disk fills while a checkpoint is being written, the ability to resume.
+
+    Raises rather than warns: there is no good outcome from continuing, and a
+    warning during a multi-hour extraction is a warning nobody is watching.
+    """
+    free = shutil.disk_usage(cache_dir).free
+    need = max_bytes if max_bytes else None
+    if need is None:
+        # Uncapped: size it from what is actually on disk to extract.
+        parquet_dir = os.path.join(cache_dir, "fineweb_edu")
+        src = 0
+        for root, _dirs, files in os.walk(parquet_dir):
+            for f in files:
+                if f.endswith(".parquet"):
+                    src += os.path.getsize(os.path.join(root, f))
+        # Extracted text runs larger than the compressed parquet it came from.
+        need = int(src * 1.05) if src else 0
+    if need and free - need < min_free_gb * 2**30:
+        raise RuntimeError(
+            f"\n\nREFUSING to extract FineWeb-Edu -- it would fill the disk.\n\n"
+            f"  extraction needs   ~{need / 2**30:.0f} GB of intermediate .txt\n"
+            f"  free now            {free / 2**30:.0f} GB\n"
+            f"  would leave         {(free - need) / 2**30:.0f} GB "
+            f"(minimum {min_free_gb:.0f} GB)\n\n"
+            f"{'  The extraction is UNCAPPED, so it extracts the ENTIRE download.' if not max_bytes else ''}\n"
+            f"  Cap it with --fineweb-edu-token-bytes N, where N is "
+            f"tokens x {_FINEWEB_BYTES_PER_TOKEN:g}.\n"
+            f"  For a 1.21B model at 30 tokens/param that is ~167000000000 "
+            f"(~156 GB);\n"
+            f"  for a 478M model, ~66000000000 (~61 GB).\n\n"
+            f"  If data_cache/tokenized/fineweb_edu.bin already exists, no "
+            f"extraction is\n  needed at all -- check why it is being asked for.")
 
 
 def _load_fineweb_edu(
@@ -1124,11 +1218,32 @@ class MixedLocalDataset(Dataset):
         slim_r, oasst_r, wt_r, fineweb_r = self.mix
         fineweb_bin = None
         if fineweb_r > 0:
-            fineweb_path = _load_fineweb_edu(cache_dir, fineweb_edu_dir, max_bytes=fineweb_edu_token_bytes)
-            if fineweb_path is not None:
-                print(f"    Tokenizing FineWeb-Edu...")
-                fineweb_bin = _bin("fineweb_edu")
-                _tokenize_text_to_bin(fineweb_path, fineweb_bin, enc, max_bytes=fineweb_edu_token_bytes)
+            fineweb_bin = _bin("fineweb_edu")
+            # If the .bin is already there we need NOTHING from the .txt, so do
+            # not touch the extractor. This ordering was a real hazard: the
+            # intermediate .txt is ~4.6 bytes per token (157 GB for a 1B run's
+            # budget) and deleting it to reclaim that space is the obvious,
+            # correct thing to do -- but it silently armed a full
+            # re-extraction on the next run, to build a file that would then be
+            # thrown away unused because _tokenize_text_to_bin caches on the
+            # .bin. It filled this disk to 100% (4.2 GB free) on 2026-08-27.
+            #
+            # Guarding on the .bin makes deleting the .txt safe, which is what
+            # makes the space reclaimable at all.
+            if os.path.exists(fineweb_bin):
+                _n = os.path.getsize(fineweb_bin) // 2   # uint16
+                print(f"    Tokenized cache hit: {fineweb_bin} ({_n:,} tokens)"
+                      f" -- skipping parquet extraction")
+            else:
+                _guard_extraction_disk(cache_dir, fineweb_edu_token_bytes)
+                fineweb_path = _load_fineweb_edu(
+                    cache_dir, fineweb_edu_dir, max_bytes=fineweb_edu_token_bytes)
+                if fineweb_path is None:
+                    fineweb_bin = None
+                else:
+                    print(f"    Tokenizing FineWeb-Edu...")
+                    _tokenize_text_to_bin(fineweb_path, fineweb_bin, enc,
+                                          max_bytes=fineweb_edu_token_bytes)
 
         # --- Memory-map each tokenized source (read-only, paged on demand) ---
         # Source mix (SlimPajama, OpenAssistant, WikiText-103, FineWeb-Edu).
@@ -1203,6 +1318,13 @@ class MixedLocalDataset(Dataset):
         # does the arithmetic by hand after the fact.
         self.total_chunks = total_chunks  # exposed for callers/tests, e.g. #119's cap warning
         effective_tokens = total_chunks * self.seq_len
+        # Issue #162/#163: expose the budget so the caller can REFUSE TO START
+        # when it cannot serve the requested model size. The warnings below are
+        # correct and have always printed -- they were simply never fatal, and
+        # a 1B run on the default mix gets 270x less data than it needs while
+        # the loss curve looks entirely healthy (it is re-reading the same
+        # tokens, i.e. memorising).
+        self.effective_tokens = int(effective_tokens)
         equiv_params_m = effective_tokens / 20 / 1e6  # 20 tokens/param, this project's Chinchilla convention
         if total_cap < sum(avail):
             # A source's max_repeat bind is the ACTIVE constraint: there is
@@ -1588,6 +1710,9 @@ def build_dataset_pipeline(
         print(f"  Held-out val: {stats['val_samples']:,} samples")
 
     stats["num_batches"] = len(dataloader)
+    # Issue #162/#163: the budget the mix can actually supply, so the caller can
+    # refuse to start rather than train on a silently-capped corpus.
+    stats["effective_tokens"] = int(getattr(dataset, "effective_tokens", 0))
     print(f"\n  DataLoader ready: batch_size={batch_size}")
     print(f"✓ Step 2 complete.")
     return dataloader, val_loader, stats
@@ -1809,6 +1934,7 @@ def build_model_and_config(
     lr: float = 3e-4,
     vocab_size: int = GPT2_VOCAB_SIZE,
     eos_token_id: int | None = None,
+    offload_weights: bool = False,
 ) -> tuple[EdgeHVN, dict]:
     """Build the EdgeHVN model with DeltaNet (or transformer baseline) + config.
 
@@ -1957,8 +2083,19 @@ def build_model_and_config(
     else:
         print(f"  Ternary: DISABLED — fp32 weights (A/B mode)")
 
-    # Move to device
-    model = model.to(device)
+    # Move to device.
+    #
+    # Issue #163: under CPU weight offload the model must stay CPU-resident and
+    # let BlockCoordinateScheduler own ALL placement. #102's extended finding:
+    # nn.Module.to() copies parameters one at a time and needs the WHOLE model
+    # transiently resident to do so, which is what OOM'd at 3.39B -- and at 1B
+    # it would defeat the point of offloading before the scheduler is even
+    # constructed. _activate()'s eviction already handles a CPU-resident start
+    # correctly (.to("cpu") on a CPU tensor is a no-op).
+    if offload_weights:
+        print("  Offload ON: model stays CPU-resident; the BCD scheduler owns placement")
+    else:
+        model = model.to(device)
 
     # Report compression
     dense_bytes = sum(p.numel() * 4 for p in model.parameters())
@@ -2581,12 +2718,31 @@ def train(
     bcd_scheduler = None
     if config.get("block_coordinate", False):
         from hvn.core.block_coordinate import BlockCoordinateScheduler
+        # Issue #163: CPU weight offload. Without it a 1B model cannot fit --
+        # weights alone are ~4.9 GB before gradients. Every "1.07B trains in
+        # 4.00 GB" figure in docs/ was produced by bench harnesses that enabled
+        # this; the training script itself had no path to it until now.
+        offload = bool(config.get("offload", False))
         bcd_scheduler = BlockCoordinateScheduler(
-            model, optimizer, steps_per_block=config.get("bcd_steps_per_block", 100),
+            model, optimizer,
+            steps_per_block=config.get("bcd_steps_per_block", 100),
+            offload_inactive_weights=offload,
+            device=device if offload else None,
+            # #113: park inactive blocks in bf16 -- exactly halves both CPU RAM
+            # and the bytes crossing PCIe per swap.
+            offload_park_dtype=torch.bfloat16 if offload else None,
+            # #115: overlap the next block's transfer with current compute.
+            # NOTE the data race fixed 2026-08-27 -- if this is ever disabled,
+            # do not re-enable it without re-reading that commit.
+            offload_prefetch=offload,
+            offload_cache_blocks=config.get("offload_cache_blocks", 1),
         )
         print(f"  Block-coordinate-descent: {bcd_scheduler.num_blocks} blocks, "
               f"{bcd_scheduler.steps_per_block} steps/block, "
               f"active={bcd_scheduler.active_block_name!r}")
+        if offload:
+            print(f"  CPU weight offload: ON (bf16 parked, prefetch on, "
+                  f"cache={config.get('offload_cache_blocks', 1)} blocks)")
 
     # --- Restore optimizer + BCD cycle position (Issue #112) ---
     # Without this, every restart of a long run threw away Muon/AdamW momentum AND
@@ -2974,6 +3130,45 @@ def train(
                 _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler,
                        lr_scheduler=scheduler)
                 print(f"  ✓ Checkpoint saved: {ckpt_path}")
+                _prune_checkpoints(checkpoint_dir,
+                                   keep_last=config.get("keep_checkpoints", 5),
+                                   milestone_every=config.get("milestone_every", 0))
+
+            # --- Issue #163: spill guard, checked once, on the first step ---
+            # On Windows/WDDM exceeding VRAM does NOT raise. The driver backs
+            # the overflow with host RAM over PCIe and the step merely gets
+            # 4-15x slower, so a spilled run looks alive and finishes months
+            # late. This repo has been bitten by that repeatedly (#136 added
+            # the same 85% rule to size_sweep for exactly this reason), and on
+            # a year-long run it is the difference between finishing and not.
+            #
+            # Checked after the FIRST completed step, when peak memory is
+            # representative but almost nothing has been spent yet.
+            if global_step == resume_step + 1 and device.type == "cuda":
+                _pct = 100.0 * torch.cuda.max_memory_reserved() / \
+                    torch.cuda.get_device_properties(0).total_memory
+                _cap = config.get("max_vram_pct", 85.0)
+                if _cap > 0 and _pct > _cap:
+                    _msg = (
+                        f"\n\nVRAM SPILL — refusing to continue (#163).\n\n"
+                        f"  peak reserved   {torch.cuda.max_memory_reserved()/2**30:.2f} GB "
+                        f"({_pct:.0f}% of the card)\n"
+                        f"  threshold       {_cap:.0f}%\n\n"
+                        f"Past ~85% the driver silently spills to host RAM instead of "
+                        f"raising, and steps get 4-15x slower with no error. The run "
+                        f"would look alive and take months longer than planned.\n\n"
+                        f"  Most common cause: batch size. hardware_scan() picks "
+                        f"batch_size=4 regardless of model size, which is right at "
+                        f"512x12 and far too big at 1B. Measured at d=2048/24L seq "
+                        f"4096: batch 1 = 73% (fits), batch 2 = 118%, batch 4 = 182%.\n\n"
+                        f"  Try:  --batch-size 1 --grad-accum {config.get('grad_accum', 8) * 4}"
+                        f"   (same effective batch)\n\n"
+                        f"Also check --chunked-loss is on (saves ~1.8 GB at seq 4096) "
+                        f"and --grad-checkpoint. Override with --max-vram-pct 0 only "
+                        f"if you have measured that spilling is acceptable here.")
+                    raise RuntimeError(_msg)
+                print(f"  [vram] peak {_pct:.0f}% of card — under the {_cap:.0f}% "
+                      f"spill threshold")
 
             loss_accum_t.zero_()
 
@@ -3233,6 +3428,45 @@ def main():
     parser.add_argument("--muon-lr", type=float, default=0.02,
                         help="Muon LR for 2-D hidden matrices (default 0.02; "
                              "only used with --optimizer muon).")
+    # --- Issue #163: CPU weight offload, checkpoint retention, budget guard ---
+    parser.add_argument("--offload", action="store_true",
+                        help="Stream BCD-inactive block weights to CPU RAM "
+                             "(#101/#113/#115). REQUIRED above ~500M: at 1B the "
+                             "weights alone are ~4.9 GB before gradients. "
+                             "Implies --block-coordinate and --grad-checkpoint, "
+                             "and is incompatible with --tie-embeddings (#151). "
+                             "Measured 1.21B at 4.38 GB / 73%% of a 6 GB card.")
+    parser.add_argument("--offload-cache-blocks", type=int, default=1,
+                        help="Blocks kept GPU-resident by the offload pool. "
+                             "#103/#118 and a 2026-08-27 re-measure both found "
+                             "raising this buys ~0.3%% for real VRAM -- the step "
+                             "is compute-bound, so avoiding transfers reclaims "
+                             "nothing. Default 1; raise only with evidence.")
+    parser.add_argument("--max-vram-pct", type=float, default=85.0,
+                        help="Abort after the first step if peak reserved VRAM "
+                             "exceeds this %% of the card (default 85, the #136 "
+                             "rule). Windows/WDDM does NOT raise on overflow -- "
+                             "it spills to host RAM and runs 4-15x slower while "
+                             "looking healthy. 0 disables the check.")
+    parser.add_argument("--save-every-steps", type=int, default=None,
+                        help="Optimizer steps between checkpoints (default 500, "
+                             "previously hardcoded with no way to change it). "
+                             "Pair with --keep-checkpoints so a long run does "
+                             "not fill the disk.")
+    parser.add_argument("--keep-checkpoints", type=int, default=5,
+                        help="Rolling step-checkpoints to retain (default 5). A "
+                             "1B run at one per 1,000 steps would otherwise "
+                             "write ~5.4 TB. 0 disables pruning.")
+    parser.add_argument("--milestone-every", type=int, default=0,
+                        help="Also keep every Nth step checkpoint permanently, "
+                             "for a coarse trail across a long run. 0 = off.")
+    parser.add_argument("--min-tokens-per-param", type=float, default=10.0,
+                        help="Refuse to start if the data mix cannot supply this "
+                             "many tokens per parameter (#162). The default mix "
+                             "caps at 0.13B tokens -- enough for a ~7M model -- "
+                             "so a 1B run on defaults would silently re-read the "
+                             "same data forever with a healthy-looking loss "
+                             "curve. 0 disables the guard.")
     parser.add_argument("--tokenizer", type=str, default="gpt2",
                         help="Issue #139: 'gpt2' (default, 50257) or a directory "
                              "holding vocab.json + merges.txt from "
@@ -3349,6 +3583,34 @@ def main():
                              "Triton scan is skipped under --arch transformer.")
     args = parser.parse_args()
 
+    # --- Issue #163: validate the offload couplings BEFORE anything expensive ---
+    # These three are not preferences -- the offload path breaks without them,
+    # and it breaks SILENTLY, so they are settled here rather than after a
+    # multi-GB model has already been constructed.
+    #
+    #   block_coordinate : the scheduler IS the offload mechanism
+    #   grad_checkpoint  : offload evicts a block's weights after its forward;
+    #                      the checkpoint recompute is what fetches them back
+    #                      for the backward (EdgeHVN.forward raises without it)
+    #   tie_embeddings   : #151 -- the shared table belongs to no single block,
+    #                      so it cannot be parked or evicted
+    if args.offload:
+        if args.tie_embeddings:
+            parser.error(
+                "--offload is incompatible with --tie-embeddings (#151): the "
+                "shared embedding table belongs to no single block, so it "
+                "cannot be parked or evicted. Pass --no-tie-embeddings. Note "
+                "this costs ~103M parameters at d=2048, and #139 measured tied "
+                "as 0.058 nats BETTER -- a real price, not a formality.")
+        if not args.block_coordinate:
+            args.block_coordinate = True
+            print("[#163] --offload implies --block-coordinate; enabling it.")
+        if not args.grad_checkpoint:
+            args.grad_checkpoint = True
+            print("[#163] --offload requires --grad-checkpoint; enabling it "
+                  "(offload evicts weights after the forward and relies on the "
+                  "recompute to bring them back).")
+
     # --- Issue #86: expand the --fast meta-flag into the recommended stack ---
     # One switch instead of five flags. Any lever the user passed explicitly on
     # the command line wins over the preset (mirrors train.py's --full). The
@@ -3362,12 +3624,34 @@ def main():
             args.precision = "bf16"; fast_enabled.append("precision=bf16")
         if "--tf32" not in explicit:
             args.tf32 = True; fast_enabled.append("tf32")
-        if "--compile" not in explicit:
-            args.compile = True; fast_enabled.append("compile")
-        # Triton scan targets the DeltaNet/HVN block — skip it for the transformer
-        # A/B arm, where it's a no-op at best and a shape mismatch at worst.
-        if "--triton-scan" not in explicit and args.arch == "hvn":
-            args.triton_scan = True; fast_enabled.append("triton-scan")
+        # Issue #163: --fast no longer turns torch.compile ON, and now covers
+        # the hybrid arch. Both were straight contradictions of what docs/ and
+        # CLAUDE.md already said, and together they cost ~5x on the config every
+        # real run uses.
+        #
+        # compile: #158 measured per-block compile at 20.72 s/step against
+        # 8.66 eager, with GPU utilisation 35% vs 98% -- 2.4x SLOWER, and
+        # turning the fused kernels off does not help, so it is compile itself
+        # on this architecture. That is the FOURTH independent loss (#129,
+        # #112, the Inductor MemoryError at 16 layers, #158). docs/training.md
+        # and CLAUDE.md both already stated "--fast ... skips compile"; the
+        # code simply never matched. Pass --compile explicitly to opt back in.
+        #
+        # triton_scan: the old condition was `args.arch == "hvn"`, so
+        # --arch hvn-hybrid -- the arch of every documented run and of the
+        # entire 1B plan -- silently got the EAGER scan. Widened to every arch
+        # that contains DeltaNet blocks; the transformer A/B arm still opts out,
+        # where the scan is a no-op at best and a shape mismatch at worst.
+        #
+        # megakernel: #96 Design B, blockwise-recompute backward. Bit-identical
+        # loss, ~4x less transient backward VRAM. #136's sweep measured -574 MiB
+        # at 896x16. It was never in the preset despite being part of the
+        # recommended stack everywhere it is described.
+        if args.arch != "transformer":
+            if "--triton-scan" not in explicit:
+                args.triton_scan = True; fast_enabled.append("triton-scan")
+            if "--megakernel-scan" not in explicit:
+                args.megakernel_scan = True; fast_enabled.append("megakernel-scan")
         if "--num-workers" not in explicit and args.num_workers == 0:
             args.num_workers = 4; fast_enabled.append("num-workers=4")
         print(f"[--fast] Enabled recommended training stack: {', '.join(fast_enabled)}")
@@ -3514,7 +3798,40 @@ def main():
         optimizer=args.optimizer,
         precision=args.precision,
         lr=args.lr,
+        offload_weights=args.offload,
     )
+
+    # --- Issue #162/#163: refuse to start on a corpus that cannot serve the model ---
+    # This is the failure that does NOT announce itself. The run does not crash;
+    # it re-reads a capped budget forever and the loss curve looks healthy the
+    # whole way, because memorising a small corpus lowers training loss exactly
+    # like learning does. On a multi-week run that is a total write-off found at
+    # the end. The #119 warning already prints the number -- it was simply never
+    # fatal.
+    if args.min_tokens_per_param > 0:
+        _n_params = sum(p.numel() for p in model.parameters())
+        _budget = int(dataset_stats.get("effective_tokens", 0))
+        _needed = _n_params * args.min_tokens_per_param
+        if _budget and _budget < _needed:
+            parser.error(
+                f"\n\nDATA BUDGET TOO SMALL — refusing to start (#162).\n\n"
+                f"  model              {_n_params:,} parameters\n"
+                f"  mix can supply     {_budget:,} tokens "
+                f"({_budget / max(_n_params, 1):.2f} per parameter)\n"
+                f"  minimum required   {_needed:,.0f} tokens "
+                f"({args.min_tokens_per_param:g} per parameter)\n"
+                f"  short by           {_needed / max(_budget, 1):.0f}x\n\n"
+                f"This run would silently re-read the same {_budget / 1e9:.2f}B tokens "
+                f"with a perfectly healthy-looking loss curve -- that is "
+                f"memorisation, not training.\n\n"
+                f"The usual cause is the default mix: OpenAssistant holds ~15.7M "
+                f"tokens but takes a 35% share, so max_repeat binds the WHOLE "
+                f"budget at ~0.13B. Meanwhile FineWeb-Edu sits at a 0.0 share.\n\n"
+                f"  Fix:  --pretrain-mix 0.0,0.0,0.0,1.0     (FineWeb-Edu only)\n\n"
+                f"#159 measured ~30 tokens/parameter as the right target for this "
+                f"architecture. Override this guard with --min-tokens-per-param 0 "
+                f"only if you know the run is deliberately data-limited.")
+
     config["lr"] = args.lr
     config["precision"] = args.precision
     config["optimizer"] = args.optimizer
@@ -3524,6 +3841,14 @@ def main():
     config["galore_scale"] = args.galore_scale
     config["block_coordinate"] = args.block_coordinate
     config["bcd_steps_per_block"] = args.bcd_steps_per_block
+    # --- Issue #163 ---
+    config["offload"] = args.offload
+    config["offload_cache_blocks"] = args.offload_cache_blocks
+    config["keep_checkpoints"] = args.keep_checkpoints
+    config["milestone_every"] = args.milestone_every
+    config["max_vram_pct"] = args.max_vram_pct
+    if args.save_every_steps is not None:
+        config["save_every_steps"] = args.save_every_steps
     config["dynamic_lr"] = args.dynamic_lr
     config["dynamic_lr_log"] = args.dynamic_lr_log
     if args.val_every is not None:
