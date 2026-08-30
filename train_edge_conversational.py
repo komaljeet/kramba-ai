@@ -37,6 +37,29 @@ import time
 
 import numpy as np
 
+# pandas is imported HERE, at module scope, and must stay ahead of `import
+# torch` below. It is only USED by the two parquet-extraction helpers
+# (_download_language_foundation and the FineWeb-Edu reader), and it used to be
+# imported lazily inside them -- which put it AFTER torch had initialised CUDA.
+#
+# On this stack (torch 2.12.1+cu126 / pyarrow 24 / Windows 11) loading pyarrow's
+# C extension once the CUDA driver is armed aborts the process with
+# 0xC0000374 (STATUS_HEAP_CORRUPTION): a native crash, no Python traceback, no
+# catchable exception. pandas pulls pyarrow in, so the lazy import was the
+# trigger. Verified boundary:
+#     torch.cuda.is_available(); import pyarrow.lib   -> 0xC0000374
+#     import pyarrow.lib; torch.randn(8, device=cuda) -> fine
+#
+# It never fired in practice because both helpers return early when their
+# extracted .txt is already cached, so the lazy import was only reached on a
+# cache MISS. That makes it a landmine rather than a bug: a run would die at
+# startup the first time the cache was absent. Found 2026-08-30 when a fresh
+# harness hit exactly that path.
+#
+# Costs ~0.5 s of startup on every invocation. That is the price of the fix;
+# do not "optimise" it back into the functions.
+import pandas as pd  # noqa: E402  (ordering is load-bearing -- see above)
+
 # Force UTF-8 stdout/stderr so the ✓/→ characters don't crash on cp1252 Windows.
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -514,7 +537,6 @@ def _download_language_foundation(max_bytes: int, cache_dir: str, slimpajama_dir
             "--include 'data/train-00002-of-00250.parquet'"
         )
 
-    import pandas as pd
     parquet_files = sorted([
         os.path.join(parquet_dir, f)
         for f in os.listdir(parquet_dir)
@@ -651,7 +673,6 @@ def _load_fineweb_edu(
               f".parquet files -- skipping")
         return None
 
-    import pandas as pd
     print(f"    Found {len(parquet_files)} FineWeb-Edu parquet files in {parquet_dir}")
     bytes_seen = 0
     with open(out_path, "w", encoding="utf-8") as f:
