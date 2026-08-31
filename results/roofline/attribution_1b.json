@@ -1,0 +1,40 @@
+{
+  "question": "what fraction of the 1B step is the scan",
+  "config": {
+    "d_model": 2048,
+    "n_heads": 64,
+    "num_layers": 24,
+    "seq": 4096,
+    "batch": 1,
+    "loss_chunk": 512,
+    "vocab_size": 50257,
+    "profile_steps": 2,
+    "out": "results/roofline/attribution_1b.json"
+  },
+  "params": 1215986129,
+  "ref_step_s": 3.6751734999998007,
+  "device_s_per_step": 3.6572108414999898,
+  "categories": {
+    "elementwise": {
+      "s_per_step": 1.3042469264999839,
+      "share_pct": 35.662338952409215
+    },
+    "gemm": {
+      "s_per_step": 1.2025473400000102,
+      "share_pct": 32.88154257758873
+    },
+    "scan": {
+      "s_per_step": 0.5457109140000023,
+      "share_pct": 14.921505421770576
+    },
+    "other": {
+      "s_per_step": 0.5450811999999932,
+      "share_pct": 14.904286999664214
+    },
+    "optimizer": {
+      "s_per_step": 0.05962446100000036,
+      "share_pct": 1.6303260485672637
+    }
+  },
+  "void_reasons": []
+}

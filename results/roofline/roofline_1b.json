@@ -1,0 +1,45 @@
+{
+  "question": "what binds the 1B step",
+  "config": {
+    "d_model": 2048,
+    "n_heads": 64,
+    "seq": 4096,
+    "batch": 1,
+    "out": "results/roofline/roofline_1b.json"
+  },
+  "peak_tflops_measured": 25.1176399530623,
+  "peak_bandwidth_gb_s_measured": 169.67249191639377,
+  "machine_balance_flop_per_byte": 148.0360173258906,
+  "ops": [
+    {
+      "op": "DeltaNet scan (fwd)",
+      "ms": 6.5208799998799805,
+      "tflops": 0.32932420900852727,
+      "gb_s": 12.944628332610568,
+      "flop_per_byte": 25.440993788819874,
+      "pct_peak_flops": 1.3111271983511994,
+      "pct_peak_bw": 7.629185017798314,
+      "verdict": "LATENCY-bound"
+    },
+    {
+      "op": "projection GEMM",
+      "ms": 1.359165000030771,
+      "tflops": 25.28003470308764,
+      "gb_s": 30.85941736216753,
+      "flop_per_byte": 819.2,
+      "pct_peak_flops": 100.64653665841541,
+      "pct_peak_bw": 18.187637261420978,
+      "verdict": "COMPUTE-bound"
+    },
+    {
+      "op": "elementwise (SiLU gate)",
+      "ms": 0.4488300000957679,
+      "tflops": 0.09344972482020034,
+      "gb_s": 112.1396697842404,
+      "flop_per_byte": 0.8333333333333334,
+      "pct_peak_flops": 0.3720481900163837,
+      "pct_peak_bw": 66.09183876399794,
+      "verdict": "MEMORY-bound"
+    }
+  ]
+}
