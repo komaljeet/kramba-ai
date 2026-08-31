@@ -5,6 +5,62 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Depth vs width at 1B: 1.21x is the whole lever, and half the sweep does not fit (2026-08-31)
+
+**One line: at matched parameters, trading depth for width is worth up to 1.21x -- but every
+config past 12 layers spills the card, so the usable range is 24L -> 16L for 1.15x, and the
+question that actually decides it (quality) is not measured.**
+
+Motivated by the roofline: the scan is 14.9% of the step and its cost per layer is
+`d_model x d_head x seq`, so fewer/wider layers should mean fewer scan calls and larger, more
+efficient GEMMs. Total parameters held to ~1.21B (within 1.1%) and `d_head` pinned at 32, so
+neither size nor head width is a confound. `scripts/profile_1b_step.py`, seq 4096, batch 1,
+offload ON.
+
+| layers | d_model | params | s/step | tok/s | peak | % card | vs 24L | days | |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 32 | 1792 | 1.211B | 3.895 | 1052 | 4.18 GB | 70% | 0.92x | 400 | |
+| **24** | **2048** | **1.216B** | **3.575** | **1146** | **4.52 GB** | **75%** | — | **369** | current |
+| 16 | 2464 | 1.222B | 3.118 | 1314 | 5.22 GB | 87% | 1.15x | 323 | |
+| 12 | 2784 | 1.213B | 2.954 | 1387 | 5.75 GB | 96% | 1.21x | 304 | |
+| 10 | 3008 | 1.210B | 2.923 | 1401 | 6.13 GB | 102% | 1.22x | 300 | **SPILL** |
+| 8 | 3328 | 1.223B | 2.800 | 1463 | 6.76 GB | 113% | 1.28x | 290 | **SPILL** |
+| 6 | 3744 | 1.219B | 2.780 | 1474 | 7.55 GB | 126% | 1.29x | 287 | **SPILL** |
+
+**Three rows were nearly published as "the curve flattens below 12 layers".** They are past
+the card -- 102%, 113%, 126% -- and on Windows WDDM backs the overflow with host RAM instead
+of raising, so they run, report **99% GPU-busy**, and look like ordinary data points. Peak
+VRAM is the only signal that separates them from real configs. **Do not quote their timings.**
+This is the #141 spill hazard exactly, and it caught this sweep.
+
+**Direction confirmed, magnitude capped.** 32L is *slower* than 24L (0.92x), and every step
+shallower helps, so the mechanism is real. But the usable range ends at 12L/96%, which leaves
+no headroom for a multi-month run -- one allocation over and the run silently goes 4-15x
+slower. **16L at 87% is the only config with both a real gain (1.15x, 46 days) and margin.**
+
+**Known-answer cell, and it earned its place.** Fixing `plan()` (below) changed *where* the
+two attention layers sit for every depth except 24. `L12_ctrl` re-ran an already-measured
+config under the new placement: **2.954 s at attn [3,10] vs 2.938 s at attn [1,5], 0.5%
+apart.** Placement does not affect step time, so the two sweeps are comparable. Without that
+cell the second sweep could not have been read against the first.
+
+**Not a recommendation to change the default.** This measures step TIME. Whether 16 wide
+layers learn as well as 24 narrow ones at matched parameters is unmeasured, and depth
+generally buys something in language models that width does not. It is also one seed, and the
+0.089-nat seed spread measured the same day says that matters. The decision to stay at 24L
+rests on the untested quality question, not on the speed number.
+
+### `plan()` bug found by the sweep
+
+`scripts/profile_1b_step.py:44` hardcoded the two attention layers at indices 3 and 10, so any
+config below 11 layers raised `IndexError` -- L=8 died mid-sweep. Now placed proportionally at
+the same depth fractions those indices held at 24 layers (1/8 and 5/12), verified to return
+exactly `[3, 10]` at L=24 so the reference config is unchanged, and to place exactly 2
+attention layers at every depth from 2 to 32. The COUNT stays at 2 by design; for a step-time
+measurement only the count matters.
+
+Artifacts: `results/depth_width/L{6,8,10,12,12_ctrl,16,24,32}.json`.
+
 ## No dead units to recycle -- 0 of 49,152 ternary rows, 6 of 13,312 activations (2026-08-31)
 
 **One line: dormant-neuron recycling (ReDo) was proposed, and the population it would
