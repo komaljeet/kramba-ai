@@ -5,6 +5,58 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## No dead units to recycle -- 0 of 49,152 ternary rows, 6 of 13,312 activations (2026-08-31)
+
+**One line: dormant-neuron recycling (ReDo) was proposed, and the population it would
+operate on was measured first -- it is 0.05%, so there is nothing to recycle and the idea
+is dropped without building it.**
+
+Two distinct ways a unit can die here, and only the second is specific to this stack:
+
+1. **Dormant activations** -- output negligible against the layer average, so almost no
+   gradient returns through it. The classic cause is ReLU pinned at zero; this model's FFN
+   defaults to GELU (`deltanet.py:145`) with SiLU/sigmoid gates, none of which have a hard
+   zero, so the mechanism should be weak. Measured anyway.
+2. **Ternary collapse** -- BitNet b1.58 rounds any weight under half the scale to exactly
+   zero, so a whole output row can go silent with no activation function involved. **#109
+   documented exactly this**: fresh attention layers were ternary-quantized at init,
+   "collapsing them to {-1,0,1} before they had any chance to learn a pattern", and a real
+   recall regression was traced to it.
+
+Measured on `checkpoints/hybrid_a4_v2/hybrid_a4_step8000.pt`
+(`scripts/probe_dead_units.py`):
+
+| population | result |
+|---|---|
+| ternary output rows entirely zero | **0 of 49,152** |
+| activation units exactly zero | **0 of 13,312** |
+| dormant at ReDo's tau=0.025 | **6 of 13,312 (0.05%)** |
+
+Threshold sweep, so the verdict does not rest on one cutoff: tau=0.001 -> 0 units,
+0.01 -> 2, 0.025 -> 6, 0.05 -> 20, 0.1 -> 84 (0.63%). Nothing approaching a population
+worth reinitialising at any threshold.
+
+**The one number worth keeping: 35.33% of ternary weights round to exactly zero.** A third
+of the weight matrix is zero and yet no complete row ever is -- the zeros are spread, which
+is ternary behaving as intended (sparsity), not units failing.
+
+**Why the detector's zero is trustworthy.** A detector that finds nothing is
+indistinguishable from a broken one, so `selftest_detector()` plants a known number of dead
+units into a synthetic tensor and asserts it finds exactly those and no others, plus asserts
+it reports ZERO on all-healthy data. It also runs before the checkpoint is touched. And the
+ternary scan is confirmed non-vacuous: it found **49,152 real output rows**, so "0 dead" is
+a measurement rather than "no ternary modules were present" -- the false negative this
+check exists to rule out.
+
+**#109 is not contradicted.** Ternary collapse is real, it happens at init on freshly added
+layers, and a checkpoint trained 8,000 steps has recovered from it. Recycling addresses a
+condition that does not persist.
+
+**And it was never a speed lever.** Recycling does not change step time; it changes what the
+parameters buy. Same category as weight sharing.
+
+Artifact: `results/dead_units/probe.json`.
+
 ## "98.7% GPU-busy" was right; "therefore compute-bound" was WRONG (2026-08-31)
 
 **One line: a roofline against this card's own measured ceilings puts the scan at 1.3% of peak
