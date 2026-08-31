@@ -1,0 +1,279 @@
+{
+  "question": "what is aten::copy_ doing",
+  "config": {
+    "d_model": 2048,
+    "n_heads": 64,
+    "num_layers": 24,
+    "seq": 4096,
+    "batch": 1,
+    "vocab_size": 50257,
+    "steps": 1,
+    "out": "results/roofline/copy_traffic.json"
+  },
+  "copy_total_s_per_step": 0.8310594579999919,
+  "buckets": {
+    "weight-shaped": 0.2886834280000007,
+    "activation-shaped": 0.5218275619999969,
+    "small/other": 0.020548467999994404
+  },
+  "rows": [
+    {
+      "shape": [
+        2048,
+        2048
+      ],
+      "count": 414,
+      "ms": 232.1002650000016,
+      "category": "weight-shaped"
+    },
+    {
+      "shape": [
+        1,
+        4096,
+        64,
+        32
+      ],
+      "count": 418,
+      "ms": 118.1253689999954,
+      "category": "activation-shaped"
+    },
+    {
+      "shape": [
+        64,
+        4096,
+        32
+      ],
+      "count": 396,
+      "ms": 116.10691999999815,
+      "category": "activation-shaped"
+    },
+    {
+      "shape": [
+        1,
+        4096,
+        2048
+      ],
+      "count": 316,
+      "ms": 88.42704500000502,
+      "category": "activation-shaped"
+    },
+    {
+      "shape": [
+        4096,
+        2048
+      ],
+      "count": 65,
+      "ms": 70.93131900000071,
+      "category": "activation-shaped"
+    },
+    {
+      "shape": [
+        2048,
+        4096
+      ],
+      "count": 65,
+      "ms": 67.08961699999986,
+      "category": "activation-shaped"
+    },
+    {
+      "shape": [
+        1,
+        2048,
+        4096
+      ],
+      "count": 66,
+      "ms": 49.61549799999897,
+      "category": "activation-shaped"
+    },
+    {
+      "shape": [
+        512,
+        50257
+      ],
+      "count": 24,
+      "ms": 21.117677999999955,
+      "category": "weight-shaped"
+    },
+    {
+      "shape": [
+        1,
+        2048,
+        4099
+      ],
+      "count": 66,
+      "ms": 18.21107699999934,
+      "category": "small/other"
+    },
+    {
+      "shape": [
+        50257,
+        2048
+      ],
+      "count": 2,
+      "ms": 16.222033000000053,
+      "category": "weight-shaped"
+    },
+    {
+      "shape": [
+        6144,
+        2048
+      ],
+      "count": 6,
+      "ms": 9.280544999999575,
+      "category": "weight-shaped"
+    },
+    {
+      "shape": [
+        2048,
+        6144
+      ],
+      "count": 6,
+      "ms": 8.97705800000028,
+      "category": "weight-shaped"
+    },
+    {
+      "shape": [
+        1,
+        2048,
+        1,
+        4096
+      ],
+      "count": 22,
+      "ms": 8.3014440000006,
+      "category": "activation-shaped"
+    },
+    {
+      "shape": [
+        1,
+        64,
+        4096,
+        16
+      ],
+      "count": 8,
+      "ms": 1.7858109999995213,
+      "category": "activation-shaped"
+    },
+    {
+      "shape": [
+        1,
+        512,
+        2048
+      ],
+      "count": 32,
+      "ms": 1.5389029999995838,
+      "category": "small/other"
+    },
+    {
+      "shape": [
+        64,
+        4096
+      ],
+      "count": 44,
+      "ms": 1.099322999998505,
+      "category": "activation-shaped"
+    },
+    {
+      "shape": [
+        64,
+        2048
+      ],
+      "count": 65,
+      "ms": 0.9858489999992635,
+      "category": "weight-shaped"
+    },
+    {
+      "shape": [
+        2048
+      ],
+      "count": 343,
+      "ms": 0.39193099999648073,
+      "category": "small/other"
+    },
+    {
+      "shape": [
+        1,
+        4096,
+        64
+      ],
+      "count": 66,
+      "ms": 0.24572900000056688,
+      "category": "activation-shaped"
+    },
+    {
+      "shape": [
+        64,
+        32
+      ],
+      "count": 109,
+      "ms": 0.21123099999986697,
+      "category": "small/other"
+    },
+    {
+      "shape": [
+        2048,
+        1,
+        4
+      ],
+      "count": 65,
+      "ms": 0.12032100000056743,
+      "category": "small/other"
+    },
+    {
+      "shape": [
+        4096
+      ],
+      "count": 69,
+      "ms": 0.08784099999947648,
+      "category": "activation-shaped"
+    },
+    {
+      "shape": [
+        64
+      ],
+      "count": 65,
+      "ms": 0.04345299999938652,
+      "category": "small/other"
+    },
+    {
+      "shape": [
+        4096,
+        32
+      ],
+      "count": 8,
+      "ms": 0.011646000000007916,
+      "category": "activation-shaped"
+    },
+    {
+      "shape": [
+        50257
+      ],
+      "count": 2,
+      "ms": 0.009344000000040978,
+      "category": "small/other"
+    },
+    {
+      "shape": [
+        6144
+      ],
+      "count": 6,
+      "ms": 0.009056000000069616,
+      "category": "small/other"
+    },
+    {
+      "shape": [
+        1
+      ],
+      "count": 22,
+      "ms": 0.008351999999256805,
+      "category": "small/other"
+    },
+    {
+      "shape": [
+        16
+      ],
+      "count": 4,
+      "ms": 0.004799999999813735,
+      "category": "small/other"
+    }
+  ]
+}

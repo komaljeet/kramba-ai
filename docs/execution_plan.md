@@ -35,7 +35,7 @@ the start (fp16/int8/ternary branches).
   (NVMe layer streaming, mmap, succinct), `recovery.py` (pruners, Lloyd-Max, QLoRA recovery),
   `model.py` (`EdgeHVN`). End-to-end: EdgeHVN (4 shared layers, 3.62× param reduction) + GPTQ
   4-bit → **2.33× additional compression at +0.37% PPL**. `test_edge_devices.py` 12/12.
-  *Honest scope:* some techniques are simplified-but-functioning versions (e.g. TopologicalPruner
+  *Scope:* some techniques are simplified-but-functioning versions (e.g. TopologicalPruner
   is a union-find connectivity sweep, not full persistent homology).
 
 ## Key Constraints (all issues)

@@ -31,7 +31,7 @@ source of truth; these files are the reorganized, linkable view.
 > "The compute wall — why *fits in VRAM* was never the binding constraint" (2026-08-02).
 > Training cost grows as **N²** (`6·params·tokens`, Chinchilla scaling tokens with params),
 > and this project's memory work — impressive as it is — addresses only ~2× of the gap.
-> The honest local ceiling on the 6 GB card is **~142M** (3.6 days to Chinchilla); 6B is
+> The local ceiling on the 6 GB card is **~142M** (3.6 days to Chinchilla); 6B is
 > out of reach by ~30×. Size decisions should start from `6·N·D ÷ throughput`, never from
 > whether the model fits.
 
@@ -99,7 +99,7 @@ work. Nobody retested it after the stack matured. Whether it would still lose is
 > even though present-day validation runs on a single RTX 4050 (6 GB). When two options are
 > otherwise equal, pick the one that scales.
 
-**Honest framing.** A frontier model (100B–1T+ params) requires a multi-node GPU cluster
+**Framing.** A frontier model (100B–1T+ params) requires a multi-node GPU cluster
 (hundreds–thousands of 80 GB accelerators), not this laptop. The RTX 4050 work exists to
 **de-risk and validate scaling behavior** — measuring exponents, stability, and O(1)
 inference on research-scale models — *before* committing cluster budget. The 6 GB GPU is

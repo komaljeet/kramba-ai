@@ -49,7 +49,7 @@ Hamiltonian-memory machinery is live infrastructure, not legacy.**
   non-ternary reference is *not implemented* — a grep for parity/allclose assertions across the two
   finds nothing. Code that builds a `HamiltonianVortexNetwork` (e.g. `tests/test_edge_devices.py:368`)
   uses it as a convenient small model for exercising *other* machinery. If a ternary reference check
-  is wanted, the honest form is a quantizer parity test (`apply_ternary_to_model` at `group_size=0`
+  is wanted, the right form is a quantizer parity test (`apply_ternary_to_model` at `group_size=0`
   against the same-shape fp32 model) — no second architecture required.
 
 ## 4. Architecture Components & Project Structure
@@ -154,13 +154,12 @@ numbers and the retraction). The corrected picture:
   recurrence's floor (4% → 35.5% at 200-trial N). This is the hybrid's core claim, proven with
   a real statistic, not "not broken." It **plateaus** with more training on a fixed corpus —
   the lever to push it further is corpus size/diversity, not step count.
-- **Beyond the window, the recurrence carries some genuine exact-token signal — small, but
+- **Beyond the window, the recurrence carries some exact-token signal — small, but
   real and growing with training** (0.5% trunk floor → 5.5% → **8.5%** at 8,000 FT steps,
   monotonic, ~17× the floor). This *contradicts* the earlier "architecturally capped at ~0"
   claim: the O(1) state is not purely a semantic gist with zero exact-token content — it's
   weak exact recall that improves with training, currently far below near-window quality.
-  Whether it keeps climbing with more data/scale or saturates near here is **open** — the
-  honest position is "real but not yet reliable," not "impossible" and not "solved." If a
+  Whether it keeps climbing with more data/scale or saturates near here is **open** — the position is "real but not yet reliable," not "impossible" and not "solved." If a
   workload needs **reliable** long-range exact recall today, a bigger window or tool-refetch
   is still the safer answer than trusting the recurrence's gist.
 - **First A4 FT (step5000, 40-example corpus) did NOT degrade the trunk** — it was already

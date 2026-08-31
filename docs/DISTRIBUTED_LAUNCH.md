@@ -101,7 +101,7 @@ Consequences:
   changes** — verified by `tests/test_issue67.py`, which loads and serves a
   2-process-DDP-produced checkpoint through the real `generate.load_model`
   path and checks param parity against an identical single-process run.
-* Honest test-coverage note: the **FSDP** consolidation branch is the
+* Test-coverage note: the **FSDP** consolidation branch is the
   standard `FULL_STATE_DICT` recipe but cannot produce a runnable artifact on
   the laptop — torch's FSDP refuses CPU-only execution and Windows has no
   NCCL — so `tests/test_issue67.py` proves the layout/serving contract via

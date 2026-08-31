@@ -62,8 +62,7 @@ chunked scan is matmul-dominated so transformer-like MFU is plausible, but
 Projected quality: the measured fit `PPL ≈ 652703 × params^−0.504` [measured]
 extrapolates to ~19 PPL at 1B and ~6 at 10B — **[assumption] treat as
 ordering, not absolute**: the fit was taken at a fixed 5M-token budget;
-absolute PPL at a Chinchilla budget will differ (lower). The honest use of
-the exponent is comparative (DeltaNet > Transformer > default HVN at scale).
+absolute PPL at a Chinchilla budget will differ (lower). The use of the exponent is comparative (DeltaNet > Transformer > default HVN at scale).
 
 ## 3. Data pipeline at scale
 

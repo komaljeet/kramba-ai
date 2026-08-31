@@ -7,8 +7,7 @@
 
 ## Read this first — what to expect
 
-This is an **83M-parameter** model. GPT-4 is roughly 20,000x larger. Setting the
-expectation honestly here saves an hour of thinking the setup is broken when it
+This is an **83M-parameter** model. GPT-4 is roughly 20,000x larger. Setting the expectation here saves an hour of thinking the setup is broken when it
 is working exactly as measured:
 
 | you ask it to | expect |

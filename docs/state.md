@@ -5,6 +5,134 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## "98.7% GPU-busy" was right; "therefore compute-bound" was WRONG (2026-08-31)
+
+**One line: a roofline against this card's own measured ceilings puts the scan at 1.3% of peak
+compute and 7.6% of peak bandwidth -- near NEITHER -- so it is latency-bound, not compute-bound,
+and the conclusion the 98.7% figure has been carrying since 2026-08-27 does not follow.**
+
+`scripts/profile_1b_step.py` prints *"compute-bound. Only fewer FLOPs or a better kernel helps"*
+whenever GPU-busy is high. **That inference is invalid.** GPU-busy measures whether a kernel is
+executing, not whether the machine is doing work. A kernel running a serial dependency chain with
+64 programs on 20 SMs reports as busy the entire time while most of the card idles.
+
+The 98.7% measurement itself stands. Everything derived from it about *what kind of fix applies*
+was wrong for the scan.
+
+### The roofline (`scripts/roofline_1b_step.py`)
+
+Both ceilings measured on this card, not taken from a spec sheet -- a roofline drawn against a
+vendor peak no code ever reaches makes everything look memory-bound:
+
+    peak compute     25.12 TFLOP/s   (bf16 GEMM, the same cuBLAS path training issues)
+    peak bandwidth   169.7  GB/s     (large streaming copy)
+    machine balance  148    FLOP/byte
+
+| op | ms | TFLOP/s | GB/s | % peak compute | % peak BW | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| DeltaNet scan (fwd) | 6.52 | 0.33 | 12.9 | **1.3%** | **7.6%** | **LATENCY-bound** |
+| projection GEMM | 1.36 | 25.28 | 30.9 | **100.6%** | 18.2% | compute-bound |
+| elementwise (SiLU gate) | 0.45 | 0.09 | 112.1 | 0.4% | 66.1% | memory-bound |
+
+**The GEMMs are at 100.6% of the card's own demonstrated ceiling.** There is nothing to reclaim
+there, and any proposal to speed up the projections is finished before it starts.
+
+Byte counts are analytic minimums (Nsight Compute is not installed on this box), which biases a
+re-reading kernel toward looking latency-bound. The scan verdict survives that caveat only
+because **both** fractions are low: no re-read accounting moves 1.3%-of-compute.
+
+### What binds the scan: parallelism, and the chain is exactly serial (`scripts/probe_scan_levers.py`)
+
+Two candidate causes, told apart by how cost responds to N and to S:
+
+| N (=batch x heads) | progs/SM | Mhead-tok/s | vs N=8 |
+|---:|---:|---:|---:|
+| 8 | 0.4 | 16.2 | 1.00x |
+| 20 | 1.0 | 28.2 | 1.74x |
+| **64** | 3.2 | **39.8** | 2.46x |
+| 128 | 6.4 | 45.0 | 2.78x |
+| 256 | 12.8 | 46.3 | 2.86x |
+
+Occupancy is real (2.86x across the sweep) but **nearly spent at the current config**: N=64 to
+N=256 is only **1.16x**, and it costs 4x the batch in VRAM. Not a lever worth pulling.
+
+Sequence scaling settles the rest -- **ns per sequential step is constant to within 1.05x across
+a 16x range of S** (1529/1571/1609/1589/1585 ns at S=512..8192). The chain is fully serial: cost
+is set by the number of steps and nothing else.
+
+**The 1,590 ns/step is the interesting number.** The data a step actually needs is ~20 KB across
+all programs; at 170 GB/s that is **~120 ns**. The scan pays **13x** that, waiting on dependent
+loads with too few warps in flight to hide the latency.
+
+### Chunk-parallel is dead -- now on a sweep, not one sample
+
+`gate_scan_vs_dhead.py` concluded "do not build" from a **single chunk size (128)**, which is the
+premature-discard pattern this repo keeps writing up. Swept properly at d_head 32:
+
+| chunk | 16 | 32 | 64 | 128 | 256 | 512 |
+|---|---:|---:|---:|---:|---:|---:|
+| vs sequential | 28.5x | 14.0x | 7.2x | **4.95x** | 8.2x | 14.9x |
+
+Every size loses; the best is still 5x worse. The verdict now rests on evidence. Known-answer
+cell held (d_head 64 reproduced #95/#96's measured loss).
+
+### Where the step ACTUALLY goes (`scripts/attribute_1b_step.py`)
+
+The measurement that decides whether any kernel work is worth doing. d=2048/24L, n_heads 64,
+seq 4096, batch 1, offload ON, 3.67 s/step:
+
+| category | s/step | share |
+|---|---:|---:|
+| elementwise | 1.304 | 35.6% |
+| gemm | 1.208 | 33.0% |
+| **scan** | **0.546** | **14.9%** |
+| other (mostly PCIe memcpy) | 0.545 | 14.9% |
+| optimizer | 0.060 | 1.6% |
+
+**Amdahl kills the scan kernel rewrite.** Even the full 13x latency gap yields **1.16x** on the
+whole step -- 375 days to 323. Weeks of Triton for 14%.
+
+**A harness bug caught by its own check, and it is #131's exactly.** The first run reported
+`other` at 49% and a device-time/wall-clock ratio of **1.99** -- near-exactly 2x, because
+`key_averages()` returns op-level rows (`aten::mm`) *and* the kernel rows they launched, both
+carrying the same device time. #131 disclosed this same double-count in its decode profile
+("they agree to the last decimal at 54,794.628 us"). Filtering to `device_type == CUDA` brought
+the ratio to **1.00**. **Any future profiling script must not sum across `key_averages()`.**
+
+### `aten::copy_` is the largest single op, and it is mostly NOT waste (`scripts/probe_copy_traffic.py`)
+
+`copy_` is **0.83 s/step** -- larger than any single GEMM. It is *not* the PCIe offload traffic,
+which is counted separately as `Memcpy HtoD` at 0.40 s. This is device-to-device copying.
+
+| bucket | s/step | share |
+|---|---:|---:|
+| activation-shaped | 0.522 | 62.8% |
+| weight-shaped | 0.289 | 34.7% |
+| small/other | 0.021 | 2.5% |
+
+63% is gradient-checkpoint saves and contiguity -- structural, and removing checkpointing was
+measured at 178% of the card and 5.6x slower. The one suspect row is **`[2048, 2048]`: 414 calls,
+232 ms/step**, each weight copied several times per step by the autocast cast and the BitNet STE,
+paid on the forward *and again* on the checkpoint recompute. Best case ~6% of the step.
+
+**#131 already tried caching this and found training cannot reuse it** -- the STE needs the live
+shadow weight in the autograd graph and the weight moves every step. The **untested** case is
+caching within a single step across the forward/recompute pair, where the weight demonstrably has
+not changed.
+
+### Verdict: the step is finished
+
+GEMMs at 100.6% of the card. Scan capped at 1.16x. Two-thirds of the copies structural. 98-99%
+busy. Summing every remaining lever optimistically gives **20-25%** for weeks of risky work --
+375 days to ~300.
+
+**This holds for this config only** (1.21B, batch 1, seq 4096, offload on) and says nothing about
+a different architecture or shorter sequences. Within what is built, step time is real work at
+close to hardware speed. **The remaining variable was never the step -- it is the 36 billion
+tokens.**
+
+Artifacts: `results/roofline/{roofline_1b,scan_levers,attribution_1b,copy_traffic}.json`.
+
 ## Decision: not training a 1B model on this laptop (2026-08-28)
 
 `data_cache/fineweb_edu` (233 GB parquet, ~127B tokens) has been **deleted** to free disk
@@ -108,7 +236,18 @@ micro-batch from 1 to 2 at ~478M, worth +7.1%.**
 | **GPU busy** | | **98.7% mean, 100% max** |
 
 **98.7% busy settles the class of fix.** Only fewer FLOPs or a better kernel can help;
-PCIe/prefetch/cache tuning is chasing a cost that is already ~0. #153 measured 97.2% at 83M
+PCIe/prefetch/cache tuning is chasing a cost that is already ~0.
+
+> **⚠️ Corrected 2026-08-31 — the second half of that sentence does not follow.** "98.7% busy"
+> is correct, and the PCIe/prefetch conclusion stands. But **"compute-bound" does not follow
+> from "busy"**: GPU-busy measures whether a kernel is *executing*, not whether the machine is
+> doing work. A roofline against this card's own measured ceilings puts the scan at **1.3% of
+> peak compute and 7.6% of peak bandwidth** — near neither, i.e. **latency-bound**: a serial
+> dependency chain with too few programs to hide memory latency, which reports as 100% busy
+> while most of the card idles. The class of fix for the scan is parallelism, not fewer FLOPs.
+> See the 2026-08-31 entry at the top of this file. `profile_1b_step.py` still prints the
+> "compute-bound" line; treat it as describing the GEMMs, which genuinely are (100.6% of peak),
+> not the whole step. #153 measured 97.2% at 83M
 with everything resident — this confirms the same holds at 1B with weights streaming from
 CPU, which nobody had checked and which is a genuinely different regime.
 
@@ -187,7 +326,7 @@ that on this card, memory pressure dominates arithmetic savings.
 loses 1.7% to 7.1%, while needing a scheduler change and a rewrite of the offload eviction
 logic to be usable in the config that matters.
 
-### The honest summary
+### Summary
 
 **There is no large exact speedup available on this hardware.** The GPU is saturated doing
 arithmetic that has to happen plus one recompute that cannot profitably be removed. Everything
@@ -292,7 +431,7 @@ a fifth of a nat. Not marginal.
 
 **Matched parameters — INCONCLUSIVE, +0.01228 at matched steps and +0.01336 at matched wall
 clock.** Both are above the 2.3e-03 noise floor but inside the pre-registered 0.02 band, so
-the run refuses to call it. The honest reading is "TT-wider is very slightly behind
+the run refuses to call it. The reading is "TT-wider is very slightly behind
 dense-narrower and one seed at this size cannot separate them," not "they are equal".
 
 ### The finding that decides it, and it is about memory rather than loss
@@ -591,7 +730,7 @@ that do not reproduce here. Third independent time this has been measured (#95, 
 | `ternary_quantize_ste` — pure Python, 1,760 calls | 0.395 s (4.6%) |
 
 **The CPU is idle, not slow.** That is why rewriting host code in a compiled language buys
-nothing, and why fusing the ternary quantizer — genuinely 4.14× faster in isolation — moved the
+nothing, and why fusing the ternary quantizer — 4.14× faster in isolation — moved the
 loop only **1.9%**: it removed host work that was overlapping with GPU work anyway.
 
 `HVN_FUSED_TERNARY=1` enables it (`hvn/edge/ternary_fused.py`, 13 parity tests). **Default off**:
@@ -639,7 +778,7 @@ Recorded because both would have produced a false verdict:
 - **Attention layers are the *cheap* ones during training** (#149: removing both was 6.4% *slower*). Any proposal premised on "attention is the expensive part" starts from a false assumption at seq 512.
 - **The pipeline is not idle** (#153: 97.2% GPU-busy). Plumbing optimisations have nothing to reclaim.
 
-**The honest framing for all of the above:** these are *"no gain at 83M"*, not *"impossible"*. Several were written up more finally than the evidence supports — the same over-confident-verdict pattern that got #122 and #132 retracted. When the next size is trained, this table is the list to walk.
+**The framing for all of the above:** these are *"no gain at 83M"*, not *"impossible"*. Several were written up more finally than the evidence supports — the same over-confident-verdict pattern that got #122 and #132 retracted. When the next size is trained, this table is the list to walk.
 
 ## Three generated architecture ideas, all killed by cheap gates (Issues #149/#150, 2026-08-11)
 
@@ -839,7 +978,7 @@ restores numerical noise. This is one data point from a smoke run, not a finding
 mechanism and the evidence point the same way, and a rotation-matched `beta` (~0.99947 for a
 per-rotation half-life) is the untested variant if anyone returns to this.
 
-### Known-answer cell, and an honest caveat about it
+### Known-answer cell, and a caveat about it
 
 `bcd_delete` had to reproduce BCD's known cost or the harness would not be measuring what #112
 measured. It did, qualitatively: **+2.374 nats (10.7x ppl)** against #112's **+1.36 (3.9x)** --
@@ -959,7 +1098,7 @@ Without `control_restart` this would have been written up as "progressive stacki
 
 ### What survives, and what does not
 
-- **Dead: stacking as a quality lever.** −0.0037 nats against the honest control, with the two
+- **Dead: stacking as a quality lever.** −0.0037 nats against the control, with the two
   metrics disagreeing on the sign.
 - **Real but unconverted: stacking's throughput.** 1,769 steps vs 1,500 in the same 7.68 min,
   **+18%**, exactly as the arithmetic predicts (half the layers for the first half of the run).
@@ -977,8 +1116,7 @@ reason, and the ranking could reverse at length. It is also not novel (SGDR).
 
 It does land in an area this repo has already found to be live: #133 concluded a dynamic LR
 schedule "wins by 0.30 nats, but the win is that the LR was 10x too high". A restart helping at
-1.5K steps may be the same story — evidence about **LR level**, not about schedules. The honest
-next test is a fixed-LR sweep at this length before anyone touches the schedule.
+1.5K steps may be the same story — evidence about **LR level**, not about schedules. The next test is a fixed-LR sweep at this length before anyone touches the schedule.
 
 ### Limits
 
@@ -1199,7 +1337,7 @@ metric, because the extra speed buys extra steps.
 - Applies to a **new** pretrain only — `n_heads` cannot be changed on an existing checkpoint.
 
 Firming this up would need multiple seeds and ~20K steps (~2 h). Not run: the measured effect is
-0.08% with the sign in dispute, so the honest reading is already "no detectable difference", and
+0.08% with the sign in dispute, so the reading is already "no detectable difference", and
 a longer run would most likely spend two hours confirming that.
 
 ## FT recipes adopt #141's wins — and the compile gain does NOT transfer at full size (Issues #142/#143, 2026-08-11)
@@ -1477,7 +1615,7 @@ epilogue, which can only *shrink* the gaps. A null in eager is a null in product
 GPU-hours of continued-FT, and would be confounded anyway: the checkpoint's weights spent
 8,000 steps adapting *to GELU*, so a warm-started arm measures "how fast can these weights
 adapt to a new activation", not "which activation is better". **Not funded; #140 closed on the
-throughput finding.** If revisited, the honest design is small from-scratch runs, not a
+throughput finding.** If revisited, the design is small from-scratch runs, not a
 warm-started swap.
 
 Code landed regardless (`hvn/core/activations.py`, `ffn_activation=` on `DeltaNetBlock`/
@@ -1939,7 +2077,7 @@ Picking up #107/#112 (scale past 83M): before committing to a multi-hour/day pre
 120–270M, ran a short **300-step validation** of the "recommended ceiling config" from this
 file's VRAM table (d=1024, 24L, ~268M, `--grad-checkpoint`) with the **real** data pipeline
 (SlimPajama/WikiText via the existing `data_cache`, not synthetic) and the real `--fast` stack,
-to get an honest steps/sec + VRAM-peak reading before scoping the full run.
+to get a steps/sec + VRAM-peak reading before scoping the full run.
 
 **First finding — the untracked smoke probes already in `pretrain-300m-112` (`logs/probe_143m.log`,
 `probe_300m.log`, `probe_300m_clean.log`, 150 steps each) were not measuring this table's 268M
@@ -2036,7 +2174,7 @@ full overhead (DataLoader, checkpoint I/O, audit machinery) — almost certainly
 WDDM silent-host-spill behavior, but far worse than the "4–15× slower" already on record, and
 never actually root-caused (would need real profiling, not attempted). **Open, unsolved.**
 
-**Scaled down instead, on the same fixed code path, to get an honest number today.** At
+**Scaled down instead, on the same fixed code path, to get the number today.** At
 **355M** (d=1024, 24L — the "268M-class" config, actual param count higher due to
 vocab/embedding overhead), `--grad-checkpoint --block-coordinate`:
 
@@ -2319,7 +2457,7 @@ training design, not more of the same one.
 already-full-depth 12-layer hybrid + naive deep supervision), does not deliver a working
 mechanism — neither without retraining (the original N×T sweep) nor with a real continued-FT
 (this stage). Parking here rather than continuing to iterate on this specific recipe.** If
-picked up again, the honest next steps are (a) a genuinely weight-shared/looped architecture
+picked up again, the next steps are (a) a genuinely weight-shared/looped architecture
 (this repo already has `EdgeHVN(shared_weights=True)` infrastructure for that — the original
 issue's own "reuse a single weight-shared block" framing, never actually used by this work,
 which instead looped the full already-deep hybrid) or (b) a training objective with an explicit
@@ -3203,7 +3341,7 @@ Training for the perturbation — but its benefit is normally *parallelism acros
 question here is whether it helps on ONE card, where 3 networks each get a third of the
 throughput.
 
-The honest comparison holds **total tokens constant**: 3 nets at batch 4 vs 1 net at batch 12,
+The comparison holds **total tokens constant**: 3 nets at batch 4 vs 1 net at batch 12,
 same 1.8M tokens, byte-identical batch sequence (900 batches of 4 materialised once; the single
 arm concatenates each group of 3). Averaging every 10 rounds, ensemble scored on its **averaged**
 weights, per-arm seeding, same fixed 16-batch probe set used throughout #126/#128.
@@ -3365,7 +3503,7 @@ let GPU clock ramp inflate the second arm:
 | legacy first | 22.30 | 43.21 | **1.94x** |
 | cached first | 48.40 | 21.45 | **2.26x** |
 
-Two earlier runs against a monkeypatched prototype read 2.02x and 1.99x. **Honest claim: ~2x**,
+Two earlier runs against a monkeypatched prototype read 2.02x and 1.99x. **Claim: ~2x**,
 consistent across four measurements and both orders.
 
 **Known-answer cell** (what the #122 retraction requires of every harness): caching a
@@ -3556,7 +3694,7 @@ step got cheaper or dearer.
 
 **Recall: no detectable difference, but the probe is a weak instrument on this run.** Near
 z=-1.40 (p=0.16), far z=-0.40 (p=0.69) — both non-significant at n=300, and both nominally
-favour the *packed* arm. The honest caveat is that this FT is 100% chat with zero grounded
+favour the *packed* arm. The caveat is that this FT is 100% chat with zero grounded
 replay, so both arms sit at or below the pure-trunk floor (4-5% near / 0.5% far): recall was
 eroded by the chat FT itself, exactly as Stage 1 (#108) predicted, in both arms equally. A
 floored metric can only detect gross damage, so "no difference" is weaker evidence here than
@@ -3850,8 +3988,7 @@ examined today for the "train on less compute" goal:
 | multi-token prediction | ❌ ruled out from the literature (negative below ~1B) |
 | selective tokens (this entry) | ❌ measured, no gain at 83M |
 
-Packing is the one that worked, and it is already landed. The remaining honest lever at
-this scale is not a training trick — it is spending the fine-tune budget on more and
+Packing is the one that worked, and it is already landed. The remaining lever at this scale is not a training trick — it is spending the fine-tune budget on more and
 better data, which this document has concluded repeatedly.
 
 Artifacts: `results/slm/ab_selective_tokens.json`,
@@ -3964,7 +4101,7 @@ freshly initialised model that needs large steps, wrong for a checkpoint already
 into training. New harness, inherited default, nobody had previously run a continue-training
 job at pretrain LR.
 
-**So the honest reading is weaker than the table suggests: the cosine arm is a badly-tuned
+**So the reading is weaker than the table suggests: the cosine arm is a badly-tuned
 control, not a fair one.** The 0.30 nats measures how much damage a 10x-too-high LR does and
 how quickly a cut rule undoes it — not that dynamic scheduling beats a competently configured
 cosine. A cosine baseline at a sane LR would very likely beat both arms here, and that run has
@@ -4003,7 +4140,7 @@ Artifacts: `results/dynamic_lr/ab_dynamic_lr.json`, `lr_log.json`, `curves.png`,
 ## Parameter-free LR (Prodigy) — wins fine-tuning outright, loses pretraining (Issue #134, 2026-08-09)
 
 **One line: with no learning rate given at all, Prodigy beats hand-tuned Muon by 0.18 nats on a
-fine-tune and loses to it by 0.07 on a from-scratch pretrain — so the honest recommendation is a
+fine-tune and loses to it by 0.07 on a from-scratch pretrain — so the recommendation is a
 split by regime, not the single universal setting the issue hoped for.**
 
 Opened directly out of #133, whose real finding was that a human has to pick this number and
@@ -4054,7 +4191,7 @@ pretrain is 100,000+ steps, where a 1,500-step ramp is 1.5% of the run. **This t
 distinguish "Prodigy is worse at pretraining" from "1,500 steps is too short to see it" and
 should not be read as if it could.**
 
-### The claim the issue was built to test, answered honestly
+### The claim the issue was built to test, answered
 
 The premise was that ONE invocation with no learning rate covers both regimes. **It does not.**
 It covers fine-tuning better than a human does, and pretraining worse. Recommendation:
@@ -4098,7 +4235,7 @@ near-window exact recall, the capability the 2 windowed-attention layers were ad
 converts the weakness into the strength.
 
 `hvn/retrieval.py` — Okapi BM25, pure Python/numpy, **no new dependency and no second neural
-model**. Lexical deliberately: BM25 is the honest floor a dense retriever must later beat, and
+model**. Lexical deliberately: BM25 is the floor a dense retriever must later beat, and
 introducing an embedding model now would confound "is the retriever good" with "can this model
 use retrieved text" — the entanglement that forced #122's retraction.
 
@@ -4236,7 +4373,7 @@ Likely mechanism: regularisation. 51.5M of the 83M were two independent tables l
 same mapping from limited data; forcing them to share removes 25.7M parameters that were otherwise
 free to memorise.
 
-Honest cost: **~7% slower per step** despite identical FLOPs, because the shared table now receives
+Cost: **~7% slower per step** despite identical FLOPs, because the shared table now receives
 gradients from both the input lookup and the output head, serialising an accumulation.
 
 ### The 32K mixed tokenizer — a real trade, currently negative on English
@@ -4493,7 +4630,7 @@ tokens where GPT-2 needs 70,189,328 for identical text, so at the same 3.07M-tok
 
 **It lost on English anyway.** The English penalty is therefore measured *against* a 25% data
 advantage, which means the true penalty is larger than the 2.42% quoted. The same logic flatters
-the code and chat wins by an unknown amount. This is the honest reading in both directions, and
+the code and chat wins by an unknown amount. That is the reading in both directions, and
 it is why the recommendation splits by domain rather than declaring a winner.
 
 ### A clean confirmation of the compute saving
@@ -4644,7 +4781,7 @@ in training.md was published as fitting when the real script spills at 355M.
 - **The `days` column applies this repo's 20-tokens-per-param convention to TOTAL params.** The two
   arms have identical bodies, so the 32K arm is credited with needing ~30% fewer tokens purely for
   having smaller lookup tables. If the correct budget scales with BODY params instead, the day
-  counts converge and the honest 32K advantage shrinks to the throughput margin (1.11-1.15x) plus
+  counts converge and the 32K advantage shrinks to the throughput margin (1.11-1.15x) plus
   the VRAM headroom. **This is unmeasured and it is the weakest number in the table.**
 - Chinchilla-optimality itself is an assumption at this scale; #134 noted a 1,500-step pretrain
   cannot distinguish a real effect from an unfinished ramp.
@@ -4847,8 +4984,7 @@ the sweep does not exercise.
 3. If it reproduces at n_heads=14 but not n_heads=8 with the same memory
    settings, it is a shape/kernel problem and the config choice is affected.
 
-Until this is understood, **the 9.1-day plan is not launchable** -- and that is
-the honest status, not the "ready to pretrain" heading above.
+Until this is understood, **the 9.1-day plan is not launchable** -- and that is the status, not the "ready to pretrain" heading above.
 
 ## Adafactor does NOT scale to 1B — offload stays mandatory (#157, 2026-08-14)
 
@@ -5066,7 +5202,7 @@ With BCD + CPU offload + ternary + tied embeddings, seq 4096, single micro-batch
 | 2048x36 | 1.58B | 5.92 GB | at the edge of a 5.9966 GiB card |
 | 2560x36 | 2.45B | 9.39 GB | **spills to host RAM** (no OOM -- the WDDM failure mode) |
 
-**~1.6B is the honest ceiling.** Note these were measured WITHOUT the scan kernels
+**~1.6B is the ceiling.** Note these were measured WITHOUT the scan kernels
 (see the benchmark error above), so the memory figures are ~0.4 GB pessimistic and the
 step times are ~4x pessimistic. Fitting is not training: at 875 tok/s a 1B model needs
 ~267 days for a Chinchilla-optimal budget, so the practical range remains a few hundred
