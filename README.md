@@ -53,6 +53,8 @@ Triton scan and megakernel, and the fixes that make them work together.
 | needs **~30 tokens per parameter**, not the usual 20 | measured 2026-08-16, size trend unresolved |
 | chunked cross-entropy saves **1436 MB at 48M** | measured 2026-08-17 |
 | **not cheaper to train** — a transformer is 1.41× faster per step | measured; the win is at inference only |
+| the 1B step runs at **close to hardware limits** — matmuls hit 100.6% of the card's own measured GEMM ceiling | measured 2026-08-31 |
+| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 |
 
 One row deliberately removed: earlier versions led with "18.7% of attention's FLOPs" and
 "6.29 MB vs 2.46 GB of memory". Both were **hand-derived, never benchmarked**, and both
@@ -76,11 +78,17 @@ compromise.
 Training cost is roughly `6 × parameters × tokens`, and the tokens you need scale with the
 parameters — so cost grows with the **square** of model size.
 
-The memory engineering genuinely got a 6B model to run forward and backward on this card at
+The memory engineering got a 6B model to run forward and backward on this card at
 ~1 GB peak. **That is not the same as being able to train it.** 6B would take about 33 years
-here. Even 1B is roughly a year.
+here. Even 1B is roughly a year — **375 days**, measured 2026-08-31 at the current best config.
 
-**The honest local ceiling is ~142M parameters** (about 3.6 days). Anything above that needs
+And that year is not waiting on better code. A roofline against the card's own measured
+ceilings (2026-08-31) puts the matmuls at **100.6% of peak**, the recurrent scan at 14.9% of
+the step and capped at 1.16× by Amdahl, and two thirds of the remaining copies structural.
+Every optimisation left, added up optimistically, is 20–25%. The cost is
+`6 × params × tokens ÷ card speed`, and only the first two terms are still open.
+
+**The local ceiling is ~142M parameters** (about 3.6 days). Anything above that needs
 rented compute, and no architecture choice changes that arithmetic.
 
 So: the *inference* half of the goal is real and measured. The *train-it-yourself* half isn't

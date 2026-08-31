@@ -121,12 +121,12 @@ corrections above, B=8, S=128, bf16, fused AdamW; full grid in
 | d=1536, 24L `+ckpt` | 592M | 10.0 GiB | 1.95 | ❌ |
 | d=2048, 24L (±ckpt) | ~1B | — | — | ❌ hard OOM at allocation |
 
-> **⚠️ The "~270M honest ceiling" below is wrong for the real script.** At vocab 50257 that
+> **⚠️ The "~270M ceiling" below is wrong for the real script.** At vocab 50257 that
 > config is 355M and needs 6.34 GiB reserved with the default optimizer — it spills. It runs
 > only with `--block-coordinate` (3.91 GiB reserved), validated end-to-end at 4,587 MiB
 > steady. The paragraph is kept for the bytes/param derivation, which still holds.
 
-**Honest ceiling: ~270M params** (d=1024, 24L, bf16 + `--grad_checkpoint`, 4.3 GiB peak) —
+**Ceiling: ~270M params** (d=1024, 24L, bf16 + `--grad_checkpoint`, 4.3 GiB peak) —
 measured **16.8 bytes/param** end-to-end (bf16 weights + grads + fp32 AdamW moments +
 master). **1B (~16 GB) and 10B (~160 GB) cannot train on this card — off by ~3× and ~30×** —
 and 10B can't even bf16-load (20 GB weights). Knobs ranked by measured effect: bf16
@@ -303,7 +303,7 @@ view of the gradient is compressed — still genuine full-parameter training.
 | d=2048, 24L, BCD+ckpt, **+ GaLore** | 1.04B | 4.43 GiB alloc / 4.69 GiB reserved — **flat, not additive** |
 | d=3072, 32L, BCD+ckpt+GaLore | 3.07B | ❌ 12.5 GiB — hits the `2M` floor (see below) |
 
-**Two honest findings, not oversold:**
+**Two findings:**
 - **GaLore alone gives a real 24% reduction** — well short of the paper's headline 65.5%,
   because that figure is *optimizer-state-only* on a 7B model where optimizer state
   dominates total memory. Here activation memory (untouched by GaLore) dilutes the
@@ -355,7 +355,7 @@ allocated after the first block of each shape is seen) + `BlockCoordinateSchedul
 **Peak allocated memory matches the design's promise** — ~1 GiB regardless of scaling
 toward 1.5B, confirmed via an instrumented single-step trace (peaked at 716 MB before the
 buffer pool, ~1.15 GiB after — both far below vanilla's multi-GB requirement). The buffer
-pool also delivered a genuine **2.4× speedup** (10.7s → 4.5s/step at 1.54B) by eliminating
+pool also delivered a **2.4× speedup** (10.7s → 4.5s/step at 1.54B) by eliminating
 the CUDA allocator churn from constant fresh alloc/free on every block swap (measured
 before the pool: 317 reserved memory segments, ~290 GB of cumulative allocate/free traffic
 over just 6 steps).
@@ -456,7 +456,7 @@ storage and (b) per-step training time.
 invocations (call #1 forward, call #2 backward recompute) instead of evicting immediately,
 sized via `offload_cache_blocks` (LRU eviction beyond that capacity). Verified correct
 (gradient parity, cache-hit + no-pileup regression tests, 174/174 suite) and effective at
-the practical ~1.5–2B sweet spot. **Honest limit found, not a bug**: on a 95-layer, ~4B
+the practical ~1.5–2B sweet spot. **A limit, not a bug**: on a 95-layer, ~4B
 stress config, raising `cache_blocks` 8→32 did *not* help — backward recomputes in reverse
 order, so a block must stay resident through nearly the whole stack to get reused, which no
 affordable cache size reaches at that depth; bigger cache there only added VRAM pressure
@@ -683,7 +683,7 @@ bigger comfortable config and more bf16 width headroom (#44), **not a categorica
 > tokens/param. The extra 2 GB of an 8 GB card does not change that — it buys micro-batch 2
 > without the WDDM spill that costs 21% here, worth single-digit percent.
 >
-> 10B remains genuinely out of reach: the ~160 GB figure is against system RAM for the
+> 10B remains out of reach: the ~160 GB figure is against system RAM for the
 > CPU-side fp32 home tensors, and this box has ~15.3 GiB.
 
 > **"RTX 4060" caveat:** laptop and desktop 4060 are 8 GB, but the desktop **4060 Ti** ships
@@ -769,7 +769,7 @@ only on the output `.bin` existing, so silently appending more text to SlimPajam
 **Real bug found and fixed while integrating this**: unlike the other 3 sources (all under
 ~5 GB, so preparing them unconditionally regardless of mix share is cheap, the existing
 pattern), FineWeb-Edu can be hundreds of GB — an early version loaded/tokenized it
-unconditionally, which caused genuinely slow test runs and, worse, a real file collision
+unconditionally, which caused slow test runs and, worse, a real file collision
 (`PermissionError` on `fineweb_edu.bin.tmp`) between a stale unconditional-load test process
 and a concurrent real download, that also silently wrote a runaway 66 GB extraction from a
 still-in-progress download. Fixed: FineWeb-Edu is only loaded/tokenized when its mix share is
@@ -810,7 +810,7 @@ sidesteps WikiText's #119 mix-ratio cap by construction rather than needing to t
 | `--full` | flag | Issue #50 meta-flag: enable the **complete recommended fast-training stack** in one switch. Explicit flags override. See below. |
 
 **The `--full` meta-flag (Issue #50).** One switch that turns on the whole recommended
-stack. Expands into two **honestly-labelled** categories:
+stack. Expands into two categories:
 
 | Category | What it enables | Honesty |
 |----------|-----------------|---------|
@@ -1015,7 +1015,7 @@ fewer.** Muon also passes 6.0, which AdamW never reaches in the whole run. Muon 
 (step 100) and overtakes by step 200, so a short smoke test can read the wrong way.
 
 **Wall-clock, which #86 did not report: Muon runs at 0.7 steps/s vs AdamW's 0.8 — ~12% slower
-per step.** The honest end-to-end win is therefore **~1.54x**, not 1.75x (1,250 s for AdamW's
+per step.** The end-to-end win is therefore **~1.54x**, not 1.75x (1,250 s for AdamW's
 1,000 steps vs ~814 s for Muon's 570).
 
 **Ternary does not change Muon's relative advantage.** Final gap here (ternary on) is 0.395;
@@ -1121,13 +1121,13 @@ locally in 6–8 months** and leaves **6B out of reach by roughly 30×**.
 
 | target | local time | verdict |
 |---|---|---|
-| **142M** | **3.6 days** | ✅ the honest local ceiling |
+| **142M** | **3.6 days** | ✅ the local ceiling |
 | 300M | ~129 days (measured, #112) | ❌ |
 | 1B | 6–8 months | ❌ |
 | 6B | 2.5–33 years | ❌ by ~30× |
 
 **A note for future planning.** "It fits in VRAM" and "it can be trained" are different claims,
 and this project spent considerable effort on the first while believing it was progress toward
-the second. The 6B-at-1-GiB result is a genuine engineering achievement and simultaneously not
+the second. The 6B-at-1-GiB result is an engineering achievement and simultaneously not
 a training capability. Any future size decision should start from `6 · N · D ÷ throughput`, not
 from whether the model loads.
