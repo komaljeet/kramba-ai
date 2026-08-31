@@ -1,0 +1,16 @@
+{
+  "params": 1212750391,
+  "offload": true,
+  "seq": 4096,
+  "batch": 1,
+  "phases_sec": {
+    "fwd": 0.8439535999932559,
+    "bwd": 1.922131699990132,
+    "opt": 0.1718579000007594,
+    "total": 2.938060599990422
+  },
+  "tok_per_sec": 1394.116921895128,
+  "gpu_busy_mean": 98.4,
+  "gpu_busy_samples": 80,
+  "peak_reserved_gb": 5.751953125
+}

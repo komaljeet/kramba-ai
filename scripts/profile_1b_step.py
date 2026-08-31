@@ -41,9 +41,26 @@ from scripts.ab_prodigy import enable_scan_flags         # noqa: E402
 
 
 def plan(num_layers: int):
+    """Two sliding-window attention layers, the rest DeltaNet.
+
+    Positions were hardcoded to 3 and 10, which raised IndexError below 11
+    layers and blocked the depth-vs-width sweep (2026-08-31). They are now
+    placed proportionally at the same fractions of depth those indices sat at
+    in the 24-layer reference (1/8 and 5/12), so a shallower config keeps the
+    same *shape* rather than the same absolute indices.
+
+    The COUNT stays at 2 regardless of depth, deliberately: that is the
+    architecture's design, and for a step-time measurement only the count
+    matters -- an attention layer costs the same wherever it sits.
+    """
+    if num_layers < 2:
+        raise ValueError(f"need >= 2 layers to place 2 attention layers, got {num_layers}")
     p = ["deltanet"] * num_layers
-    p[3] = "transformer"
-    p[10] = "transformer"
+    a, b = num_layers // 8, (5 * num_layers) // 12
+    if a == b:                      # too shallow for the fractions to separate
+        a, b = 0, 1
+    p[a] = "transformer"
+    p[b] = "transformer"
     return p
 
 
