@@ -1,5 +1,7 @@
 # kramba-ai — training language models on one 6 GB GPU
 
+[![DOI](https://doi.org/10.5281/zenodo.22725430)](https://doi.org)
+
 A training and evaluation stack for linear-attention language models that runs on a single
 consumer graphics card. The headline result, measured rather than estimated: **a 1.07-billion
 parameter model trains in 4.00 GB**, and ~1.6B is the ceiling on the card.
