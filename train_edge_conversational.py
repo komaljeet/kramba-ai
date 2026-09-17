@@ -2884,7 +2884,7 @@ def train(
     csv_file = open(log_file, "a", newline="", encoding="utf-8")
     csv_writer = csv.writer(csv_file)
     if not file_exists:
-        csv_writer.writerow(["step", "epoch", "loss", "ppl", "lr", "timestamp"])
+        csv_writer.writerow(["step", "epoch", "loss", "ppl", "lr", "peak_vram_gb", "reserved_vram_gb", "tokens_sec", "timestamp"])
     csv_file.flush()
 
     # --- Held-out validation logging (A/B primary metric) ---
@@ -3099,10 +3099,14 @@ def train(
                 if dyn_lr is not None:
                     dyn_str = (f"  |  xLR: {dyn_lr.multiplier:.2f} "
                                f"(eff {current_lr * dyn_lr.multiplier:.6f})")
+                peak_vram = torch.cuda.max_memory_allocated() / 1024**3
+                reserved_vram = torch.cuda.memory_reserved() / 1024**3
+                tokens_sec = steps_per_sec * config["batch_size"] * config["seq_len"] * config["grad_accum"]
                 print(f"  Step {global_step:>6d} (epoch {epoch})  |  "
                       f"Loss: {step_loss:.4f}  |  PPL: {step_ppl:.2f}  |  "
                       f"LR: {current_lr:.6f}{dyn_str}  |  "
-                      f"{steps_per_sec:.1f} steps/s")
+                      f"{steps_per_sec:.1f} steps/s ({tokens_sec:.0f} tok/s)  |  "
+                      f"VRAM: {peak_vram:.2f}/{reserved_vram:.2f} GB")
 
                 # Per-source loss reporting
                 if any(source_count):
@@ -3115,7 +3119,8 @@ def train(
 
                 csv_writer.writerow([
                     global_step, epoch, f"{step_loss:.6f}", f"{step_ppl:.4f}",
-                    f"{current_lr:.8f}", time.strftime("%Y-%m-%d %H:%M:%S"),
+                    f"{current_lr:.8f}", f"{peak_vram:.4f}", f"{reserved_vram:.4f}",
+                    f"{tokens_sec:.2f}", time.strftime("%Y-%m-%d %H:%M:%S"),
                 ])
                 csv_file.flush()
 
