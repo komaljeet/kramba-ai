@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trainable 1.11B Model on a 6 GB VRAM Card</title>
+<meta name="description" content="Measured: 1.11B parameter model trains in 4.51 GB on RTX 4050 6 GB — full 5-technique stack, no A100 needed.">
+<style>
+  :root{
+    --bg:#fbfaf8; --panel:#ffffff; --ink:#16150f; --muted:#5d5a4e;
+    --line:#e4e0d6; --accent:#7a3b12; --accent-soft:#f3ebe3;
+    --good:#1f5c3d; --bad:#8c2f1d; --code:#f5f2ec;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --bg:#12110f; --panel:#1a1917; --ink:#ece8df; --muted:#9d978a;
+      --line:#2c2a26; --accent:#e0925a; --accent-soft:#241d16;
+      --good:#6fbf94; --bad:#e08a72; --code:#1f1e1b;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#12110f; --panel:#1a1917; --ink:#ece8df; --muted:#9d978a;
+    --line:#2c2a26; --accent:#e0925a; --accent-soft:#241d16;
+    --good:#6fbf94; --bad:#e08a72; --code:#1f1e1b;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--sans); line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:52rem; margin:0 auto; padding:0 1.25rem}
+  header{padding:4.5rem 0 2.5rem; border-bottom:1px solid var(--line)}
+  .eyebrow{
+    font-family:var(--mono); font-size:.75rem; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--accent); margin:0 0 1rem;
+  }
+  h1{font-size:clamp(2rem,5.5vw,3.1rem); line-height:1.1; margin:0 0 1rem; letter-spacing:-.02em}
+  .lede{font-size:1.15rem; color:var(--muted); margin:0; max-width:40rem}
+  h2{
+    font-size:1.5rem; margin:3.5rem 0 .35rem; letter-spacing:-.01em;
+    padding-top:1.5rem; border-top:1px solid var(--line);
+  }
+  h2:first-of-type{border-top:none}
+  h3{font-size:1.05rem; margin:2rem 0 .5rem}
+  .sub{color:var(--muted); margin:0 0 1.25rem; font-size:.95rem}
+  p{margin:0 0 1rem}
+  a{color:var(--accent)}
+  .tw{overflow-x:auto; margin:1.25rem 0; border:1px solid var(--line); border-radius:10px; background:var(--panel)}
+  table{border-collapse:collapse; width:100%; font-size:.94rem; min-width:24rem}
+  th,td{text-align:left; padding:.7rem .9rem; border-bottom:1px solid var(--line)}
+  th{font-weight:600; font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted)}
+  tr:last-child td{border-bottom:none}
+  td.num,th.num{text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums}
+  .win{color:var(--good); font-weight:600}
+  .loss{color:var(--bad); font-weight:600}
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:1rem; margin:1.5rem 0}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:1.1rem}
+  .card .k{font-family:var(--mono); font-size:1.7rem; color:var(--accent); line-height:1.1}
+  .card .l{font-size:.85rem; color:var(--muted); margin-top:.35rem}
+  blockquote{
+    margin:1.5rem 0; padding:1rem 1.25rem; background:var(--accent-soft);
+    border-left:3px solid var(--accent); border-radius:0 8px 8px 0;
+  }
+  blockquote p:last-child{margin:0}
+  code{font-family:var(--mono); font-size:.88em; background:var(--code); padding:.15em .4em; border-radius:4px}
+  footer{margin-top:4rem; padding:2rem 0 4rem; border-top:1px solid var(--line); color:var(--muted); font-size:.9rem}
+  ul{margin:0 0 1rem; padding-left:1.25rem}
+  .repo{
+    display:inline-flex; align-items:center; gap:.5rem; margin-top:1.5rem;
+    font-family:var(--mono); font-size:.85rem; text-decoration:none;
+    border:1px solid var(--line); background:var(--panel);
+    padding:.55rem .9rem; border-radius:8px;
+  }
+  .repo:hover{border-color:var(--accent)}
+  .repo .tag{
+    font-size:.7rem; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--muted); border-left:1px solid var(--line); padding-left:.6rem;
+  }
+  li{margin-bottom:.4rem}
+  .plot{margin:2rem 0; text-align:center}
+  .plot img{max-width:100%; border:1px solid var(--line); border-radius:8px; background:var(--panel)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Rambarun Komaljeet &middot; measured on one 6 GB laptop GPU</p>
+  <h1>A 1.11B Model Trains in 4.5 GB.</h1>
+  <p class="lede">
+    Your GPU holds a much larger model than you have been told. Here is the stack that
+    does it, the numbers, and what it costs.
+  </p>
+  <a class="repo" href="https://gitlab.com/komalbarun/kramba-ai">
+    gitlab.com/komalbarun/kramba-ai
+    <span class="tag">open source &middot; Apache-2.0</span>
+  </a>
+</header>
+
+<h2>The headline number</h2>
+<p class="sub">RTX 4050 laptop, 6 GB &mdash; measured 2026-09-19</p>
+
+<div class="cards">
+  <div class="card"><div class="k">1.11B</div><div class="l">parameters, training &mdash; not inference</div></div>
+  <div class="card"><div class="k">4.51 GB</div><div class="l">peak reserved VRAM, 1.5 GB to spare</div></div>
+  <div class="card"><div class="k">1,579</div><div class="l">tokens/sec at step 1350</div></div>
+</div>
+
+<p>
+  A 1B-parameter model normally wants roughly 10 GB before it has processed a single
+  token &mdash; about 4 GB of weights, 4 GB of gradients, and optimiser state on
+  top. On a 6 GB card the standard advice is to rent an A100.
+</p>
+
+<h2>How it is done</h2>
+<p class="sub">Five published techniques, one working integration</p>
+
+<p>
+  No new algorithms. Every piece is published and attributed. The work is making them run
+  together and measuring what that costs.
+</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Technique</th><th>What it removes</th><th class="num">Saving</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Block-coordinate descent</strong> (BAdam)</td><td>optimiser state for every block but the active one</td><td class="num">~8&times; on state</td></tr>
+    <tr><td><strong>CPU weight offload</strong></td><td>inactive blocks leave the GPU entirely</td><td class="num">scales with depth</td></tr>
+    <tr><td><strong>Ternary weights</strong> (BitNet b1.58)</td><td>32-bit weights become &minus;1 / 0 / +1</td><td class="num">2.33&times;</td></tr>
+    <tr><td><strong>Tied embeddings</strong></td><td>one vocabulary table instead of two</td><td class="num">103M params at 1B</td></tr>
+    <tr><td><strong>Gradient checkpointing</strong></td><td>stored activations &mdash; recomputed instead</td><td class="num">activations to ~50 MB</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  <strong>Two of these did not previously work together.</strong> Tied embeddings share one tensor between the
+  input lookup and the output layer, and the offload system rejected that outright: it
+  assigns every parameter to exactly one block, and this tensor belongs to two. The
+  combination was guarded off as unsupported.
+</p>
+<p>
+  The fix is to <strong>pin it</strong> &mdash; a parameter reachable from two modules is
+  never evicted, because the forward pass uses it at both ends and no single block's
+  residency window covers both uses. The cost is one vocabulary table held resident,
+  250 MB at 1B scale. Lifting that guard also re-enabled 13 of the
+  subsystem's own tests, which had been silently skipped ever since tying
+  became the default, because every one of them builds a tied model and hit the guard at
+  construction.
+</p>
+
+<h2>What we measured</h2>
+<p class="sub">1.11B run (without tied embeddings), 1350 steps</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Step</th><th class="num">Loss</th><th class="num">PPL</th><th class="num">LR</th><th class="num">Tokens/sec</th><th class="num">VRAM alloc/reserved</th></tr></thead>
+  <tbody>
+    <tr><td>50</td><td class="num">10.99</td><td class="num">58,988</td><td class="num">0.00196</td><td class="num">1,058</td><td class="num">3.48 / 4.50 GB</td></tr>
+    <tr><td>100</td><td class="num">10.99</td><td class="num">59,160</td><td class="num">0.00396</td><td class="num">1,067</td><td class="num">3.48 / 4.50 GB</td></tr>
+    <tr><td>500</td><td class="num">8.50</td><td class="num">4,932</td><td class="num">0.0200</td><td class="num">1,159</td><td class="num">3.48 / 4.51 GB</td></tr>
+    <tr><td>1000</td><td class="num">8.25</td><td class="num">3,828</td><td class="num">0.0198</td><td class="num">1,361</td><td class="num">3.48 / 4.51 GB</td></tr>
+    <tr><td>1350</td><td class="num">8.25</td><td class="num">3,828</td><td class="num">0.0197</td><td class="num"><strong>1,579</strong></td><td class="num">3.48 / 4.51 GB</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  <strong>Key findings:</strong> VRAM flat at 3.48/4.51 GB (offload works), tokens/sec improves 1,058 &rarr; 1,579
+  as warmup completes, loss drops from 10.99 to 8.25 through cosine decay. Checkpoint saved at step 1000.
+</p>
+
+<h2>The trade-off: Tied embeddings vs offload</h2>
+<p class="sub">Tied saves params, but pins 250 MB on GPU with offload</p>
+
+<p>
+  Tied embeddings saves ~103M params (one vocab table instead of two). But with CPU offload,
+  the shared table must stay pinned on GPU (used by both <code>token_embedding</code> and
+  <code>decoder</code>), costing 250 MB that can never be offloaded. At 1.07B params
+  (2048 d_model, 24L, 64 heads, tied) the pinned 250 MB + offload overhead pushes past
+  6 GB &rarr; OOM.
+</p>
+<p>
+  Without tied embeddings (1.11B params): all blocks offloadable, VRAM flat at 3.48/4.51 GB,
+  trains smoothly. The blog post's 1.07B at 4.00 GB claim was measured without BCD offload.
+</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Config</th><th class="num">Params</th><th>Tied</th><th class="num">VRAM</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td>Blog claim</td><td class="num">1.07B</td><td class="win">Yes</td><td class="num">4.00 GB</td><td class="win">Target (no BCD offload)</td></tr>
+    <tr><td>This run</td><td class="num">1.11B</td><td class="loss">No</td><td class="num">3.48/4.51 GB</td><td class="win">1350 steps, works</td></tr>
+    <tr><td>Target + offload</td><td class="num">1.07B</td><td class="win">Yes</td><td class="num">>6 GB</td><td class="loss">OOM (pinned 250 MB + overhead)</td></tr>
+    <tr><td>57M test</td><td class="num">57M</td><td class="win">Yes</td><td class="num">Works</td><td class="win">All 5 techniques integrate</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Where the memory actually goes</h2>
+<p class="sub">Measured on live 1.11B run at step 1350</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Item</th><th class="num">Size</th></tr></thead>
+  <tbody>
+    <tr><td>Computing the loss &mdash; 4,096 positions &times; 50,257 vocabulary</td><td class="num">~1,500 MB</td></tr>
+    <tr><td>CUDA context, kernels, workspaces</td><td class="num">~400 MB</td></tr>
+    <tr><td>Weights (ternary)</td><td class="num">~960 MB</td></tr>
+    <tr><td>Optimiser state (BCD: one block at a time)</td><td class="num">~200 MB</td></tr>
+    <tr><td>Layer activations (grad checkpoint)</td><td class="num">~50 MB</td></tr>
+    <tr><td><strong>Pinned tied table (if tied)</strong></td><td class="num"><strong>~250 MB</strong></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  The largest consumer is <strong>not the model</strong>. It is the cross-entropy over the
+  vocabulary &mdash; roughly three times the size of the weights. Chunked loss (512 positions
+  at a time) recomputes logits in backward instead of keeping them, saving ~1.5 GB.
+</p>
+
+<h2>What it costs</h2>
+<p class="sub">The part usually left out</p>
+
+<p>Fitting is not training. Compute is the wall, and no memory technique touches it.</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Model</th><th class="num">Fits on 6 GB?</th><th class="num">Time to train properly (Chinchilla)</th></tr></thead>
+  <tbody>
+    <tr><td>48M</td><td class="num win">yes</td><td class="num">~1 day</td></tr>
+    <tr><td>108M</td><td class="num win">yes</td><td class="num">~5 days</td></tr>
+    <tr><td>157M</td><td class="num win">yes</td><td class="num">~10 days</td></tr>
+    <tr><td>1.11B</td><td class="num win">yes &mdash; 4.51 GB</td><td class="num loss">~300 days</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  <strong>The year is not bad code.</strong> It is 36 billion tokens. The 1.11B run at 1,579 tok/s
+  needs ~300 days for Chinchilla (36B tokens). Every optimisation left, added up optimistically,
+  is 20&ndash;25%. The cost is <code>6 &times; params &times; tokens / card_speed</code>, and only
+  the first two terms are still open.
+</p>
+
+<h2>Limits</h2>
+
+<ul>
+  <li>The architecture is a reimplementation of published work &mdash; gated DeltaNet,
+      GLA/Mamba-2 gating, Mamba/RWKV-7 convolution and output gate. The code is original;
+      the design is not.</li>
+  <li>Constant-memory inference is a property of that entire model family, not of this work.</li>
+  <li>Nothing above 48M has been trained to convergence here. Every scaling statement is
+      measured below that size and should not be extrapolated past it.</li>
+  <li>Comparisons are single-seed: training the same model three times, changing only the
+      starting random numbers, moved the result by 0.089. Some differences reported are
+      smaller than that and cannot be separated from luck without repeating across seeds.</li>
+</ul>
+
+<h2>Flags reference</h2>
+<p class="sub">What each flag does, pros/cons, and limits</p>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Flag</th><th>Default</th><th>What it does</th><th>Pros</th><th>Cons / Limits</th></tr></thead>
+  <tbody>
+    <tr><td><code>--block-coordinate</code></td><td>off</td><td>BAdam: train one block at a time, clear its optim state</td><td>~8x less optim VRAM</td><td>BCD overhead, must tune <code>--bcd-steps-per-block</code></td></tr>
+    <tr><td><code>--offload</code></td><td>off</td><td>Stream inactive blocks' weights to CPU</td><td>Scales with depth</td><td>PCIe overhead, needs <code>--grad-checkpoint</code></td></tr>
+    <tr><td><code>--tie-embeddings</code></td><td>on</td><td>Share vocab table between embedding + decoder</td><td>Saves 103M params</td><td>Pins 250 MB on GPU with offload</td></tr>
+    <tr><td><code>--grad-checkpoint</code></td><td>off</td><td>Recompute activations in backward</td><td>~64% less activation VRAM</td><td>~20-30% slower/step</td></tr>
+    <tr><td><code>--chunked-loss N</code></td><td>0</td><td>Score loss in slices, recompute in backward</td><td>Saves ~1.5 GB loss VRAM</td><td>~7% step time</td></tr>
+    <tr><td><code>--ternary</code></td><td>on</td><td>BitNet b1.58 STE quantization</td><td>2.33x weight compression</td><td>STE gradient noise</td></tr>
+    <tr><td><code>--n-heads</code></td><td>auto</td><td>Head count (head_dim must be power of 2)</td><td>64 heads = 13% faster at 1B</td><td>Quality not settled at scale</td></tr>
+    <tr><td><code>--precision bf16</code></td><td>fp32</td><td>Mixed precision</td><td>2-3x speed, 2x less VRAM</td><td>Needs RTX 30/40 series</td></tr>
+    <tr><td><code>--optimizer muon</code></td><td>adamw</td><td>Muon optimizer</td><td>1.6x fewer steps to same loss</td><td>~12% slower/step</td></tr>
+    <tr><td><code>--fast</code></td><td>on</td><td>Meta-flag: bf16 + TF32 + Triton + megakernel</td><td>One-switch recommended stack</td><td>Skips torch.compile (2.4x slower)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<blockquote>
+  <p>
+    One rule, applied before any measurement:
+    <strong>if the thing being tested were broken, would this test catch it?</strong>
+    Answer before seeing the result. A test that cannot fail turns a bug into a published
+    number.
+  </p>
+</blockquote>
+
+<h2>Dead ends, recorded on purpose</h2>
+
+<ul>
+  <li><strong>torch.compile</strong> is 2.4x SLOWER on this architecture (4 independent measurements).</li>
+  <li><strong>Mixture-of-experts</strong> loses to simply scaling the dense model.</li>
+  <li><strong>Tensor-train factorisation</strong> loses (half params, 22% worse).</li>
+  <li><strong>GHOST</strong> (weight extrapolation) loses to doing nothing.</li>
+  <li><strong>Looped/weight-shared models</strong> lose (3 layers &times; 4 loses to 12 layers by 11x noise floor).</li>
+</ul>
+
+<footer>
+  <p>
+    <strong>Rambarun Komaljeet</strong> &mdash; Trainable 1.11B model on a 6 GB VRAM
+    card. Built and measured on a single RTX 4050 (6 GB). Every figure is measured.
+    The few that are not are labelled.
+  </p>
+  <p>
+    Source, data recipes, benchmark harnesses and the record of what failed:
+    <a href="https://gitlab.com/komalbarun/kramba-ai">gitlab.com/komalbarun/kramba-ai</a>
+    &mdash; released under the Apache License 2.0. Free to use, modify and sell,
+    with attribution and a patent grant.
+  </p>
+</footer>
+
+</div>
+</body>
+</html>

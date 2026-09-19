@@ -45,7 +45,7 @@ Triton scan and megakernel, and the fixes that make them work together.
 
 | claim | status |
 |---|---|
-| 1.07B-parameter model **trains in 4.00 GB**, 875 tok/s | measured 2026-08-14/17 |
+| 1.11B-parameter model **trains in 4.51 GB**, 1,579 tok/s | measured 2026-09-19 |
 | **~1.6B is the size ceiling** (2.45B spills to system RAM) | measured 2026-08-17 |
 | the stack is **not architecture-specific** — a plain 1.07B transformer also trains in 4.04 GB | measured 2026-08-17 |
 | flat ms/token from 256 → 4096 tokens of context | measured, [benchmarks_speed.md](docs/benchmarks_speed.md) |
@@ -55,6 +55,7 @@ Triton scan and megakernel, and the fixes that make them work together.
 | **not cheaper to train** — a transformer is 1.41× faster per step | measured; the win is at inference only |
 | the 1B step runs at **close to hardware limits** — matmuls hit 100.6% of the card's own measured GEMM ceiling | measured 2026-08-31 |
 | `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 |
+| **1.11B trains in 4.51 GB with 5-technique stack** (BCD + offload + ternary + grad checkpoint + chunked loss) | measured 2026-09-19, 1350 steps |
 
 One row deliberately removed: earlier versions led with "18.7% of attention's FLOPs" and
 "6.29 MB vs 2.46 GB of memory". Both were **hand-derived, never benchmarked**, and both

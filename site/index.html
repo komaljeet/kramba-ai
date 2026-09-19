@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trainable 1.07B model on a 6 GB VRAM card</title>
-<meta name="description" content="Trainable 1.07B model on a 6 GB VRAM card — measured envelopes for training language models on consumer GPUs: 1.07B parameters in 4.05 GB. Open source, Apache-2.0.">
+<title>Trainable 1.11B model on a 6 GB VRAM card</title>
+<meta name="description" content="Trainable 1.11B model on a 6 GB VRAM card — measured envelopes for training language models on consumer GPUs: 1.11B parameters in 4.51 GB. Open source, Apache-2.0.">
 <style>
   :root{
     --bg:#fbfaf8; --panel:#ffffff; --ink:#16150f; --muted:#5d5a4e;
@@ -87,7 +87,7 @@
 
 <header>
   <p class="eyebrow">Rambarun Komaljeet &middot; measured on one 6&nbsp;GB laptop GPU</p>
-  <h1>A 1B model trains in 4&nbsp;GB.</h1>
+  <h1>A 1.11B model trains in 4.5&nbsp;GB.</h1>
   <p class="lede">
     Your GPU holds a much larger model than you have been told. Here is the stack that
     does it, the numbers, and what it costs.
@@ -99,12 +99,12 @@
 </header>
 
 <h2>The headline number</h2>
-<p class="sub">RTX 4050 laptop, 6&nbsp;GB &mdash; measured 2026-08-14</p>
+<p class="sub">RTX 4050 laptop, 6&nbsp;GB &mdash; measured 2026-09-19</p>
 
 <div class="cards">
-  <div class="card"><div class="k">1.07B</div><div class="l">parameters, training &mdash; not inference</div></div>
-  <div class="card"><div class="k">4.05 GB</div><div class="l">peak VRAM, 1.9&nbsp;GB to spare</div></div>
-  <div class="card"><div class="k">1,111</div><div class="l">tokens/sec at 4,096 context</div></div>
+  <div class="card"><div class="k">1.11B</div><div class="l">parameters, training &mdash; not inference</div></div>
+  <div class="card"><div class="k">4.51 GB</div><div class="l">peak VRAM, 1.5&nbsp;GB to spare</div></div>
+  <div class="card"><div class="k">1,579</div><div class="l">tokens/sec at 4,096 context</div></div>
 </div>
 
 <p>
@@ -128,7 +128,7 @@
     <tr><td><strong>Block-coordinate descent</strong> (BAdam)</td><td>optimiser state for every block but the active one</td><td class="num">~8&times; on state</td></tr>
     <tr><td><strong>CPU weight offload</strong></td><td>inactive blocks leave the GPU entirely</td><td class="num">scales with depth</td></tr>
     <tr><td><strong>Ternary weights</strong> (BitNet b1.58)</td><td>32-bit weights become &minus;1 / 0 / +1</td><td class="num">2.33&times;</td></tr>
-    <tr><td><strong>Tied embeddings</strong></td><td>one vocabulary table instead of two</td><td class="num">70M params at 1B</td></tr>
+    <tr><td><strong>Tied embeddings</strong></td><td>one vocabulary table instead of two</td><td class="num">103M params at 1B</td></tr>
     <tr><td><strong>Gradient checkpointing</strong></td><td>stored activations &mdash; recomputed instead</td><td class="num">activations to ~50 MB</td></tr>
   </tbody>
 </table>

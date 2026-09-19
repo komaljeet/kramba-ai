@@ -187,6 +187,7 @@ class GPUBufferPool:
         self._resident: OrderedDict[str, dict] = OrderedDict()  # key -> {buffers, params, sig}
         self._cpu_home: dict[int, torch.Tensor] = {}  # id(p) -> its stable CPU tensor
         self._native_dtype: dict[int, torch.dtype] = {}  # id(p) -> its true training dtype
+        self._pinned_ids: set[int] = set()  # id(p) -> pinned params that must never be evicted
         # Issue #115: a side CUDA stream for prefetching the NEXT block's
         # CPU->GPU copy while compute for the CURRENT block runs on the
         # main/default stream. None on non-CUDA devices (prefetch() then
@@ -260,8 +261,13 @@ class GPUBufferPool:
         active block always shows real local descent within its own window --
         see tests/test_block_coordinate_offload.py::
         test_deactivated_block_retains_training_across_cycles.
+
+        Pinned params (tied embeddings) are never registered -- they must
+        never be evicted to CPU.
         """
         for p in params:
+            if id(p) in self._pinned_ids:
+                continue
             if p.data.device.type != "cpu":
                 continue
             if force or id(p) not in self._cpu_home:
@@ -304,8 +310,10 @@ class GPUBufferPool:
         list contains a tensor the pool has never owned. Before this,
         prefetching the tail raised KeyError and the two features could not be
         combined at all.
+
+        Pinned params (tied embeddings) are never offloaded.
         """
-        return [q for q in params if id(q) in self._cpu_home]
+        return [q for q in params if id(q) in self._cpu_home and id(q) not in self._pinned_ids]
 
     def load(self, key: str, params: list[nn.Parameter]) -> None:
         """Move `params` onto `self.device`, keyed by `key` (the block's
@@ -471,6 +479,8 @@ class GPUBufferPool:
 
     def _release(self, entry: dict) -> None:
         for p in entry["params"]:
+            if id(p) in self._pinned_ids:
+                continue
             home = self._cpu_home.get(id(p))
             if home is not None:
                 p.data = home
@@ -731,6 +741,7 @@ class BlockCoordinateScheduler:
         if self.buffer_pool is not None:
             model._offload_pool = self.buffer_pool
             model._offload_prefetch = offload_prefetch
+            self.buffer_pool._pinned_ids = self._pinned
             # Issue #113: capture every param's true training dtype BEFORE
             # any parking/activation happens below, so park_dtype_for() can
             # later tell "should this be downcast while parked" from "is

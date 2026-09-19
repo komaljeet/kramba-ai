@@ -3618,16 +3618,12 @@ def main():
     #   grad_checkpoint  : offload evicts a block's weights after its forward;
     #                      the checkpoint recompute is what fetches them back
     #                      for the backward (EdgeHVN.forward raises without it)
-    #   tie_embeddings   : #151 -- the shared table belongs to no single block,
-    #                      so it cannot be parked or evicted
+    #   tie_embeddings   : #157 -- the shared table is PINNED (not offloaded) by
+    #                      BlockCoordinateScheduler, so it works with offload
     if args.offload:
-        if args.tie_embeddings:
-            parser.error(
-                "--offload is incompatible with --tie-embeddings (#151): the "
-                "shared embedding table belongs to no single block, so it "
-                "cannot be parked or evicted. Pass --no-tie-embeddings. Note "
-                "this costs ~103M parameters at d=2048, and #139 measured tied "
-                "as 0.058 nats BETTER -- a real price, not a formality.")
+        # #151 was lifted by #157: tied embeddings are now pinned to the
+        # token_embedding block and never evicted, so they work with offload.
+        pass
         if not args.block_coordinate:
             args.block_coordinate = True
             print("[#163] --offload implies --block-coordinate; enabling it.")
