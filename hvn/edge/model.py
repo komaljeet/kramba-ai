@@ -271,6 +271,11 @@ class EdgeHVN(nn.Module):
             return fn()
 
         params = [p for m in modules for p in m.parameters()]
+        # Pinned params (e.g. tied embeddings) have no CPU home and must stay
+        # on GPU. Skip offload wrapper entirely for them.
+        if not self._offload_pool._offloadable(params):
+            return fn()
+
         self._offload_pool.load(name, params)
         out = fn()
 
