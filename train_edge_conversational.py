@@ -1642,7 +1642,7 @@ def build_dataset_pipeline(
     print("STEP 2 — DATASET PIPELINE")
     print("=" * 70)
 
-    eff_mix = mix if mix is not None else (0.50, 0.35, 0.15, 0.0)
+    eff_mix = mix if mix is not None else (0.0, 0.0, 0.0, 1.0)
     mix_ratio = {"SlimPajama": eff_mix[0], "OpenAssistant": eff_mix[1],
                  "WikiText-103": eff_mix[2], "FineWeb-Edu": eff_mix[3]}
     print(f"\nMix ratio: {mix_ratio}")
@@ -3305,16 +3305,17 @@ def main():
                              "than silently reusing differently-cut data.")
     parser.add_argument("--fim-separator", type=str, default="<|endoftext|>",
                         help="Document separator in the corpus file.")
-    parser.add_argument("--pretrain-mix", type=str, default=None,
+    parser.add_argument("--pretrain-mix", type=str, default="0.0,0.0,0.0,1.0",
                         help="Pretrain source mix as 'slim,oasst,wiki,fineweb_edu' fractions "
                              "(e.g. '0.85,0.0,0.15,0.0' = knowledge-heavy mix that DROPS "
                              "OpenAssistant from pretrain; '0.0,0.0,0.0,1.0' = FineWeb-Edu "
                              "only, Issue #120's recommended mix for 4B+ runs, sidesteps "
                              "WikiText's Issue #119 mix-ratio cap by construction). Default "
-                             "None = 0.50,0.35,0.15,0.0 (the original conversational mix, "
-                             "FineWeb-Edu off unless explicitly requested). Zero-fraction "
-                             "sources are excluded from the train index, so dropping the "
-                             "tiny ~16M-token OASST source stops it capping the dataset "
+                             "= '0.0,0.0,0.0,1.0' (FineWeb-Edu only, Issue #162). The old "
+                             "default (0.50,0.35,0.15,0.0) capped pretrain at 0.13B tokens "
+                             "via the OpenAssistant max_repeat bind, making 1B+ runs silently "
+                             "re-read the same data. Zero-fraction sources are excluded from "
+                             "the train index, so dropping OASST stops it capping the dataset "
                              "via the max_repeat bind (see build_dataset, and the #119/#120 "
                              "mix-cap warning it prints). OASST still goes into the separate "
                              "chat fine-tune stage. A nonzero FineWeb-Edu share requires "
