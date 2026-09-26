@@ -149,6 +149,13 @@
   became the default, because every one of them builds a tied model and hit the guard at
   construction.
 </p>
+<p>
+  <strong>Update 2026-09-26:</strong> the previously OOM combination (tied embeddings + CPU offload)
+  now works when combined with <strong>chunked cross-entropy (--chunked-loss 512)</strong>.
+  A 5-step fp32 test at 1.11B parameters ran at <strong>79% of 6 GB = 4.85 GB</strong> without OOM.
+  The pinned tied table (~206 MB bf16) plus chunked loss (~1.5 GB saved) makes the previously-untested
+  four-technique stack (BCD + offload + tied + chunked) fully composable.
+</p>
 
 <h2>What you get without any of this</h2>
 <p class="sub">The same card, a standard training script &mdash; measured, both columns</p>
@@ -371,6 +378,50 @@
   </tbody>
 </table>
 </div>
+
+<h3>11 ideas tested and rejected (measured, not guessed)</h3>
+<ol>
+  <li><strong>Original HVN architecture</strong> — lost by 13% at equal data vs gated DeltaNet (retracted)</li>
+  <li><strong>torch.compile</strong> — 2.4× slower (4 independent measurements)</li>
+  <li><strong>Mixture-of-Experts</strong> — loses to simply scaling the dense model</li>
+  <li><strong>Tensor-train factorisation</strong> — half params, 22% worse</li>
+  <li><strong>GHOST (weight extrapolation)</strong> — loses to doing nothing</li>
+  <li><strong>Looped/weight-shared models</strong> — 3 layers × 4 loses to 12 layers by 11× noise floor</li>
+  <li><strong>Chunk-parallel scan</strong> — 4× slower (serial triangular solves)</li>
+  <li><strong>Sequence-length curriculum</strong> — 2.9% slower (occupancy against 20 SMs)</li>
+  <li><strong>Per-token entanglement rate</strong> — no gain at 83M</li>
+  <li><strong>Entropy-gated early exit</strong> — does not work (retracted)</li>
+  <li><strong>Adafactor without BCD</strong> — spills to host RAM, 10× slower</li>
+</ol>
+
+<h3>5 retractions (conclusions this project withdrew)</h3>
+<ol>
+  <li><strong>Original HVN "novel architecture" claim</strong> — lost to published DeltaNet by 13%</li>
+  <li><strong>#117 cache serving untrained weights</strong> — whole epic on aggregate loss that still trended down</li>
+  <li><strong>#122 5-item recall gate</strong> — gating scale-up on luck-dominated measurement</li>
+  <li><strong>#132 verdict on train loss</strong> — multi-pass regime measures memorisation, not quality</li>
+  <li><strong>#138 CUDA graph "6.8× speedup"</strong> — compared one replay against one eager step from same state; both do same thing, passed at max|dlogits|=0 while context silently stopped growing</li>
+</ol>
+
+<h3>4 optimisations measured slower than doing nothing</h3>
+<ol>
+  <li><strong>torch.compile</strong> — 2.4× slower (20.72 vs 8.66 s/step)</li>
+  <li><strong>Chunk-parallel scan (Design A)</strong> — 2–4× slower at d=64</li>
+  <li><strong>Sequence-length curriculum</strong> — 2.9% slower at 83M</li>
+  <li><strong>Attention layer removal</strong> — 6.4% slower (attention is the cheap part during training)</li>
+</ol>
+
+<h3>8 silent bugs caught by falsifiable tests</h3>
+<ol>
+  <li><strong>#117</strong> — cache served untrained weights; only test watched aggregate loss (trended down)</li>
+  <li><strong>#122</strong> — 5-item recall gate passed by luck, not signal</li>
+  <li><strong>#132</strong> — graded on train loss in multi-pass regime (measures memorisation)</li>
+  <li><strong>#138</strong> — CUDA graph compared 1 step against 1 step from same state; both identical, passed at 0 diff</li>
+  <li><strong>#155</strong> — tokenizer.vocab_size EXCLUDES added tokens; embedding sized 3 rows short, OOB CUDA assert</li>
+  <li><strong>#157</strong> — tokenized .bin cache keyed on string "code", not corpus; silently reused old cache</li>
+  <li><strong>#112</strong> — pre-training audit deepcopied model to GPU, OOM'd 6 GB card at large sizes</li>
+  <li><strong>#159</strong> — cosine LR scheduler compounded decay on every resume (sawtooth LR)</li>
+</ol>
 
 <p>
   The largest one: this project began as an original architecture. Benchmarked against the

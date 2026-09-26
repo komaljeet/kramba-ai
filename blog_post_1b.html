@@ -151,6 +151,13 @@
   became the default, because every one of them builds a tied model and hit the guard at
   construction.
 </p>
+<p>
+  <strong>Update 2026-09-26:</strong> the previously OOM combination (tied embeddings + CPU offload)
+  now works when combined with <strong>chunked cross-entropy (--chunked-loss 512)</strong>.
+  A 5-step fp32 test at 1.11B parameters ran at <strong>79% of 6 GB = 4.85 GB</strong> without OOM.
+  The pinned tied table (~206 MB bf16) plus chunked loss (~1.5 GB saved) makes the previously-untested
+  four-technique stack (BCD + offload + tied + chunked) fully composable.
+</p>
 
 <h2>What we measured</h2>
 <p class="sub">1.11B run (without tied embeddings), 1350 steps</p>
@@ -194,20 +201,22 @@
   <tbody>
     <tr><td>Blog claim</td><td class="num">1.07B</td><td class="win">Yes</td><td class="num">4.00 GB</td><td class="win">Target (no BCD offload)</td></tr>
     <tr><td>This run</td><td class="num">1.11B</td><td class="loss">No</td><td class="num">3.48/4.51 GB</td><td class="win">1350 steps, works</td></tr>
-    <tr><td>Target + offload</td><td class="num">1.07B</td><td class="win">Yes</td><td class="num">>6 GB</td><td class="loss">OOM (pinned 250 MB + overhead)</td></tr>
+    <tr><td>Target + offload + chunked_loss</td><td class="num">1.11B</td><td class="win">Yes</td><td class="num">4.85 GB (79%)</td><td class="win">5 steps fp32, works (fixed)</td></tr>
+    <tr><td>Target + offload (no chunked)</td><td class="num">1.07B</td><td class="win">Yes</td><td class="num">>6 GB</td><td class="loss">OOM (pinned 250 MB + overhead)</td></tr>
     <tr><td>57M test</td><td class="num">57M</td><td class="win">Yes</td><td class="num">Works</td><td class="win">All 5 techniques integrate</td></tr>
   </tbody>
 </table>
 </div>
 
 <h2>Where the memory actually goes</h2>
-<p class="sub">Measured on live 1.11B run at step 1350</p>
+<p class="sub">Measured on live 1.11B run at step 1350 (untied) + 5-step fp32 test (tied + offload + chunked)</p>
 
 <div class="tw">
 <table>
   <thead><tr><th>Item</th><th class="num">Size</th></tr></thead>
   <tbody>
     <tr><td>Computing the loss &mdash; 4,096 positions &times; 50,257 vocabulary</td><td class="num">~1,500 MB</td></tr>
+    <tr><td><strong>Chunked loss (512 positions) saves</strong></td><td class="num win"><strong>~1,500 MB</strong></td></tr>
     <tr><td>CUDA context, kernels, workspaces</td><td class="num">~400 MB</td></tr>
     <tr><td>Weights (ternary)</td><td class="num">~960 MB</td></tr>
     <tr><td>Optimiser state (BCD: one block at a time)</td><td class="num">~200 MB</td></tr>
@@ -219,8 +228,10 @@
 
 <p>
   The largest consumer is <strong>not the model</strong>. It is the cross-entropy over the
-  vocabulary &mdash; roughly three times the size of the weights. Chunked loss (512 positions
-  at a time) recomputes logits in backward instead of keeping them, saving ~1.5 GB.
+  vocabulary &mdash; roughly three times the size of the weights. <strong>Chunked loss (512 positions
+  at a time) recomputes logits in backward instead of keeping them, saving ~1.5 GB</strong>.
+  This is what made the previously OOM combination (tied + offload) work: the pinned tied
+  table costs ~250 MB, but chunked loss returns ~1,500 MB, leaving headroom.
 </p>
 
 <h2>What it costs</h2>
