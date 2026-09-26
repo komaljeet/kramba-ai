@@ -1,8 +1,8 @@
 # kramba-ai — training language models on one 6 GB GPU
 
 A training and evaluation stack for linear-attention language models that runs on a single
-consumer graphics card. The headline result, measured rather than estimated: **a 1.07-billion
-parameter model trains in 4.00 GB**, and ~1.6B is the ceiling on the card.
+consumer graphics card. The headline result, measured rather than estimated: **a 1.11-billion
+parameter model trains in 4.51 GB**, and ~1.6B is the ceiling on the card.
 
 That's the whole project. The rest of this page is about what that does and doesn't mean.
 
@@ -56,6 +56,7 @@ Triton scan and megakernel, and the fixes that make them work together.
 | the 1B step runs at **close to hardware limits** — matmuls hit 100.6% of the card's own measured GEMM ceiling | measured 2026-08-31 |
 | `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 |
 | **1.11B trains in 4.51 GB with 5-technique stack** (BCD + offload + ternary + grad checkpoint + chunked loss) | measured 2026-09-19, 1350 steps |
+| **tied embeddings + offload + BCD + chunked_loss now composes** (previously OOM, fixed by pinning + chunked loss) | measured 2026-09-26, 79% VRAM (4.85 GB of 6 GB) at 1.11B fp32 |
 
 One row deliberately removed: earlier versions led with "18.7% of attention's FLOPs" and
 "6.29 MB vs 2.46 GB of memory". Both were **hand-derived, never benchmarked**, and both
