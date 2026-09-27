@@ -127,7 +127,7 @@
   <tbody>
     <tr><td><strong>Block-coordinate descent</strong> (BAdam)</td><td>optimiser state for every block but the active one</td><td class="num">~8&times; on state</td></tr>
     <tr><td><strong>CPU weight offload</strong></td><td>inactive blocks leave the GPU entirely</td><td class="num">scales with depth</td></tr>
-    <tr><td><strong>Ternary weights</strong> (BitNet b1.58)</td><td>fp32 weights → {-1, 0, +1} (1.58 bits), per-matrix fp32 scale</td><td class="num">2.33&times; weight storage</td></tr>
+    <tr><td><strong>Ternary weights</strong> (BitNet b1.58)</td><td>fp32 weights → {-1, 0, +1} (1.58 bits), per-matrix fp32 scale</td><td class="num"><strong>2.33&times; compression</strong> (weight tensors only)</td></tr>
     <tr><td><strong>Tied embeddings</strong></td><td>one vocabulary table instead of two</td><td class="num">103M params at 1B</td></tr>
     <tr><td><strong>Gradient checkpointing</strong></td><td>stored activations &mdash; recomputed instead</td><td class="num">activations to ~50 MB</td></tr>
   </tbody>

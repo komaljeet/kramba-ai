@@ -27,7 +27,7 @@ No new algorithms — every piece is published and attributed. The work was maki
 |-----------|-----------------|--------|
 | **Block-coordinate descent (BAdam)** | Optimizer state for every block but the active one | ~8× on optimizer state |
 | **CPU weight offload** | Inactive blocks leave the GPU entirely | Scales with depth |
-| **Ternary weights (BitNet b1.58)** | fp32 weights → {-1, 0, +1} (1.58 bits), per-matrix fp32 scale | 2.33× weight storage |
+| **Ternary weights (BitNet b1.58)** | fp32 weights → {-1, 0, +1} (1.58 bits), per-matrix fp32 scale | **2.33× compression** (weight tensors only) |
 | **Tied embeddings** | One vocabulary table instead of two | 103M params at 1B scale |
 | **Gradient checkpointing** | Stored activations — recomputed instead | Activations to ~50 MB |
 | **Chunked cross-entropy** | Logits materialized slice-by-slice, recomputed in backward | ~1.5 GB saved at 4,096 × 50K vocab |
