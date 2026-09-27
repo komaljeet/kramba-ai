@@ -129,12 +129,24 @@
   <tbody>
     <tr><td><strong>Block-coordinate descent</strong> (BAdam)</td><td>optimiser state for every block but the active one</td><td class="num">~8&times; on state</td></tr>
     <tr><td><strong>CPU weight offload</strong></td><td>inactive blocks leave the GPU entirely</td><td class="num">scales with depth</td></tr>
-    <tr><td><strong>Ternary weights</strong> (BitNet b1.58)</td><td>32-bit weights become &minus;1 / 0 / +1</td><td class="num">2.33&times;</td></tr>
+    <tr><td><strong>Ternary weights</strong> (BitNet b1.58)</td><td>fp32 weights → {-1, 0, +1} (1.58 bits), per-matrix fp32 scale</td><td class="num"><strong>2.33&times; compression</strong> (weight tensors only)</td></tr>
     <tr><td><strong>Tied embeddings</strong></td><td>one vocabulary table instead of two</td><td class="num">103M params at 1B</td></tr>
     <tr><td><strong>Gradient checkpointing</strong></td><td>stored activations &mdash; recomputed instead</td><td class="num">activations to ~50 MB</td></tr>
   </tbody>
 </table>
 </div>
+
+<details style="margin:1rem 0;">
+<summary style="cursor:pointer;color:var(--accent);">Ternary quantization details (BitNet b1.58)</summary>
+<div style="margin-top:0.75rem;font-size:0.9rem;color:var(--muted);line-height:1.7;">
+<p><strong>What 2.33&times; means:</strong> Weight tensors only (not total VRAM). fp32 (32 bits) → ternary stored as int8 (8 bits) + per-matrix fp32 scale. Theoretical 20&times; (log₂3 ≈ 1.58 bits), practical 2.33&times; after scale overhead.</p>
+<p><strong>35% sparsity:</strong> ~1/3 of weights round to exactly 0 — zeros are spread across rows, not whole-row collapse.</p>
+<p><strong>QAT only:</strong> Must train from scratch with straight-through estimator (STE). Post-hoc quantization loses the learned dynamics. <code>--ternary</code> is ON by default in production runs.</p>
+<p><strong>No training VRAM win:</strong> fp32 shadow weights stay resident for gradient updates. Ternary saves checkpoint size and inference memory only.</p>
+<p><strong>Ternary collapse at init:</strong> Fresh layers can zero out before learning (Issue #109). Fixed by warm-starting trunk from pre-trained checkpoint.</p>
+<p><strong>Group-wise scales tested (Issue #146):</strong> Finer per-group scales lose to per-tensor — storage ratio improves with width but quality doesn't.</p>
+</div>
+</details>
 
 <p>
   <strong>Two of these did not previously work together.</strong> Tied embeddings share one tensor between the
@@ -284,7 +296,7 @@
     <tr><td><code>--tie-embeddings</code></td><td>on</td><td>Share vocab table between embedding + decoder</td><td>Saves 103M params</td><td>Pins 250 MB on GPU with offload</td></tr>
     <tr><td><code>--grad-checkpoint</code></td><td>off</td><td>Recompute activations in backward</td><td>~64% less activation VRAM</td><td>~20-30% slower/step</td></tr>
     <tr><td><code>--chunked-loss N</code></td><td>0</td><td>Score loss in slices, recompute in backward</td><td>Saves ~1.5 GB loss VRAM</td><td>~7% step time</td></tr>
-    <tr><td><code>--ternary</code></td><td>on</td><td>BitNet b1.58 STE quantization</td><td>2.33x weight compression</td><td>STE gradient noise</td></tr>
+    <tr><td><code>--ternary</code></td><td>on</td><td>BitNet b1.58 QAT: fp32→{-1,0,+1} (int8+scale), STE gradients</td><td>2.33x weight storage; 35% sparsity; checkpoint size</td><td>No training VRAM win (fp32 shadows); QAT only; collapse at init fixed by trunk warm-start</td></tr>
     <tr><td><code>--n-heads</code></td><td>auto</td><td>Head count (head_dim must be power of 2)</td><td>64 heads = 13% faster at 1B</td><td>Quality not settled at scale</td></tr>
     <tr><td><code>--precision bf16</code></td><td>fp32</td><td>Mixed precision</td><td>2-3x speed, 2x less VRAM</td><td>Needs RTX 30/40 series</td></tr>
     <tr><td><code>--optimizer muon</code></td><td>adamw</td><td>Muon optimizer</td><td>1.6x fewer steps to same loss</td><td>~12% slower/step</td></tr>
