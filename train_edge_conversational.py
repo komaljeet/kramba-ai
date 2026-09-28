@@ -2232,7 +2232,12 @@ def pre_training_audit(
             amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
 
             audit_model.eval()
-            with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
+            # no_grad is load-bearing: eval() also disables gradient checkpointing
+            # (model.py: use_ckpt needs self.training), so a grad-enabled eval
+            # forward records a FULL un-checkpointed graph over every layer at full
+            # seq length -- ~12 GB at 270M/seq 4096 -- and startup-OOMs a run whose
+            # real training fits in ~4 GB. Same bug as #112, fixed at the source.
+            with torch.no_grad(), torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
                 logits = audit_model(x)
             # Issue #139: compare against the MODEL's vocab, not a constant.
             # Hardcoding 50257 here made the audit reject every non-GPT-2 vocab
@@ -2250,16 +2255,28 @@ def pre_training_audit(
                 all_passed = False
             else:
                 print(f"    ✓ Forward pass correct")
+            del logits  # free the [B, S, vocab] eval logits before the train forward
 
-            # Also test backward pass
+            # Also test backward pass -- with the same loss path training uses, so
+            # the audit's peak VRAM is the real step's, not a larger one.
             audit_model.train()
             y = batch_y.to(device)
+            chunked_loss_size = int(config.get("chunked_loss", 0) or 0)
             with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
-                logits = audit_model(x)
-                loss = nn.CrossEntropyLoss()(
-                    logits.reshape(-1, logits.size(-1)),
-                    y.reshape(-1),
-                )
+                if chunked_loss_size:
+                    from hvn.edge.chunked_loss import chunked_cross_entropy
+                    hidden = audit_model(x, return_hidden=True)
+                    loss = chunked_cross_entropy(
+                        hidden, y, audit_model.decoder, chunk=chunked_loss_size,
+                    ).mean()
+                    del hidden
+                else:
+                    logits = audit_model(x)
+                    loss = nn.CrossEntropyLoss()(
+                        logits.reshape(-1, logits.size(-1)),
+                        y.reshape(-1),
+                    )
+                    del logits
             loss.backward()
             print(f"    ✓ Backward pass correct (loss = {loss.item():.4f})")
 
