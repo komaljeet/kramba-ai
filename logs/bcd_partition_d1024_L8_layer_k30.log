@@ -1,0 +1,70 @@
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.0, 'OpenAssistant': 0.0, 'WikiText-103': 0.0, 'FineWeb-Edu': 1.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 144,853,865  |  windows/source: [252205, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 144853865
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[ab] 16 held-out probe batches + 4000 identical training batches per arm
+[ab] triton+megakernel scan on 8 DeltaNet blocks
+
+[ab] === arm 'bcd_layer' ===
+[ab]     Muon (muon_lr=0.02 on 72 matrices / 84,148,224 params; AdamW aux lr=0.0003 / 51,614,033 params)
+[ab]     block token_embedding                                                 51.46M
+[ab]     block blocks.0                                                        10.53M
+[ab]     block blocks.1                                                        10.53M
+[ab]     block blocks.2                                                        10.53M
+[ab]     block blocks.3                                                        10.53M
+[ab]     block blocks.4                                                        10.53M
+[ab]     block blocks.5                                                        10.53M
+[ab]     block blocks.6                                                        10.53M
+[ab]     block blocks.7                                                        10.53M
+[ab]     block final_norm+decoder                                               0.05M
+[ab]     10 blocks x 30 steps = rotation 300 steps; 13.33 rotations
+[ab]   step   250  held-out 8.56043  (0.8 min)
+[ab]   step   500  held-out 6.77187  (1.5 min)
+[ab]   step   750  held-out 6.44130  (2.2 min)
+[ab]   step  1000  held-out 6.28148  (2.9 min)
+[ab]   step  1250  held-out 6.22954  (3.6 min)
+[ab]   step  1500  held-out 6.13320  (4.3 min)
+[ab]   step  1750  held-out 6.06794  (5.0 min)
+[ab]   step  2000  held-out 6.03328  (5.8 min)
+[ab]   step  2250  held-out 5.99364  (6.5 min)
+[ab]   step  2500  held-out 5.95994  (7.2 min)
+[ab]   step  2750  held-out 5.93469  (7.9 min)
+[ab]   step  3000  held-out 5.90980  (8.5 min)
+[ab]   step  3250  held-out 5.89106  (9.3 min)
+[ab]   step  3500  held-out 5.87835  (10.0 min)
+[ab]   step  3750  held-out 5.87328  (10.7 min)
+[ab]   step  4000  held-out 5.87325  (11.4 min)
+[ab]   peak grad+optimizer state 0.575 GiB, peak allocated 3.875 GiB, unmoved params: 0 []
+
+[ab] ================ BCD partition ================
+[ab] arm             held-out       ppl  state GiB    min
+[ab] bcd_layer         5.8733     355.4      0.575   11.4
+
+[ab] VERDICT: None
+[ab] wrote results/bcd_partition/ab_d1024_L8_layer_k30.json
+exit 0

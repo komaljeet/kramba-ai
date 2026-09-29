@@ -1,0 +1,118 @@
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.0, 'OpenAssistant': 0.0, 'WikiText-103': 0.0, 'FineWeb-Edu': 1.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 144,853,865  |  windows/source: [252205, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 144853865
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[ab] 16 held-out probe batches + 4000 identical training batches per arm
+[ab] triton+megakernel scan on 8 DeltaNet blocks
+
+[ab] === arm 'full' ===
+[ab]     Muon (muon_lr=0.02 on 72 matrices / 84,148,224 params; AdamW aux lr=0.0003 / 51,614,033 params)
+[ab]   step   250  held-out 6.14610  (1.8 min)
+[ab]   step   500  held-out 5.81155  (3.5 min)
+[ab]   step   750  held-out 5.61571  (5.3 min)
+[ab]   step  1000  held-out 5.49635  (7.0 min)
+[ab]   step  1250  held-out 5.41382  (8.8 min)
+[ab]   step  1500  held-out 5.34042  (10.5 min)
+[ab]   step  1750  held-out 5.27205  (12.2 min)
+[ab]   step  2000  held-out 5.22372  (14.0 min)
+[ab]   step  2250  held-out 5.15794  (15.7 min)
+[ab]   step  2500  held-out 5.11347  (17.5 min)
+[ab]   step  2750  held-out 5.07376  (19.2 min)
+[ab]   step  3000  held-out 5.02293  (21.0 min)
+[ab]   step  3250  held-out 4.99313  (22.7 min)
+[ab]   step  3500  held-out 4.97297  (24.5 min)
+[ab]   step  3750  held-out 4.96160  (26.2 min)
+[ab]   step  4000  held-out 4.95791  (27.9 min)
+[ab]   peak grad+optimizer state 1.204 GiB, peak allocated 4.628 GiB, unmoved params: 0 []
+[ab] triton+megakernel scan on 8 DeltaNet blocks
+
+[ab] === arm 'bcd_layer' ===
+[ab]     Muon (muon_lr=0.02 on 72 matrices / 84,148,224 params; AdamW aux lr=0.0003 / 51,614,033 params)
+[ab]     block token_embedding                                                 51.46M
+[ab]     block blocks.0                                                        10.53M
+[ab]     block blocks.1                                                        10.53M
+[ab]     block blocks.2                                                        10.53M
+[ab]     block blocks.3                                                        10.53M
+[ab]     block blocks.4                                                        10.53M
+[ab]     block blocks.5                                                        10.53M
+[ab]     block blocks.6                                                        10.53M
+[ab]     block blocks.7                                                        10.53M
+[ab]     block final_norm+decoder                                               0.05M
+[ab]     10 blocks x 100 steps = rotation 1000 steps; 4.00 rotations
+[ab]   step   250  held-out 7.11641  (0.9 min)
+[ab]   step   500  held-out 6.83675  (1.7 min)
+[ab]   step   750  held-out 6.76826  (2.3 min)
+[ab]   step  1000  held-out 6.71812  (2.8 min)
+[ab]   step  1250  held-out 6.10232  (3.7 min)
+[ab]   step  1500  held-out 6.01202  (4.5 min)
+[ab]   step  1750  held-out 5.97381  (5.2 min)
+[ab]   step  2000  held-out 5.95863  (5.7 min)
+[ab]   step  2250  held-out 5.88232  (6.6 min)
+[ab]   step  2500  held-out 5.83516  (7.3 min)
+[ab]   step  2750  held-out 5.81887  (8.0 min)
+[ab]   step  3000  held-out 5.80669  (8.5 min)
+[ab]   step  3250  held-out 5.77368  (9.4 min)
+[ab]   step  3500  held-out 5.76330  (10.2 min)
+[ab]   step  3750  held-out 5.75902  (10.8 min)
+[ab]   step  4000  held-out 5.75827  (11.3 min)
+[ab]   peak grad+optimizer state 0.575 GiB, peak allocated 3.876 GiB, unmoved params: 0 []
+[ab] triton+megakernel scan on 8 DeltaNet blocks
+
+[ab] === arm 'bcd_balanced' ===
+[ab]     Muon (muon_lr=0.02 on 72 matrices / 84,148,224 params; AdamW aux lr=0.0003 / 51,614,033 params)
+[ab]     block token_embedding                                                 51.46M
+[ab]     block blocks.0+blocks.1+blocks.2+blocks.3                             42.12M
+[ab]     block blocks.4+blocks.5+blocks.6+blocks.7+final_norm+decoder          42.18M
+[ab]     3 blocks x 100 steps = rotation 300 steps; 13.33 rotations
+[ab]   step   250  held-out 6.88129  (1.0 min)
+[ab]   step   500  held-out 6.13862  (2.1 min)
+[ab]   step   750  held-out 5.97754  (3.1 min)
+[ab]   step  1000  held-out 5.96577  (4.1 min)
+[ab]   step  1250  held-out 5.87740  (5.2 min)
+[ab]   step  1500  held-out 5.67863  (6.2 min)
+[ab]   step  1750  held-out 5.65368  (7.3 min)
+[ab]   step  2000  held-out 5.65889  (8.3 min)
+[ab]   step  2250  held-out 5.60052  (9.3 min)
+[ab]   step  2500  held-out 5.59681  (10.3 min)
+[ab]   step  2750  held-out 5.53311  (11.4 min)
+[ab]   step  3000  held-out 5.47845  (12.4 min)
+[ab]   step  3250  held-out 5.45779  (13.5 min)
+[ab]   step  3500  held-out 5.44275  (14.5 min)
+[ab]   step  3750  held-out 5.43257  (15.5 min)
+[ab]   step  4000  held-out 5.42970  (16.5 min)
+[ab]   peak grad+optimizer state 0.575 GiB, peak allocated 3.875 GiB, unmoved params: 0 []
+
+[ab] ================ BCD partition ================
+[ab] arm             held-out       ppl  state GiB    min
+[ab] full              4.9579     142.3      1.204   27.9
+[ab] bcd_layer         5.7583     316.8      0.575   11.3
+[ab] bcd_balanced      5.4297     228.1      0.575   16.5
+
+[ab] VERDICT: balanced closes 41% of BCD's gap (layer +0.800 nats vs full, balanced +0.472)
+[ab] wrote results/bcd_partition/ab_d1024_L8.json
+exit 0
