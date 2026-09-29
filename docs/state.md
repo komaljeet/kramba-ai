@@ -5487,3 +5487,75 @@ checkpoints and HF reference models share one sampler, rather than a second impl
 multi-turn format). SmolLM2-135M-Instruct was fetched via `curl` into
 `checkpoints/hf/SmolLM2-135M-Instruct` (gitignored) because the HF Python client's TLS
 failed in this environment.
+
+## BCD's flat early loss was a false alarm; its real quality cost was a fixable partition problem, 41% closed (2026-09-29)
+
+The 270M BCD POC's loss sat near-flat (~11.0) at step 100 -- looked like a possible bug,
+compared against a no-BCD run already down to 7.65 by the same step. **It wasn't a bug:
+that POC was only 100 steps long, and BCD's fixed round-robin partition (`token_embedding`
+| one block per layer | `final_norm+decoder`, `hvn/core/block_coordinate.py:529-535`,
+order always `sequential`) hadn't reached a single layer yet in that window -- all 20
+layers were still at random init. A loss of ~11 is exactly what that predicts. The two
+runs were never a matched comparison.**
+
+**The real, fixable problem was underneath it.** BCD's peak grad+optimizer-state memory is
+set by its *largest* block -- the tied vocab table (51.5M params at d=1024) -- while every
+layer block is ~5x smaller (10.5M params). So each layer was training only 1/22 of the
+time (22 blocks at 270M) for zero memory benefit; the slot sized for the vocab table was
+being paid for at every block, including the ones far smaller than it.
+
+**Fix:** `--bcd-partition balanced` (opt-in, `hvn/core/block_coordinate.py`'s
+`balance_blocks`) groups consecutive layers into blocks sized near the memory ceiling
+instead of one-per-layer -- 22 blocks -> 6 at 270M (groups of 4 layers).
+
+**Measured** (controlled A/B, d=1024, 8 layers, pure DeltaNet, tied GPT-2 vocab, ternary,
+muon, 4,000 steps, same batches, scored on held-out data, `scripts/ab_bcd_partition.py`):
+
+| step | full training | BCD, old (layer) partition | BCD, balanced partition |
+|---|---:|---:|---:|
+| 4000 | 4.958 (ppl 142) | 5.758 (ppl 317) | 5.430 (ppl 228) |
+
+**Closes 41% of the full-vs-BCD gap, at identical peak memory** (grad+optimizer state:
+0.575 GiB both BCD arms vs 1.204 GiB full; peak allocated 3.875 GiB all three). Isolated
+properly: a control at the old per-layer partition but the same short (300-step) rotation
+length scored *worse* (5.873) than today's normal-rotation layer partition (5.758) -- so
+the gain is from each layer training more often, not from a faster cycle, and confirms
+shrinking `--bcd-steps-per-block` alone would hurt, not help.
+
+**What's still inherent, not fixed:** balanced BCD still trails full training by 0.47 nats
+(~1.6x ppl vs full's ~1x). That remainder is the random-init under-training cost this
+session already suspected from reading the BAdam paper's own validation (continued
+pretraining on an already-competent Llama-3.1-8B, never tested from a random init) --
+freezing an untrained block doesn't preserve anything worth preserving. No schedule change
+closes this without spending the memory BCD exists to save.
+
+**Ruled out, with reasons:** faster rotation hurts (above). Keeping optimizer state across
+block switches measured -0.3% in issue #151's own harness. A short all-blocks warmup
+before switching to BCD needs full-training memory, which defeats the point (270M without
+BCD only fits at batch 1 to begin with). Always keeping the embedding block trainable
+raises the peak (table + a live layer at once), failing the same-memory rule that
+`balanced` meets.
+
+**Does not shrink at 1B the way it does at 270M.** The packing ratio depends on
+vocab-table-size vs. per-layer-size; the vocab table grows linearly with d_model while a
+layer's params grow roughly with d_model^2, so relatively less slack exists to reclaim at
+larger d_model. Estimated (not measured) to pack only 2 layers/group at d=2048 (26 blocks
+-> 13) vs 4 layers/group at d=1024 -- expect a real but smaller gain there, needs its own
+measurement before relying on it.
+
+**Not yet supported combined with `--offload`** -- `EdgeHVN`'s offload path decides the
+active block by comparing a single layer name (`hvn/edge/model.py:270,346,490`), so a
+merged group would get evicted mid-step. The combination is refused loudly (scheduler and
+argparse), not silently broken. Doesn't block current sizes (270M and below don't need
+offload at all). Resuming a run under a different partition than it started with is also
+refused.
+
+**Two side findings:** `scripts/ab_bcd_retain_state.py` (issue #151) imports
+`train_edge_conversational` (which imports pyarrow) *after* `require_cuda()` --
+importing pyarrow post-CUDA-init crashes with no traceback (the known pandas/pyarrow
+ordering issue noted at the top of `train_edge_conversational.py:40-61`); a latent crash in
+that script, not fixed there. Separately, #151's own harness ran the embedding/head group
+at `aux_lr=2e-5` against the real training default of `3e-4`, which likely inflated its
+reported 3.9x-10.7x gap -- this session's harness at the correct `3e-4` measured 2.2x for
+the (unfixed) layer partition on its own 8-layer test, closer to earlier estimates than
+#151's number.
