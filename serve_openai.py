@@ -65,17 +65,38 @@ def generate(prompt: str, max_new: int, temperature: float, top_p: float,
     which is what a bridge needs; wiring the incremental path (#97) through here
     is the obvious follow-up and is gated on #138's ring-buffer work landing.
     """
-    import torch.nn.functional as F
     model, tok, device = _STATE["model"], _STATE["tok"], _STATE["device"]
-    ids = tok.encode(prompt)
+    out, _stopped = generate_ids(model, tok.encode(prompt), eos=EOS,
+                                 device=device, max_new=max_new,
+                                 temperature=temperature, top_p=top_p,
+                                 repetition_penalty=repetition_penalty)
+    return tok.decode(out).strip()
+
+
+@torch.no_grad()
+def generate_ids(model, ids: list[int], *, eos: int, device, max_new: int,
+                 temperature: float, top_p: float,
+                 repetition_penalty: float) -> tuple[list[int], bool]:
+    """Model-agnostic core of :func:`generate`. Returns ``(new_ids, hit_eos)``.
+
+    ``hit_eos`` is exposed for ``eval/chat_coherence.py``, which scores whether
+    a reply terminates on its own or runs to the token limit. Also accepts a
+    Hugging Face causal LM (output has ``.logits``) so a reference model is
+    decoded by the *same* loop, not a parallel one.
+    """
+    import torch.nn.functional as F
     x = torch.tensor([ids], device=device)
     out: list[int] = []
     for _ in range(max_new):
         with torch.amp.autocast("cuda", enabled=(device.type == "cuda"),
                                 dtype=torch.bfloat16):
-            logits = model(x)[0, -1].float()
+            res = model(x)
+        logits = getattr(res, "logits", res)[0, -1].float()
         for t in set(out):
-            logits[t] /= repetition_penalty
+            # Sign-aware (CTRL), as EdgeHVN.chat_step does. Plain division
+            # RAISED a negative logit toward 0, i.e. favoured repeating it.
+            logits[t] = (logits[t] / repetition_penalty if logits[t] > 0
+                         else logits[t] * repetition_penalty)
         if temperature <= 0:
             nxt = int(logits.argmax())
         else:
@@ -85,11 +106,11 @@ def generate(prompt: str, max_new: int, temperature: float, top_p: float,
             sp[cum - sp > top_p] = 0
             sp = sp / sp.sum()
             nxt = int(si[torch.multinomial(sp, 1)])
-        if nxt == EOS:
-            break
+        if nxt == eos:
+            return out, True
         out.append(nxt)
         x = torch.cat([x, torch.tensor([[nxt]], device=device)], dim=1)
-    return tok.decode(out).strip()
+    return out, False
 
 
 def build_prompt(messages) -> str:
@@ -110,7 +131,11 @@ def build_prompt(messages) -> str:
         if role == "system":
             continue
         if role == "assistant":
-            parts.append(ASST_PREFIX + m["content"] + "\n")
+            # Trained format ends an assistant turn with EOS and no newline
+            # (finetune_edge_conversational.py); GPT-2's tokenizer maps this
+            # literal to id 50256. A bare "\n" here put every multi-turn
+            # prompt off-distribution.
+            parts.append(ASST_PREFIX + m["content"] + "<|endoftext|>")
         else:
             content = m["content"]
             if index is not None:

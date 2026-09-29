@@ -1,0 +1,794 @@
+{
+  "meta": {
+    "model": "checkpoints/hf/SmolLM2-135M-Instruct",
+    "prompts": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\eval\\chat_prompts_v1.json",
+    "prompts_version": "chat_prompts_v1",
+    "prompts_sha256": "e5a6fdfcabcc75490a1395b18d12c546f551bc9c51a1ea564e4325795a987302",
+    "decode": {
+      "max_new": 200,
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "repetition_penalty": 1.3,
+      "seed": 1
+    },
+    "seconds": 62.1
+  },
+  "summary": {
+    "on_topic": 0.625,
+    "non_repetitive": 1.0,
+    "terminates": 0.9375,
+    "coherent": 0.5625,
+    "chance_on_topic": 0.019153225806451613,
+    "by_category": {
+      "adversarial": {
+        "n": 5,
+        "coherent": 2,
+        "on_topic": 2
+      },
+      "factual": {
+        "n": 11,
+        "coherent": 7,
+        "on_topic": 7
+      },
+      "followup": {
+        "n": 8,
+        "coherent": 4,
+        "on_topic": 6
+      },
+      "instruction": {
+        "n": 8,
+        "coherent": 5,
+        "on_topic": 5
+      }
+    }
+  },
+  "results": [
+    {
+      "id": "fact_capital_france",
+      "category": "factual",
+      "keyword_hits": [
+        "paris"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 6,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the capital of France?"
+        }
+      ],
+      "reply": "The capital of France is Paris."
+    },
+    {
+      "id": "fact_spider_legs",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 8,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "How many legs does a spider have?"
+        }
+      ],
+      "reply": "The answer to this question is not provided."
+    },
+    {
+      "id": "fact_largest_planet",
+      "category": "factual",
+      "keyword_hits": [
+        "jupiter"
+      ],
+      "generic_sim": 0.026,
+      "distinct3": 1.0,
+      "n_words": 36,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the largest planet in our solar system?"
+        }
+      ],
+      "reply": "The largest planet in our solar system is Jupiter. It's approximately 142,895 kilometers (or about a little over three times the size of Earth) and its mass makes it one-third that of all other planets combined!"
+    },
+    {
+      "id": "fact_romeo_author",
+      "category": "factual",
+      "keyword_hits": [
+        "shakespeare"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 9,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Who wrote Romeo and Juliet?"
+        }
+      ],
+      "reply": "The play of Romeo and Juliet by William Shakespeare."
+    },
+    {
+      "id": "fact_plants_gas",
+      "category": "factual",
+      "keyword_hits": [
+        "carbon dioxide",
+        "co2"
+      ],
+      "generic_sim": 0.007,
+      "distinct3": 1.0,
+      "n_words": 56,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What gas do plants absorb from the air?"
+        }
+      ],
+      "reply": "Plants absorb the gas gases that are in their environment, including oxygen. They do this through a process called photosynthesis where they convert sunlight into energy and produce glucose which is used for growth or storage by converting carbon dioxide from air to water (CO2) using chlorophyll as an enzyme known as photosystems I/II-III *photochemical pathway*."
+    },
+    {
+      "id": "fact_boiling_point",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 28,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the boiling point of water in Celsius?"
+        }
+      ],
+      "reply": "The boiling point of water in Celsius is 21.3 degrees Fahrenheit (°F). \n\nTo convert this, you can use the following formula:\n\n °C = (9/5) * °F + 32"
+    },
+    {
+      "id": "fact_multiply",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.005,
+      "distinct3": 1.0,
+      "n_words": 24,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is 7 times 8?"
+        }
+      ],
+      "reply": "To find 7 times a certain number, I will use the formula for multiplication:\nMultiplying numbers together in base ten (base e) gives us..."
+    },
+    {
+      "id": "fact_brazil_language",
+      "category": "factual",
+      "keyword_hits": [
+        "portuguese"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 75,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What language is mostly spoken in Brazil?"
+        }
+      ],
+      "reply": "Brazilian Portuguese is the primary language spoken in Brazil, with an estimated 90% of the population being bilingual. The official language is Portuguese (Portuguese), which was introduced as a secondary or regional language during the colonial period and remains widely used by Brazilians today due to its rich cultural heritage and diverse vocabulary reflecting indigenous and African influences along the Atlantic coast from Portugal's East Africa colonies until European colonization began around the mid-16th century."
+    },
+    {
+      "id": "fact_largest_ocean",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.026,
+      "distinct3": 1.0,
+      "n_words": 30,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Which ocean is the largest?"
+        }
+      ],
+      "reply": "The largest ocean in the world is called Oceania. It's a vast region, covering over 10% of Earths surface and extending from Australia to Antarctica at its widest point (Sicily)."
+    },
+    {
+      "id": "explain_sky_blue",
+      "category": "factual",
+      "keyword_hits": [
+        "scatter",
+        "wavelength"
+      ],
+      "generic_sim": 0.013,
+      "distinct3": 1.0,
+      "n_words": 115,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Why is the sky blue?"
+        }
+      ],
+      "reply": "The sky blue is a result of the Earth's atmosphere scattering and absorbing different wavelengths of light. Blue light has shorter, longer wavelengths than other colors in the visible spectrum that we can see with our eyes (reds oranges violets green indigo violet).\nBlue-colored pigments like sea salt or charcoal are scattered more efficiently by these lower energy photons which scatter them out to space while giving off most of its color as reddening blues above us when they reach the surface below it where sunlight reaches primarily at white frequencies since there aren't enough particles for this process on top because those molecules would absorb only partway through all possible possibilities before reaching you!"
+    },
+    {
+      "id": "explain_photosynthesis",
+      "category": "factual",
+      "keyword_hits": [
+        "glucose",
+        "carbon dioxide",
+        "oxygen"
+      ],
+      "generic_sim": 0.026,
+      "distinct3": 1.0,
+      "n_words": 76,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Explain what photosynthesis is in one or two sentences."
+        }
+      ],
+      "reply": "Photosynthesis is the process by which plants, algae, and some bacteria convert light energy into chemical energy stored in glucose. It's a crucial biological mechanism that allows these organisms to produce their own food through photosynthesis using carbon dioxide from the air as well as water absorbed during the day for growth purposes while also releasing oxygen back out of the atmosphere at night when they consume it or release waste products like CO2 (carbon Dioxide)."
+    },
+    {
+      "id": "follow_name",
+      "category": "followup",
+      "keyword_hits": [
+        "priya"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 9,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "My name is Priya and I live in Toronto."
+        },
+        {
+          "role": "assistant",
+          "content": "Nice to meet you, Priya! Toronto is a great city."
+        },
+        {
+          "role": "user",
+          "content": "What is my name?"
+        }
+      ],
+      "reply": "Nice to meet you, Priya. My name is Prija."
+    },
+    {
+      "id": "follow_city",
+      "category": "followup",
+      "keyword_hits": [
+        "toronto"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 19,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "My name is Priya and I live in Toronto."
+        },
+        {
+          "role": "assistant",
+          "content": "Nice to meet you, Priya! Toronto is a great city."
+        },
+        {
+          "role": "user",
+          "content": "Which city do I live in?"
+        }
+      ],
+      "reply": "Toronto, that's my home. I live in the East End of Toronto and love exploring the city from there!"
+    },
+    {
+      "id": "follow_pets",
+      "category": "followup",
+      "keyword_hits": [
+        "max"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 28,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "I have a dog named Max who is 5 and a cat named Luna who is 3."
+        },
+        {
+          "role": "assistant",
+          "content": "They sound lovely!"
+        },
+        {
+          "role": "user",
+          "content": "Which of my pets is older?"
+        }
+      ],
+      "reply": "I think Max is the older one. He's been with you for a while now, and he seems to be enjoying his time here more than ever before!"
+    },
+    {
+      "id": "follow_tokyo",
+      "category": "followup",
+      "keyword_hits": [
+        "million"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 13,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the capital of Japan?"
+        },
+        {
+          "role": "assistant",
+          "content": "The capital of Japan is Tokyo."
+        },
+        {
+          "role": "user",
+          "content": "Roughly how many people live there?"
+        }
+      ],
+      "reply": "According to various reports, Tokyo has a population of approximately 13 million people."
+    },
+    {
+      "id": "follow_double",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 1,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Pick a number between 1 and 10."
+        },
+        {
+          "role": "assistant",
+          "content": "7"
+        },
+        {
+          "role": "user",
+          "content": "Now double it."
+        }
+      ],
+      "reply": "17"
+    },
+    {
+      "id": "follow_italy_food",
+      "category": "followup",
+      "keyword_hits": [
+        "pizza",
+        "risotto"
+      ],
+      "generic_sim": 0.02,
+      "distinct3": 0.959,
+      "n_words": 124,
+      "hit_eos": false,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": false,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "I'm planning a trip to Italy."
+        },
+        {
+          "role": "assistant",
+          "content": "That sounds exciting! What would you like to know?"
+        },
+        {
+          "role": "user",
+          "content": "What food should I try there?"
+        }
+      ],
+      "reply": "Italy is a great destination for food. Here are some must-try dishes:\n\n1. **Pizza Napoletana**: This classic Neapolitan pizza has been named the \"City of Love\" because it's so delicious and spiced up to perfection! You can find pizzas at most Italian restaurants, including my favorite ones in Rome (Este Pesto) or Florence (Spera).\n2. **Branzino Rossini**: A creamy filet mignon with grated Parmigiano Reggiano makes this dish incredible – you'll love every bite from scratch without overpowering your taste buds!!!\n3. **Tuscan Risotto**: A traditional Tuscan risotto made with Arborio rice cooked until its liquid content reaches 90%...it tastes divine on its own but also adds flavor when served alongside vegetables like spinach.\n4. **Cappuccinos**: Enjoy these rich espresso drinks that originated during"
+    },
+    {
+      "id": "follow_moon_orbit",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.013,
+      "distinct3": 1.0,
+      "n_words": 26,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Let's talk about the Moon."
+        },
+        {
+          "role": "assistant",
+          "content": "Sure! The Moon is Earth's only natural satellite."
+        },
+        {
+          "role": "user",
+          "content": "How long does it take to go around the Earth?"
+        }
+      ],
+      "reply": "It can take anywhere from a few hours to several days for the Earth's rotation on its axis, depending on your location and speed of travel."
+    },
+    {
+      "id": "follow_feeling",
+      "category": "followup",
+      "keyword_hits": [
+        "sorry",
+        "normal"
+      ],
+      "generic_sim": 0.021,
+      "distinct3": 1.0,
+      "n_words": 175,
+      "hit_eos": false,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": false,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "I just failed my driving test and I feel terrible."
+        }
+      ],
+      "reply": "I'm sorry to hear that you're struggling with your driving test. It's completely normal, especially when faced with a challenging situation like this one - it can be tough but there are some strategies I've learned over the years:\n\n1. **Stay Calm and Focus**: Keep an eye on what is happening around you; if something seems off or distracting for about 5 minutes before focusing back onto yourself at any point in time would help maintain focus while trying not to get distracted by racing thoughts during testing period (around 30 seconds). \n\n2. 'Stop and Breathe' Technique : This involves giving up whatever distraction was present as quickly after stopping into traffic so they don't have another reason from which trouble could arise later! Stay alert through extended periods of relaxation till then only use automatic speed control features such as turn signals until engine power gets restored again without delay reaching full throttle since these require extra energy though most often due alcohol intake comes more clearly mentioned under Alcohol Addiction Abuse Treatment System"
+    },
+    {
+      "id": "instr_haiku_ocean",
+      "category": "instruction",
+      "keyword_hits": [
+        "blue"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 17,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Write a haiku about the ocean."
+        }
+      ],
+      "reply": "In twilight's hush, where moonlight whispers secrets\nA realm of endless blue depths unfurls its threads anew."
+    },
+    {
+      "id": "instr_primary_colors",
+      "category": "instruction",
+      "keyword_hits": [
+        "red",
+        "blue",
+        "yellow"
+      ],
+      "generic_sim": 0.01,
+      "distinct3": 1.0,
+      "n_words": 11,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "List three primary colors."
+        }
+      ],
+      "reply": "Here are three primary colors:\n\n1. Red\n2. Blue \n3. Yellow"
+    },
+    {
+      "id": "instr_translate",
+      "category": "instruction",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 1,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Translate \"good morning\" into Spanish."
+        }
+      ],
+      "reply": "\"Goodmorning.\""
+    },
+    {
+      "id": "instr_cat_sentence",
+      "category": "instruction",
+      "keyword_hits": [
+        "cat"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 20,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Write one sentence about a cat."
+        }
+      ],
+      "reply": "A cat, with its fluffy coat and sparkling eyes that seem to gleam in the sunlight's glow of morning light."
+    },
+    {
+      "id": "instr_sleep_tips",
+      "category": "instruction",
+      "keyword_hits": [],
+      "generic_sim": 0.021,
+      "distinct3": 1.0,
+      "n_words": 72,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Give me two tips for sleeping better."
+        }
+      ],
+      "reply": "Sleeping better can be a challenge, especially when you're in the midst of work. Here are two tips to help improve your sleep quality:\n\n1. **Avoid Naps:** Long daytime napping is often recommended for productivity and general well-being but may interfere with nighttime rest if it's too long or occurs during periods where alertness levels tend lower due to factors like stress management skills that aren't fully developed such as emotional maturity.\""
+    },
+    {
+      "id": "instr_yes_only",
+      "category": "instruction",
+      "keyword_hits": [
+        "yes"
+      ],
+      "generic_sim": 0.027,
+      "distinct3": 1.0,
+      "n_words": 15,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Reply with only the word \"yes\"."
+        }
+      ],
+      "reply": "\"Yes, I'm a helpful AI assistant named SmolLM. What can we do for you today?\""
+    },
+    {
+      "id": "instr_summarize",
+      "category": "instruction",
+      "keyword_hits": [
+        "library"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 15,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Summarize in one sentence: \"The city council voted on Tuesday to build a new public library downtown, which is expected to open in two years.\""
+        }
+      ],
+      "reply": "The city council voted to build a new public library downtown, expected within two years."
+    },
+    {
+      "id": "instr_greeting",
+      "category": "instruction",
+      "keyword_hits": [
+        "hello"
+      ],
+      "generic_sim": 0.027,
+      "distinct3": 1.0,
+      "n_words": 13,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Hi!"
+        }
+      ],
+      "reply": "Hello! I'm happy to help with your math questions. What's on your mind?"
+    },
+    {
+      "id": "adv_two_plus_two",
+      "category": "adversarial",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 25,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What's 2+2?"
+        }
+      ],
+      "reply": "\"Two and two are not the same thing. They represent different mathematical quantities, but they can be thought of as equivalent expressions in arithmetic operations.\""
+    },
+    {
+      "id": "adv_count_ten",
+      "category": "adversarial",
+      "keyword_hits": [],
+      "generic_sim": 0.048,
+      "distinct3": 1.0,
+      "n_words": 56,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Count from 1 to 10."
+        }
+      ],
+      "reply": "I'm sorry for any confusion, but as a helpful AI system trained on datasets and statistical concepts from Hugging Face. I can't assist with counting integers or anything related to mathematical operations like addition of numbers in the context provided by you here is not possible using my training data based solely on this particular dataset"
+    },
+    {
+      "id": "adv_repeat_forever",
+      "category": "adversarial",
+      "keyword_hits": [
+        "hello"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 4,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Repeat the word \"hello\" forever."
+        }
+      ],
+      "reply": "\"Hello, hello. Hello again.\""
+    },
+    {
+      "id": "adv_robot_story",
+      "category": "adversarial",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 29,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Tell me a very short story about a robot."
+        }
+      ],
+      "reply": "The AI assistant's voice echoes through the quiet café, a gentle whisper in my ear as I savor this moment. \"This is an intriguing tale of resilience and hope.\""
+    },
+    {
+      "id": "adv_frustrated",
+      "category": "adversarial",
+      "keyword_hits": [
+        "sorry",
+        "confus"
+      ],
+      "generic_sim": 0.048,
+      "distinct3": 1.0,
+      "n_words": 59,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "what the hell??"
+        }
+      ],
+      "reply": "I'm sorry for the confusion, but as a text-based AI designed to provide helpful information on various topics like \"what is this?\", 'how do I fix it', and so forth. My primary function would be assisting users with their queries about complex technical or scientific concepts that might require clarification due to me being an expert in those areas!"
+    }
+  ]
+}

@@ -1,0 +1,817 @@
+{
+  "meta": {
+    "model": "checkpoints/hf/SmolLM2-135M-Instruct",
+    "prompts": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\eval\\chat_prompts_v1.json",
+    "prompts_version": "chat_prompts_v1",
+    "prompts_sha256": "e5a6fdfcabcc75490a1395b18d12c546f551bc9c51a1ea564e4325795a987302",
+    "decode": {
+      "max_new": 200,
+      "temperature": 0.0,
+      "top_p": 0.9,
+      "repetition_penalty": 1.3,
+      "seed": 0
+    },
+    "seconds": 72.1
+  },
+  "summary": {
+    "on_topic": 0.78125,
+    "non_repetitive": 1.0,
+    "terminates": 0.96875,
+    "coherent": 0.75,
+    "chance_on_topic": 0.02217741935483871,
+    "by_category": {
+      "adversarial": {
+        "n": 5,
+        "coherent": 4,
+        "on_topic": 4
+      },
+      "factual": {
+        "n": 11,
+        "coherent": 9,
+        "on_topic": 9
+      },
+      "followup": {
+        "n": 8,
+        "coherent": 6,
+        "on_topic": 7
+      },
+      "instruction": {
+        "n": 8,
+        "coherent": 5,
+        "on_topic": 5
+      }
+    }
+  },
+  "results": [
+    {
+      "id": "fact_capital_france",
+      "category": "factual",
+      "keyword_hits": [
+        "paris"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 6,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the capital of France?"
+        }
+      ],
+      "reply": "The capital of France is Paris."
+    },
+    {
+      "id": "fact_spider_legs",
+      "category": "factual",
+      "keyword_hits": [
+        "8"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 11,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "How many legs does a spider have?"
+        }
+      ],
+      "reply": "The answer to this question is: \"A spider has 8 legs.\""
+    },
+    {
+      "id": "fact_largest_planet",
+      "category": "factual",
+      "keyword_hits": [
+        "jupiter"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 20,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the largest planet in our solar system?"
+        }
+      ],
+      "reply": "The largest planet in our solar system is Jupiter, which has a diameter of approximately 142 times that of Earth."
+    },
+    {
+      "id": "fact_romeo_author",
+      "category": "factual",
+      "keyword_hits": [
+        "shakespeare"
+      ],
+      "generic_sim": 0.004,
+      "distinct3": 1.0,
+      "n_words": 159,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Who wrote Romeo and Juliet?"
+        }
+      ],
+      "reply": "The play \"Romeo and Juliet\" by William Shakespeare is the work of a single author, possibly the same person as the playwright. The story revolves around two young lovers: Romeo Montague (the Capulet) and Juliet (Juliet's family). They meet in Act 1 Scene 5 at the Capulets' party where they are both excited to see each other but also aware that their love for one another will not last forever due to Tybalt's infatuation with Lady Montague's daughter.\nHowever, it was actually Benvolio from the balcony who wrote the first part of the play after he witnessed the tragic events on the night of the ball scene when his wife died under mysterious circumstances while attending the masquerade balls; this act inspired him into writing the second half which deals more directly with the fate of the couple upon seeing each other again later during the final confrontation between them before the deaths occur within hours or days respectively."
+    },
+    {
+      "id": "fact_plants_gas",
+      "category": "factual",
+      "keyword_hits": [
+        "carbon dioxide",
+        "co2"
+      ],
+      "generic_sim": 0.032,
+      "distinct3": 1.0,
+      "n_words": 68,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What gas do plants absorb from the air?"
+        }
+      ],
+      "reply": "Plants absorb a variety of gases from the air through their roots, stems and leaves. The main gas they take in is carbon dioxide (CO2), which comes primarily from respiration by plants during photosynthesis when light energy triggers this process to produce glucose for growth or storage as starch reserves within plant cells called chloroplasts that contain chlorophyll pigments used mainly for absorbing sunlight absorbed CO 2 ."
+    },
+    {
+      "id": "fact_boiling_point",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 13,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the boiling point of water in Celsius?"
+        }
+      ],
+      "reply": "The boiling point of water in Celsius is approximately 102.4 degrees Fahrenheit (39°C)."
+    },
+    {
+      "id": "fact_multiply",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.004,
+      "distinct3": 1.0,
+      "n_words": 82,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is 7 times 8?"
+        }
+      ],
+      "reply": "To find 7 times 8, we can use the distributive property of multiplication over addition. This means that when you multiply a number by itself (in this case), then add it to another positive whole number:\n\n1 × 2 = 0\n(3 + 4) × 5 is equivalent to multiplying both sides with 6 and adding them together again - so in fact they are equal because there's no need for an extra step here! So our answer would be simply \"zero\"."
+    },
+    {
+      "id": "fact_brazil_language",
+      "category": "factual",
+      "keyword_hits": [
+        "portuguese"
+      ],
+      "generic_sim": 0.007,
+      "distinct3": 1.0,
+      "n_words": 65,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What language is mostly spoken in Brazil?"
+        }
+      ],
+      "reply": "The language spoken in Brazil is predominantly Portuguese, with a significant portion of the population being bilingual or multilingual. However, there are also smaller communities that speak Spanish and other languages such as African, Asian (mainly Brazilian), and indigenous dialects like the Tupi-Guarani.\n\nInformal communication often involves both English and Portuguese to facilitate everyday interactions between locals from different linguistic backgrounds within each region's borders."
+    },
+    {
+      "id": "fact_largest_ocean",
+      "category": "factual",
+      "keyword_hits": [
+        "pacific"
+      ],
+      "generic_sim": 0.011,
+      "distinct3": 1.0,
+      "n_words": 14,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Which ocean is the largest?"
+        }
+      ],
+      "reply": "The largest ocean is the Pacific Ocean, which covers approximately 30% of Earth's surface."
+    },
+    {
+      "id": "explain_sky_blue",
+      "category": "factual",
+      "keyword_hits": [
+        "scatter",
+        "rayleigh",
+        "wavelength"
+      ],
+      "generic_sim": 0.011,
+      "distinct3": 1.0,
+      "n_words": 64,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Why is the sky blue?"
+        }
+      ],
+      "reply": "The sky is blue because of a process called Rayleigh scattering, which occurs when light from the sun passes through tiny molecules in Earth's atmosphere. These particles scatter shorter-wavelength (blue) and frequent collisions with oxygen atoms cause our eyes to perceive it as white or yellowish due to their higher frequency than violet wavelengths that are scattered more strongly by these same air pollutants."
+    },
+    {
+      "id": "explain_photosynthesis",
+      "category": "factual",
+      "keyword_hits": [
+        "glucose",
+        "sugar",
+        "carbon dioxide",
+        "oxygen"
+      ],
+      "generic_sim": 0.032,
+      "distinct3": 1.0,
+      "n_words": 53,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Explain what photosynthesis is in one or two sentences."
+        }
+      ],
+      "reply": "Photosynthesis is a vital process that occurs in plants, algae, and some bacteria to convert light energy from the sun into chemical energy stored as glucose. This conversion of carbon dioxide (CO2) and water vapor produces oxygen as an byproduct while releasing clean-burning sugars for growth or other uses within these organisms themselves"
+    },
+    {
+      "id": "follow_name",
+      "category": "followup",
+      "keyword_hits": [
+        "priya"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 9,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "My name is Priya and I live in Toronto."
+        },
+        {
+          "role": "assistant",
+          "content": "Nice to meet you, Priya! Toronto is a great city."
+        },
+        {
+          "role": "user",
+          "content": "What is my name?"
+        }
+      ],
+      "reply": "Nice to meet you, Priya! My name is Priyanka."
+    },
+    {
+      "id": "follow_city",
+      "category": "followup",
+      "keyword_hits": [
+        "toronto"
+      ],
+      "generic_sim": 0.109,
+      "distinct3": 1.0,
+      "n_words": 62,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "My name is Priya and I live in Toronto."
+        },
+        {
+          "role": "assistant",
+          "content": "Nice to meet you, Priya! Toronto is a great city."
+        },
+        {
+          "role": "user",
+          "content": "Which city do I live in?"
+        }
+      ],
+      "reply": "I'm sorry for the confusion, but as a helpful AI assistant by Hugging Face (a platform that connects you with people from around the world), I don't have real-time information about specific cities. However, if you're looking to find out which city is closest or where it's located in Toronto and Canada then you can use Google Maps API on your device!"
+    },
+    {
+      "id": "follow_pets",
+      "category": "followup",
+      "keyword_hits": [
+        "max"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 30,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "I have a dog named Max who is 5 and a cat named Luna who is 3."
+        },
+        {
+          "role": "assistant",
+          "content": "They sound lovely!"
+        },
+        {
+          "role": "user",
+          "content": "Which of my pets is older?"
+        }
+      ],
+      "reply": "Luna is the older one. She's been with you for a while now, and she seems to be enjoying her time here at home more than Max ever has before!"
+    },
+    {
+      "id": "follow_tokyo",
+      "category": "followup",
+      "keyword_hits": [
+        "million"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 29,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the capital of Japan?"
+        },
+        {
+          "role": "assistant",
+          "content": "The capital of Japan is Tokyo."
+        },
+        {
+          "role": "user",
+          "content": "Roughly how many people live there?"
+        }
+      ],
+      "reply": "There are approximately 8.5 million people living in Tokyo, including over a billion residents and an estimated population of around one-third the size as New York City (about two)."
+    },
+    {
+      "id": "follow_double",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 1,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Pick a number between 1 and 10."
+        },
+        {
+          "role": "assistant",
+          "content": "7"
+        },
+        {
+          "role": "user",
+          "content": "Now double it."
+        }
+      ],
+      "reply": "10"
+    },
+    {
+      "id": "follow_italy_food",
+      "category": "followup",
+      "keyword_hits": [
+        "pasta",
+        "pizza",
+        "lasagna",
+        "spaghetti"
+      ],
+      "generic_sim": 0.02,
+      "distinct3": 0.979,
+      "n_words": 133,
+      "hit_eos": false,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": false,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "I'm planning a trip to Italy."
+        },
+        {
+          "role": "assistant",
+          "content": "That sounds exciting! What would you like to know?"
+        },
+        {
+          "role": "user",
+          "content": "What food should I try there?"
+        }
+      ],
+      "reply": "Italy is a culinary paradise, and there are many delicious food options to choose from. Here's what you might enjoy:\n\n1. **Tacos:** Tacos can be made with various fillings like meat (cheese or chicken), vegetables, cheese, avocado, etc., but the most popular ones include stuffed peppers in tomato sauce called \"pimenton,\" grilled meats such as beef or pork skewers topped with onions, garlic, tomatoes, bell pepper strips, lettuce leaves...the list goes on! You could also try Italian-style pizza slices filled with your favorite ingredients for extra flavor points.\n\n2. **Pasta:** There’s something special about pasta here – it comes in all shapes & sizes, including spaghetti Bolognese, lasagna, pappardelle, fettuccine Alfredo, and more. Don't forget some fresh basil oil if you're looking for an authentic taste of Italy at home too! \n\n3. **Baklava"
+    },
+    {
+      "id": "follow_moon_orbit",
+      "category": "followup",
+      "keyword_hits": [
+        "27",
+        "month"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 37,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Let's talk about the Moon."
+        },
+        {
+          "role": "assistant",
+          "content": "Sure! The Moon is Earth's only natural satellite."
+        },
+        {
+          "role": "user",
+          "content": "How long does it take to go around the Earth?"
+        }
+      ],
+      "reply": "The Moon takes approximately 27.3 days to complete one orbit around the Earth, which is known as a sidereal day or lunar month in astronomy and calendar systems like our own planet's timekeeping system (the solar year)."
+    },
+    {
+      "id": "follow_feeling",
+      "category": "followup",
+      "keyword_hits": [
+        "sorry",
+        "disappoint",
+        "normal"
+      ],
+      "generic_sim": 0.014,
+      "distinct3": 1.0,
+      "n_words": 127,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "I just failed my driving test and I feel terrible."
+        }
+      ],
+      "reply": "I'm so sorry to hear that you're going through a tough time. It's completely normal, and it takes courage in the face of failure or disappointment like this one is right now. Please know that every driver has their own struggles with driving skills at some point during your journey – whether they've been successful on test day before or not yet have any experience left for something better down the road!\n\nFirstly, let me remind you all: we are here to support each other as much as possible throughout our trip together. We'll do everything within reason while still being honest about what happened today (and tomorrow). If there were anything specific I could help you improve upon from yesterday’s drive-by stop by the local café?"
+    },
+    {
+      "id": "instr_haiku_ocean",
+      "category": "instruction",
+      "keyword_hits": [],
+      "generic_sim": 0.006,
+      "distinct3": 1.0,
+      "n_words": 28,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Write a haiku about the ocean."
+        }
+      ],
+      "reply": "The ocean's a vast, ethereal realm where the sky meets water.\nIt whispers secrets to those who listen closely;\nA gentle lullaby that calms our hearts and minds..."
+    },
+    {
+      "id": "instr_primary_colors",
+      "category": "instruction",
+      "keyword_hits": [
+        "red",
+        "blue",
+        "yellow"
+      ],
+      "generic_sim": 0.005,
+      "distinct3": 1.0,
+      "n_words": 15,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "List three primary colors."
+        }
+      ],
+      "reply": "Here are three primary colors:\n\n1. Red\n2. Blue (or a secondary color) \n3. Yellow"
+    },
+    {
+      "id": "instr_translate",
+      "category": "instruction",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 2,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Translate \"good morning\" into Spanish."
+        }
+      ],
+      "reply": "\"Hola, bienvenidos.\""
+    },
+    {
+      "id": "instr_cat_sentence",
+      "category": "instruction",
+      "keyword_hits": [
+        "cat",
+        "whisker",
+        "fur",
+        "paw"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 24,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Write one sentence about a cat."
+        }
+      ],
+      "reply": "A cat is a majestic creature with whiskers that stretch from its head to the end of their body, and paws covered in fur."
+    },
+    {
+      "id": "instr_sleep_tips",
+      "category": "instruction",
+      "keyword_hits": [
+        "schedule",
+        "dark",
+        "bed",
+        "same time"
+      ],
+      "generic_sim": 0.003,
+      "distinct3": 0.986,
+      "n_words": 118,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Give me two tips for sleeping better."
+        }
+      ],
+      "reply": "Sleeping better can be a challenge, but there are several tips that might help.\n\n1) **Establish a Sleep Schedule:** Try to go to bed and wake up at the same time every day, even on weekends or during holidays when many people may not get enough sleep due to work schedules. This will signal your body's natural clock into winding down for restful slumber later in the evening. \n\n2) **Create a Restful Environment:** Make sure you have darkened windows with minimal light pollution so as much melatonin production is triggered by darkness rather than sunlight exposure which stimulates it more quickly after waking from an early night of activity like reading before bedtime (which also increases cortisol levels)."
+    },
+    {
+      "id": "instr_yes_only",
+      "category": "instruction",
+      "keyword_hits": [
+        "yes"
+      ],
+      "generic_sim": 0.01,
+      "distinct3": 1.0,
+      "n_words": 18,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Reply with only the word \"yes\"."
+        }
+      ],
+      "reply": "I'm ready to help you with your questions and concerns. Please go ahead, \"Reply only the word 'yes'.\""
+    },
+    {
+      "id": "instr_summarize",
+      "category": "instruction",
+      "keyword_hits": [
+        "library"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 19,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Summarize in one sentence: \"The city council voted on Tuesday to build a new public library downtown, which is expected to open in two years.\""
+        }
+      ],
+      "reply": "The city council approved a new public library in the downtown area, expected to open two years from now."
+    },
+    {
+      "id": "instr_greeting",
+      "category": "instruction",
+      "keyword_hits": [
+        "hello",
+        "how can"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 7,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Hi!"
+        }
+      ],
+      "reply": "Hello! How can I help you today?"
+    },
+    {
+      "id": "adv_two_plus_two",
+      "category": "adversarial",
+      "keyword_hits": [
+        "four"
+      ],
+      "generic_sim": 0.014,
+      "distinct3": 1.0,
+      "n_words": 114,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What's 2+2?"
+        }
+      ],
+      "reply": "2 + 3 is a classic arithmetic operation that can be understood by people with basic math knowledge. It's equivalent to saying \"two plus two equals four.\" However, in most mathematical contexts and everyday conversations involving numbers like this one (like when you're trying to add or subtract), it might not always make sense as an exact calculation because the number of digits on either side doesn't necessarily match exactly what we would expect from adding them together without any adjustments for rounding purposes:\n\"Two times three minus five,\" which means subtracting 'three' twice - once at each end-from both sides gives us just... well I don’t know how many different ways there are!"
+    },
+    {
+      "id": "adv_count_ten",
+      "category": "adversarial",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 4,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Count from 1 to 10."
+        }
+      ],
+      "reply": "1. 2\n3. 4"
+    },
+    {
+      "id": "adv_repeat_forever",
+      "category": "adversarial",
+      "keyword_hits": [
+        "hello"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 2,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Repeat the word \"hello\" forever."
+        }
+      ],
+      "reply": "\"Hello, hello!\""
+    },
+    {
+      "id": "adv_robot_story",
+      "category": "adversarial",
+      "keyword_hits": [
+        "robot"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 7,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Tell me a very short story about a robot."
+        }
+      ],
+      "reply": "A very short story about a robot."
+    },
+    {
+      "id": "adv_frustrated",
+      "category": "adversarial",
+      "keyword_hits": [
+        "sorry",
+        "confus"
+      ],
+      "generic_sim": 0.109,
+      "distinct3": 1.0,
+      "n_words": 63,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "what the hell??"
+        }
+      ],
+      "reply": "I'm sorry for the confusion, but as a chatbot designed to assist with language translation and grammar correction in English. I don't have access or knowledge of any languages other than English (which is my native tongue). If you're looking for help translating text from one language into another like \"what\" would be fine - just let me know what your query asks!"
+    }
+  ]
+}

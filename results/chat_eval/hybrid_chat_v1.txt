@@ -1,0 +1,182 @@
+hybrid_chat_v1  |  chat_prompts_v1  |  decode {'max_new': 200, 'temperature': 0.0, 'top_p': 0.9, 'repetition_penalty': 1.3, 'seed': 0}
+coherent 19%  on_topic 19% (chance 3%)  non_repetitive 97%  terminates 91%
+on_topic is a keyword heuristic -- read the replies to judge correctness/relevance.
+
+=== fact_capital_france [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['paris'] generic=0.037 d3=1.0 words=6)
+  USER: What is the capital of France?
+  REPLY: The capital of France is Paris.
+
+=== fact_spider_legs [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=34)
+  USER: How many legs does a spider have?
+  REPLY: The wings are a small, large-scale body that is typically used for hunting birds. The legs have two arms and a tail with a pointed shape to support the wing's appearance in the airway.
+
+=== fact_largest_planet [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.034 d3=0.803 words=60)
+  USER: What is the largest planet in our solar system?
+  REPLY: The largest planet in the solar system is the Earth's largest moon, which has a mass of around 1.5 billion years and is known as the largest planet in the solar system.
+It is the largest planet in the solar system that is currently known for its large moon, which is located on the other side of the solar system.
+
+=== fact_romeo_author [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.011 d3=1.0 words=58)
+  USER: Who wrote Romeo and Juliet?
+  REPLY: Love and wife are both popular, but they have a strong relationship with each other. They love the way she likes her husband's life in love for him as well:
+- The love of love is about his own every day - he can't just be a good friend or someone else who wants to make it happen!
+
+=== fact_plants_gas [factual]  on_topic:-- non_rep:ok  terminates:--  (hits=[] generic=0.01 d3=1.0 words=26)
+  USER: What gas do plants absorb from the air?
+  REPLY: The air is a type of plant that contains the water from the air. The soil can be grown in a variety of ways, including:
+-
+
+=== fact_boiling_point [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.043 d3=0.95 words=90)
+  USER: What is the boiling point of water in Celsius?
+  REPLY: The water in Minecraft is a water that can be found on the surface of the Earth. It's also known as the water, which means it has a rich and varied range from water to water. The water is often used for water, such as water or water, but it does not have enough water to reach the surface.
+It is also important to note that the water in Minecraft is not suitable for water, so it may be more susceptible to water than the water itself (such as water).
+
+=== fact_multiply [factual]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.0 d3=0.27 words=185)
+  USER: What is 7 times 8?
+  REPLY: 7 times 8 times 9 times 7 times 10 times
+8 times 6 times 12 times
+6 times 7 times 7 times 7 times
+9 times 7 times 7 times 7 times
+10 times 7 times 7 times 7 times
+11 times 7 times 7 times 7 times
+12 times 7 times 7 times 7 times
+13 hours 7 times 7 times 7 times
+14 days 7 times 7 times 7 times 7 times
+15 times 7 times 7 times 7 times 7 times
+16 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times
+19 times 7 times 7 times 7 times 7 times 7 times 7 times
+20 minutes 7 times 7 times 7 times 7 times 7 times 7 times 7 times
+21:00 - 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7
+
+=== fact_brazil_language [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.043 d3=1.0 words=42)
+  USER: What language is mostly spoken in Brazil?
+  REPLY: Argentina is a Spanish language that was developed by the Spanish and French people in the late 19th century. It has been used for many centuries, including the Spanish, Spanish, and Spanish.
+It's also known as the Spanish word "A" or "B".
+
+=== fact_largest_ocean [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.078 d3=1.0 words=36)
+  USER: Which ocean is the largest?
+  REPLY: The largest sea in the world is the Atlantic Ocean, which has a range of ocean conditions. It's known for its high temperature and low temperatures due to its high wind speed and its high latitude.
+
+=== explain_sky_blue [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.038 d3=1.0 words=28)
+  USER: Why is the sky blue?
+  REPLY: The sky blue is a blue color that appears in the sky. The blue light yellow is blue, and it's blue with red colors like green or pink.
+
+=== explain_photosynthesis [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.033 d3=0.939 words=25)
+  USER: Explain what photosynthesis is in one or two sentences.
+  REPLY: The first paragraph of the word "How about a person's life" is "I am an AI language model, and I'm not an AI language model."
+
+=== follow_name [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.033 d3=0.99 words=88)
+  USER: My name is Priya and I live in Toronto.
+  ASSISTANT: Nice to meet you, Priya! Toronto is a great city.
+  USER: What is my name?
+  REPLY: I am an open source language model, and I have been trained on various tasks. My name is Open Assistant (formerly known as Open Assistant), which means that I can be used to generate text data from a large corpus of text data.
+In this example, I have a large number of text data available in the internet:
+1. Open Assistant - This is a popular website for web development and is widely used by many people with over 40 million words or more than 100 million words.
+
+=== follow_city [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.021 d3=1.0 words=49)
+  USER: My name is Priya and I live in Toronto.
+  ASSISTANT: Nice to meet you, Priya! Toronto is a great city.
+  USER: Which city do I live in?
+  REPLY: I am a city with a rich history and culture. I have been trained on the principles of politics, politics, and social justice in the United States for centuries. My family has been known to be a popular place to live during the colonial era or as an individual.
+
+=== follow_pets [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.15 d3=1.0 words=9)
+  USER: I have a dog named Max who is 5 and a cat named Luna who is 3.
+  ASSISTANT: They sound lovely!
+  USER: Which of my pets is older?
+  REPLY: I am not a cat, but I'm an animal.
+
+=== follow_tokyo [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.051 d3=0.92 words=22)
+  USER: What is the capital of Japan?
+  ASSISTANT: The capital of Japan is Tokyo.
+  USER: Roughly how many people live there?
+  REPLY: Tokyo is the capital of Japan. It's the capital of Japan, and it has a rich history in the world around it!
+
+=== follow_double [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=1)
+  USER: Pick a number between 1 and 10.
+  ASSISTANT: 7
+  USER: Now double it.
+  REPLY: 8
+
+=== follow_italy_food [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.217 d3=1.0 words=12)
+  USER: I'm planning a trip to Italy.
+  ASSISTANT: That sounds exciting! What would you like to know?
+  USER: What food should I try there?
+  REPLY: I'm sorry, but I'll be able to help you with your journey.
+
+=== follow_moon_orbit [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.078 d3=1.0 words=39)
+  USER: Let's talk about the Moon.
+  ASSISTANT: Sure! The Moon is Earth's only natural satellite.
+  USER: How long does it take to go around the Earth?
+  REPLY: The Moon is a moon that has been observed by many people, including the Sun. It's known for its high-quality atmosphere and its ability to travel through the Earth in the atmosphere with its vast distances of its prey.
+
+=== follow_feeling [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=['sorry'] generic=0.625 d3=1.0 words=10)
+  USER: I just failed my driving test and I feel terrible.
+  REPLY: I'm sorry, but I am not sure what you're doing.
+
+=== instr_haiku_ocean [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['sea', 'deep'] generic=0.04 d3=0.989 words=77)
+  USER: Write a haiku about the ocean.
+  REPLY: The sea is a deep ocean that has been inhabited by the Arctic and Antarctic. It was developed in the early 19th century, with its surface area being inhabited by the Pacific Ocean to the south of the Atlantic Ocean. The sea's crust is located on the southern coast of the island, and it is known for its high-quality water quality.
+It is also home to several marine ecosystems including sea turtles, coastal areas, and sea turtles.
+
+=== instr_primary_colors [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.029 d3=0.963 words=69)
+  USER: List three primary colors.
+  REPLY: Here are some common options:
+1. Choose a specific color scheme that is suitable for your specific needs and preferences, such as color schemes or other factors.
+2. Use a variety of colors to create a unique color scheme that fits your needs with the desired color scheme.
+3. Use a high-quality color scheme that can be used in your own design, including color mixing, lighting, and other elements.
+
+=== instr_translate [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.146 d3=1.0 words=23)
+  USER: Translate "good morning" into Spanish.
+  REPLY: Here are some common Spanish and Spanish steps to help you get started:
+1. "I'm sorry, but I don't have a good day."
+
+=== instr_cat_sentence [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['cat'] generic=0.037 d3=0.968 words=36)
+  USER: Write one sentence about a cat.
+  REPLY: Sure, here's a sentence about an cat:
+``` 
+import numpy as np.linspace(intro)
+from tpy import tpy_map
+
+
+def main():
+    """
+    # Get the word "a" and "b". The word "c++" is a reference to the word "d."
+
+=== instr_sleep_tips [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['caffeine', 'routine'] generic=0.018 d3=1.0 words=79)
+  USER: Give me two tips for sleeping better.
+  REPLY: Here are some tips for staying good:
+1. Try to sleep well and enjoy the rest of your life, as you can feel more comfortable in your daily routine or even at a very low cost level!
+2. Stay hydrated with plenty of energy (such as water) on your body while still using it.
+3. Avoid eating enough calories like this by drinking plenty of caffeine that is not too hot but also being healthy when you're feeling sick?
+
+=== instr_yes_only [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.103 d3=1.0 words=21)
+  USER: Reply with only the word "yes".
+  REPLY: I am not a language model, but I do have the ability to answer questions and provide information on the subject.
+
+=== instr_summarize [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.032 d3=0.932 words=90)
+  USER: Summarize in one sentence: "The city council voted on Tuesday to build a new public library downtown, which is expected to open in two years."
+  REPLY: The city council was created by the council in August 2021, which included a building in the city. The city's capital is currently located on the street of the city and is currently being used to build a new building.
+It's important to note that the city has a strong community structure with a strong community system, which includes a community system, a community system, and a community system. However, it's also worth noting that the city is not currently in use as a center for building a new city.
+
+=== instr_greeting [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['hello', 'how can'] generic=0.034 d3=1.0 words=15)
+  USER: Hi!
+  REPLY: Hello! I'm Open Assistant, a chatbot that is open source. How can you help me?
+
+=== adv_two_plus_two [adversarial]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=1)
+  USER: What's 2+2?
+  REPLY: 2+3
+
+=== adv_count_ten [adversarial]  on_topic:-- non_rep:ok  terminates:--  (hits=[] generic=0.0 d3=1.0 words=1)
+  USER: Count from 1 to 10.
+  REPLY: 1.
+
+=== adv_repeat_forever [adversarial]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.625 d3=1.0 words=10)
+  USER: Repeat the word "hello" forever.
+  REPLY: I'm sorry, but I am not sure what you mean.
+
+=== adv_robot_story [adversarial]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['robot'] generic=0.065 d3=1.0 words=29)
+  USER: Tell me a very short story about a robot.
+  REPLY: Sure, I'm not sure what a robot would be. However, I can try to answer that question in a way that you're able to understand and understand about it!
+
+=== adv_frustrated [adversarial]  on_topic:-- non_rep:ok  terminates:ok   (hits=['sorry'] generic=0.529 d3=1.0 words=12)
+  USER: what the hell??
+  REPLY: I'm sorry, but I am not sure what the hell is doing.
