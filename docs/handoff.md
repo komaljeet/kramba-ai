@@ -1,4 +1,4 @@
-# Handoff — read this first (updated 2026-08-17 08:10)
+# Handoff — read this first (updated 2026-09-29 14:00)
 
 Author: Rambarun Komaljeet
 
@@ -7,9 +7,37 @@ context reset. Everything below is measured unless it says otherwise.
 
 ---
 
-## 1. Nothing is running
+## 0. LIVE: the 896x16 pretrain owns the GPU until ~2026-10-10 12:00
 
-The GPU is idle. The #160 Phase 1 pair was killed deliberately on 2026-08-16: once the
+**Do not launch anything on the GPU while this runs.** It is the real candidate
+conversational model, an ~11-day commitment, not a smoke test. A second process on
+the card OOMs one of them or makes WDDM spill and slows both; a second writer on the
+same log overwrites it in place (both happened 2026-08-10). CPU-only work is fine.
+
+| | |
+|---|---|
+| started | 2026-09-29 13:45 (step 0, fresh — no warm start) |
+| shape | 896x16 hvn-hybrid, attention at layers 4,12; 174,043,993 params (129,013,721 body) |
+| config | tied GPT-2 embeddings, ternary, Muon, `--fast`, `--grad-checkpoint`, `--chunked-loss 512`, batch 1 x accum 8 x seq 4096, no BCD, `--seed 0` |
+| data | FineWeb-Edu only (`--pretrain-mix 0.0,0.0,0.0,1.0`, passed explicitly), `data_cache/tokenized/fineweb_edu.bin` cache hit, 1,621,692 windows; the run uses 945K of them = **single pass, 0.58x of the data, no repeats** |
+| budget | 30 tok / body param = 3.87B tokens → `--max-steps 118116` (ceil(3,870,411,630 / 32,768)); cosine LR over all 118,116 steps |
+| speed | 4,102 tok/s, 7.99 s/step, VRAM 57% (2.93/3.42 GB) at step 50 — matches the sizing tool's 4,106 |
+| finish | ~10.9 days → **~2026-10-10 12:00** |
+| code | worktree `C:\Users\komal\Documents\Codes\kramba-ai-wt-pretrain896`, branch `run/pretrain-896x16` at main d9bb7c6 — pinned so branch switches in the shared main tree cannot change the code under a running/resuming job |
+| log | `logs\pretrain_896x16_real.log` (main tree); per-50-step rows in `training_log.csv` in the checkpoint dir |
+| checkpoints | `checkpoints\pretrain_896x16_real\` (main tree): every 250 steps (~33 min lost at worst), newest 3 kept, every 10,000th kept forever (#163 pruning) — ~11 GB total on disk |
+| launch / resume | `scripts\launch_pretrain_896x16.cmd` in the worktree. The SAME command resumes (model + optimizer + LR schedule). Check the GPU is empty first. |
+
+Mid-run checkpoints sit under a cosine schedule that has not decayed, so they are
+**not** "a model trained to N tokens" (see §4). Grade only the final one. No held-out
+val split in-loop: this is single-pass, so train loss is loss on unseen windows; use
+`eval/heldout_loss.py` on the final checkpoint for a fixed-slice number.
+
+Next, after it finishes (not before): chat fine-tune, then the chat coherence eval.
+
+## 1. (2026-08-17) Nothing was running
+
+The GPU was idle. The #160 Phase 1 pair was killed deliberately on 2026-08-16: once the
 architecture turned out to be a reimplementation of published gated DeltaNet, that
 comparison became a reproduction of someone else's result rather than a finding.
 
