@@ -3506,6 +3506,12 @@ def main():
                              "rule). Windows/WDDM does NOT raise on overflow -- "
                              "it spills to host RAM and runs 4-15x slower while "
                              "looking healthy. 0 disables the check.")
+    parser.add_argument("--log-every", type=int, default=50,
+                        help="Optimizer steps between console/CSV log rows "
+                             "(default 50, previously hardcoded). Each row's "
+                             "tok/s is the average over that window, so a short "
+                             "calibration run needs a small value "
+                             "(scripts/size_for_pretrain.py uses 1).")
     parser.add_argument("--save-every-steps", type=int, default=None,
                         help="Optimizer steps between checkpoints (default 500, "
                              "previously hardcoded with no way to change it). "
@@ -3957,6 +3963,7 @@ def main():
     config["block_coordinate"] = args.block_coordinate
     config["bcd_steps_per_block"] = args.bcd_steps_per_block
     config["bcd_partition"] = args.bcd_partition
+    config["log_every_steps"] = max(1, args.log_every)
     # --- Issue #163 ---
     config["offload"] = args.offload
     config["offload_cache_blocks"] = args.offload_cache_blocks
