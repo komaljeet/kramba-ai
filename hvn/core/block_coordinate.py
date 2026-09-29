@@ -734,8 +734,9 @@ class BlockCoordinateScheduler:
             # could pass simply by never offloading anything.
         self.model = model
         self.blocks = partition_named_blocks(model)
-        # "layer" (default) = one block per layer, BAdam's default and every
-        # measurement on record. "balanced" packs consecutive layers into groups
+        # "layer" (library default) = one block per layer, BAdam's default and
+        # what the offload path needs. train_edge_conversational.py defaults to
+        # "balanced" (2026-09-29, 8L A/B). "balanced" packs consecutive layers into groups
         # no larger than the largest block (see balance_blocks), so peak
         # residency is unchanged while each layer trains more often.
         if partition == "balanced":
@@ -1021,7 +1022,8 @@ class BlockCoordinateScheduler:
             raise ValueError(
                 f"BCD state was saved with partition={saved!r} "
                 f"({len(sd['order'])} blocks) but this run uses "
-                f"partition={self.partition!r} ({len(self.blocks)} blocks)")
+                f"partition={self.partition!r} ({len(self.blocks)} blocks); "
+                f"resume with --bcd-partition {saved}")
         self._cycle_pos = sd["cycle_pos"]
         self._step_in_block = sd["step_in_block"]
         self.order = sd["order"]

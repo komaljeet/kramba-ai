@@ -237,6 +237,9 @@ doesn't have to be resident for the whole model at once. [BAdam](https://arxiv.o
 explicitly clearing the outgoing block's optimizer state on every switch — every block gets
 properly trained over a full cycle, but only ONE block's Adam moments are ever VRAM-resident.
 `--block-coordinate --bcd-steps-per-block N` (`hvn/core/block_coordinate.py`).
+Since 2026-09-29 blocks default to `--bcd-partition balanced` (consecutive layers packed up
+to the vocab table's size: same peak memory, each layer trains ~3-4x as often; ppl 228 vs
+317 in the 8-layer A/B). `--offload` still uses `layer` (balanced is not supported with it yet).
 
 **Measured on this card** (`scripts/bench_block_coordinate_vram.py`, isolated subprocesses,
 `results/bcd_vram.json`):

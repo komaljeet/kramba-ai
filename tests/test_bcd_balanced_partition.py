@@ -28,6 +28,10 @@ from hvn.core.block_coordinate import (  # noqa: E402
     BlockCoordinateScheduler, balance_blocks, partition_named_blocks,
 )
 from hvn.edge.model import EdgeHVN  # noqa: E402
+# Imported at module load, not inside the test: importing the training script
+# (it pulls in pandas) AFTER the CPU backward passes above hard-crashes the
+# interpreter on this Windows venv (access violation in pandas' import).
+from train_edge_conversational import resolve_bcd_partition  # noqa: E402
 
 
 def _model(num_layers=6, vocab=512, d=32, tie=True):
@@ -110,3 +114,11 @@ def test_resume_across_partitions_is_refused():
     other = BlockCoordinateScheduler(m, opt, partition="balanced")
     with pytest.raises(ValueError, match="partition"):
         other.load_state_dict(sd)
+
+
+def test_training_script_defaults_to_balanced_except_offload():
+    # Pins the CLI default: if it silently reverts to per-layer, every BCD run
+    # loses the 8L A/B's ~0.33 nats again with no error.
+    assert resolve_bcd_partition(None, offload=False) == "balanced"
+    assert resolve_bcd_partition(None, offload=True) == "layer"
+    assert resolve_bcd_partition("layer", offload=False) == "layer"
