@@ -89,7 +89,7 @@ sys.path.insert(0, REPO)
 #: the rest cover BCD-only and offload-only territory up to ~1.6B.
 CANDIDATES = [
     (640, 12), (768, 14), (896, 16), (1024, 20),
-    (1280, 24), (1536, 24), (2048, 24), (2048, 36),
+    (1280, 24), (1536, 24), (2048, 24), (2048, 32), (2048, 36),
 ]
 
 SEQ, BATCH, ACCUM = 4096, 1, 8
@@ -287,7 +287,7 @@ def run_rung(name, d, L, rung, shape, args, card) -> dict:
 
 
 def report(results: list[dict], data_tokens: float) -> None:
-    hdr = (f"{'shape':<8} {'body':>7} {'total':>7}  {'config':<22} {'tok/s':>6} "
+    hdr = (f"{'shape':<8} {'body':>7} {'total':>7}  {'config':<27} {'tok/s':>6} "
            f"{'VRAM GB (card%)':>16} {'tokens':>7} {'data x':>6} {'days':>6} "
            f"{'BCD-adj est':>11}")
     print("\n" + hdr + "\n" + "-" * len(hdr))
@@ -309,7 +309,7 @@ def report(results: list[dict], data_tokens: float) -> None:
         if ok["rung"] != "plain":
             adj = f"{days * BCD_TOKEN_PENALTY[ok.get('partition', 'layer')]:.0f}"
         flag = " *" if ok["half_drift"] > 0.15 else ""
-        print(head + f"{cfg:<22} {ok['tok_s']:>6,.0f} "
+        print(head + f"{cfg:<27} {ok['tok_s']:>6,.0f} "
               f"{vram:>6.2f} ({ok['vram_pct']:>3.0f}%)    {tokens/1e9:>6.2f}B "
               f"{tokens/data_tokens:>6.2f} {days:>6.1f} {adj:>11}{flag}")
     print(f"\n tokens = {TOKENS_PER_BODY_PARAM} x body params; days = tokens / measured tok/s."

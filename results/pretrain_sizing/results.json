@@ -1,0 +1,567 @@
+{
+  "config": {
+    "seq": 4096,
+    "batch": 1,
+    "grad_accum": 8,
+    "tokens_per_body_param": 30,
+    "guard_pct": 85.0
+  },
+  "data_tokens": 6642451492.0,
+  "results": [
+    {
+      "name": "640x12",
+      "d_model": 640,
+      "num_layers": 12,
+      "attn_layers": [
+        3,
+        9
+      ],
+      "shape": {
+        "total": 81579417,
+        "body": 49414937,
+        "embed": 32164480,
+        "blocks": {
+          "layer": 14,
+          "balanced": 3
+        },
+        "largest_block": 32164480
+      },
+      "card_gib": 5.9970703125,
+      "attempts": [
+        {
+          "rung": "plain",
+          "log": "logs\\pretrain_sizing\\640x12_plain.log",
+          "wall_min": 2.255541729927063,
+          "returncode": 0,
+          "total_logged": 81579417,
+          "n_heads": 20,
+          "guard_pct": 31,
+          "steps_logged": 25,
+          "peak_alloc_gib": 1.5722,
+          "reserved_gib": 1.8379,
+          "measured_steps": 24,
+          "s_per_step": 4.423090944640945,
+          "tok_s": 7408.393906008645,
+          "half_drift": 0.00627258259893404,
+          "vram_pct": 31.0
+        }
+      ],
+      "chosen": {
+        "rung": "plain",
+        "log": "logs\\pretrain_sizing\\640x12_plain.log",
+        "wall_min": 2.255541729927063,
+        "returncode": 0,
+        "total_logged": 81579417,
+        "n_heads": 20,
+        "guard_pct": 31,
+        "steps_logged": 25,
+        "peak_alloc_gib": 1.5722,
+        "reserved_gib": 1.8379,
+        "measured_steps": 24,
+        "s_per_step": 4.423090944640945,
+        "tok_s": 7408.393906008645,
+        "half_drift": 0.00627258259893404,
+        "vram_pct": 31.0
+      }
+    },
+    {
+      "name": "768x14",
+      "d_model": 768,
+      "num_layers": 14,
+      "attn_layers": [
+        3,
+        10
+      ],
+      "shape": {
+        "total": 121564273,
+        "body": 82966897,
+        "embed": 38597376,
+        "blocks": {
+          "layer": 16,
+          "balanced": 4
+        },
+        "largest_block": 38597376
+      },
+      "card_gib": 5.9970703125,
+      "attempts": [
+        {
+          "rung": "plain",
+          "log": "logs\\pretrain_sizing\\768x14_plain.log",
+          "wall_min": 2.961369514465332,
+          "returncode": 0,
+          "total_logged": 121564273,
+          "n_heads": 24,
+          "guard_pct": 43,
+          "steps_logged": 25,
+          "peak_alloc_gib": 2.1662,
+          "reserved_gib": 2.5645,
+          "measured_steps": 24,
+          "s_per_step": 6.061973803502437,
+          "tok_s": 5405.50009983012,
+          "half_drift": 0.0008709957222679403,
+          "vram_pct": 43.0
+        }
+      ],
+      "chosen": {
+        "rung": "plain",
+        "log": "logs\\pretrain_sizing\\768x14_plain.log",
+        "wall_min": 2.961369514465332,
+        "returncode": 0,
+        "total_logged": 121564273,
+        "n_heads": 24,
+        "guard_pct": 43,
+        "steps_logged": 25,
+        "peak_alloc_gib": 2.1662,
+        "reserved_gib": 2.5645,
+        "measured_steps": 24,
+        "s_per_step": 6.061973803502437,
+        "tok_s": 5405.50009983012,
+        "half_drift": 0.0008709957222679403,
+        "vram_pct": 43.0
+      }
+    },
+    {
+      "name": "896x16",
+      "d_model": 896,
+      "num_layers": 16,
+      "attn_layers": [
+        4,
+        12
+      ],
+      "shape": {
+        "total": 174043993,
+        "body": 129013721,
+        "embed": 45030272,
+        "blocks": {
+          "layer": 18,
+          "balanced": 5
+        },
+        "largest_block": 45030272
+      },
+      "card_gib": 5.9970703125,
+      "attempts": [
+        {
+          "rung": "plain",
+          "log": "logs\\pretrain_sizing\\896x16_plain.log",
+          "wall_min": 3.812995207309723,
+          "returncode": 0,
+          "total_logged": 174043993,
+          "n_heads": 28,
+          "guard_pct": 57,
+          "steps_logged": 25,
+          "peak_alloc_gib": 2.9258,
+          "reserved_gib": 3.418,
+          "measured_steps": 24,
+          "s_per_step": 7.9805993692051755,
+          "tok_s": 4105.957270132145,
+          "half_drift": 0.00078253277626866,
+          "vram_pct": 57.0
+        }
+      ],
+      "chosen": {
+        "rung": "plain",
+        "log": "logs\\pretrain_sizing\\896x16_plain.log",
+        "wall_min": 3.812995207309723,
+        "returncode": 0,
+        "total_logged": 174043993,
+        "n_heads": 28,
+        "guard_pct": 57,
+        "steps_logged": 25,
+        "peak_alloc_gib": 2.9258,
+        "reserved_gib": 3.418,
+        "measured_steps": 24,
+        "s_per_step": 7.9805993692051755,
+        "tok_s": 4105.957270132145,
+        "half_drift": 0.00078253277626866,
+        "vram_pct": 57.0
+      }
+    },
+    {
+      "name": "1024x20",
+      "d_model": 1024,
+      "num_layers": 20,
+      "attn_layers": [
+        5,
+        15
+      ],
+      "shape": {
+        "total": 262052497,
+        "body": 210589329,
+        "embed": 51463168,
+        "blocks": {
+          "layer": 22,
+          "balanced": 6
+        },
+        "largest_block": 51463168
+      },
+      "card_gib": 5.9970703125,
+      "attempts": [
+        {
+          "rung": "plain",
+          "log": "logs\\pretrain_sizing\\1024x20_plain.log",
+          "wall_min": 5.341314057509105,
+          "returncode": 0,
+          "total_logged": 262052497,
+          "n_heads": 32,
+          "guard_pct": 74,
+          "steps_logged": 25,
+          "peak_alloc_gib": 4.0769,
+          "reserved_gib": 4.4297,
+          "measured_steps": 24,
+          "s_per_step": 11.440078128281735,
+          "tok_s": 2864.3161027888586,
+          "half_drift": 0.0001789533834586081,
+          "vram_pct": 74.0
+        }
+      ],
+      "chosen": {
+        "rung": "plain",
+        "log": "logs\\pretrain_sizing\\1024x20_plain.log",
+        "wall_min": 5.341314057509105,
+        "returncode": 0,
+        "total_logged": 262052497,
+        "n_heads": 32,
+        "guard_pct": 74,
+        "steps_logged": 25,
+        "peak_alloc_gib": 4.0769,
+        "reserved_gib": 4.4297,
+        "measured_steps": 24,
+        "s_per_step": 11.440078128281735,
+        "tok_s": 2864.3161027888586,
+        "half_drift": 0.0001789533834586081,
+        "vram_pct": 74.0
+      }
+    },
+    {
+      "name": "1280x24",
+      "d_model": 1280,
+      "num_layers": 24,
+      "attn_layers": [
+        6,
+        18
+      ],
+      "shape": {
+        "total": 459075777,
+        "body": 394746817,
+        "embed": 64328960,
+        "blocks": {
+          "layer": 26,
+          "balanced": 9
+        },
+        "largest_block": 64328960
+      },
+      "card_gib": 5.9970703125,
+      "attempts": [
+        {
+          "rung": "plain",
+          "log": "logs\\pretrain_sizing\\1280x24_plain.log",
+          "fail": "skipped: memory lower bound 5.13 GiB > 85% of 6.00 GiB"
+        },
+        {
+          "rung": "bcd",
+          "log": "logs\\pretrain_sizing\\1280x24_bcd.log",
+          "wall_min": 4.05378034512202,
+          "returncode": 0,
+          "total_logged": 459075777,
+          "blocks_logged": 9,
+          "partition": "balanced",
+          "n_heads": 40,
+          "guard_pct": 77,
+          "steps_logged": 19,
+          "peak_alloc_gib": 3.1976,
+          "reserved_gib": 4.5977,
+          "measured_steps": 18,
+          "s_per_step": 11.579059869990596,
+          "tok_s": 2829.9361405777595,
+          "half_drift": 0.0005865584388879548,
+          "vram_pct": 77.0
+        }
+      ],
+      "chosen": {
+        "rung": "bcd",
+        "log": "logs\\pretrain_sizing\\1280x24_bcd.log",
+        "wall_min": 4.05378034512202,
+        "returncode": 0,
+        "total_logged": 459075777,
+        "blocks_logged": 9,
+        "partition": "balanced",
+        "n_heads": 40,
+        "guard_pct": 77,
+        "steps_logged": 19,
+        "peak_alloc_gib": 3.1976,
+        "reserved_gib": 4.5977,
+        "measured_steps": 18,
+        "s_per_step": 11.579059869990596,
+        "tok_s": 2829.9361405777595,
+        "half_drift": 0.0005865584388879548,
+        "vram_pct": 77.0
+      }
+    },
+    {
+      "name": "1536x24",
+      "d_model": 1536,
+      "num_layers": 24,
+      "attn_layers": [
+        6,
+        18
+      ],
+      "shape": {
+        "total": 645523057,
+        "body": 568328305,
+        "embed": 77194752,
+        "blocks": {
+          "layer": 26,
+          "balanced": 9
+        },
+        "largest_block": 77194752
+      },
+      "card_gib": 5.9970703125,
+      "attempts": [
+        {
+          "rung": "plain",
+          "log": "logs\\pretrain_sizing\\1536x24_plain.log",
+          "fail": "skipped: memory lower bound 7.21 GiB > 85% of 6.00 GiB"
+        },
+        {
+          "rung": "bcd",
+          "log": "logs\\pretrain_sizing\\1536x24_bcd.log",
+          "wall_min": 0.6873080412546794,
+          "returncode": 0,
+          "fail": "spill guard (>85% after step 1)",
+          "total_logged": 645523057,
+          "blocks_logged": 9,
+          "partition": "balanced",
+          "n_heads": 48,
+          "steps_logged": 1,
+          "peak_alloc_gib": 4.1886,
+          "reserved_gib": 5.8223
+        },
+        {
+          "rung": "offload",
+          "log": "logs\\pretrain_sizing\\1536x24_offload.log",
+          "wall_min": 13.063532213370005,
+          "returncode": 0,
+          "total_logged": 645523057,
+          "blocks_logged": 26,
+          "partition": "layer",
+          "n_heads": 48,
+          "guard_pct": 61,
+          "steps_logged": 53,
+          "peak_alloc_gib": 2.1939,
+          "reserved_gib": 3.6562,
+          "measured_steps": 52,
+          "s_per_step": 14.275605389730043,
+          "tok_s": 2295.3842660552596,
+          "half_drift": 0.0004837104539976124,
+          "vram_pct": 61.0
+        }
+      ],
+      "chosen": {
+        "rung": "offload",
+        "log": "logs\\pretrain_sizing\\1536x24_offload.log",
+        "wall_min": 13.063532213370005,
+        "returncode": 0,
+        "total_logged": 645523057,
+        "blocks_logged": 26,
+        "partition": "layer",
+        "n_heads": 48,
+        "guard_pct": 61,
+        "steps_logged": 53,
+        "peak_alloc_gib": 2.1939,
+        "reserved_gib": 3.6562,
+        "measured_steps": 52,
+        "s_per_step": 14.275605389730043,
+        "tok_s": 2295.3842660552596,
+        "half_drift": 0.0004837104539976124,
+        "vram_pct": 61.0
+      }
+    },
+    {
+      "name": "2048x24",
+      "d_model": 2048,
+      "num_layers": 24,
+      "attn_layers": [
+        6,
+        18
+      ],
+      "shape": {
+        "total": 1113059793,
+        "body": 1010133457,
+        "embed": 102926336,
+        "blocks": {
+          "layer": 26,
+          "balanced": 13
+        },
+        "largest_block": 102926336
+      },
+      "card_gib": 5.9970703125,
+      "attempts": [
+        {
+          "rung": "plain",
+          "log": "logs\\pretrain_sizing\\2048x24_plain.log",
+          "fail": "skipped: memory lower bound 12.44 GiB > 85% of 6.00 GiB"
+        },
+        {
+          "rung": "bcd",
+          "log": "logs\\pretrain_sizing\\2048x24_bcd.log",
+          "fail": "skipped: memory lower bound 5.30 GiB > 85% of 6.00 GiB"
+        },
+        {
+          "rung": "offload",
+          "log": "logs\\pretrain_sizing\\2048x24_offload.log",
+          "wall_min": 19.579125459988912,
+          "returncode": 0,
+          "total_logged": 1113059793,
+          "blocks_logged": 26,
+          "partition": "layer",
+          "n_heads": 64,
+          "guard_pct": 80,
+          "steps_logged": 53,
+          "peak_alloc_gib": 2.9863,
+          "reserved_gib": 4.7871,
+          "measured_steps": 52,
+          "s_per_step": 21.41086456633796,
+          "tok_s": 1530.4379651963081,
+          "half_drift": 7.043043440535697e-05,
+          "vram_pct": 80.0
+        }
+      ],
+      "chosen": {
+        "rung": "offload",
+        "log": "logs\\pretrain_sizing\\2048x24_offload.log",
+        "wall_min": 19.579125459988912,
+        "returncode": 0,
+        "total_logged": 1113059793,
+        "blocks_logged": 26,
+        "partition": "layer",
+        "n_heads": 64,
+        "guard_pct": 80,
+        "steps_logged": 53,
+        "peak_alloc_gib": 2.9863,
+        "reserved_gib": 4.7871,
+        "measured_steps": 52,
+        "s_per_step": 21.41086456633796,
+        "tok_s": 1530.4379651963081,
+        "half_drift": 7.043043440535697e-05,
+        "vram_pct": 80.0
+      }
+    },
+    {
+      "name": "2048x32",
+      "d_model": 2048,
+      "num_layers": 32,
+      "attn_layers": [
+        8,
+        24
+      ],
+      "shape": {
+        "total": 1449849809,
+        "body": 1346923473,
+        "embed": 102926336,
+        "blocks": {
+          "layer": 34,
+          "balanced": 17
+        },
+        "largest_block": 102926336
+      },
+      "card_gib": 5.9970703125,
+      "attempts": [
+        {
+          "rung": "plain",
+          "log": "logs\\pretrain_sizing\\2048x32_plain.log",
+          "fail": "skipped: memory lower bound 16.20 GiB > 85% of 6.00 GiB"
+        },
+        {
+          "rung": "bcd",
+          "log": "logs\\pretrain_sizing\\2048x32_bcd.log",
+          "fail": "skipped: memory lower bound 6.55 GiB > 85% of 6.00 GiB"
+        },
+        {
+          "rung": "offload",
+          "log": "logs\\pretrain_sizing\\2048x32_offload.log",
+          "wall_min": 32.70003545681636,
+          "returncode": 0,
+          "total_logged": 1449849809,
+          "blocks_logged": 34,
+          "partition": "layer",
+          "n_heads": 64,
+          "guard_pct": 84,
+          "steps_logged": 69,
+          "peak_alloc_gib": 3.2363,
+          "reserved_gib": 5.0469,
+          "measured_steps": 68,
+          "s_per_step": 27.720981112773195,
+          "tok_s": 1182.0649444799503,
+          "half_drift": 0.00046108327414586306,
+          "vram_pct": 84.15609184171959
+        }
+      ],
+      "chosen": {
+        "rung": "offload",
+        "log": "logs\\pretrain_sizing\\2048x32_offload.log",
+        "wall_min": 32.70003545681636,
+        "returncode": 0,
+        "total_logged": 1449849809,
+        "blocks_logged": 34,
+        "partition": "layer",
+        "n_heads": 64,
+        "guard_pct": 84,
+        "steps_logged": 69,
+        "peak_alloc_gib": 3.2363,
+        "reserved_gib": 5.0469,
+        "measured_steps": 68,
+        "s_per_step": 27.720981112773195,
+        "tok_s": 1182.0649444799503,
+        "half_drift": 0.00046108327414586306,
+        "vram_pct": 84.15609184171959
+      }
+    },
+    {
+      "name": "2048x36",
+      "d_model": 2048,
+      "num_layers": 36,
+      "attn_layers": [
+        9,
+        27
+      ],
+      "shape": {
+        "total": 1618244817,
+        "body": 1515318481,
+        "embed": 102926336,
+        "blocks": {
+          "layer": 38,
+          "balanced": 19
+        },
+        "largest_block": 102926336
+      },
+      "card_gib": 5.9970703125,
+      "attempts": [
+        {
+          "rung": "plain",
+          "log": "logs\\pretrain_sizing\\2048x36_plain.log",
+          "fail": "skipped: memory lower bound 18.09 GiB > 85% of 6.00 GiB"
+        },
+        {
+          "rung": "bcd",
+          "log": "logs\\pretrain_sizing\\2048x36_bcd.log",
+          "fail": "skipped: memory lower bound 7.18 GiB > 85% of 6.00 GiB"
+        },
+        {
+          "rung": "offload",
+          "log": "logs\\pretrain_sizing\\2048x36_offload.log",
+          "wall_min": 1.4815914551417033,
+          "returncode": 0,
+          "fail": "spill guard (>85% after step 1)",
+          "total_logged": 1618244817,
+          "blocks_logged": 38,
+          "partition": "layer",
+          "n_heads": 64,
+          "steps_logged": 1,
+          "peak_alloc_gib": 3.3613,
+          "reserved_gib": 5.1719
+        }
+      ],
+      "chosen": null
+    }
+  ]
+}
