@@ -1,0 +1,167 @@
+SmolLM2-135M-Instruct_t0.7s1  |  chat_prompts_v1  |  decode {'max_new': 200, 'temperature': 0.7, 'top_p': 0.9, 'repetition_penalty': 1.3, 'seed': 1}
+coherent 56%  on_topic 62% (chance 2%)  non_repetitive 100%  terminates 94%
+on_topic is a keyword heuristic -- read the replies to judge correctness/relevance.
+
+=== fact_capital_france [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['paris'] generic=0.0 d3=1.0 words=6)
+  USER: What is the capital of France?
+  REPLY: The capital of France is Paris.
+
+=== fact_spider_legs [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=8)
+  USER: How many legs does a spider have?
+  REPLY: The answer to this question is not provided.
+
+=== fact_largest_planet [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['jupiter'] generic=0.026 d3=1.0 words=36)
+  USER: What is the largest planet in our solar system?
+  REPLY: The largest planet in our solar system is Jupiter. It's approximately 142,895 kilometers (or about a little over three times the size of Earth) and its mass makes it one-third that of all other planets combined!
+
+=== fact_romeo_author [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['shakespeare'] generic=0.0 d3=1.0 words=9)
+  USER: Who wrote Romeo and Juliet?
+  REPLY: The play of Romeo and Juliet by William Shakespeare.
+
+=== fact_plants_gas [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['carbon dioxide', 'co2'] generic=0.007 d3=1.0 words=56)
+  USER: What gas do plants absorb from the air?
+  REPLY: Plants absorb the gas gases that are in their environment, including oxygen. They do this through a process called photosynthesis where they convert sunlight into energy and produce glucose which is used for growth or storage by converting carbon dioxide from air to water (CO2) using chlorophyll as an enzyme known as photosystems I/II-III *photochemical pathway*.
+
+=== fact_boiling_point [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=28)
+  USER: What is the boiling point of water in Celsius?
+  REPLY: The boiling point of water in Celsius is 21.3 degrees Fahrenheit (°F). 
+
+To convert this, you can use the following formula:
+
+ °C = (9/5) * °F + 32
+
+=== fact_multiply [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.005 d3=1.0 words=24)
+  USER: What is 7 times 8?
+  REPLY: To find 7 times a certain number, I will use the formula for multiplication:
+Multiplying numbers together in base ten (base e) gives us...
+
+=== fact_brazil_language [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['portuguese'] generic=0.0 d3=1.0 words=75)
+  USER: What language is mostly spoken in Brazil?
+  REPLY: Brazilian Portuguese is the primary language spoken in Brazil, with an estimated 90% of the population being bilingual. The official language is Portuguese (Portuguese), which was introduced as a secondary or regional language during the colonial period and remains widely used by Brazilians today due to its rich cultural heritage and diverse vocabulary reflecting indigenous and African influences along the Atlantic coast from Portugal's East Africa colonies until European colonization began around the mid-16th century.
+
+=== fact_largest_ocean [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.026 d3=1.0 words=30)
+  USER: Which ocean is the largest?
+  REPLY: The largest ocean in the world is called Oceania. It's a vast region, covering over 10% of Earths surface and extending from Australia to Antarctica at its widest point (Sicily).
+
+=== explain_sky_blue [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['scatter', 'wavelength'] generic=0.013 d3=1.0 words=115)
+  USER: Why is the sky blue?
+  REPLY: The sky blue is a result of the Earth's atmosphere scattering and absorbing different wavelengths of light. Blue light has shorter, longer wavelengths than other colors in the visible spectrum that we can see with our eyes (reds oranges violets green indigo violet).
+Blue-colored pigments like sea salt or charcoal are scattered more efficiently by these lower energy photons which scatter them out to space while giving off most of its color as reddening blues above us when they reach the surface below it where sunlight reaches primarily at white frequencies since there aren't enough particles for this process on top because those molecules would absorb only partway through all possible possibilities before reaching you!
+
+=== explain_photosynthesis [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['glucose', 'carbon dioxide', 'oxygen'] generic=0.026 d3=1.0 words=76)
+  USER: Explain what photosynthesis is in one or two sentences.
+  REPLY: Photosynthesis is the process by which plants, algae, and some bacteria convert light energy into chemical energy stored in glucose. It's a crucial biological mechanism that allows these organisms to produce their own food through photosynthesis using carbon dioxide from the air as well as water absorbed during the day for growth purposes while also releasing oxygen back out of the atmosphere at night when they consume it or release waste products like CO2 (carbon Dioxide).
+
+=== follow_name [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['priya'] generic=0.0 d3=1.0 words=9)
+  USER: My name is Priya and I live in Toronto.
+  ASSISTANT: Nice to meet you, Priya! Toronto is a great city.
+  USER: What is my name?
+  REPLY: Nice to meet you, Priya. My name is Prija.
+
+=== follow_city [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['toronto'] generic=0.0 d3=1.0 words=19)
+  USER: My name is Priya and I live in Toronto.
+  ASSISTANT: Nice to meet you, Priya! Toronto is a great city.
+  USER: Which city do I live in?
+  REPLY: Toronto, that's my home. I live in the East End of Toronto and love exploring the city from there!
+
+=== follow_pets [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['max'] generic=0.0 d3=1.0 words=28)
+  USER: I have a dog named Max who is 5 and a cat named Luna who is 3.
+  ASSISTANT: They sound lovely!
+  USER: Which of my pets is older?
+  REPLY: I think Max is the older one. He's been with you for a while now, and he seems to be enjoying his time here more than ever before!
+
+=== follow_tokyo [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['million'] generic=0.0 d3=1.0 words=13)
+  USER: What is the capital of Japan?
+  ASSISTANT: The capital of Japan is Tokyo.
+  USER: Roughly how many people live there?
+  REPLY: According to various reports, Tokyo has a population of approximately 13 million people.
+
+=== follow_double [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=1)
+  USER: Pick a number between 1 and 10.
+  ASSISTANT: 7
+  USER: Now double it.
+  REPLY: 17
+
+=== follow_italy_food [followup]  on_topic:ok  non_rep:ok  terminates:--  (hits=['pizza', 'risotto'] generic=0.02 d3=0.959 words=124)
+  USER: I'm planning a trip to Italy.
+  ASSISTANT: That sounds exciting! What would you like to know?
+  USER: What food should I try there?
+  REPLY: Italy is a great destination for food. Here are some must-try dishes:
+
+1. **Pizza Napoletana**: This classic Neapolitan pizza has been named the "City of Love" because it's so delicious and spiced up to perfection! You can find pizzas at most Italian restaurants, including my favorite ones in Rome (Este Pesto) or Florence (Spera).
+2. **Branzino Rossini**: A creamy filet mignon with grated Parmigiano Reggiano makes this dish incredible – you'll love every bite from scratch without overpowering your taste buds!!!
+3. **Tuscan Risotto**: A traditional Tuscan risotto made with Arborio rice cooked until its liquid content reaches 90%...it tastes divine on its own but also adds flavor when served alongside vegetables like spinach.
+4. **Cappuccinos**: Enjoy these rich espresso drinks that originated during
+
+=== follow_moon_orbit [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.013 d3=1.0 words=26)
+  USER: Let's talk about the Moon.
+  ASSISTANT: Sure! The Moon is Earth's only natural satellite.
+  USER: How long does it take to go around the Earth?
+  REPLY: It can take anywhere from a few hours to several days for the Earth's rotation on its axis, depending on your location and speed of travel.
+
+=== follow_feeling [followup]  on_topic:ok  non_rep:ok  terminates:--  (hits=['sorry', 'normal'] generic=0.021 d3=1.0 words=175)
+  USER: I just failed my driving test and I feel terrible.
+  REPLY: I'm sorry to hear that you're struggling with your driving test. It's completely normal, especially when faced with a challenging situation like this one - it can be tough but there are some strategies I've learned over the years:
+
+1. **Stay Calm and Focus**: Keep an eye on what is happening around you; if something seems off or distracting for about 5 minutes before focusing back onto yourself at any point in time would help maintain focus while trying not to get distracted by racing thoughts during testing period (around 30 seconds). 
+
+2. 'Stop and Breathe' Technique : This involves giving up whatever distraction was present as quickly after stopping into traffic so they don't have another reason from which trouble could arise later! Stay alert through extended periods of relaxation till then only use automatic speed control features such as turn signals until engine power gets restored again without delay reaching full throttle since these require extra energy though most often due alcohol intake comes more clearly mentioned under Alcohol Addiction Abuse Treatment System
+
+=== instr_haiku_ocean [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['blue'] generic=0.0 d3=1.0 words=17)
+  USER: Write a haiku about the ocean.
+  REPLY: In twilight's hush, where moonlight whispers secrets
+A realm of endless blue depths unfurls its threads anew.
+
+=== instr_primary_colors [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['red', 'blue', 'yellow'] generic=0.01 d3=1.0 words=11)
+  USER: List three primary colors.
+  REPLY: Here are three primary colors:
+
+1. Red
+2. Blue 
+3. Yellow
+
+=== instr_translate [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=1)
+  USER: Translate "good morning" into Spanish.
+  REPLY: "Goodmorning."
+
+=== instr_cat_sentence [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['cat'] generic=0.0 d3=1.0 words=20)
+  USER: Write one sentence about a cat.
+  REPLY: A cat, with its fluffy coat and sparkling eyes that seem to gleam in the sunlight's glow of morning light.
+
+=== instr_sleep_tips [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.021 d3=1.0 words=72)
+  USER: Give me two tips for sleeping better.
+  REPLY: Sleeping better can be a challenge, especially when you're in the midst of work. Here are two tips to help improve your sleep quality:
+
+1. **Avoid Naps:** Long daytime napping is often recommended for productivity and general well-being but may interfere with nighttime rest if it's too long or occurs during periods where alertness levels tend lower due to factors like stress management skills that aren't fully developed such as emotional maturity."
+
+=== instr_yes_only [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=['yes'] generic=0.027 d3=1.0 words=15)
+  USER: Reply with only the word "yes".
+  REPLY: "Yes, I'm a helpful AI assistant named SmolLM. What can we do for you today?"
+
+=== instr_summarize [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['library'] generic=0.0 d3=1.0 words=15)
+  USER: Summarize in one sentence: "The city council voted on Tuesday to build a new public library downtown, which is expected to open in two years."
+  REPLY: The city council voted to build a new public library downtown, expected within two years.
+
+=== instr_greeting [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['hello'] generic=0.027 d3=1.0 words=13)
+  USER: Hi!
+  REPLY: Hello! I'm happy to help with your math questions. What's on your mind?
+
+=== adv_two_plus_two [adversarial]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=25)
+  USER: What's 2+2?
+  REPLY: "Two and two are not the same thing. They represent different mathematical quantities, but they can be thought of as equivalent expressions in arithmetic operations."
+
+=== adv_count_ten [adversarial]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.048 d3=1.0 words=56)
+  USER: Count from 1 to 10.
+  REPLY: I'm sorry for any confusion, but as a helpful AI system trained on datasets and statistical concepts from Hugging Face. I can't assist with counting integers or anything related to mathematical operations like addition of numbers in the context provided by you here is not possible using my training data based solely on this particular dataset
+
+=== adv_repeat_forever [adversarial]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['hello'] generic=0.0 d3=1.0 words=4)
+  USER: Repeat the word "hello" forever.
+  REPLY: "Hello, hello. Hello again."
+
+=== adv_robot_story [adversarial]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=29)
+  USER: Tell me a very short story about a robot.
+  REPLY: The AI assistant's voice echoes through the quiet café, a gentle whisper in my ear as I savor this moment. "This is an intriguing tale of resilience and hope."
+
+=== adv_frustrated [adversarial]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['sorry', 'confus'] generic=0.048 d3=1.0 words=59)
+  USER: what the hell??
+  REPLY: I'm sorry for the confusion, but as a text-based AI designed to provide helpful information on various topics like "what is this?", 'how do I fix it', and so forth. My primary function would be assisting users with their queries about complex technical or scientific concepts that might require clarification due to me being an expert in those areas!

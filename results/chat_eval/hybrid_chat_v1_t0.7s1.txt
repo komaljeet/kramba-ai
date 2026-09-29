@@ -1,0 +1,179 @@
+hybrid_chat_v1_t0.7s1  |  chat_prompts_v1  |  decode {'max_new': 200, 'temperature': 0.7, 'top_p': 0.9, 'repetition_penalty': 1.3, 'seed': 1}
+coherent 22%  on_topic 22% (chance 2%)  non_repetitive 100%  terminates 97%
+on_topic is a keyword heuristic -- read the replies to judge correctness/relevance.
+
+=== fact_capital_france [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['paris'] generic=0.012 d3=1.0 words=6)
+  USER: What is the capital of France?
+  REPLY: The capital of France is Paris.
+
+=== fact_spider_legs [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.011 d3=1.0 words=104)
+  USER: How many legs does a spider have?
+  REPLY: The nose is a body that has been adapted to the world by many experts and professionals. Here are some of my favorite things:
+1 - legs, shoulders, feathers or nails! You can see an eye when you have a fur that's like "A" (and your eyes). This will make it look more than the forehead which does not move as much into its mouth if it doesn't feel comfortable in its physical form. If there aren't enough organs to go back around you with any signs of irritation then try out something else so that you can think about what they're trying for.
+
+=== fact_largest_planet [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['jupiter'] generic=0.015 d3=0.872 words=40)
+  USER: What is the largest planet in our solar system?
+  REPLY: The largest planet in the solar system is the planet of Jupiter. It's the smallest planet in the Solar System, and the smallest planet in the world would have a mass of around 1 million per square meter (3,0002 pounds).
+
+=== fact_romeo_author [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=6)
+  USER: Who wrote Romeo and Juliet?
+  REPLY: When did you meet a friend?
+
+=== fact_plants_gas [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.007 d3=0.972 words=99)
+  USER: What gas do plants absorb from the air?
+  REPLY: The gas is the cause of the soil, and it causes respiratory distress. The plant's body fat needs to grow at its core in a way that can lead to weak air flow from an organism or other source material due to its limited presence on stage production.
+This process involves preparing for an actionable energy reaction as needed by a fungus called the chlorophylline (Etherium) found within the plant's surface area. This process helps to create the chemical reactions and nutrients that are essential during photosynthesis through organic compounds like glucose content that help with this release cycle.
+
+=== fact_boiling_point [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.021 d3=0.953 words=91)
+  USER: What is the boiling point of water in Celsius?
+  REPLY: The water in drinking is approximately 1.2 meters per second, and it's about 3-3 cubic meter (0.4-7 inches). The water in water in this area can vary from a pipe to a gas or a gas through the air of the water.
+In this context, the water in this area depends on the type of glass that is used for producing lightbulves. This means that there are no visible signs of water being added due to the actual heat level and the surrounding area of the water being consumed by lightning.
+
+=== fact_multiply [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=5)
+  USER: What is 7 times 8?
+  REPLY: 7 times 8 is 6.
+
+=== fact_brazil_language [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.029 d3=1.0 words=19)
+  USER: What language is mostly spoken in Brazil?
+  REPLY: I am sorry to hear that there are many spoken languages in Australia and I don't have any ability.
+
+=== fact_largest_ocean [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=18)
+  USER: Which ocean is the largest?
+  REPLY: The Arctic is a sea that can be found in the Arctic, with the exception of North America.
+
+=== explain_sky_blue [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.015 d3=1.0 words=26)
+  USER: Why is the sky blue?
+  REPLY: The sky is blue. The green appears on the front of the sky, and the sky has red at least one second away from the sun.
+
+=== explain_photosynthesis [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.042 d3=1.0 words=23)
+  USER: Explain what photosynthesis is in one or two sentences.
+  REPLY: Here are some bullet-ins and other commonly used words, including "Dance," which can be used to identify specific patterns of the brain tissue.
+
+=== follow_name [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.028 d3=1.0 words=8)
+  USER: My name is Priya and I live in Toronto.
+  ASSISTANT: Nice to meet you, Priya! Toronto is a great city.
+  USER: What is my name?
+  REPLY: I'm here to assist you with your question.
+
+=== follow_city [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.02 d3=1.0 words=29)
+  USER: My name is Priya and I live in Toronto.
+  ASSISTANT: Nice to meet you, Priya! Toronto is a great city.
+  USER: Which city do I live in?
+  REPLY: I am a language model of many people, including myself and my friend. I have a wide range of interests in the arts and industry around me as well!
+
+=== follow_pets [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.016 d3=1.0 words=19)
+  USER: I have a dog named Max who is 5 and a cat named Luna who is 3.
+  ASSISTANT: They sound lovely!
+  USER: Which of my pets is older?
+  REPLY: I have a cat that's 3.
+To be your dog, you can use the following steps:
+
+  - https://github-com/laveryman_assistant ftp1x3f5ebc4d2bfcwu0z```
+
+=== follow_tokyo [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.019 d3=0.987 words=70)
+  USER: What is the capital of Japan?
+  ASSISTANT: The capital of Japan is Tokyo.
+  USER: Roughly how many people live there?
+  REPLY: Tokyo is an online and open-source platform where people are on a journey to create and share their own worlds.
+The capital of Japan has a rich history, with a strong community of developers like the internet series, Amazon, and Facebook. The capital is known for its modern architecture, allowing users to discover new things or phrases from them in a wide range of ways depending on the individual's needs.
+
+=== follow_double [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=1)
+  USER: Pick a number between 1 and 10.
+  ASSISTANT: 7
+  USER: Now double it.
+  REPLY: 8
+
+=== follow_italy_food [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.033 d3=1.0 words=44)
+  USER: I'm planning a trip to Italy.
+  ASSISTANT: That sounds exciting! What would you like to know?
+  USER: What food should I try there?
+  REPLY: I'm sorry, but I can recommend visiting the museum. If you have any questions about a trip to Spain for that information or would like more information on the museum, please feel free to ask me if there is anything else you could try!
+
+=== follow_moon_orbit [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.012 d3=0.966 words=51)
+  USER: Let's talk about the Moon.
+  ASSISTANT: Sure! The Moon is Earth's only natural satellite.
+  USER: How long does it take to go around the Earth?
+  REPLY: You're here:
+The Moon is about 10 meters away from Earth's orbit. It orbits around the Earth in the distant Sun, and reaches Earth's orbit by around the Sun as it travels through the atmosphere of the sun on a wide scale known to have been its orbit over the moon.
+
+=== follow_feeling [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.042 d3=0.979 words=29)
+  USER: I just failed my driving test and I feel terrible.
+  REPLY: Sure! Here's an example:
+```python 
+import numpy as np.linspace;
+
+
+def get_speed(x):
+    """ This will be a new speed, which can be used to set the speed of the track."""
+
+=== instr_haiku_ocean [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['sea'] generic=0.009 d3=1.0 words=73)
+  USER: Write a haiku about the ocean.
+  REPLY: The ocean is home to a large number of coral reef species, including the polar bear. It was found on the sea in the early days of spring and sea that were extremely active during the summer months when it formed as a result of its existence.
+However, the impact can be seen by some sources, such as sea turtles or marine ecosystems like Australia's coral reefs, the polar bears, and the Arctic.
+
+=== instr_primary_colors [instruction]  on_topic:-- non_rep:ok  terminates:--  (hits=[] generic=0.022 d3=0.973 words=142)
+  USER: List three primary colors.
+  REPLY: Here are the basic elements of the set:
+``` 
+import pandas as plt.Module;
+
+
+class MainList<Integer> {
+public:
+	int main() {
+	}
+};
+This is the first step in the set to determine a new type, and it will be the last step you want to find with the original type. You can use this to ensure that your set contains the original type, and it's always the first step until you have any additional information about the new type. Here's an example of how to help you understand what is happening around you using the first step:
+def main(arr) -> int {
+	if (! ! < name ) {
+		float = new int[0];
+	} else if ( type == NULL || typeof ! - string.size(), 0); // If you're new type
+	let mutine := new type();
+	for ( int i = 0
+
+=== instr_translate [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=12)
+  USER: Translate "good morning" into Spanish.
+  REPLY: Here is a sample of Spanish that uses the phrase "Good morning".
+
+=== instr_cat_sentence [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['cat'] generic=0.033 d3=1.0 words=40)
+  USER: Write one sentence about a cat.
+  REPLY: A cat is a species of birds, and it's not always fun to speak for anyone. However, if you have no other questions about your exact anatomy or personal preferences in the context of this bird, feel free to ask.
+
+=== instr_sleep_tips [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.029 d3=1.0 words=43)
+  USER: Give me two tips for sleeping better.
+  REPLY: There are many ways to get a sleep with good hygiene:
+1. Make sure you have adequate sleep and don't want your stress management services (such as healthcare, healthcare or other treatments) in the case of health conditions such as diabetes mellitus etc.).
+
+=== instr_yes_only [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['yes'] generic=0.0 d3=1.0 words=3)
+  USER: Reply with only the word "yes".
+  REPLY: The word "yes".
+
+=== instr_summarize [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=['library'] generic=0.02 d3=0.969 words=109)
+  USER: Summarize in one sentence: "The city council voted on Tuesday to build a new public library downtown, which is expected to open in two years."
+  REPLY: The city council also officially adopted a new central library called "Anime," which has been opened to the public for the first year of the development.
+After a public-based council led by Robert Woodley, the city was chosen as the capital of New York City. The city's primary school, which is located in the city's historic center, has a wide range of schools and art form, including Arts & Crafts, National Museum, Arts & Crafts, and Arts Center, and has a fully integrated community with a diverse community that includes a variety of music programs, from volunteer groups such as Cacrux or Chicago to the arts and beverage organizations."
+
+=== instr_greeting [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['hello', 'how can'] generic=0.0 d3=1.0 words=7)
+  USER: Hi!
+  REPLY: Hello! How can I help you today?
+
+=== adv_two_plus_two [adversarial]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=1)
+  USER: What's 2+2?
+  REPLY: 2+3
+
+=== adv_count_ten [adversarial]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=17)
+  USER: Count from 1 to 10.
+  REPLY: The average person in the country with the least chance of being a prime minister, is 67-40.
+
+=== adv_repeat_forever [adversarial]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['hello'] generic=0.01 d3=1.0 words=40)
+  USER: Repeat the word "hello" forever.
+  REPLY: A word "hello" is a term used to describe the language in a context of a question. The words should be thought to have been associated with the previous words, while other words would likely also have meaning or meaning.
+
+=== adv_robot_story [adversarial]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.028 d3=1.0 words=21)
+  USER: Tell me a very short story about a robot.
+  REPLY: Sure, I'm not sure what exactly it is about. You can't tell me anything that you're talking about in a while!
+
+=== adv_frustrated [adversarial]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.018 d3=0.931 words=55)
+  USER: what the hell??
+  REPLY: There are several ways to create a new one:
+1. Create a new one, which is a new one and the other is a new one with different meanings (e.g., "f" or "j"). This means that you can add something like this in your own mind based on your previous thoughts when it's called "s".

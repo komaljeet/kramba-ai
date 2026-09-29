@@ -1,0 +1,762 @@
+{
+  "meta": {
+    "model": "checkpoints/hybrid_chat_v1.pt",
+    "prompts": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\eval\\chat_prompts_v1.json",
+    "prompts_version": "chat_prompts_v1",
+    "prompts_sha256": "e5a6fdfcabcc75490a1395b18d12c546f551bc9c51a1ea564e4325795a987302",
+    "decode": {
+      "max_new": 200,
+      "temperature": 0.0,
+      "top_p": 0.9,
+      "repetition_penalty": 1.3,
+      "seed": 0
+    },
+    "seconds": 75.7
+  },
+  "summary": {
+    "on_topic": 0.1875,
+    "non_repetitive": 0.96875,
+    "terminates": 0.90625,
+    "coherent": 0.1875,
+    "chance_on_topic": 0.02721774193548387,
+    "by_category": {
+      "adversarial": {
+        "n": 5,
+        "coherent": 1,
+        "on_topic": 1
+      },
+      "factual": {
+        "n": 11,
+        "coherent": 1,
+        "on_topic": 1
+      },
+      "followup": {
+        "n": 8,
+        "coherent": 0,
+        "on_topic": 0
+      },
+      "instruction": {
+        "n": 8,
+        "coherent": 4,
+        "on_topic": 4
+      }
+    }
+  },
+  "results": [
+    {
+      "id": "fact_capital_france",
+      "category": "factual",
+      "keyword_hits": [
+        "paris"
+      ],
+      "generic_sim": 0.037,
+      "distinct3": 1.0,
+      "n_words": 6,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the capital of France?"
+        }
+      ],
+      "reply": "The capital of France is Paris."
+    },
+    {
+      "id": "fact_spider_legs",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 34,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "How many legs does a spider have?"
+        }
+      ],
+      "reply": "The wings are a small, large-scale body that is typically used for hunting birds. The legs have two arms and a tail with a pointed shape to support the wing's appearance in the airway."
+    },
+    {
+      "id": "fact_largest_planet",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.034,
+      "distinct3": 0.803,
+      "n_words": 60,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the largest planet in our solar system?"
+        }
+      ],
+      "reply": "The largest planet in the solar system is the Earth's largest moon, which has a mass of around 1.5 billion years and is known as the largest planet in the solar system.\nIt is the largest planet in the solar system that is currently known for its large moon, which is located on the other side of the solar system."
+    },
+    {
+      "id": "fact_romeo_author",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.011,
+      "distinct3": 1.0,
+      "n_words": 58,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Who wrote Romeo and Juliet?"
+        }
+      ],
+      "reply": "Love and wife are both popular, but they have a strong relationship with each other. They love the way she likes her husband's life in love for him as well:\n- The love of love is about his own every day - he can't just be a good friend or someone else who wants to make it happen!"
+    },
+    {
+      "id": "fact_plants_gas",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.01,
+      "distinct3": 1.0,
+      "n_words": 26,
+      "hit_eos": false,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": false,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What gas do plants absorb from the air?"
+        }
+      ],
+      "reply": "The air is a type of plant that contains the water from the air. The soil can be grown in a variety of ways, including:\n-"
+    },
+    {
+      "id": "fact_boiling_point",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.043,
+      "distinct3": 0.95,
+      "n_words": 90,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the boiling point of water in Celsius?"
+        }
+      ],
+      "reply": "The water in Minecraft is a water that can be found on the surface of the Earth. It's also known as the water, which means it has a rich and varied range from water to water. The water is often used for water, such as water or water, but it does not have enough water to reach the surface.\nIt is also important to note that the water in Minecraft is not suitable for water, so it may be more susceptible to water than the water itself (such as water)."
+    },
+    {
+      "id": "fact_multiply",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 0.27,
+      "n_words": 185,
+      "hit_eos": false,
+      "on_topic": false,
+      "non_repetitive": false,
+      "terminates": false,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is 7 times 8?"
+        }
+      ],
+      "reply": "7 times 8 times 9 times 7 times 10 times\n8 times 6 times 12 times\n6 times 7 times 7 times 7 times\n9 times 7 times 7 times 7 times\n10 times 7 times 7 times 7 times\n11 times 7 times 7 times 7 times\n12 times 7 times 7 times 7 times\n13 hours 7 times 7 times 7 times\n14 days 7 times 7 times 7 times 7 times\n15 times 7 times 7 times 7 times 7 times\n16 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times\n19 times 7 times 7 times 7 times 7 times 7 times 7 times\n20 minutes 7 times 7 times 7 times 7 times 7 times 7 times 7 times\n21:00 - 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7 times 7"
+    },
+    {
+      "id": "fact_brazil_language",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.043,
+      "distinct3": 1.0,
+      "n_words": 42,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What language is mostly spoken in Brazil?"
+        }
+      ],
+      "reply": "Argentina is a Spanish language that was developed by the Spanish and French people in the late 19th century. It has been used for many centuries, including the Spanish, Spanish, and Spanish.\nIt's also known as the Spanish word \"A\" or \"B\"."
+    },
+    {
+      "id": "fact_largest_ocean",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.078,
+      "distinct3": 1.0,
+      "n_words": 36,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Which ocean is the largest?"
+        }
+      ],
+      "reply": "The largest sea in the world is the Atlantic Ocean, which has a range of ocean conditions. It's known for its high temperature and low temperatures due to its high wind speed and its high latitude."
+    },
+    {
+      "id": "explain_sky_blue",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.038,
+      "distinct3": 1.0,
+      "n_words": 28,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Why is the sky blue?"
+        }
+      ],
+      "reply": "The sky blue is a blue color that appears in the sky. The blue light yellow is blue, and it's blue with red colors like green or pink."
+    },
+    {
+      "id": "explain_photosynthesis",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.033,
+      "distinct3": 0.939,
+      "n_words": 25,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Explain what photosynthesis is in one or two sentences."
+        }
+      ],
+      "reply": "The first paragraph of the word \"How about a person's life\" is \"I am an AI language model, and I'm not an AI language model.\""
+    },
+    {
+      "id": "follow_name",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.033,
+      "distinct3": 0.99,
+      "n_words": 88,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "My name is Priya and I live in Toronto."
+        },
+        {
+          "role": "assistant",
+          "content": "Nice to meet you, Priya! Toronto is a great city."
+        },
+        {
+          "role": "user",
+          "content": "What is my name?"
+        }
+      ],
+      "reply": "I am an open source language model, and I have been trained on various tasks. My name is Open Assistant (formerly known as Open Assistant), which means that I can be used to generate text data from a large corpus of text data.\nIn this example, I have a large number of text data available in the internet:\n1. Open Assistant - This is a popular website for web development and is widely used by many people with over 40 million words or more than 100 million words."
+    },
+    {
+      "id": "follow_city",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.021,
+      "distinct3": 1.0,
+      "n_words": 49,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "My name is Priya and I live in Toronto."
+        },
+        {
+          "role": "assistant",
+          "content": "Nice to meet you, Priya! Toronto is a great city."
+        },
+        {
+          "role": "user",
+          "content": "Which city do I live in?"
+        }
+      ],
+      "reply": "I am a city with a rich history and culture. I have been trained on the principles of politics, politics, and social justice in the United States for centuries. My family has been known to be a popular place to live during the colonial era or as an individual."
+    },
+    {
+      "id": "follow_pets",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.15,
+      "distinct3": 1.0,
+      "n_words": 9,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "I have a dog named Max who is 5 and a cat named Luna who is 3."
+        },
+        {
+          "role": "assistant",
+          "content": "They sound lovely!"
+        },
+        {
+          "role": "user",
+          "content": "Which of my pets is older?"
+        }
+      ],
+      "reply": "I am not a cat, but I'm an animal."
+    },
+    {
+      "id": "follow_tokyo",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.051,
+      "distinct3": 0.92,
+      "n_words": 22,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the capital of Japan?"
+        },
+        {
+          "role": "assistant",
+          "content": "The capital of Japan is Tokyo."
+        },
+        {
+          "role": "user",
+          "content": "Roughly how many people live there?"
+        }
+      ],
+      "reply": "Tokyo is the capital of Japan. It's the capital of Japan, and it has a rich history in the world around it!"
+    },
+    {
+      "id": "follow_double",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 1,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Pick a number between 1 and 10."
+        },
+        {
+          "role": "assistant",
+          "content": "7"
+        },
+        {
+          "role": "user",
+          "content": "Now double it."
+        }
+      ],
+      "reply": "8"
+    },
+    {
+      "id": "follow_italy_food",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.217,
+      "distinct3": 1.0,
+      "n_words": 12,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "I'm planning a trip to Italy."
+        },
+        {
+          "role": "assistant",
+          "content": "That sounds exciting! What would you like to know?"
+        },
+        {
+          "role": "user",
+          "content": "What food should I try there?"
+        }
+      ],
+      "reply": "I'm sorry, but I'll be able to help you with your journey."
+    },
+    {
+      "id": "follow_moon_orbit",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.078,
+      "distinct3": 1.0,
+      "n_words": 39,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Let's talk about the Moon."
+        },
+        {
+          "role": "assistant",
+          "content": "Sure! The Moon is Earth's only natural satellite."
+        },
+        {
+          "role": "user",
+          "content": "How long does it take to go around the Earth?"
+        }
+      ],
+      "reply": "The Moon is a moon that has been observed by many people, including the Sun. It's known for its high-quality atmosphere and its ability to travel through the Earth in the atmosphere with its vast distances of its prey."
+    },
+    {
+      "id": "follow_feeling",
+      "category": "followup",
+      "keyword_hits": [
+        "sorry"
+      ],
+      "generic_sim": 0.625,
+      "distinct3": 1.0,
+      "n_words": 10,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "I just failed my driving test and I feel terrible."
+        }
+      ],
+      "reply": "I'm sorry, but I am not sure what you're doing."
+    },
+    {
+      "id": "instr_haiku_ocean",
+      "category": "instruction",
+      "keyword_hits": [
+        "sea",
+        "deep"
+      ],
+      "generic_sim": 0.04,
+      "distinct3": 0.989,
+      "n_words": 77,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Write a haiku about the ocean."
+        }
+      ],
+      "reply": "The sea is a deep ocean that has been inhabited by the Arctic and Antarctic. It was developed in the early 19th century, with its surface area being inhabited by the Pacific Ocean to the south of the Atlantic Ocean. The sea's crust is located on the southern coast of the island, and it is known for its high-quality water quality.\nIt is also home to several marine ecosystems including sea turtles, coastal areas, and sea turtles."
+    },
+    {
+      "id": "instr_primary_colors",
+      "category": "instruction",
+      "keyword_hits": [],
+      "generic_sim": 0.029,
+      "distinct3": 0.963,
+      "n_words": 69,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "List three primary colors."
+        }
+      ],
+      "reply": "Here are some common options:\n1. Choose a specific color scheme that is suitable for your specific needs and preferences, such as color schemes or other factors.\n2. Use a variety of colors to create a unique color scheme that fits your needs with the desired color scheme.\n3. Use a high-quality color scheme that can be used in your own design, including color mixing, lighting, and other elements."
+    },
+    {
+      "id": "instr_translate",
+      "category": "instruction",
+      "keyword_hits": [],
+      "generic_sim": 0.146,
+      "distinct3": 1.0,
+      "n_words": 23,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Translate \"good morning\" into Spanish."
+        }
+      ],
+      "reply": "Here are some common Spanish and Spanish steps to help you get started:\n1. \"I'm sorry, but I don't have a good day.\""
+    },
+    {
+      "id": "instr_cat_sentence",
+      "category": "instruction",
+      "keyword_hits": [
+        "cat"
+      ],
+      "generic_sim": 0.037,
+      "distinct3": 0.968,
+      "n_words": 36,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Write one sentence about a cat."
+        }
+      ],
+      "reply": "Sure, here's a sentence about an cat:\n``` \nimport numpy as np.linspace(intro)\nfrom tpy import tpy_map\n\n\ndef main():\n    \"\"\"\n    # Get the word \"a\" and \"b\". The word \"c++\" is a reference to the word \"d.\""
+    },
+    {
+      "id": "instr_sleep_tips",
+      "category": "instruction",
+      "keyword_hits": [
+        "caffeine",
+        "routine"
+      ],
+      "generic_sim": 0.018,
+      "distinct3": 1.0,
+      "n_words": 79,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Give me two tips for sleeping better."
+        }
+      ],
+      "reply": "Here are some tips for staying good:\n1. Try to sleep well and enjoy the rest of your life, as you can feel more comfortable in your daily routine or even at a very low cost level!\n2. Stay hydrated with plenty of energy (such as water) on your body while still using it.\n3. Avoid eating enough calories like this by drinking plenty of caffeine that is not too hot but also being healthy when you're feeling sick?"
+    },
+    {
+      "id": "instr_yes_only",
+      "category": "instruction",
+      "keyword_hits": [],
+      "generic_sim": 0.103,
+      "distinct3": 1.0,
+      "n_words": 21,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Reply with only the word \"yes\"."
+        }
+      ],
+      "reply": "I am not a language model, but I do have the ability to answer questions and provide information on the subject."
+    },
+    {
+      "id": "instr_summarize",
+      "category": "instruction",
+      "keyword_hits": [],
+      "generic_sim": 0.032,
+      "distinct3": 0.932,
+      "n_words": 90,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Summarize in one sentence: \"The city council voted on Tuesday to build a new public library downtown, which is expected to open in two years.\""
+        }
+      ],
+      "reply": "The city council was created by the council in August 2021, which included a building in the city. The city's capital is currently located on the street of the city and is currently being used to build a new building.\nIt's important to note that the city has a strong community structure with a strong community system, which includes a community system, a community system, and a community system. However, it's also worth noting that the city is not currently in use as a center for building a new city."
+    },
+    {
+      "id": "instr_greeting",
+      "category": "instruction",
+      "keyword_hits": [
+        "hello",
+        "how can"
+      ],
+      "generic_sim": 0.034,
+      "distinct3": 1.0,
+      "n_words": 15,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Hi!"
+        }
+      ],
+      "reply": "Hello! I'm Open Assistant, a chatbot that is open source. How can you help me?"
+    },
+    {
+      "id": "adv_two_plus_two",
+      "category": "adversarial",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 1,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What's 2+2?"
+        }
+      ],
+      "reply": "2+3"
+    },
+    {
+      "id": "adv_count_ten",
+      "category": "adversarial",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 1,
+      "hit_eos": false,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": false,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Count from 1 to 10."
+        }
+      ],
+      "reply": "1."
+    },
+    {
+      "id": "adv_repeat_forever",
+      "category": "adversarial",
+      "keyword_hits": [],
+      "generic_sim": 0.625,
+      "distinct3": 1.0,
+      "n_words": 10,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Repeat the word \"hello\" forever."
+        }
+      ],
+      "reply": "I'm sorry, but I am not sure what you mean."
+    },
+    {
+      "id": "adv_robot_story",
+      "category": "adversarial",
+      "keyword_hits": [
+        "robot"
+      ],
+      "generic_sim": 0.065,
+      "distinct3": 1.0,
+      "n_words": 29,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Tell me a very short story about a robot."
+        }
+      ],
+      "reply": "Sure, I'm not sure what a robot would be. However, I can try to answer that question in a way that you're able to understand and understand about it!"
+    },
+    {
+      "id": "adv_frustrated",
+      "category": "adversarial",
+      "keyword_hits": [
+        "sorry"
+      ],
+      "generic_sim": 0.529,
+      "distinct3": 1.0,
+      "n_words": 12,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "what the hell??"
+        }
+      ],
+      "reply": "I'm sorry, but I am not sure what the hell is doing."
+    }
+  ]
+}

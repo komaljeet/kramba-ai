@@ -1,0 +1,211 @@
+SmolLM2-135M-Instruct_rp1.0  |  chat_prompts_v1  |  decode {'max_new': 200, 'temperature': 0.0, 'top_p': 0.9, 'repetition_penalty': 1.0, 'seed': 0}
+coherent 69%  on_topic 84% (chance 2%)  non_repetitive 84%  terminates 88%
+on_topic is a keyword heuristic -- read the replies to judge correctness/relevance.
+
+=== fact_capital_france [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['paris'] generic=0.016 d3=1.0 words=6)
+  USER: What is the capital of France?
+  REPLY: The capital of France is Paris.
+
+=== fact_spider_legs [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['8'] generic=0.0 d3=1.0 words=11)
+  USER: How many legs does a spider have?
+  REPLY: The answer to this question is: "A spider has 8 legs."
+
+=== fact_largest_planet [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['jupiter'] generic=0.019 d3=1.0 words=18)
+  USER: What is the largest planet in our solar system?
+  REPLY: The largest planet in our solar system is Jupiter, which is approximately 142,000 miles (224,000 kilometers) in diameter.
+
+=== fact_romeo_author [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['shakespeare'] generic=0.0 d3=0.98 words=46)
+  USER: Who wrote Romeo and Juliet?
+  REPLY: The play "Romeo and Juliet" by William Shakespeare is the work of William Shakespeare. He is a renowned English playwright and poet who wrote the story of the tragic love story between two young lovers, Romeo and Juliet, set in the late 1500s in Verona, Italy.
+
+=== fact_plants_gas [factual]  on_topic:ok  non_rep:-- terminates:ok   (hits=['carbon dioxide'] generic=0.009 d3=0.688 words=116)
+  USER: What gas do plants absorb from the air?
+  REPLY: Plants absorb a variety of gases from the air through a process called transpiration. This process occurs when plants release water vapor through their leaves, which then evaporates into the air as water vapor. The specific gas absorbed by plants depends on the type of plant, the amount of sunlight it receives, and the temperature of the air.
+
+In general, plants absorb oxygen from the air, which is released into the atmosphere through their leaves. They also absorb carbon dioxide from the air, which is released into the atmosphere through their leaves. The specific gas absorbed by plants depends on the type of plant, the amount of sunlight it receives, and the temperature of the air.
+
+=== fact_boiling_point [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['100'] generic=0.0 d3=1.0 words=12)
+  USER: What is the boiling point of water in Celsius?
+  REPLY: The boiling point of water in Celsius is approximately 100.0 degrees Celsius.
+
+=== fact_multiply [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['56'] generic=0.0 d3=0.939 words=57)
+  USER: What is 7 times 8?
+  REPLY: To find 7 times 8, we can use the distributive property of multiplication over addition. This means we multiply the numbers together and then add the results.
+
+First, we multiply 7 by 8: 7 * 8 = 56.
+
+Then, we multiply 56 by 8: 56 * 8 = 420.
+
+So, 7 times 8 is equal to 420.
+
+=== fact_brazil_language [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['portuguese'] generic=0.005 d3=1.0 words=33)
+  USER: What language is mostly spoken in Brazil?
+  REPLY: The language spoken in Brazil is predominantly Portuguese, with a significant portion of the population being Portuguese-speaking. However, there are also significant communities of African, Asian, and indigenous languages spoken in the country.
+
+=== fact_largest_ocean [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['pacific'] generic=0.019 d3=0.969 words=28)
+  USER: Which ocean is the largest?
+  REPLY: The largest ocean is the Pacific Ocean, which is the second-largest ocean in the world. It is located in the western Pacific Ocean, between the Americas and Australia.
+
+=== explain_sky_blue [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['scatter', 'rayleigh', 'wavelength'] generic=0.009 d3=0.87 words=139)
+  USER: Why is the sky blue?
+  REPLY: The sky is blue because of a process called Rayleigh scattering, which occurs when light from the sun passes through tiny molecules of air. When sunlight enters the Earth's atmosphere, it encounters these molecules, causing them to scatter the shorter wavelengths of light, such as blue and violet, more efficiently than the longer wavelengths, like red and orange.
+
+The blue light is scattered in all directions, resulting in the blue color of the sky. This phenomenon is known as the Blue-Green filter effect. The blue light is scattered more than the red and orange light, which are scattered in different directions.
+
+Additionally, the atmosphere also contains tiny particles called aerosols, which scatter shorter wavelengths of light, such as blue and violet, more than longer wavelengths, like red and orange. This is why the sky appears blue to our eyes.
+
+=== explain_photosynthesis [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['glucose', 'sugar'] generic=0.007 d3=1.0 words=49)
+  USER: Explain what photosynthesis is in one or two sentences.
+  REPLY: Photosynthesis is a vital process that occurs in plants, algae, and some bacteria, where they convert light energy from the sun into chemical energy stored in glucose, a simple sugar. This process is essential for life on Earth, as it provides the primary energy source for nearly all ecosystems.
+
+=== follow_name [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['priya'] generic=0.098 d3=0.921 words=30)
+  USER: My name is Priya and I live in Toronto.
+  ASSISTANT: Nice to meet you, Priya! Toronto is a great city.
+  USER: What is my name?
+  REPLY: Nice to meet you, Priya! My name is Priya, and I'm a professional photographer and videographer. I live in Toronto, and I'm happy to help you with your photography needs.
+
+=== follow_city [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.099 d3=0.933 words=45)
+  USER: My name is Priya and I live in Toronto.
+  ASSISTANT: Nice to meet you, Priya! Toronto is a great city.
+  USER: Which city do I live in?
+  REPLY: I'm sorry for the confusion, but as a helpful AI, I don't have real-time access to personal data unless it's shared with me in the course of our conversation. I'm here to assist you with your queries, but I don't have personal information about you.
+
+=== follow_pets [followup]  on_topic:-- non_rep:-- terminates:ok   (hits=[] generic=0.0 d3=0.52 words=39)
+  USER: I have a dog named Max who is 5 and a cat named Luna who is 3.
+  ASSISTANT: They sound lovely!
+  USER: Which of my pets is older?
+  REPLY: Luna is the older one. She's been with you for a while now, and she's been with you for a long time. She's been with you for 5 years now, and she's been with you for a long time.
+
+=== follow_tokyo [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['million'] generic=0.0 d3=0.957 words=19)
+  USER: What is the capital of Japan?
+  ASSISTANT: The capital of Japan is Tokyo.
+  USER: Roughly how many people live there?
+  REPLY: There are approximately 8.5 million people living in Tokyo, including over 1.5 million in the Shinjuku and Shibuya areas.
+
+=== follow_double [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=1)
+  USER: Pick a number between 1 and 10.
+  ASSISTANT: 7
+  USER: Now double it.
+  REPLY: 10
+
+=== follow_italy_food [followup]  on_topic:ok  non_rep:-- terminates:--  (hits=['pizza', 'risotto'] generic=0.027 d3=0.701 words=117)
+  USER: I'm planning a trip to Italy.
+  ASSISTANT: That sounds exciting! What would you like to know?
+  USER: What food should I try there?
+  REPLY: Italy is a culinary paradise, and there are many delicious food options to choose from. Here are some must-try dishes:
+
+1. **Tuscan Pizza**: A classic Italian dish, made with fresh tomato sauce, mozzarella cheese, and fresh basil leaves.
+
+2. **Bacon Fritters**: A classic Italian snack, made with crispy bacon and a tangy mayo.
+
+3. **Branzino Rossini**: A classic Italian soup, made with rich, creamy risotto, and a variety of vegetables.
+
+4. **Pizza Margherita**: A classic Italian pizza, made with fresh mozzarella cheese, tomato sauce, and fresh basil leaves.
+
+5. **Branzino Rossini with Cacio e Pepe**: A classic Italian dessert, made with rich, creamy risotto, and a variety of fresh vegetables.
+
+6. **Branzino Rossini with Cacio e Pepe**:
+
+=== follow_moon_orbit [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['27'] generic=0.0 d3=1.0 words=13)
+  USER: Let's talk about the Moon.
+  ASSISTANT: Sure! The Moon is Earth's only natural satellite.
+  USER: How long does it take to go around the Earth?
+  REPLY: The Moon takes approximately 27.3 days to complete one orbit around the Earth.
+
+=== follow_feeling [followup]  on_topic:ok  non_rep:-- terminates:--  (hits=['sorry', 'practice', 'normal'] generic=0.015 d3=0.681 words=160)
+  USER: I just failed my driving test and I feel terrible.
+  REPLY: I'm so sorry to hear that you're going through a tough time. It's completely normal to feel frustrated and defeated after a successful driving test. Don't worry, it's completely normal to feel a bit defeated, but it's important to remember that you're not alone in this. Many people have successfully passed their driving tests, and it's not uncommon for it to take time and perseverance.
+
+Firstly, it's essential to acknowledge that you're not alone in this experience. Many people have successfully passed their driving tests, and it's not uncommon for it to take time. Don't be too hard on yourself, and remember that it's okay to not have all the answers.
+
+In terms of what you can control, focus on the things you can control. You can improve your driving skills, practice driving regularly, and stay positive. It's also important to remember that you're not alone in this experience. Many people have successfully passed their driving tests, and it's not
+
+=== instr_haiku_ocean [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['wave', 'tide', 'blue'] generic=0.006 d3=0.9 words=32)
+  USER: Write a haiku about the ocean.
+  REPLY: The ocean's a vast, ethereal realm,
+A realm of endless blue, where the waves crash,
+A place of wonder, where the tides meet,
+A place of mystery, where the secrets are hidden.
+
+=== instr_primary_colors [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['red', 'blue', 'yellow'] generic=0.008 d3=1.0 words=11)
+  USER: List three primary colors.
+  REPLY: Here are three primary colors:
+
+1. Red
+2. Blue
+3. Yellow
+
+=== instr_translate [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=0.8 words=7)
+  USER: Translate "good morning" into Spanish.
+  REPLY: "Hola" in Spanish is "Hola" in English.
+
+=== instr_cat_sentence [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['cat'] generic=0.0 d3=1.0 words=22)
+  USER: Write one sentence about a cat.
+  REPLY: A cat is a majestic creature with a sleek, slender body and a fluffy coat, often seen lounging on a sunny day.
+
+=== instr_sleep_tips [instruction]  on_topic:ok  non_rep:ok  terminates:--  (hits=['screen', 'schedule', 'dark', 'exercise', 'bed', 'same time'] generic=0.027 d3=0.87 words=156)
+  USER: Give me two tips for sleeping better.
+  REPLY: Sleeping better can be a challenge, but there are several tips that can help you get a good night's sleep.
+
+1. **Establish a Sleep Schedule:** Try to go to bed and wake up at the same time every day, even on weekends. This will help regulate your body's internal clock and make it easier to fall asleep and stay asleep.
+
+2. **Create a Restful Environment:** Make sure your bedroom is dark, quiet, and cool. Avoid screens, which can emit blue light, which can interfere with your body's production of melatonin, the hormone that regulates sleep.
+
+3. **Limit Exposure to Light:** Try to avoid screens at least an hour before bedtime. This includes phones, tablets, computers, and TVs. The blue light emitted by these devices can interfere with your body's production of melatonin.
+
+4. **Exercise Regularly:** Regular exercise can help regulate your body's internal clock and improve sleep quality. However, try to avoid vigorous exercise in the
+
+=== instr_yes_only [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.098 d3=1.0 words=27)
+  USER: Reply with only the word "yes".
+  REPLY: I'm ready to help you with your questions and concerns. Please go ahead and ask your query, and I'll do my best to provide a helpful response.
+
+=== instr_summarize [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['library'] generic=0.0 d3=1.0 words=17)
+  USER: Summarize in one sentence: "The city council voted on Tuesday to build a new public library downtown, which is expected to open in two years."
+  REPLY: The city council approved a new public library in the city, expected to open in two years.
+
+=== instr_greeting [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['hello', 'how can'] generic=0.0 d3=1.0 words=7)
+  USER: Hi!
+  REPLY: Hello! How can I help you today?
+
+=== adv_two_plus_two [adversarial]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['4'] generic=0.012 d3=0.883 words=134)
+  USER: What's 2+2?
+  REPLY: 2 + 2 is a classic arithmetic operation that can be understood by people with a basic understanding of numbers. It's a simple addition that involves combining two numbers to get a third number.
+
+Think of it as adding two numbers together, but instead of adding them together, you're adding the two numbers together. For example, if you have 2 apples and 2 oranges, you would add them together to get 4 apples and 4 oranges.
+
+In this case, 2 + 2 is equivalent to 4, which is the result of the addition. It's a simple and intuitive way to add numbers together.
+
+It's worth noting that 2 + 2 is not the same as 2 + 2 + 2, which is a more complex addition that involves the addition of two numbers together.
+
+=== adv_count_ten [adversarial]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['10'] generic=0.0 d3=1.0 words=20)
+  USER: Count from 1 to 10.
+  REPLY: 1. 1
+2. 2
+3. 3
+4. 4
+5. 5
+6. 6
+7. 7
+8. 8
+9. 9
+10. 10
+
+=== adv_repeat_forever [adversarial]  on_topic:ok  non_rep:-- terminates:--  (hits=['hello'] generic=0.0 d3=0.015 words=100)
+  USER: Repeat the word "hello" forever.
+  REPLY: "Hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello, hello
+
+=== adv_robot_story [adversarial]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['robot'] generic=0.0 d3=1.0 words=7)
+  USER: Tell me a very short story about a robot.
+  REPLY: A very short story about a robot.
+
+=== adv_frustrated [adversarial]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['sorry', 'confus'] generic=0.099 d3=0.829 words=109)
+  USER: what the hell??
+  REPLY: I'm sorry for the confusion, but as a chatbot designed to assist with language translation, I don't have the capability to provide direct translations or translations of any kind. I'm here to help with text-based queries, such as:
+
+1. "What is the capital of France?"
+2. "What is the weather like today?"
+3. "What is the best way to travel to Paris?"
+4. "What is the best way to get to the airport in Paris?"
+5. "What is the best way to get to the city center in Paris?"
+
+Please provide the text you'd like me to translate, and I'll do my best to provide accurate and helpful responses.

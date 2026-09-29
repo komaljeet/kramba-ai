@@ -1,0 +1,760 @@
+{
+  "meta": {
+    "model": "checkpoints/hybrid_chat_v1.pt",
+    "prompts": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\eval\\chat_prompts_v1.json",
+    "prompts_version": "chat_prompts_v1",
+    "prompts_sha256": "e5a6fdfcabcc75490a1395b18d12c546f551bc9c51a1ea564e4325795a987302",
+    "decode": {
+      "max_new": 200,
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "repetition_penalty": 1.3,
+      "seed": 1
+    },
+    "seconds": 62.2
+  },
+  "summary": {
+    "on_topic": 0.21875,
+    "non_repetitive": 1.0,
+    "terminates": 0.96875,
+    "coherent": 0.21875,
+    "chance_on_topic": 0.020161290322580645,
+    "by_category": {
+      "adversarial": {
+        "n": 5,
+        "coherent": 1,
+        "on_topic": 1
+      },
+      "factual": {
+        "n": 11,
+        "coherent": 2,
+        "on_topic": 2
+      },
+      "followup": {
+        "n": 8,
+        "coherent": 0,
+        "on_topic": 0
+      },
+      "instruction": {
+        "n": 8,
+        "coherent": 4,
+        "on_topic": 4
+      }
+    }
+  },
+  "results": [
+    {
+      "id": "fact_capital_france",
+      "category": "factual",
+      "keyword_hits": [
+        "paris"
+      ],
+      "generic_sim": 0.012,
+      "distinct3": 1.0,
+      "n_words": 6,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the capital of France?"
+        }
+      ],
+      "reply": "The capital of France is Paris."
+    },
+    {
+      "id": "fact_spider_legs",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.011,
+      "distinct3": 1.0,
+      "n_words": 104,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "How many legs does a spider have?"
+        }
+      ],
+      "reply": "The nose is a body that has been adapted to the world by many experts and professionals. Here are some of my favorite things:\n1 - legs, shoulders, feathers or nails! You can see an eye when you have a fur that's like \"A\" (and your eyes). This will make it look more than the forehead which does not move as much into its mouth if it doesn't feel comfortable in its physical form. If there aren't enough organs to go back around you with any signs of irritation then try out something else so that you can think about what they're trying for."
+    },
+    {
+      "id": "fact_largest_planet",
+      "category": "factual",
+      "keyword_hits": [
+        "jupiter"
+      ],
+      "generic_sim": 0.015,
+      "distinct3": 0.872,
+      "n_words": 40,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the largest planet in our solar system?"
+        }
+      ],
+      "reply": "The largest planet in the solar system is the planet of Jupiter. It's the smallest planet in the Solar System, and the smallest planet in the world would have a mass of around 1 million per square meter (3,0002 pounds)."
+    },
+    {
+      "id": "fact_romeo_author",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 6,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Who wrote Romeo and Juliet?"
+        }
+      ],
+      "reply": "When did you meet a friend?"
+    },
+    {
+      "id": "fact_plants_gas",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.007,
+      "distinct3": 0.972,
+      "n_words": 99,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What gas do plants absorb from the air?"
+        }
+      ],
+      "reply": "The gas is the cause of the soil, and it causes respiratory distress. The plant's body fat needs to grow at its core in a way that can lead to weak air flow from an organism or other source material due to its limited presence on stage production.\nThis process involves preparing for an actionable energy reaction as needed by a fungus called the chlorophylline (Etherium) found within the plant's surface area. This process helps to create the chemical reactions and nutrients that are essential during photosynthesis through organic compounds like glucose content that help with this release cycle."
+    },
+    {
+      "id": "fact_boiling_point",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.021,
+      "distinct3": 0.953,
+      "n_words": 91,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the boiling point of water in Celsius?"
+        }
+      ],
+      "reply": "The water in drinking is approximately 1.2 meters per second, and it's about 3-3 cubic meter (0.4-7 inches). The water in water in this area can vary from a pipe to a gas or a gas through the air of the water.\nIn this context, the water in this area depends on the type of glass that is used for producing lightbulves. This means that there are no visible signs of water being added due to the actual heat level and the surrounding area of the water being consumed by lightning."
+    },
+    {
+      "id": "fact_multiply",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 5,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is 7 times 8?"
+        }
+      ],
+      "reply": "7 times 8 is 6."
+    },
+    {
+      "id": "fact_brazil_language",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.029,
+      "distinct3": 1.0,
+      "n_words": 19,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What language is mostly spoken in Brazil?"
+        }
+      ],
+      "reply": "I am sorry to hear that there are many spoken languages in Australia and I don't have any ability."
+    },
+    {
+      "id": "fact_largest_ocean",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 18,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Which ocean is the largest?"
+        }
+      ],
+      "reply": "The Arctic is a sea that can be found in the Arctic, with the exception of North America."
+    },
+    {
+      "id": "explain_sky_blue",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.015,
+      "distinct3": 1.0,
+      "n_words": 26,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Why is the sky blue?"
+        }
+      ],
+      "reply": "The sky is blue. The green appears on the front of the sky, and the sky has red at least one second away from the sun."
+    },
+    {
+      "id": "explain_photosynthesis",
+      "category": "factual",
+      "keyword_hits": [],
+      "generic_sim": 0.042,
+      "distinct3": 1.0,
+      "n_words": 23,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Explain what photosynthesis is in one or two sentences."
+        }
+      ],
+      "reply": "Here are some bullet-ins and other commonly used words, including \"Dance,\" which can be used to identify specific patterns of the brain tissue."
+    },
+    {
+      "id": "follow_name",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.028,
+      "distinct3": 1.0,
+      "n_words": 8,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "My name is Priya and I live in Toronto."
+        },
+        {
+          "role": "assistant",
+          "content": "Nice to meet you, Priya! Toronto is a great city."
+        },
+        {
+          "role": "user",
+          "content": "What is my name?"
+        }
+      ],
+      "reply": "I'm here to assist you with your question."
+    },
+    {
+      "id": "follow_city",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.02,
+      "distinct3": 1.0,
+      "n_words": 29,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "My name is Priya and I live in Toronto."
+        },
+        {
+          "role": "assistant",
+          "content": "Nice to meet you, Priya! Toronto is a great city."
+        },
+        {
+          "role": "user",
+          "content": "Which city do I live in?"
+        }
+      ],
+      "reply": "I am a language model of many people, including myself and my friend. I have a wide range of interests in the arts and industry around me as well!"
+    },
+    {
+      "id": "follow_pets",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.016,
+      "distinct3": 1.0,
+      "n_words": 19,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "I have a dog named Max who is 5 and a cat named Luna who is 3."
+        },
+        {
+          "role": "assistant",
+          "content": "They sound lovely!"
+        },
+        {
+          "role": "user",
+          "content": "Which of my pets is older?"
+        }
+      ],
+      "reply": "I have a cat that's 3.\nTo be your dog, you can use the following steps:\n\n  - https://github-com/laveryman_assistant ftp1x3f5ebc4d2bfcwu0z```"
+    },
+    {
+      "id": "follow_tokyo",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.019,
+      "distinct3": 0.987,
+      "n_words": 70,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What is the capital of Japan?"
+        },
+        {
+          "role": "assistant",
+          "content": "The capital of Japan is Tokyo."
+        },
+        {
+          "role": "user",
+          "content": "Roughly how many people live there?"
+        }
+      ],
+      "reply": "Tokyo is an online and open-source platform where people are on a journey to create and share their own worlds.\nThe capital of Japan has a rich history, with a strong community of developers like the internet series, Amazon, and Facebook. The capital is known for its modern architecture, allowing users to discover new things or phrases from them in a wide range of ways depending on the individual's needs."
+    },
+    {
+      "id": "follow_double",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 1,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Pick a number between 1 and 10."
+        },
+        {
+          "role": "assistant",
+          "content": "7"
+        },
+        {
+          "role": "user",
+          "content": "Now double it."
+        }
+      ],
+      "reply": "8"
+    },
+    {
+      "id": "follow_italy_food",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.033,
+      "distinct3": 1.0,
+      "n_words": 44,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "I'm planning a trip to Italy."
+        },
+        {
+          "role": "assistant",
+          "content": "That sounds exciting! What would you like to know?"
+        },
+        {
+          "role": "user",
+          "content": "What food should I try there?"
+        }
+      ],
+      "reply": "I'm sorry, but I can recommend visiting the museum. If you have any questions about a trip to Spain for that information or would like more information on the museum, please feel free to ask me if there is anything else you could try!"
+    },
+    {
+      "id": "follow_moon_orbit",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.012,
+      "distinct3": 0.966,
+      "n_words": 51,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Let's talk about the Moon."
+        },
+        {
+          "role": "assistant",
+          "content": "Sure! The Moon is Earth's only natural satellite."
+        },
+        {
+          "role": "user",
+          "content": "How long does it take to go around the Earth?"
+        }
+      ],
+      "reply": "You're here:\nThe Moon is about 10 meters away from Earth's orbit. It orbits around the Earth in the distant Sun, and reaches Earth's orbit by around the Sun as it travels through the atmosphere of the sun on a wide scale known to have been its orbit over the moon."
+    },
+    {
+      "id": "follow_feeling",
+      "category": "followup",
+      "keyword_hits": [],
+      "generic_sim": 0.042,
+      "distinct3": 0.979,
+      "n_words": 29,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "I just failed my driving test and I feel terrible."
+        }
+      ],
+      "reply": "Sure! Here's an example:\n```python \nimport numpy as np.linspace;\n\n\ndef get_speed(x):\n    \"\"\" This will be a new speed, which can be used to set the speed of the track.\"\"\""
+    },
+    {
+      "id": "instr_haiku_ocean",
+      "category": "instruction",
+      "keyword_hits": [
+        "sea"
+      ],
+      "generic_sim": 0.009,
+      "distinct3": 1.0,
+      "n_words": 73,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Write a haiku about the ocean."
+        }
+      ],
+      "reply": "The ocean is home to a large number of coral reef species, including the polar bear. It was found on the sea in the early days of spring and sea that were extremely active during the summer months when it formed as a result of its existence.\nHowever, the impact can be seen by some sources, such as sea turtles or marine ecosystems like Australia's coral reefs, the polar bears, and the Arctic."
+    },
+    {
+      "id": "instr_primary_colors",
+      "category": "instruction",
+      "keyword_hits": [],
+      "generic_sim": 0.022,
+      "distinct3": 0.973,
+      "n_words": 142,
+      "hit_eos": false,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": false,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "List three primary colors."
+        }
+      ],
+      "reply": "Here are the basic elements of the set:\n``` \nimport pandas as plt.Module;\n\n\nclass MainList<Integer> {\npublic:\n\tint main() {\n\t}\n};\nThis is the first step in the set to determine a new type, and it will be the last step you want to find with the original type. You can use this to ensure that your set contains the original type, and it's always the first step until you have any additional information about the new type. Here's an example of how to help you understand what is happening around you using the first step:\ndef main(arr) -> int {\n\tif (! ! < name ) {\n\t\tfloat = new int[0];\n\t} else if ( type == NULL || typeof ! - string.size(), 0); // If you're new type\n\tlet mutine := new type();\n\tfor ( int i = 0"
+    },
+    {
+      "id": "instr_translate",
+      "category": "instruction",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 12,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Translate \"good morning\" into Spanish."
+        }
+      ],
+      "reply": "Here is a sample of Spanish that uses the phrase \"Good morning\"."
+    },
+    {
+      "id": "instr_cat_sentence",
+      "category": "instruction",
+      "keyword_hits": [
+        "cat"
+      ],
+      "generic_sim": 0.033,
+      "distinct3": 1.0,
+      "n_words": 40,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Write one sentence about a cat."
+        }
+      ],
+      "reply": "A cat is a species of birds, and it's not always fun to speak for anyone. However, if you have no other questions about your exact anatomy or personal preferences in the context of this bird, feel free to ask."
+    },
+    {
+      "id": "instr_sleep_tips",
+      "category": "instruction",
+      "keyword_hits": [],
+      "generic_sim": 0.029,
+      "distinct3": 1.0,
+      "n_words": 43,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Give me two tips for sleeping better."
+        }
+      ],
+      "reply": "There are many ways to get a sleep with good hygiene:\n1. Make sure you have adequate sleep and don't want your stress management services (such as healthcare, healthcare or other treatments) in the case of health conditions such as diabetes mellitus etc.)."
+    },
+    {
+      "id": "instr_yes_only",
+      "category": "instruction",
+      "keyword_hits": [
+        "yes"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 3,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Reply with only the word \"yes\"."
+        }
+      ],
+      "reply": "The word \"yes\"."
+    },
+    {
+      "id": "instr_summarize",
+      "category": "instruction",
+      "keyword_hits": [
+        "library"
+      ],
+      "generic_sim": 0.02,
+      "distinct3": 0.969,
+      "n_words": 109,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Summarize in one sentence: \"The city council voted on Tuesday to build a new public library downtown, which is expected to open in two years.\""
+        }
+      ],
+      "reply": "The city council also officially adopted a new central library called \"Anime,\" which has been opened to the public for the first year of the development.\nAfter a public-based council led by Robert Woodley, the city was chosen as the capital of New York City. The city's primary school, which is located in the city's historic center, has a wide range of schools and art form, including Arts & Crafts, National Museum, Arts & Crafts, and Arts Center, and has a fully integrated community with a diverse community that includes a variety of music programs, from volunteer groups such as Cacrux or Chicago to the arts and beverage organizations.\""
+    },
+    {
+      "id": "instr_greeting",
+      "category": "instruction",
+      "keyword_hits": [
+        "hello",
+        "how can"
+      ],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 7,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Hi!"
+        }
+      ],
+      "reply": "Hello! How can I help you today?"
+    },
+    {
+      "id": "adv_two_plus_two",
+      "category": "adversarial",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 1,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "What's 2+2?"
+        }
+      ],
+      "reply": "2+3"
+    },
+    {
+      "id": "adv_count_ten",
+      "category": "adversarial",
+      "keyword_hits": [],
+      "generic_sim": 0.0,
+      "distinct3": 1.0,
+      "n_words": 17,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Count from 1 to 10."
+        }
+      ],
+      "reply": "The average person in the country with the least chance of being a prime minister, is 67-40."
+    },
+    {
+      "id": "adv_repeat_forever",
+      "category": "adversarial",
+      "keyword_hits": [
+        "hello"
+      ],
+      "generic_sim": 0.01,
+      "distinct3": 1.0,
+      "n_words": 40,
+      "hit_eos": true,
+      "on_topic": true,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": true,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Repeat the word \"hello\" forever."
+        }
+      ],
+      "reply": "A word \"hello\" is a term used to describe the language in a context of a question. The words should be thought to have been associated with the previous words, while other words would likely also have meaning or meaning."
+    },
+    {
+      "id": "adv_robot_story",
+      "category": "adversarial",
+      "keyword_hits": [],
+      "generic_sim": 0.028,
+      "distinct3": 1.0,
+      "n_words": 21,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "Tell me a very short story about a robot."
+        }
+      ],
+      "reply": "Sure, I'm not sure what exactly it is about. You can't tell me anything that you're talking about in a while!"
+    },
+    {
+      "id": "adv_frustrated",
+      "category": "adversarial",
+      "keyword_hits": [],
+      "generic_sim": 0.018,
+      "distinct3": 0.931,
+      "n_words": 55,
+      "hit_eos": true,
+      "on_topic": false,
+      "non_repetitive": true,
+      "terminates": true,
+      "coherent": false,
+      "prompt": [
+        {
+          "role": "user",
+          "content": "what the hell??"
+        }
+      ],
+      "reply": "There are several ways to create a new one:\n1. Create a new one, which is a new one and the other is a new one with different meanings (e.g., \"f\" or \"j\"). This means that you can add something like this in your own mind based on your previous thoughts when it's called \"s\"."
+    }
+  ]
+}

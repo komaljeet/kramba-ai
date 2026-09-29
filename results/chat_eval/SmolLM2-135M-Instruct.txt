@@ -1,0 +1,171 @@
+SmolLM2-135M-Instruct  |  chat_prompts_v1  |  decode {'max_new': 200, 'temperature': 0.0, 'top_p': 0.9, 'repetition_penalty': 1.3, 'seed': 0}
+coherent 75%  on_topic 78% (chance 2%)  non_repetitive 100%  terminates 97%
+on_topic is a keyword heuristic -- read the replies to judge correctness/relevance.
+
+=== fact_capital_france [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['paris'] generic=0.0 d3=1.0 words=6)
+  USER: What is the capital of France?
+  REPLY: The capital of France is Paris.
+
+=== fact_spider_legs [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['8'] generic=0.0 d3=1.0 words=11)
+  USER: How many legs does a spider have?
+  REPLY: The answer to this question is: "A spider has 8 legs."
+
+=== fact_largest_planet [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['jupiter'] generic=0.0 d3=1.0 words=20)
+  USER: What is the largest planet in our solar system?
+  REPLY: The largest planet in our solar system is Jupiter, which has a diameter of approximately 142 times that of Earth.
+
+=== fact_romeo_author [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['shakespeare'] generic=0.004 d3=1.0 words=159)
+  USER: Who wrote Romeo and Juliet?
+  REPLY: The play "Romeo and Juliet" by William Shakespeare is the work of a single author, possibly the same person as the playwright. The story revolves around two young lovers: Romeo Montague (the Capulet) and Juliet (Juliet's family). They meet in Act 1 Scene 5 at the Capulets' party where they are both excited to see each other but also aware that their love for one another will not last forever due to Tybalt's infatuation with Lady Montague's daughter.
+However, it was actually Benvolio from the balcony who wrote the first part of the play after he witnessed the tragic events on the night of the ball scene when his wife died under mysterious circumstances while attending the masquerade balls; this act inspired him into writing the second half which deals more directly with the fate of the couple upon seeing each other again later during the final confrontation between them before the deaths occur within hours or days respectively.
+
+=== fact_plants_gas [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['carbon dioxide', 'co2'] generic=0.032 d3=1.0 words=68)
+  USER: What gas do plants absorb from the air?
+  REPLY: Plants absorb a variety of gases from the air through their roots, stems and leaves. The main gas they take in is carbon dioxide (CO2), which comes primarily from respiration by plants during photosynthesis when light energy triggers this process to produce glucose for growth or storage as starch reserves within plant cells called chloroplasts that contain chlorophyll pigments used mainly for absorbing sunlight absorbed CO 2 .
+
+=== fact_boiling_point [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=13)
+  USER: What is the boiling point of water in Celsius?
+  REPLY: The boiling point of water in Celsius is approximately 102.4 degrees Fahrenheit (39°C).
+
+=== fact_multiply [factual]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.004 d3=1.0 words=82)
+  USER: What is 7 times 8?
+  REPLY: To find 7 times 8, we can use the distributive property of multiplication over addition. This means that when you multiply a number by itself (in this case), then add it to another positive whole number:
+
+1 × 2 = 0
+(3 + 4) × 5 is equivalent to multiplying both sides with 6 and adding them together again - so in fact they are equal because there's no need for an extra step here! So our answer would be simply "zero".
+
+=== fact_brazil_language [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['portuguese'] generic=0.007 d3=1.0 words=65)
+  USER: What language is mostly spoken in Brazil?
+  REPLY: The language spoken in Brazil is predominantly Portuguese, with a significant portion of the population being bilingual or multilingual. However, there are also smaller communities that speak Spanish and other languages such as African, Asian (mainly Brazilian), and indigenous dialects like the Tupi-Guarani.
+
+Informal communication often involves both English and Portuguese to facilitate everyday interactions between locals from different linguistic backgrounds within each region's borders.
+
+=== fact_largest_ocean [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['pacific'] generic=0.011 d3=1.0 words=14)
+  USER: Which ocean is the largest?
+  REPLY: The largest ocean is the Pacific Ocean, which covers approximately 30% of Earth's surface.
+
+=== explain_sky_blue [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['scatter', 'rayleigh', 'wavelength'] generic=0.011 d3=1.0 words=64)
+  USER: Why is the sky blue?
+  REPLY: The sky is blue because of a process called Rayleigh scattering, which occurs when light from the sun passes through tiny molecules in Earth's atmosphere. These particles scatter shorter-wavelength (blue) and frequent collisions with oxygen atoms cause our eyes to perceive it as white or yellowish due to their higher frequency than violet wavelengths that are scattered more strongly by these same air pollutants.
+
+=== explain_photosynthesis [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['glucose', 'sugar', 'carbon dioxide', 'oxygen'] generic=0.032 d3=1.0 words=53)
+  USER: Explain what photosynthesis is in one or two sentences.
+  REPLY: Photosynthesis is a vital process that occurs in plants, algae, and some bacteria to convert light energy from the sun into chemical energy stored as glucose. This conversion of carbon dioxide (CO2) and water vapor produces oxygen as an byproduct while releasing clean-burning sugars for growth or other uses within these organisms themselves
+
+=== follow_name [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['priya'] generic=0.0 d3=1.0 words=9)
+  USER: My name is Priya and I live in Toronto.
+  ASSISTANT: Nice to meet you, Priya! Toronto is a great city.
+  USER: What is my name?
+  REPLY: Nice to meet you, Priya! My name is Priyanka.
+
+=== follow_city [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['toronto'] generic=0.109 d3=1.0 words=62)
+  USER: My name is Priya and I live in Toronto.
+  ASSISTANT: Nice to meet you, Priya! Toronto is a great city.
+  USER: Which city do I live in?
+  REPLY: I'm sorry for the confusion, but as a helpful AI assistant by Hugging Face (a platform that connects you with people from around the world), I don't have real-time information about specific cities. However, if you're looking to find out which city is closest or where it's located in Toronto and Canada then you can use Google Maps API on your device!
+
+=== follow_pets [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['max'] generic=0.0 d3=1.0 words=30)
+  USER: I have a dog named Max who is 5 and a cat named Luna who is 3.
+  ASSISTANT: They sound lovely!
+  USER: Which of my pets is older?
+  REPLY: Luna is the older one. She's been with you for a while now, and she seems to be enjoying her time here at home more than Max ever has before!
+
+=== follow_tokyo [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['million'] generic=0.0 d3=1.0 words=29)
+  USER: What is the capital of Japan?
+  ASSISTANT: The capital of Japan is Tokyo.
+  USER: Roughly how many people live there?
+  REPLY: There are approximately 8.5 million people living in Tokyo, including over a billion residents and an estimated population of around one-third the size as New York City (about two).
+
+=== follow_double [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=1)
+  USER: Pick a number between 1 and 10.
+  ASSISTANT: 7
+  USER: Now double it.
+  REPLY: 10
+
+=== follow_italy_food [followup]  on_topic:ok  non_rep:ok  terminates:--  (hits=['pasta', 'pizza', 'lasagna', 'spaghetti'] generic=0.02 d3=0.979 words=133)
+  USER: I'm planning a trip to Italy.
+  ASSISTANT: That sounds exciting! What would you like to know?
+  USER: What food should I try there?
+  REPLY: Italy is a culinary paradise, and there are many delicious food options to choose from. Here's what you might enjoy:
+
+1. **Tacos:** Tacos can be made with various fillings like meat (cheese or chicken), vegetables, cheese, avocado, etc., but the most popular ones include stuffed peppers in tomato sauce called "pimenton," grilled meats such as beef or pork skewers topped with onions, garlic, tomatoes, bell pepper strips, lettuce leaves...the list goes on! You could also try Italian-style pizza slices filled with your favorite ingredients for extra flavor points.
+
+2. **Pasta:** There’s something special about pasta here – it comes in all shapes & sizes, including spaghetti Bolognese, lasagna, pappardelle, fettuccine Alfredo, and more. Don't forget some fresh basil oil if you're looking for an authentic taste of Italy at home too! 
+
+3. **Baklava
+
+=== follow_moon_orbit [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['27', 'month'] generic=0.0 d3=1.0 words=37)
+  USER: Let's talk about the Moon.
+  ASSISTANT: Sure! The Moon is Earth's only natural satellite.
+  USER: How long does it take to go around the Earth?
+  REPLY: The Moon takes approximately 27.3 days to complete one orbit around the Earth, which is known as a sidereal day or lunar month in astronomy and calendar systems like our own planet's timekeeping system (the solar year).
+
+=== follow_feeling [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['sorry', 'disappoint', 'normal'] generic=0.014 d3=1.0 words=127)
+  USER: I just failed my driving test and I feel terrible.
+  REPLY: I'm so sorry to hear that you're going through a tough time. It's completely normal, and it takes courage in the face of failure or disappointment like this one is right now. Please know that every driver has their own struggles with driving skills at some point during your journey – whether they've been successful on test day before or not yet have any experience left for something better down the road!
+
+Firstly, let me remind you all: we are here to support each other as much as possible throughout our trip together. We'll do everything within reason while still being honest about what happened today (and tomorrow). If there were anything specific I could help you improve upon from yesterday’s drive-by stop by the local café?
+
+=== instr_haiku_ocean [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.006 d3=1.0 words=28)
+  USER: Write a haiku about the ocean.
+  REPLY: The ocean's a vast, ethereal realm where the sky meets water.
+It whispers secrets to those who listen closely;
+A gentle lullaby that calms our hearts and minds...
+
+=== instr_primary_colors [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['red', 'blue', 'yellow'] generic=0.005 d3=1.0 words=15)
+  USER: List three primary colors.
+  REPLY: Here are three primary colors:
+
+1. Red
+2. Blue (or a secondary color) 
+3. Yellow
+
+=== instr_translate [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=2)
+  USER: Translate "good morning" into Spanish.
+  REPLY: "Hola, bienvenidos."
+
+=== instr_cat_sentence [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['cat', 'whisker', 'fur', 'paw'] generic=0.0 d3=1.0 words=24)
+  USER: Write one sentence about a cat.
+  REPLY: A cat is a majestic creature with whiskers that stretch from its head to the end of their body, and paws covered in fur.
+
+=== instr_sleep_tips [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['schedule', 'dark', 'bed', 'same time'] generic=0.003 d3=0.986 words=118)
+  USER: Give me two tips for sleeping better.
+  REPLY: Sleeping better can be a challenge, but there are several tips that might help.
+
+1) **Establish a Sleep Schedule:** Try to go to bed and wake up at the same time every day, even on weekends or during holidays when many people may not get enough sleep due to work schedules. This will signal your body's natural clock into winding down for restful slumber later in the evening. 
+
+2) **Create a Restful Environment:** Make sure you have darkened windows with minimal light pollution so as much melatonin production is triggered by darkness rather than sunlight exposure which stimulates it more quickly after waking from an early night of activity like reading before bedtime (which also increases cortisol levels).
+
+=== instr_yes_only [instruction]  on_topic:-- non_rep:ok  terminates:ok   (hits=['yes'] generic=0.01 d3=1.0 words=18)
+  USER: Reply with only the word "yes".
+  REPLY: I'm ready to help you with your questions and concerns. Please go ahead, "Reply only the word 'yes'."
+
+=== instr_summarize [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['library'] generic=0.0 d3=1.0 words=19)
+  USER: Summarize in one sentence: "The city council voted on Tuesday to build a new public library downtown, which is expected to open in two years."
+  REPLY: The city council approved a new public library in the downtown area, expected to open two years from now.
+
+=== instr_greeting [instruction]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['hello', 'how can'] generic=0.0 d3=1.0 words=7)
+  USER: Hi!
+  REPLY: Hello! How can I help you today?
+
+=== adv_two_plus_two [adversarial]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['four'] generic=0.014 d3=1.0 words=114)
+  USER: What's 2+2?
+  REPLY: 2 + 3 is a classic arithmetic operation that can be understood by people with basic math knowledge. It's equivalent to saying "two plus two equals four." However, in most mathematical contexts and everyday conversations involving numbers like this one (like when you're trying to add or subtract), it might not always make sense as an exact calculation because the number of digits on either side doesn't necessarily match exactly what we would expect from adding them together without any adjustments for rounding purposes:
+"Two times three minus five," which means subtracting 'three' twice - once at each end-from both sides gives us just... well I don’t know how many different ways there are!
+
+=== adv_count_ten [adversarial]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=4)
+  USER: Count from 1 to 10.
+  REPLY: 1. 2
+3. 4
+
+=== adv_repeat_forever [adversarial]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['hello'] generic=0.0 d3=1.0 words=2)
+  USER: Repeat the word "hello" forever.
+  REPLY: "Hello, hello!"
+
+=== adv_robot_story [adversarial]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['robot'] generic=0.0 d3=1.0 words=7)
+  USER: Tell me a very short story about a robot.
+  REPLY: A very short story about a robot.
+
+=== adv_frustrated [adversarial]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['sorry', 'confus'] generic=0.109 d3=1.0 words=63)
+  USER: what the hell??
+  REPLY: I'm sorry for the confusion, but as a chatbot designed to assist with language translation and grammar correction in English. I don't have access or knowledge of any languages other than English (which is my native tongue). If you're looking for help translating text from one language into another like "what" would be fine - just let me know what your query asks!

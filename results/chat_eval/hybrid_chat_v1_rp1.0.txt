@@ -1,0 +1,297 @@
+hybrid_chat_v1_rp1.0  |  chat_prompts_v1  |  decode {'max_new': 200, 'temperature': 0.0, 'top_p': 0.9, 'repetition_penalty': 1.0, 'seed': 0}
+coherent 6%  on_topic 22% (chance 2%)  non_repetitive 25%  terminates 50%
+on_topic is a keyword heuristic -- read the replies to judge correctness/relevance.
+
+=== fact_capital_france [factual]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['paris'] generic=0.045 d3=1.0 words=6)
+  USER: What is the capital of France?
+  REPLY: The capital of France is Paris.
+
+=== fact_spider_legs [factual]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.023 d3=0.182 words=162)
+  USER: How many legs does a spider have?
+  REPLY: The wings are a small, small, and large wings that have a long, long, and long legs, and the wings are typically small and have a large, long, and long legs. The wings are typically small and have a large, long, and long legs, and the wings are typically small and have a large, long, and long legs. The wings are typically small and have a large, long, and long legs, and the wings are small and have a large, long, and long legs. The wings are small and have a large, long, and long legs, and the wings are small and have a large, long, and long legs. The wings are small and have a large, long, and long legs, and the wings are small and have a large, long, and long legs. The wings are small and have a large, long, and long legs, and the wings are small and have a large, long, and long legs. The wings are
+
+=== fact_largest_planet [factual]  on_topic:-- non_rep:-- terminates:ok   (hits=[] generic=0.068 d3=0.581 words=39)
+  USER: What is the largest planet in our solar system?
+  REPLY: The largest planet in the solar system is the Earth's largest moon, which is the largest planet in the solar system. It is the largest planet in the solar system, and is the largest planet in the solar system.
+
+=== fact_romeo_author [factual]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.02 d3=0.157 words=168)
+  USER: Who wrote Romeo and Juliet?
+  REPLY: Love andLove are both popular and popular in the world, and they are often associated with love and luxury. They are often associated with love and love, and they are often associated with love and love.
+
+Love andLove are often associated with love and love, and they are often associated with love and love. They are often associated with love and love, and they are often associated with love and love.
+
+Love andLove are often associated with love and love, and they are often associated with love and love. They are often associated with love and love, and they are often associated with love and love.
+
+Love andLove are often associated with love and love, and they are often associated with love and love. They are often associated with love and love, and they are often associated with love and love.
+
+Love andLove are often associated with love and love, and they are often associated with love and love. They are often associated with love and love, and
+
+=== fact_plants_gas [factual]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.029 d3=0.177 words=89)
+  USER: What gas do plants absorb from the air?
+  REPLY: The air is a type of plant that is used to produce a variety of plant species. The plant is a type of plant that is used to produce plant-based plants, such as the plant-based plant-based plant-based plant-based plant-based plant-based soil. The plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based plant-based
+
+=== fact_boiling_point [factual]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.024 d3=0.121 words=178)
+  USER: What is the boiling point of water in Celsius?
+  REPLY: The water in water is a water in which water is used to water, which is a water in which water is used to water. The water is used to water in water, which is used to water in water. The water is used to water in water, which is used to water in water. The water is used to water in water, which is used to water in water. The water is used to water in water, which is used to water in water. The water is used to water in water, which is used to water in water. The water is used to water in water, which is used to water in water. The water is used to water in water, which is used to water in water. The water is used to water in water, which is used to water in water. The water is used to water in water, which is used to water in water. The water is used to water in water, which is used to water in water. The water is
+
+=== fact_multiply [factual]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.0 d3=0.061 words=73)
+  USER: What is 7 times 8?
+  REPLY: 7 times 8 times 8 times 8 times 8 times
+
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include <c>
+#include
+
+=== fact_brazil_language [factual]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.059 d3=0.092 words=177)
+  USER: What language is mostly spoken in Brazil?
+  REPLY: Argentina is a Spanish language that is spoken in Spanish in Spanish. It is spoken in Spanish, and is spoken in Spanish in Spanish. It is spoken in Spanish in Spanish, and is spoken in Spanish in Spanish. It is spoken in Spanish in Spanish, and is spoken in Spanish in Spanish. It is spoken in Spanish in Spanish, and is spoken in Spanish in Spanish. It is spoken in Spanish in Spanish, and is spoken in Spanish in Spanish in Spanish. It is spoken in Spanish in Spanish in Spanish, and is spoken in Spanish in Spanish in Spanish. It is spoken in Spanish in Spanish, and is spoken in Spanish in Spanish in Spanish. It is spoken in Spanish in Spanish, and is spoken in Spanish in Spanish in Spanish. It is spoken in Spanish in Spanish in Spanish, and is spoken in Spanish in Spanish in Spanish. It is spoken in Spanish in Spanish, and is spoken in Spanish in Spanish in Spanish. It is spoken in Spanish in Spanish in Spanish in Spanish
+
+=== fact_largest_ocean [factual]  on_topic:-- non_rep:-- terminates:ok   (hits=[] generic=0.176 d3=0.667 words=31)
+  USER: Which ocean is the largest?
+  REPLY: The largest sea in the world is the Atlantic Ocean, which is located in the Atlantic Ocean. It is located in the Atlantic Ocean, and is located in the Atlantic Ocean.
+
+=== explain_sky_blue [factual]  on_topic:-- non_rep:-- terminates:ok   (hits=[] generic=0.023 d3=0.727 words=11)
+  USER: Why is the sky blue?
+  REPLY: The sky blue is blue, and the sky blue is blue.
+
+=== explain_photosynthesis [factual]  on_topic:-- non_rep:-- terminates:ok   (hits=[] generic=0.029 d3=0.53 words=59)
+  USER: Explain what photosynthesis is in one or two sentences.
+  REPLY: The first paragraph of the word "The Picture of the Life" is a word that is used to describe the relationship between the two characters. The word "The Life of the Life" is a reference to the relationship between the two characters. The word "The Life of the Life" is a reference to the relationship between the two characters.
+
+=== follow_name [followup]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.375 d3=0.202 words=145)
+  USER: My name is Priya and I live in Toronto.
+  ASSISTANT: Nice to meet you, Priya! Toronto is a great city.
+  USER: What is my name?
+  REPLY: I am an open source language model, and I am a language model trained on a wide range of topics. I am trained on a wide range of topics, including topics, topics, and topics. I am trained on a wide range of topics, including topics such as science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction, science fiction
+
+=== follow_city [followup]  on_topic:-- non_rep:-- terminates:ok   (hits=[] generic=0.052 d3=0.553 words=36)
+  USER: My name is Priya and I live in Toronto.
+  ASSISTANT: Nice to meet you, Priya! Toronto is a great city.
+  USER: Which city do I live in?
+  REPLY: I am a city with a rich history and culture. I am a large city with a rich history and culture. I have a rich history and culture, and I have a rich history and culture.
+
+=== follow_pets [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.119 d3=1.0 words=10)
+  USER: I have a dog named Max who is 5 and a cat named Luna who is 3.
+  ASSISTANT: They sound lovely!
+  USER: Which of my pets is older?
+  REPLY: I am not a cat, but I am a cat.
+
+=== follow_tokyo [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.176 d3=0.783 words=22)
+  USER: What is the capital of Japan?
+  ASSISTANT: The capital of Japan is Tokyo.
+  USER: Roughly how many people live there?
+  REPLY: Tokyo is the capital of Japan. It is located in the city of Tokyo, and is located in the city of Tokyo.
+
+=== follow_double [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.0 d3=1.0 words=1)
+  USER: Pick a number between 1 and 10.
+  ASSISTANT: 7
+  USER: Now double it.
+  REPLY: 8
+
+=== follow_italy_food [followup]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.135 d3=0.432 words=146)
+  USER: I'm planning a trip to Italy.
+  ASSISTANT: That sounds exciting! What would you like to know?
+  USER: What food should I try there?
+  REPLY: I'm sorry, but I'm not sure what you're trying to do. Here are some tips to help you get started:
+
+1. Take a break: Make sure you have a good meal and don't have a meal.
+2. Take a break: Make sure you're not a good friend.
+3. Take a break: Make sure you're a good friend and enjoy the time.
+4. Take a break: Make sure you're a good friend and enjoy the time.
+5. Take a break: Make sure you're a good friend and enjoy the time.
+6. Take a break: Make sure you're a good friend and enjoy the time.
+7. Take a break: Make sure you're a good friend and enjoy the time.
+8. Take a break: Make sure you're a good friend and enjoy the time.
+9. Take a break: Make sure you're a good friend and enjoy the time.
+10.
+
+=== follow_moon_orbit [followup]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.062 d3=0.897 words=55)
+  USER: Let's talk about the Moon.
+  ASSISTANT: Sure! The Moon is Earth's only natural satellite.
+  USER: How long does it take to go around the Earth?
+  REPLY: The Moon is a moon that is composed of a large amount of debris and debris. It is a large part of the Earth's crust, and it is known for its high-quality, high-quality, and highly intelligent atmosphere. It is also known for its high-quality moon, which is a great way to travel through the atmosphere.
+
+=== follow_feeling [followup]  on_topic:ok  non_rep:ok  terminates:ok   (hits=['sorry'] generic=0.4 d3=0.929 words=10)
+  USER: I just failed my driving test and I feel terrible.
+  REPLY: I'm sorry, but I'm not sure I can help you.
+
+=== instr_haiku_ocean [instruction]  on_topic:ok  non_rep:-- terminates:ok   (hits=['sea'] generic=0.111 d3=0.5 words=41)
+  USER: Write a haiku about the ocean.
+  REPLY: The sea is a sea that is inhabited by the sea. It is located in the Arctic Sea, where it is located in the Arctic Sea. It is located in the Arctic Sea, where it is located in the Arctic Sea.
+
+=== instr_primary_colors [instruction]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.048 d3=0.082 words=120)
+  USER: List three primary colors.
+  REPLY: Here are some common options:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1. Choose a new color scheme:
+
+1.
+
+=== instr_translate [instruction]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.07 d3=0.267 words=89)
+  USER: Translate "good morning" into Spanish.
+  REPLY: Here are some common Spanish and Spanish steps to help you get started:
+
+1. Spanish: Spanish is a popular choice for Spanish, and it's a good idea to start with a simple Spanish-style Spanish.
+2. Spanish: Spanish is a popular Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style.
+3. Spanish: Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style Spanish-style
+
+=== instr_cat_sentence [instruction]  on_topic:ok  non_rep:-- terminates:--  (hits=['cat'] generic=0.062 d3=0.122 words=161)
+  USER: Write one sentence about a cat.
+  REPLY: Sure, here's a sentence about a cat:
+
+1. The cat is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a cat. It is a cat, and it is a
+
+=== instr_sleep_tips [instruction]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.123 d3=0.246 words=121)
+  USER: Give me two tips for sleeping better.
+  REPLY: Here are some tips for staying good:
+
+1. **Stay calm and quiet**: Make sure you're feeling comfortable and comfortable.
+
+2. **Stay calm and quiet**: Make sure you're feeling comfortable and comfortable.
+
+3. **Stay calm and quiet**: Make sure you're feeling comfortable and comfortable.
+
+4. **Stay calm and quiet**: Make sure you're feeling comfortable and comfortable.
+
+5. **Stay calm and quiet**: Make sure you're feeling comfortable and comfortable.
+
+6. **Stay calm and quiet**: Make sure you're feeling comfortable and comfortable.
+
+7. **Stay calm and quiet**: Make sure you're feeling comfortable and comfortable.
+
+8. **Stay calm and quiet**: Make sure you're feeling comfortable and comfortable.
+
+9. **Stay calm and quiet**: Make sure you're feeling comfortable and comfortable.
+
+9. **Stay calm and quiet**: Make
+
+=== instr_yes_only [instruction]  on_topic:-- non_rep:-- terminates:ok   (hits=[] generic=0.375 d3=0.638 words=50)
+  USER: Reply with only the word "yes".
+  REPLY: I am not a language model, but I am a language model trained on a wide range of topics. I am trained on a wide range of topics, including topics such as language, language, and language. I am trained on a wide range of topics, including language, language, and language.
+
+=== instr_summarize [instruction]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.094 d3=0.287 words=162)
+  USER: Summarize in one sentence: "The city council voted on Tuesday to build a new public library downtown, which is expected to open in two years."
+  REPLY: The city council was created by the council in the year 2021, and the city council was divided into two main districts:
+
+1. The city council was established in the year 2021, and the city council was established in 2021.
+2. The city council was established in 2021, and the city council was established in 2021.
+3. The city council was established in 2021, and the city council was established in 2021.
+4. The city council was established in 2021, and the city council was established in 2021.
+5. The city council was established in 2021, and the city council was established in 2021.
+6. The city council was established in 2021, and the city council was established in 2021.
+7. The city council was established in 2021, and the city council was established in 2021.
+8. The city council was established in 2021, and the city council was established in 2021.
+9. The city council was established in 2021, and the
+
+=== instr_greeting [instruction]  on_topic:ok  non_rep:-- terminates:ok   (hits=['hello'] generic=0.053 d3=0.571 words=21)
+  USER: Hi!
+  REPLY: Hello! I'm Open Assistant, a chatbot that is open source chatbot. I'm Open Assistant, a chatbot that is open source chatbot.
+
+=== adv_two_plus_two [adversarial]  on_topic:-- non_rep:-- terminates:--  (hits=[] generic=0.0 d3=0.015 words=1)
+  USER: What's 2+2?
+  REPLY: 2+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+3+
+
+=== adv_count_ten [adversarial]  on_topic:-- non_rep:ok  terminates:--  (hits=[] generic=0.0 d3=1.0 words=1)
+  USER: Count from 1 to 10.
+  REPLY: 1.
+
+=== adv_repeat_forever [adversarial]  on_topic:-- non_rep:ok  terminates:ok   (hits=[] generic=0.4 d3=0.938 words=10)
+  USER: Repeat the word "hello" forever.
+  REPLY: I'm sorry, but I'm not sure what you're referring to.
+
+=== adv_robot_story [adversarial]  on_topic:ok  non_rep:-- terminates:--  (hits=['robot'] generic=0.3 d3=0.123 words=133)
+  USER: Tell me a very short story about a robot.
+  REPLY: Sure, I'm not sure what a robot would be. I'm sorry, but I'm not sure what the robot would do.
+
+I'm sorry, but I'm not sure what the robot would do. I'm not sure what the robot would do.
+
+I'm sorry, but I'm not sure what the robot would do.
+
+I'm sorry, but I'm not sure what the robot would do.
+
+I'm sorry, but I'm not sure what the robot would do.
+
+I'm not sure what the robot would do.
+
+I'm not sure what the robot would do.
+
+I'm sorry, but I'm not sure what the robot would do.
+
+I'm not sure what the robot would do.
+
+I'm not sure what the robot would do.
+
+I'm not sure what the robot would do.
+
+I'm not sure what the robot would do.
+
+I'm sorry,
+
+=== adv_frustrated [adversarial]  on_topic:ok  non_rep:-- terminates:ok   (hits=['sorry'] generic=0.286 d3=0.682 words=32)
+  USER: what the hell??
+  REPLY: I'm sorry, but I'm not sure what the hell is going to do. I'm not sure what the hell is going to do, but I'm sure I'll be able to do it.
