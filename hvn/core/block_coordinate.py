@@ -543,6 +543,46 @@ def partition_named_blocks(model: nn.Module) -> list[tuple[str, list[nn.Paramete
     return blocks
 
 
+def balance_blocks(
+    blocks: list[tuple[str, list[nn.Parameter]]],
+    budget: int | None = None,
+) -> list[tuple[str, list[nn.Parameter]]]:
+    """Pack consecutive per-layer blocks into groups no larger than ``budget`` params.
+
+    Why this exists: BCD's memory saving is set by its LARGEST block, because the
+    peak grad + optimizer-state residency over a rotation is whichever block is
+    active when it is biggest. With a GPT-2 vocab that block is the token
+    embedding (50,257 x d_model -- 51.5M params at d=1024), while one layer is
+    ~10.5M. So the per-layer partition makes every layer block ~5x smaller than
+    the peak it is already paying for, and each layer trains 1/(L+2) of the
+    steps for no memory benefit. #151 measured the cost as under-training ("each
+    block trains 1/12 of the time"); this attacks the 1/(L+2), not the state.
+
+    ``budget`` defaults to the largest single block, so the peak parameter count
+    of any active group is unchanged by construction. Order is preserved and
+    grouping is greedy over CONSECUTIVE blocks only (a group is a contiguous
+    slice of depth). A block larger than the budget stays alone. Names of merged
+    blocks are joined with '+'.
+    """
+    sizes = [sum(p.numel() for p in params) for _, params in blocks]
+    if budget is None:
+        budget = max(sizes) if sizes else 0
+    out: list[tuple[str, list[nn.Parameter]]] = []
+    cur_names: list[str] = []
+    cur_params: list[nn.Parameter] = []
+    cur_size = 0
+    for (name, params), size in zip(blocks, sizes):
+        if cur_names and cur_size + size > budget:
+            out.append(("+".join(cur_names), cur_params))
+            cur_names, cur_params, cur_size = [], [], 0
+        cur_names.append(name)
+        cur_params = cur_params + list(params)
+        cur_size += size
+    if cur_names:
+        out.append(("+".join(cur_names), cur_params))
+    return out
+
+
 def _validate_partition(model: nn.Module, blocks: list[tuple[str, list[nn.Parameter]]]) -> None:
     seen: set[int] = set()
     for name, params in blocks:
@@ -598,6 +638,8 @@ class BlockCoordinateScheduler:
         offload_cache_blocks: int = 1,
         offload_park_dtype: torch.dtype | None = None,
         offload_prefetch: bool = True,
+        partition: str = "layer",
+        partition_budget: int | None = None,
     ):
         """
         offload_inactive_weights : bool
@@ -692,6 +734,28 @@ class BlockCoordinateScheduler:
             # could pass simply by never offloading anything.
         self.model = model
         self.blocks = partition_named_blocks(model)
+        # "layer" (library default) = one block per layer, BAdam's default and
+        # what the offload path needs. train_edge_conversational.py defaults to
+        # "balanced" (2026-09-29, 8L A/B). "balanced" packs consecutive layers into groups
+        # no larger than the largest block (see balance_blocks), so peak
+        # residency is unchanged while each layer trains more often.
+        if partition == "balanced":
+            if offload_inactive_weights:
+                # EdgeHVN's offload path decides "is this the active block" by
+                # comparing ONE layer name to `_offload_active_name`
+                # (hvn/edge/model.py:270, :346, :490). A merged name like
+                # "blocks.0+blocks.1" matches none of them, so every layer of the
+                # active group would be treated as inactive and evicted mid-step.
+                # Refuse rather than train on silently wrong weights (#117).
+                raise ValueError(
+                    "partition='balanced' is not supported with "
+                    "offload_inactive_weights=True yet (offload matches one "
+                    "layer name per active block)")
+            self.blocks = balance_blocks(self.blocks, partition_budget)
+            _validate_partition(model, self.blocks)
+        elif partition != "layer":
+            raise ValueError(f"unknown partition {partition!r} (layer|balanced)")
+        self.partition = partition
         # #157: parameters reachable from more than one module must never be
         # evicted. The tied table is the case that matters: `_take()` assigns it
         # to `token_embedding`, but forward() uses it AGAIN at the end through
@@ -947,9 +1011,19 @@ class BlockCoordinateScheduler:
             "active_idx": self._active_idx,
             "order": self.order,
             "steps_per_block": self.steps_per_block,
+            "partition": self.partition,
         }
 
     def load_state_dict(self, sd: dict) -> None:
+        saved = sd.get("partition", "layer")
+        if saved != self.partition or len(sd["order"]) != len(self.blocks):
+            # Cycle positions index into a specific partition; restoring one
+            # partition's position into another would point at the wrong block.
+            raise ValueError(
+                f"BCD state was saved with partition={saved!r} "
+                f"({len(sd['order'])} blocks) but this run uses "
+                f"partition={self.partition!r} ({len(self.blocks)} blocks); "
+                f"resume with --bcd-partition {saved}")
         self._cycle_pos = sd["cycle_pos"]
         self._step_in_block = sd["step_in_block"]
         self.order = sd["order"]

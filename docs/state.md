@@ -5504,7 +5504,12 @@ layer block is ~5x smaller (10.5M params). So each layer was training only 1/22 
 time (22 blocks at 270M) for zero memory benefit; the slot sized for the vocab table was
 being paid for at every block, including the ones far smaller than it.
 
-**Fix:** `--bcd-partition balanced` (opt-in, `hvn/core/block_coordinate.py`'s
+**Fix:** `--bcd-partition balanced` (**now the default** for `--block-coordinate` in
+`train_edge_conversational.py`, except under `--offload`, which falls back to `layer`;
+it won at equal steps AND at equal wall-clock in the A/B -- balanced at 11.4 min was
+5.533 vs layer's 5.758 at 11.3 min. Resume a run saved under the old partition with
+`--bcd-partition layer`; a mismatch is refused, not silently remapped.
+`hvn/core/block_coordinate.py`'s
 `balance_blocks`) groups consecutive layers into blocks sized near the memory ceiling
 instead of one-per-layer -- 22 blocks -> 6 at 270M (groups of 4 layers).
 

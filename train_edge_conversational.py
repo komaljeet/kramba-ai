@@ -2149,6 +2149,18 @@ def build_model_and_config(
 # Step 4 — Pre-Training Audit
 # ---------------------------------------------------------------------------
 
+def resolve_bcd_partition(partition: str | None, offload: bool) -> str:
+    """--bcd-partition default: 'balanced', except 'layer' under --offload.
+
+    Balanced keeps BCD's peak grad+state residency (set by the vocab table)
+    while each layer trains ~3-4x as often -- 8L A/B ppl 228 vs 317, and ahead
+    at equal wall-clock too. Offload can only drive the per-layer partition.
+    """
+    if partition is not None:
+        return partition
+    return "layer" if offload else "balanced"
+
+
 def pre_training_audit(
     model: EdgeHVN,
     dataloader: DataLoader,
@@ -2774,8 +2786,10 @@ def train(
             # do not re-enable it without re-reading that commit.
             offload_prefetch=offload,
             offload_cache_blocks=config.get("offload_cache_blocks", 1),
+            partition=resolve_bcd_partition(config.get("bcd_partition"), offload),
         )
-        print(f"  Block-coordinate-descent: {bcd_scheduler.num_blocks} blocks, "
+        print(f"  Block-coordinate-descent: {bcd_scheduler.num_blocks} blocks "
+              f"({bcd_scheduler.partition} partition), "
               f"{bcd_scheduler.steps_per_block} steps/block, "
               f"active={bcd_scheduler.active_block_name!r}")
         if offload:
@@ -3544,6 +3558,17 @@ def main():
     parser.add_argument("--bcd-steps-per-block", type=int, default=100,
                         help="Optimizer steps per active block before switching to the "
                              "next (only used with --block-coordinate). Default: 100.")
+    parser.add_argument("--bcd-partition", choices=["layer", "balanced"], default=None,
+                        help="How --block-coordinate splits the model. 'balanced' "
+                             "(default): pack consecutive layers into groups no larger "
+                             "than the largest block (the vocab table), so peak "
+                             "grad+optimizer-state residency is unchanged while each "
+                             "layer trains ~3-4x as often (8L A/B: ppl 228 vs 317 at "
+                             "equal steps AND better at equal wall-clock). 'layer': "
+                             "embedding | one block per layer | final_norm+decoder "
+                             "(pre-2026-09-29 behaviour; pass it to resume a run saved "
+                             "under it). --offload defaults to 'layer' because "
+                             "'balanced' is not yet supported with it.")
     parser.add_argument("--grad-checkpoint", action="store_true",
                         help="Exact activation checkpointing (Issue #100, mirrors the "
                              "core model's #49): recompute each block's activations in "
@@ -3650,6 +3675,16 @@ def main():
             print("[#163] --offload requires --grad-checkpoint; enabling it "
                   "(offload evicts weights after the forward and relies on the "
                   "recompute to bring them back).")
+        if args.bcd_partition == "balanced":
+            # Fail before the model is built, not after: the scheduler refuses
+            # this too (hvn/core/block_coordinate.py), since offload matches one
+            # layer name per active block.
+            parser.error("--bcd-partition balanced is not supported with --offload yet")
+    if args.bcd_partition is None:
+        args.bcd_partition = resolve_bcd_partition(None, args.offload)
+        if args.offload:
+            print("[bcd] --offload: using --bcd-partition layer "
+                  "(balanced is not supported with offload yet)")
 
     # --- Issue #86: expand the --fast meta-flag into the recommended stack ---
     # One switch instead of five flags. Any lever the user passed explicitly on
@@ -3921,6 +3956,7 @@ def main():
     config["galore_scale"] = args.galore_scale
     config["block_coordinate"] = args.block_coordinate
     config["bcd_steps_per_block"] = args.bcd_steps_per_block
+    config["bcd_partition"] = args.bcd_partition
     # --- Issue #163 ---
     config["offload"] = args.offload
     config["offload_cache_blocks"] = args.offload_cache_blocks
