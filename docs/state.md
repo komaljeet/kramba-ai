@@ -5315,3 +5315,175 @@ With BCD + CPU offload + ternary + tied embeddings, seq 4096, single micro-batch
 step times are ~4x pessimistic. Fitting is not training: at 875 tok/s a 1B model needs
 ~267 days for a Chinchilla-optimal budget, so the practical range remains a few hundred
 million parameters.
+
+## `pre_training_audit` OOMs at ~12 GB on any no-BCD run at seq 4096 -- was a bug in the audit, not a real cost (#112 resurfaced, 2026-09-28)
+
+A 270M-param POC (d=1024, 20 layers, 32 heads, 262.1M total) OOM'd at 12.25 GiB during
+startup, before training began, when run WITHOUT `--block-coordinate`. Root cause:
+`pre_training_audit`'s first check does an `.eval()`-mode forward with autograd still on
+(`train_edge_conversational.py:2234-2236`, no `torch.no_grad()`). In eval mode
+`self.training` is False, so `hvn/edge/model.py:455`
+(`use_ckpt = self.grad_checkpoint and self.training and torch.is_grad_enabled()`) turns
+gradient checkpointing off too -- the forward records a full, non-checkpointed graph for
+every layer at the full sequence length. The `logits` tensor holding that graph was never
+freed before the next check ran on top of it, and `finally: del audit_model; empty_cache()`
+did not help, since the graph still referenced the copy's activations.
+
+Same code path as #112 (this file, "pre-training audit deepcopied model to GPU, OOM'd 6 GB
+card at large sizes"), which was only ever patched by *skipping* Checks 2/3 when
+`--block-coordinate` is set (lines ~2218-2224, ~2291-2297) -- never fixed at the source. It
+resurfaces for any no-BCD run at long sequence length, because #112's own case (3x weights
+at 1.21B, seq 128) had a tiny eval graph; at seq 4096 the kept graph dominates.
+
+**Isolated repro** (same shape, deepcopy, tiny model at seq 512/1024, scratch script):
+eval forward with grad on keeps 1.68 GiB (seq 512) / 2.83 GiB (seq 1024) alive afterward,
+~+1.15 GiB per 512 tokens -- extrapolates to ~9.7 GiB at seq 4096, matching the 12.25 GiB
+logged (plus the deepcopy's own resident weights). Under `torch.no_grad()` it stays flat at
+0.49-0.53 GiB regardless of sequence length. Memory only dropped after `del logits`
+specifically -- not after `del audit_model` -- confirming `logits` was the leak.
+
+**Ruled out:** the slow eager `_scan_chunked` reference path used pre-`--fast` isn't the
+cause by itself -- the train-mode check alone (checkpointed, same slow scan) peaked at
+4.69 GiB, well inside budget. Wrong batch/seq (log showed the requested [1, 4096]). Grad
+checkpointing being skipped in train mode (traceback showed `checkpoint()` was in fact
+called there).
+
+**Fix** (commit `84cf3ac`, `feat/blog-run-logging`, not pushed): wrap the eval forward in
+`torch.no_grad()`, `del logits` before the next check runs, and use `chunked_cross_entropy`
+in the audit when `config["chunked_loss"]` is set (so the audit tests what training
+actually runs). `--block-coordinate`'s existing skip logic is untouched.
+
+**Post-fix, no-BCD 270M (batch 1, grad-accum 8, fast stack, grad-checkpoint,
+chunked-loss 512, muon) trains cleanly:** audit peak ~4.7 GiB (measured via isolated
+pieces), training 2,822-2,831 tok/s steady, 4.08 GB peak / 4.43 GB reserved (74%, under the
+85% spill guard), no spill over 300 steps. Loss fell 9.94 (step 50) -> 7.65 (100) -> 6.96
+(150) -> 6.52 (200) -> 5.99 (250) -> 6.06 (300, single-step read during LR warmup) --
+real learning, not the flat ~11.0 the earlier BCD run showed at step 100 (BCD trains one
+block at a time; whether that flatness is expected block-cycling behaviour or an actual
+problem was not verified).
+
+**Batch 2 (accum 4) and batch 4 (accum 2) do not fit without BCD** -- spill guard stopped
+training at step 1 (93% and 128% reserved respectively). Batch 1 is the only no-BCD
+setting that fits at this shape.
+
+## The blog's "~270M for coherent conversation" number was never measured (2026-09-29)
+
+Traced to this file (the "270M can plausibly prove conversational fluency" passage) and
+`HF_BLOG_POST.md`'s "what a 6 GB card is good for" table. 270M was picked because it was
+**the largest model that fit on the card at the time** -- not because any model at that
+size, or any size, was shown to hold a coherent conversation. No size trained in this repo
+has that evidence, including 270M (the POC above only has a pretrain loss curve, no
+generation).
+
+**The only model ever chat-tested is the 83M shape (31M body, untied ~62%-vocab GPT-2),
+fine-tuned as `hybrid_chat_v1`/`hybrid_tooluse_v1`** on a 51K-step trunk (~0.84B tokens,
+stopped mid-schedule). Fluent, grammatically clean, correct on simple facts ("hi" ->
+proper greeting, capital of France -> Paris), but **loops on arithmetic/creative prompts**
+and, per this file's own later notes, "frequently doesn't engage with what was actually
+asked -- generic assistant-boilerplate." This is the only real quality floor that exists.
+The fully-trained 102K-step 83M trunk (1.65B tokens) was never chat-tested. 48M/70M/108M/
+157M have loss/VRAM/speed numbers only (`results/size_vs_time/results.json`), no chat
+evidence at all.
+
+**Also caught: #159's ~30-tokens/param rule is per *body* param (vocab excluded)** --
+`scripts/size_vs_time_for_code.py:120` uses the same convention. The 270M POC's body is
+~210M (262M total - the tied GPT-2 head), so its correct budget is 30 x 210M = 6.3B tokens
+(~26 days at 2,827 tok/s), not the 7.86B/~32 days figure obtained by multiplying the
+**total** param count. Separately, the tokenized `fineweb_edu.bin` cache holds only 6.64B
+tokens -- a 6.3B run fits; anything past ~6.6B re-reads data unless more is tokenized first.
+
+**Throughput cross-check (superseded below):** `results/size_vs_time`'s 896x16 speed
+(4,603 tok/s), scaled by layers x d^2, predicted 2,824 tok/s at the POC's 1024x20 shape --
+close to the 2,827 the plain-`hvn` POC measured. That reference point turned out to be a
+hybrid model benchmarked with a 32K synthetic vocab, not GPT-2's 50K in the real training
+loop -- see the resolved flag below for the corrected number.
+
+No size below 270M has been trained or chat-tested here, so day-counts are time estimates
+only, not quality predictions. Outside priors (not measured here, treat loosely):
+DialoGPT-small (117M) and SmolLM2-135M-Instruct are roughly coherent at comparable sizes,
+but trained on 10B-2T tokens vs the few-billion-token budgets below.
+
+**Resolved: the flag about `--arch hvn` vs `--arch hvn-hybrid` (2026-09-29).** All the
+runs above used plain `hvn` (no attention), not the hybrid this project actually trains.
+Re-run at 1024x20 with `--arch hvn-hybrid --attn-layers 5,15` (attention at ~L/4 and
+~3L/4), same settings otherwise (batch 1, grad-accum 8, fast stack, grad-checkpoint,
+chunked-loss 512, muon, tied GPT-2 embeddings):
+
+| | plain hvn | hybrid |
+|---|---|---|
+| total / body params | 262.13M / 210.67M | 262.05M / 210.59M |
+| speed (steps 100-300) | 2,826-2,831 tok/s | 2,861-2,865 tok/s |
+| peak VRAM, used / held | 4.08 / 4.43 GB (74%) | 4.08 / 4.43 GB (74%) |
+| loss at steps 50/100/150/200/250/300 | 9.94/7.65/6.96/6.52/5.99/6.06 | 9.63/7.62/6.71/6.51/6.18/6.00 |
+
+**The hybrid is not more expensive here -- if anything marginally faster** (~1% at
+1024x20, ~4% at a paired 640x12: 7,478 vs 7,200 tok/s, same VRAM). This contradicts
+`HF_BLOG_POST.md`'s "~13% VRAM, ~7% step time" cost for the 2 attention layers -- that
+number was measured in a different setup (blog's KV cache capped at 128 keys vs this
+loop's full-window flash attention at seq 4096, plus grad-checkpointing keeping only one
+block's activations live regardless of type). **The blog's hybrid-cost claim needs
+correcting or re-scoping to its original setup** -- unverified which factor actually
+explains the gap, don't assume it's the KV-cache width alone.
+
+The audit (commit `84cf3ac`) needed no further fix for the hybrid path -- Check 3 already
+passed `block_plan`/`attn_window`/`tie_embeddings` through the rebuild, confirmed by
+forcing a hybrid checkpoint's `block_plan` to `None` and observing the audit correctly
+fail. `use_deltanet: False` printing for hybrid configs is a cosmetic-only quirk (the 18
+DeltaNet blocks still run on the Triton scan).
+
+**Corrected candidate-size table, hybrid, attention at ~L/4 and ~3L/4, 30 tokens/body-param,
+real measured throughput (not scaled) at each size:**
+
+| config | attn layers | body / total | tokens | tok/s | peak VRAM (held) | days |
+|---|---|---:|---:|---:|---:|---:|
+| 640x12 | 3,9 | 49.4M / 81.6M | 1.48B | 7,478 | 1.57 GB (1.84, 31%) | 2.3 |
+| 768x14 | 3,10 | 83.0M / 121.6M | 2.49B | 5,418 | 2.17 GB (2.56, 43%) | 5.3 |
+| 896x16 | 4,12 | 129.0M / 174.0M | 3.87B | 4,105 | 2.93 GB (3.42, 57%) | 10.9 |
+| 1024x20 | 5,15 | 210.6M / 262.1M | 6.32B | 2,863 | 4.08 GB (4.43, 74%) | 25.5 |
+
+These land close to the earlier wrong-architecture estimates, because the hybrid turned out
+to cost about the same as plain `hvn` in this loop. Only 640x12/768x14/896x16 are now
+measured rather than scaled; each ran 100 steps, which says nothing about quality. Chat
+eval was not run against any of these -- pretrain loss at this step count cannot show
+coherence.
+
+## Chat coherence eval built and validated (2026-09-29, `feat/chat-coherence-eval`, commit `6f14ece`)
+
+Built because loss/perplexity cannot show whether a model is *coherent* rather than just
+fluent -- the same proxy-can't-measure-target failure shape as #122/#132. 32 fixed prompts
+(`eval/chat_prompts_v1.json`: 11 factual, 8 follow-up/context-dependent, 8 instruction, 5
+loop-inducing), scored by `eval/chat_coherence.py` on three heuristics: on-topic (keyword
+overlap, not a correctness judge), non-repetitive, terminates cleanly. Scorer records the
+prompt file's sha256 with each result so the set can't silently drift.
+
+**Validated against two references, greedy decode, repetition-penalty 1.3 (serving
+default):** floor `hybrid_chat_v1` (83M/31M-body) scores **19% coherent (6/32)**; ceiling
+SmolLM2-135M-Instruct scores **75% (24/32)**. Ceiling beats floor on 19 prompts, loses on 1
+(sign test p=4e-5). A random-keyword chance control hits only 2-3%, so the 19%/75% gap
+isn't an artifact of the scoring method. Hand-reading agrees: the floor gets basic facts
+wrong ("Earth's largest moon" for the largest planet, "the Atlantic" for the largest ocean,
+loops on `7*7*7...`, forgets a name given one turn earlier).
+
+**Known limits of the score, before trusting it on a future candidate:**
+- On-topic is keyword-based, not semantic -- hand-check found ~4/32 false passes on the
+  ceiling and ~2/32 false fails on both; the *real* gap by hand (~55% vs ~8%) is larger
+  than the headline, not smaller.
+- Repetition-penalty 1.3 (the serving default) masks looping -- both models score >90% on
+  non-repetitive/terminates at that setting. Looping only shows at penalty 1.0 (floor 25%,
+  ceiling 84% non-repetitive).
+- Sampled decoding is one draw; use greedy for comparing candidates.
+- 32 prompts -- treat a gap under ~15 points between two candidates as noise. Use the
+  paired per-prompt comparison, not the headline percentage.
+
+**Side effects while wiring this up (also in commit `6f14ece`):** found and fixed two real
+serving bugs in `serve_openai.py` -- repetition penalty divided negative logits too,
+which *raised* them and made repeats more likely (now matches `EdgeHVN.chat_step`'s sign
+handling); and `build_prompt` ended earlier assistant turns with `"\n"` instead of the
+trained `<|endoftext|>` separator, so every multi-turn eval prompt was off-format.
+`generate_ids()` was split out of the existing generation loop so both the repo's own
+checkpoints and HF reference models share one sampler, rather than a second implementation.
+12 new tests (`tests/test_chat_coherence_eval.py`) check the eval can actually fail
+(boilerplate, echoed questions, loops, missing stop token, the old broken penalty sign, the
+multi-turn format). SmolLM2-135M-Instruct was fetched via `curl` into
+`checkpoints/hf/SmolLM2-135M-Instruct` (gitignored) because the HF Python client's TLS
+failed in this environment.
