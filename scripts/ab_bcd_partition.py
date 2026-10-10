@@ -15,6 +15,16 @@ Arms (identical seed, batches, LR schedule):
   bcd_layer     today's BCD: embedding | one block per layer | final_norm+decoder
   bcd_balanced  same scheduler, layers packed up to the largest block's size
 
+Optional arm (#164), not in the default set:
+  bcd_balanced_offload  bcd_balanced + CPU weight offload exactly as
+                        train_edge_conversational.py --offload runs it (bf16
+                        parking, prefetch, grad checkpointing). Offload is
+                        meant to be a placement change only; this measures
+                        whether the quality survives it, including bf16
+                        parking's rounding of each block's weights on every
+                        switch. --baseline loads full/bcd_layer/bcd_balanced
+                        from an earlier run so only this arm has to train.
+
 Guards against a vacuous result:
   * known-answer: bcd_layer must reproduce a real gap vs full, or the harness is
     not measuring BCD's cost and no verdict is printed.
@@ -50,16 +60,19 @@ from hvn.core.block_coordinate import BlockCoordinateScheduler     # noqa: E402
 from hvn.edge.ternary import apply_ternary_to_model                # noqa: E402
 from hvn.optimizers import build_optimizer                         # noqa: E402
 
-ARMS = {"full": None, "bcd_layer": "layer", "bcd_balanced": "balanced"}
+ARMS = {"full": None, "bcd_layer": "layer", "bcd_balanced": "balanced",
+        "bcd_balanced_offload": "balanced"}
+OFFLOAD_ARMS = {"bcd_balanced_offload"}
+DEFAULT_ARMS = ["full", "bcd_layer", "bcd_balanced"]
 
 
-def build(args, device):
+def build(args, device, grad_checkpoint=False):
     from hvn.edge.model import EdgeHVN
     plan = ["deltanet"] * args.num_layers
     model = EdgeHVN(
         vocab_size=args.vocab_size, d_model=args.d_model,
         num_layers=len(plan), n_heads=args.n_heads, block_plan=plan,
-        tie_embeddings=args.tie,
+        tie_embeddings=args.tie, grad_checkpoint=grad_checkpoint,
     ).to(device)
     linears = {n for n, m in model.named_modules() if isinstance(m, nn.Linear)}
     exclude = ("beta_proj", "alpha_proj", "decoder")
@@ -88,7 +101,8 @@ def run_arm(arm: str, args, batches, probes, device) -> dict:
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    model = build(args, device)
+    offload = arm in OFFLOAD_ARMS
+    model = build(args, device, grad_checkpoint=offload)
     init = {n: p.detach().clone() for n, p in model.named_parameters()}
     opt, desc = build_optimizer(model, "muon", lr=args.aux_lr,
                                 weight_decay=args.weight_decay,
@@ -97,7 +111,12 @@ def run_arm(arm: str, args, batches, probes, device) -> dict:
     if partition is not None:
         sched = BlockCoordinateScheduler(
             model, opt, steps_per_block=args.steps_per_block,
-            partition=partition)
+            partition=partition,
+            # Same settings as train_edge_conversational.py --offload.
+            offload_inactive_weights=offload,
+            device=device if offload else None,
+            offload_park_dtype=torch.bfloat16 if offload else None,
+            offload_prefetch=offload)
     cos = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.steps)
     base_lrs = [pg["lr"] for pg in opt.param_groups]
 
@@ -174,7 +193,10 @@ def run_arm(arm: str, args, batches, probes, device) -> dict:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--arms", nargs="+", default=list(ARMS))
+    p.add_argument("--arms", nargs="+", default=DEFAULT_ARMS, choices=list(ARMS))
+    p.add_argument("--baseline", default=None,
+                   help="JSON from an earlier run of this script with the same "
+                        "config; its arms are reused for the verdict")
     p.add_argument("--steps", type=int, default=4000)
     p.add_argument("--steps-per-block", type=int, default=100)
     p.add_argument("--warmup-steps", type=int, default=100)
@@ -220,6 +242,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
           f"training batches per arm", flush=True)
 
     results: Dict[str, dict] = {}
+    if args.baseline:
+        base = json.load(open(args.baseline, encoding="utf-8"))
+        same = ("steps", "steps_per_block", "batch_size", "seq_len", "d_model",
+                "num_layers", "n_heads", "tie", "muon_lr", "aux_lr", "seed",
+                "warmup_steps", "eval_every", "probe_batches", "tokenizer")
+        diff = [k for k in same if base["config"].get(k) != getattr(args, k)]
+        if diff:
+            raise SystemExit(f"--baseline config differs on {diff}; not comparable")
+        for n, r in base["arms"].items():
+            if n not in args.arms:
+                results[n] = r
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     for arm in args.arms:
         results[arm] = run_arm(arm, args, batches, probes, device)
@@ -244,10 +277,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             closed = (lay - bal) / (lay - f) * 100
             verdict = (f"balanced closes {closed:.0f}% of BCD's gap "
                        f"(layer {lay - f:+.3f} nats vs full, balanced {bal - f:+.3f})")
+    off_note = None
+    if {"bcd_balanced", "bcd_balanced_offload"} <= set(results):
+        a = results["bcd_balanced"]["trajectory"]
+        b = results["bcd_balanced_offload"]["trajectory"]
+        worst = max(abs(x["heldout_loss"] - y["heldout_loss"]) for x, y in zip(a, b))
+        d_fin = (results["bcd_balanced_offload"]["final_heldout_loss"]
+                 - results["bcd_balanced"]["final_heldout_loss"])
+        off_note = (f"offload vs no offload (balanced): final {d_fin:+.4f} nats, "
+                    f"worst eval point {worst:.4f} nats over {len(a)} evals")
+        if "full" in results and "bcd_layer" in results:
+            f = results["full"]["final_heldout_loss"]
+            lay = results["bcd_layer"]["final_heldout_loss"]
+            bo = results["bcd_balanced_offload"]["final_heldout_loss"]
+            off_note += (f"; balanced+offload closes "
+                         f"{(lay - bo) / (lay - f) * 100:.0f}% of BCD's gap")
+        print(f"[ab] {off_note}")
     print(f"\n[ab] VERDICT: {verdict}")
     with open(args.out, "w", encoding="utf-8") as fh:
-        json.dump({"config": vars(args), "arms": results, "verdict": verdict},
-                  fh, indent=2)
+        json.dump({"config": vars(args), "arms": results, "verdict": verdict,
+                   "offload_note": off_note}, fh, indent=2)
     print(f"[ab] wrote {args.out}")
     return 0
 
