@@ -870,3 +870,81 @@ def test_prefetch_does_not_corrupt_activations_at_depth():
     assert all(torch.isfinite(p.grad).all()
                for p in model.parameters() if p.grad is not None), \
         "non-finite gradients after a prefetched offload forward"
+
+
+def test_pinned_staging_overflow_never_double_frees():
+    """#164 (found while verifying it): `_PinnedStagingPool.acquire`'s overflow
+    branch hands out a buffer an earlier acquire still holds -- within one
+    prefetch, when a block has more same-shaped weights than the cap. Every
+    holder used to release it, so it entered the free list more than once, and
+    the next prefetch got the SAME pinned buffer for two weights. Deterministic
+    check of the bookkeeping; the end-to-end value check is the next test."""
+    if not torch.cuda.is_available():
+        return
+    from hvn.core.block_coordinate import _PinnedStagingPool
+    pool = _PinnedStagingPool(max_per_shape=2)
+    held = [pool.acquire(torch.Size([8, 8]), torch.float32) for _ in range(6)]
+    assert len({id(b) for b in held}) == 2, "overflow branch not exercised"
+    for b in held:
+        pool.release(b)
+    free = pool._free[((8, 8), torch.float32)]
+    assert len(free) == len({id(b) for b in free}) == 2, (
+        f"free list holds {len(free)} entries for "
+        f"{len({id(b) for b in free})} buffers -- a buffer was freed twice")
+    again = [pool.acquire(torch.Size([8, 8]), torch.float32) for _ in range(2)]
+    assert again[0] is not again[1], "same pinned buffer handed out twice"
+
+
+def _offload_logit_drift(reserve_enabled: bool) -> float:
+    """Max |logits(offload) - logits(no offload)| over 4 forward+backward
+    passes of an identical model. Weights never change (lr=0), so any
+    difference is the offload path computing with wrong weights."""
+    from hvn.core.block_coordinate import _PinnedStagingPool
+    d, L, S, V = 512, 8, 1024, 4096
+
+    def mk():
+        torch.manual_seed(0)
+        return EdgeHVN(vocab_size=V, d_model=d, num_layers=L, n_heads=16,
+                       block_plan=["deltanet"] * L, grad_checkpoint=True,
+                       tie_embeddings=False, dropout=0.0).to("cuda")
+
+    torch.manual_seed(1)
+    ids = torch.randint(0, V, (1, S), device="cuda")
+    ref = mk()
+    with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        ref_logits = ref(ids).float()
+    del ref
+    model = mk()
+    opt = torch.optim.AdamW(model.parameters(), lr=0.0)
+    sched = BlockCoordinateScheduler(model, opt, steps_per_block=1000,
+                                     offload_inactive_weights=True, device="cuda")
+    if not reserve_enabled:
+        # Force every prefetch through acquire()'s overflow branch, so that
+        # branch's own correctness is tested, not just avoided.
+        sched.buffer_pool._pinned_pool.reserve = lambda *a: None
+    worst = 0.0
+    for _ in range(4):
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            out = model(ids)
+            loss = F.cross_entropy(out.float().reshape(-1, V), ids.reshape(-1))
+        loss.backward()
+        opt.zero_grad(set_to_none=True)
+        worst = max(worst, (out.float() - ref_logits).abs().max().item())
+    return worst
+
+
+def test_prefetched_weights_match_no_offload_at_scale():
+    """End-to-end value check for the double-free above. Measured on the
+    broken code: max|dlogits| 1.1-2.6 on every one of 6 forwards; 0.0 fixed.
+    Unlike test_prefetch_does_not_corrupt_activations_at_depth this compares
+    VALUES, not finiteness -- swapped weights are perfectly finite. Needs a
+    model whose kernels outlast the host (the prefetch copy queues behind the
+    main stream); the 32-wide test models catch it only ~5% of steps."""
+    if not torch.cuda.is_available():
+        return
+    for reserve_enabled in (True, False):
+        drift = _offload_logit_drift(reserve_enabled)
+        assert drift < 1e-3, (
+            f"offloaded forward differs from the resident one by {drift:.3f} "
+            f"(reserve={'on' if reserve_enabled else 'off'}) -- prefetched "
+            f"weights are not the weights")

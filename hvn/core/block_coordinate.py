@@ -71,6 +71,24 @@ class _PinnedStagingPool:
         self.max_per_shape = max(1, max_per_shape)
         self._free: dict[tuple, list[torch.Tensor]] = {}
         self._in_use: dict[tuple, list[torch.Tensor]] = {}
+        # #164 (found while verifying it): how many outstanding acquires hold
+        # each buffer. See release() for why a plain in-use list is not enough.
+        self._holders: dict[int, int] = {}
+        # Per-signature capacity, raised by reserve() to one block's worth.
+        self._cap: dict[tuple, int] = {}
+
+    def reserve(self, shape: torch.Size, dtype: torch.dtype, n: int) -> None:
+        """Let up to `n` buffers of this signature be in use at once.
+
+        One block's prefetch holds one staging buffer per parameter until that
+        block is load()-ed, and a real block has SIX (d, d) matrices (DeltaNet
+        q/k/v/o/...; four in an attention block). With the flat cap of 2 every
+        prefetch fell into acquire()'s device-synchronising overflow branch
+        four times. Sizing to the block keeps the bound independent of depth
+        (#118's actual requirement) while taking the overflow branch off the
+        hot path."""
+        sig = (tuple(shape), dtype)
+        self._cap[sig] = max(self._cap.get(sig, self.max_per_shape), n)
 
     def acquire(self, shape: torch.Size, dtype: torch.dtype) -> torch.Tensor:
         sig = (tuple(shape), dtype)
@@ -78,26 +96,48 @@ class _PinnedStagingPool:
         buf = free.pop() if free else None
         if buf is None:
             in_use = self._in_use.setdefault(sig, [])
-            if len(in_use) >= self.max_per_shape:
+            if len(in_use) >= self._cap.get(sig, self.max_per_shape):
                 # Rare fallback (shouldn't happen in the normal sequential
                 # prefetch-then-consume-next-iteration pattern this pool is
                 # sized for): every buffer of this shape is still in use.
                 # A full device sync is a blunt but always-correct way to
                 # guarantee it's safe to reclaim one -- acceptable here
-                # since this branch is not the common hot path.
+                # since this branch is not the common hot path. The buffer
+                # stays held by its earlier owner as well (see release()).
                 torch.cuda.synchronize()
                 buf = in_use.pop(0)
             else:
                 buf = torch.empty(shape, dtype=dtype).pin_memory()
         self._in_use.setdefault(sig, []).append(buf)
+        self._holders[id(buf)] = self._holders.get(id(buf), 0) + 1
         return buf
 
     def release(self, buf: torch.Tensor) -> None:
-        """Return `buf` to the free pool. Caller MUST have already
-        host-synchronized on any event tracking a copy FROM this buffer
-        (`event.synchronize()`, not just a stream-level `wait_event()` --
-        see `GPUBufferPool.load`) before calling this, since the buffer's
-        memory becomes safe to overwrite again the moment this is called."""
+        """Drop one hold on `buf`; it returns to the free pool when the last
+        holder releases it. Caller MUST have already host-synchronized on any
+        event tracking a copy FROM this buffer (`event.synchronize()`, not
+        just a stream-level `wait_event()` -- see `GPUBufferPool.load`) before
+        calling this.
+
+        Why holds are counted (#164, found while verifying it): acquire()'s
+        overflow branch hands out a buffer that an earlier acquire still
+        holds -- often the SAME prefetch, which then lists it twice. Without
+        counting, every one of those holds released it, so the buffer entered
+        the free list several times; the next prefetch popped the same pinned
+        buffer for two different parameters, and the host memcpy for the
+        second overwrote it while the first one's async H2D copy was still
+        queued behind the main stream. Inactive blocks then ran with one
+        weight's values in another weight's slot. Measured on main at d=512,
+        8 layers, seq 1024: max|dlogits| 1.1-2.6 vs the same model without
+        offload, on EVERY forward -- 0.0 once the double free is impossible.
+        The finiteness-only depth test could not see it; values stayed finite."""
+        n = self._holders.get(id(buf), 0) - 1
+        if n > 0:
+            self._holders[id(buf)] = n
+            return
+        if n < 0:
+            return  # not held (already free): never add it to the free list twice
+        del self._holders[id(buf)]
         sig = (tuple(buf.shape), buf.dtype)
         in_use = self._in_use.get(sig)
         if in_use:
@@ -412,6 +452,12 @@ class GPUBufferPool:
         # does. `record_stream` alone does not either -- it protects future
         # allocator reuse, not the in-flight kernels already holding the bytes.
         self._prefetch_stream.wait_stream(torch.cuda.current_stream(self.device))
+        _per_sig: dict[tuple, int] = {}
+        for p in params:
+            home = self._cpu_home[id(p)]
+            _per_sig[(tuple(home.shape), home.dtype)] = _per_sig.get((tuple(home.shape), home.dtype), 0) + 1
+        for (shape, dtype), n in _per_sig.items():
+            self._pinned_pool.reserve(shape, dtype, n)
         with torch.cuda.stream(self._prefetch_stream):
             for p, buf in zip(params, buffers):
                 home = self._cpu_home[id(p)]
