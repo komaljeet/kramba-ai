@@ -211,3 +211,54 @@ def test_session_with_no_tool_call_still_returns_cleanly():
 
         assert result["num_tool_calls"] == 0
         assert result["answer"].strip() == answer_text
+
+
+class _PositionScriptedModel(_ScriptedModel):
+    """Logits are a function of POSITION (pos p predicts generated token p),
+    and the repetition penalty is EdgeHVN's real one, so penalty effects are
+    observable. ``script[p] = (wanted, decoy)``: wanted at 100, decoy at 90."""
+
+    def __init__(self, script, vocab_size):
+        super().__init__({}, vocab_size, torch.device("cpu"))
+        self.script = script
+
+    def forward_step(self, input_ids, states, position_idx=None):
+        logits = torch.full((1, 1, self.vocab_size), -100.0)
+        want, decoy = self.script.get(int(position_idx), (EOS_ID, None))
+        logits[0, 0, want] = 100.0
+        if decoy is not None:
+            logits[0, 0, decoy] = 90.0
+        return logits, states
+
+    def _apply_repetition_penalty(self, logits, seen_ids, penalty):
+        from hvn.edge.model import EdgeHVN
+        return EdgeHVN._apply_repetition_penalty(self, logits, seen_ids, penalty)
+
+
+def test_session_no_repetition_penalty_inside_tool_call():
+    """#167: the path "xx.py" repeats a token. At penalty 1.2 the second "x"
+    lost to " x" (100/1.2 < 90) and the call hit "file not found". Inside the
+    block there is no penalty now; after it, the penalty still applies."""
+    with tempfile.TemporaryDirectory() as sandbox:
+        with open(os.path.join(sandbox, "xx.py"), "w", encoding="utf-8") as f:
+            f.write("VALUE = 7\n")
+        executor = ToolExecutor(create_coding_registry(sandbox))
+        tok = _SeqTokenizer()
+        from hvn.edge.chat import EdgeConversationFormatter
+        fmt = EdgeConversationFormatter()
+        tok.encode(fmt.format_user("q") + fmt.format_assistant_open())
+        head = tok.encode('[TOOL_CALL]\n{"name":"read_file","arguments":{"path":"')[0]
+        x, sx = tok.encode("x")[0], tok.encode(" x")[0]
+        tail = tok.encode('.py"}}\n[/TOOL_CALL]')[0]
+        # pos 4 is the discarded slot, pos 5 follows the injected result.
+        script = {0: (head, None), 1: (x, sx), 2: (x, sx), 3: (tail, None),
+                  5: (x, sx)}
+        model = _PositionScriptedModel(script, vocab_size=EOS_ID + 1)
+        session = EdgeToolCallingSession(model, tok, executor, device=torch.device("cpu"),
+                                         max_new_tokens=20, repetition_penalty=1.2)
+        result = session.run("q")
+
+        assert result["tool_calls"][0]["arguments"] == {"path": "xx.py"}
+        assert "VALUE = 7" in result["tool_calls"][0]["result"]
+        # Outside the block the penalty is live: the trailing "x" became " x".
+        assert result["text"].endswith(" x"), result["text"]

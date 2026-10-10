@@ -69,22 +69,31 @@ def generate(prompt: str, max_new: int, temperature: float, top_p: float,
     out, _stopped = generate_ids(model, tok.encode(prompt), eos=EOS,
                                  device=device, max_new=max_new,
                                  temperature=temperature, top_p=top_p,
-                                 repetition_penalty=repetition_penalty)
+                                 repetition_penalty=repetition_penalty,
+                                 decode=tok.decode)
     return tok.decode(out).strip()
 
 
 @torch.no_grad()
 def generate_ids(model, ids: list[int], *, eos: int, device, max_new: int,
                  temperature: float, top_p: float,
-                 repetition_penalty: float) -> tuple[list[int], bool]:
+                 repetition_penalty: float,
+                 decode=None) -> tuple[list[int], bool]:
     """Model-agnostic core of :func:`generate`. Returns ``(new_ids, hit_eos)``.
 
     ``hit_eos`` is exposed for ``eval/chat_coherence.py``, which scores whether
     a reply terminates on its own or runs to the token limit. Also accepts a
     Hugging Face causal LM (output has ``.logits``) so a reference model is
     decoded by the *same* loop, not a parallel one.
+
+    ``decode`` (ids -> str, e.g. ``tok.decode``): when given, the repetition
+    penalty is switched OFF while generation is inside an unclosed
+    ``[TOOL_CALL]`` block (#167). Arguments legitimately repeat tokens --
+    ``"2+2"`` -- and at 1.3 the second ``2`` lost to ``22``. Plain text
+    outside the block keeps the full penalty.
     """
     import torch.nn.functional as F
+    from hvn.tools import ToolCallParser
     x = torch.tensor([ids], device=device)
     out: list[int] = []
     for _ in range(max_new):
@@ -92,7 +101,9 @@ def generate_ids(model, ids: list[int], *, eos: int, device, max_new: int,
                                 dtype=torch.bfloat16):
             res = model(x)
         logits = getattr(res, "logits", res)[0, -1].float()
-        for t in set(out):
+        in_call = (decode is not None and bool(out)
+                   and ToolCallParser.has_tool_call_start(decode(out)))
+        for t in (() if in_call else set(out)):
             # Sign-aware (CTRL), as EdgeHVN.chat_step does. Plain division
             # RAISED a negative logit toward 0, i.e. favoured repeating it.
             logits[t] = (logits[t] / repetition_penalty if logits[t] > 0

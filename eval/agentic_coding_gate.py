@@ -17,6 +17,11 @@ read_file -> edit_file -> run_tests tool-call sequence that actually
 executes (real file I/O, real subprocess) without malformed-JSON/parse
 failures.
 
+**Every call must succeed (#166):** a call whose result is an ``Error:``
+string (file not found, bad arguments, unknown tool) fails the gate, and the
+errors are listed. Before this, three calls that all returned "file not
+found" still counted as a pass, because only the call NAMES were checked.
+
 **Stretch signal (reported, not required):** the bug is actually fixed
 (the test suite passes afterward). Per the project's calibrated
 expectations for an 83M model (docs/state.md's 270M-milestone framing):
@@ -42,7 +47,7 @@ if _REPO_ROOT not in sys.path:
 import torch  # noqa: E402
 
 from hvn.edge.tool_session import EdgeToolCallingSession  # noqa: E402
-from hvn.tools import ToolExecutor, create_coding_registry  # noqa: E402
+from hvn.tools import ToolCallParser, ToolExecutor, create_coding_registry  # noqa: E402
 
 
 def _build_mock_repo(sandbox: str) -> dict:
@@ -61,6 +66,19 @@ def _build_mock_repo(sandbox: str) -> dict:
     query = ("There's a bug in gate_calc.py. total(4, 5) should return 9 but it "
              "doesn't. Please find and fix the bug, then run the tests to confirm.")
     return {"filename": filename, "query": query}
+
+
+def tool_call_errors(tool_calls: list) -> list:
+    """``[(name, error_text), ...]`` for every executed call whose result
+    is an error. A failing test run (``FAILED (exit 1)``) is a real result,
+    not a tool error."""
+    errors = []
+    for c in tool_calls:
+        body = ToolCallParser.parse_tool_results(c.get("result", ""))
+        text = body[0] if body else ""
+        if text.startswith("Error"):
+            errors.append((c["name"], text))
+    return errors
 
 
 def run_gate(checkpoint_path: str, device: torch.device | None = None,
@@ -91,6 +109,7 @@ def run_gate(checkpoint_path: str, device: torch.device | None = None,
         call_names = [c["name"] for c in result["tool_calls"]]
         expected_order = ["read_file", "edit_file", "run_tests"]
         well_formed_sequence = call_names == expected_order
+        errors = tool_call_errors(result["tool_calls"])
 
         # Independently verify the pass/fail bug-fix bar by reading the
         # sandbox's ACTUAL current state after the session ran -- not by
@@ -105,9 +124,10 @@ def run_gate(checkpoint_path: str, device: torch.device | None = None,
         bug_actually_fixed = "PASSED" in final_test_result
 
     return {
-        "pass": well_formed_sequence,
+        "pass": well_formed_sequence and not errors,
         "stretch_pass": bug_actually_fixed,
         "tool_call_sequence": call_names,
+        "tool_errors": errors,
         "num_tool_calls": result["num_tool_calls"],
         "generated_text": result["text"],
         "answer": result["answer"],
@@ -132,10 +152,12 @@ def main() -> int:
     print("=" * 70)
     print(f"Tool-call sequence: {result['tool_call_sequence']}")
     print(f"Number of tool calls: {result['num_tool_calls']}")
+    for name, err in result["tool_errors"]:
+        print(f"TOOL ERROR in {name}: {err}")
     print(f"\nGenerated text:\n{result['generated_text']}")
     print(f"\nFinal answer: {result['answer']}")
     print("\n" + "-" * 70)
-    print(f"PASS (well-formed read_file->edit_file->run_tests sequence): "
+    print(f"PASS (read_file->edit_file->run_tests, no tool errors): "
           f"{'YES' if result['pass'] else 'NO'}")
     print(f"STRETCH (bug actually fixed): "
           f"{'YES' if result['stretch_pass'] else 'NO'}")

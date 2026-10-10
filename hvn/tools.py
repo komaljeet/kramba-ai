@@ -1061,7 +1061,13 @@ def _resolve_sandboxed_path(sandbox_root: str, path: str) -> str:
     multi-tenant sandbox (doesn't chase symlinks) -- sufficient for a
     synthetic mock-repo gate where the sandbox contents are ours, not
     untrusted user uploads.
+
+    Leading/trailing whitespace is stripped first (#166): a GPT-2-tokenized
+    model copies a filename from running text as ``" gate_calc.py"`` (the
+    space belongs to the token), and every such call failed as "file not
+    found". No real file in a sandbox root starts or ends with a space.
     """
+    path = path.strip()
     root = os.path.realpath(sandbox_root)
     candidate = os.path.realpath(os.path.join(root, path))
     if os.path.commonpath([root, candidate]) != root:
