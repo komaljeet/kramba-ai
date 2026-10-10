@@ -37,22 +37,57 @@ mismatch).
 | shape | partition | blocks | tok/s | VRAM | before (layer) |
 |---|---|---:|---:|---:|---|
 | 1536x24 | **balanced** | 9 | **2,063** | 61% | 2,295 tok/s, 61%, 26 blocks |
-| 2048x24 | layer (old row) | 26 | 1,530 | 80% | **not re-measured** |
-| 2048x32 | layer (old row) | 34 | 1,182 | 84% | **not re-measured** |
+| 2048x24 | **balanced** | 13 | **1,417** | 80% | 1,530 tok/s, 80%, 26 blocks |
+| 2048x32 | **balanced** | 17 | **1,120** | 84% | 1,182 tok/s, 84%, 34 blocks |
 
-The training log confirms the new partition: `Block-coordinate-descent: 9 blocks (balanced
-partition)` + `CPU weight offload: ON`. 1536x24 is 10% slower per token: a balanced group
-backward reaches deeper than one layer's does. The re-run was killed partway through 2048x24
-because the laptop ran low on RAM (not a failure of the run). The two 2048 rows still show
-the old layer-partition measurement. Re-run with
-`scripts/size_for_pretrain.py --only 2048x24,2048x32` once memory allows.
+Every log confirms the new partition (`Block-coordinate-descent: N blocks (balanced
+partition)` + `CPU weight offload: ON`). Balanced is 5-10% slower per token at every shape
+(1536x24 -10%, 2048x24 -7%, 2048x32 -5%): a balanced group's backward reaches deeper than one
+layer's does. VRAM is unchanged. In days-to-30-tokens/param terms: 2048x24 248 days, 2048x32
+418 days -- before the BCD step penalty, which balanced roughly halves (3.2x vs 6.9x), so
+balanced is still the much faster way to a given loss.
 
-**Quality with offload is NOT measured yet.** The 41% gap closure (ppl 228 vs 317, full 142)
-is from the 8-layer A/B *without* offload. Offload is a placement change and the parity tests
-match exactly in fp32, but the real script parks inactive blocks in bf16, which rounds each
-block's weights on every switch. That cost is untested. The arm for it exists:
-`scripts/ab_bcd_partition.py --arms bcd_balanced bcd_balanced_offload --baseline
-results/bcd_partition/ab_d1024_L8.json` (~45 min). Until then, do not quote 41% for offload runs.
+2048x32's trainer finished all 35 steps (`TRAINING COMPLETE`, step 35 in the CSV), then the
+whole job was killed by a low-RAM reaper while the 3.3 GB final checkpoint was being written
+(most likely trigger; the 30 s RAM log missed the spike, it never showed under 3 GB free). So
+its row was finalized from the same log + `training_log.csv` with the script's own
+`parse_run` and guards (block count 17, params 1,449,849,809, 84% VRAM). Sizing rungs save a
+full checkpoint they then delete; at 1B+ that save is the RAM hazard, not the training.
+
+**Quality with offload: the 41% holds (2026-10-11).** Same 8-layer A/B, offload arm only,
+the other three arms from `results/bcd_partition/ab_d1024_L8.json`
+(`results/bcd_partition/ab_d1024_L8_offload.json`):
+
+| arm | held-out loss | ppl | gap closed | peak allocated | wall |
+|---|---:|---:|---:|---:|---:|
+| full | 4.958 | 142 | -- | 3.88 GiB | 27.9 min |
+| BCD layer | 5.758 | 317 | 0% | 3.88 GiB | 11.3 min |
+| BCD balanced | 5.430 | 228 | 41% | 3.88 GiB | 16.5 min |
+| BCD balanced + offload | **5.426** | **227** | **41%** | **2.88 GiB** | 21.3 min |
+
+bf16 parking costs nothing measurable: the offload arm ends 0.004 nats *lower* than no
+offload, and no eval point of 17 is more than 0.015 nats apart. The no-offload arm is
+deterministic here (a fresh re-run matched the stored one to 5e-6 nats at all 16 evals), so
+that 0.015 is offload's real effect, and it is tiny. All parameters moved. Offload saves 1 GiB
+at this size and costs 29% wall-clock. 41% can be quoted for offload runs.
+
+**The A/B harness could not have measured this before (fixed here).** `EdgeHVN.forward()`
+only does the offload load/evict when `self.training and torch.is_grad_enabled()`. Eval runs
+in `model.eval()` under no_grad, so it hit the CPU-parked weights and crashed on a device
+mismatch at the step-0 eval. `scripts/ab_bcd_partition.py` now brings parked weights to the
+GPU for each eval and puts the same CPU tensors back (asserted). Its "unmoved params" guard
+also compared GPU fp32 init against CPU bf16 params (crash); it now rounds the init the same
+way, so an untrained parked param still counts as unmoved. A 60-step smoke at 10 steps/block
+did flag 4 `alpha_proj.bias` params as unmoved under offload only: AdamW steps of 3e-4 summed
+over 10 steps are under half a bf16 ulp, so parking rounds them back to init. At the default
+100 steps/block nothing was erased. **Do not run offload with a small `--bcd-steps-per-block`**
+-- by the same arithmetic, at 1 step/block (the sizing rungs, throughput only) a 3e-4 AdamW
+step on a norm weight near 1.0 (bf16 ulp 0.008) would be rounded away on every switch. Not
+measured at 1 step/block.
+
+**Latent, not fixed:** `train_edge_conversational.py --offload --val-fraction >0` takes the
+same eval path (`model.eval()` + no_grad) and should crash the same way at the first VAL step.
+Not run; val is off by default, which is why nothing has hit it.
 
 ## Depth vs width at 1B: 1.21x is the whole lever, and half the sweep does not fit (2026-08-31)
 
