@@ -1,4 +1,4 @@
-# Handoff — read this first (updated 2026-09-29 14:00)
+# Handoff — read this first (updated 2026-10-10 14:00)
 
 Author: Rambarun Komaljeet
 
@@ -7,9 +7,36 @@ context reset. Everything below is measured unless it says otherwise.
 
 ---
 
-## 0. LIVE: the 896x16 pretrain owns the GPU until ~2026-10-10 12:00
+## 0. LIVE: the 896x16 chat + tool-use fine-tune owns the GPU until ~2026-10-10 15:05
 
-**Do not launch anything on the GPU while this runs.** It is the real candidate
+**Do not launch anything on the GPU while this runs.** It reserves ~5.9 GB of the 6 GB
+card; a second process OOMs it or makes WDDM spill.
+
+| | |
+|---|---|
+| started | 2026-10-10 ~13:50 |
+| base | `checkpoints\pretrain_896x16_real\edge_conversational.pt` (step 118,116, final train loss 3.11). Loaded with 0 missing / 0 unexpected keys; block_plan, tied embeddings, ternary, grad-checkpoint all read from the checkpoint |
+| optimizer | **`--optimizer prodigy`** (#134: no LR picked; no warmup, no cosine). Newly wired into `finetune_edge_conversational.py` on this branch. Step size it chose: 5.1e-06 at step 20, 1.08e-04 at step 80, still ramping |
+| data | 50% OASST chat (3,465 convs, 2,395 packed rows) / 10% grounded-QA replay (`grounded_qa_expanded.jsonl`, 5,240) / 40% tool-use (`tool_use_train.jsonl`, 600 examples, 303 rows) -- the #110 Stage 3 mix. Packed, seq 512, batch 4 x accum 4 |
+| length | 3 epochs = 693 optimizer steps. The 600-example tool-use set is seen ~15 times over the run, chat ~2.3 times |
+| speed | 6.1 s/step (~1,340 tok/s, 3x slower per token than the pretrain). Prodigy keeps 4 fp32 copies of the weights (~2.8 GB) on top of the model; check the end-of-run "peak VRAM ... reserved" line for host-RAM spill before reusing this batch size |
+| flags | `--no-fast` on purpose: whole-model compile MemoryErrors at 16 layers and is 2.4x slower here (#158) |
+| code | worktree `C:\Users\komal\Documents\Codes\kramba-ai-wt-chatft896`, branch `run/chatft-896x16` |
+| log | `logs\chatft_896x16_v1.log` (main tree); per-20-step rows in `checkpoints\chatft_896x16_v1\chatft_896x16_v1_finetune_log.csv` |
+| checkpoints | `checkpoints\chatft_896x16_v1\`: `chatft_896x16_v1_step{100..600}.pt` every 100 steps (~0.7 GB each), final `chatft_896x16_v1.pt` |
+
+Train loss here is multi-pass and mixes a tiny templated tool corpus, so it measures
+memorisation as much as quality (#132). Grade with the chat coherence eval (greedy,
+penalty 1.3, floor 19% / ceiling 75%) on the final AND an earlier snapshot, plus
+`eval/agentic_coding_gate.py` for the tool-use half. The #134 follow-up saw recall fall
+monotonically with FT steps on a small corpus, so "last checkpoint is best" is not assumed.
+
+## 0a. DONE: the 896x16 pretrain (ran 2026-09-29 13:45 -> 2026-10-10 ~11:28)
+
+Finished cleanly: 118,116 steps, 10.9 days, final train loss 3.11 (ppl 22.5). The table
+below is the launch record, kept for the config.
+
+**(Historical)** It was the real candidate
 conversational model, an ~11-day commitment, not a smoke test. A second process on
 the card OOMs one of them or makes WDDM spill and slows both; a second writer on the
 same log overwrites it in place (both happened 2026-08-10). CPU-only work is fine.

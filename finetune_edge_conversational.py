@@ -471,7 +471,8 @@ class ToolUseDataset(Dataset):
 # ---------------------------------------------------------------------------
 
 def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
-             out_path, log_path, warmup_frac=0.03):
+             out_path, log_path, warmup_frac=0.03, optimizer_name="adamw",
+             save_every=0):
     print("\n" + "=" * 70)
     print("FINE-TUNING")
     print("=" * 70)
@@ -480,15 +481,28 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
     print(f"  Params: {param_count:,} | epochs: {epochs} | lr: {lr} | "
           f"grad_accum: {grad_accum}")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01,
-                                  fused=(device.type == "cuda"))
-    criterion = nn.CrossEntropyLoss(ignore_index=-100)
-
     steps_per_epoch = max(1, len(dataloader) // grad_accum)
     total_steps = steps_per_epoch * epochs
-    warmup_steps = max(1, int(total_steps * warmup_frac))
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=max(1, total_steps - warmup_steps))
+
+    # Issue #134: the parameter-free path, same wiring as continue_ft_hybrid.py.
+    # Prodigy picks its own step size (landed 30x below the hand-set 2e-5-era
+    # values on a continue-FT); no warmup and no cosine, because its d-ramp IS
+    # the warmup and a decay schedule fights an estimator that is monotone.
+    is_prodigy = optimizer_name == "prodigy"
+    if is_prodigy:
+        from hvn.optimizers import build_optimizer
+        optimizer, desc = build_optimizer(model, "prodigy", lr=1.0,
+                                          weight_decay=0.01)
+        warmup_steps = 0
+        scheduler = None
+        print(f"  Optimizer: {desc}")
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01,
+                                      fused=(device.type == "cuda"))
+        warmup_steps = max(1, int(total_steps * warmup_frac))
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(1, total_steps - warmup_steps))
+    criterion = nn.CrossEntropyLoss(ignore_index=-100)
     print(f"  Optimizer steps: {total_steps} ({steps_per_epoch}/epoch), "
           f"warmup {warmup_steps}")
 
@@ -548,7 +562,7 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
                     for pg in optimizer.param_groups:
                         pg["lr"] = lr * scale
                 optimizer.step()
-                if global_step >= warmup_steps:
+                if scheduler is not None and global_step >= warmup_steps:
                     scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
@@ -561,7 +575,10 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
                     mean_loss = float(accum_loss_t.item()) / max(1, n_steps_accum)
                     accum_loss_t.zero_()
                     n_steps_accum = 0
-                    cur_lr = optimizer.param_groups[0]["lr"]
+                    # Prodigy's param_groups["lr"] is the pinned 1.0 multiplier;
+                    # log the step size it actually used, or the CSV is a constant.
+                    cur_lr = (optimizer.effective_lr if is_prodigy
+                              else optimizer.param_groups[0]["lr"])
                     ppl = math.exp(min(mean_loss, 20))
                     print(f"  Step {global_step:5d}/{total_steps} (epoch {epoch}) | "
                           f"loss {mean_loss:.4f} | ppl {ppl:.2f} | lr {cur_lr:.2e} | "
@@ -570,6 +587,16 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
                                      f"{ppl:.4f}", f"{cur_lr:.8f}",
                                      time.strftime("%Y-%m-%d %H:%M:%S")])
                     csv_file.flush()
+
+                # Numbered snapshots: crash insurance on long runs, and a way
+                # back to an earlier point if a small corpus (600 tool-use
+                # examples) starts being memorised -- the #134 follow-up saw
+                # recall fall monotonically with FT steps.
+                if save_every and global_step % save_every == 0:
+                    snap = (os.path.splitext(out_path)[0]
+                            + f"_step{global_step}.pt")
+                    _save_edge_checkpoint(model, snap, global_step=global_step)
+                    print(f"  ✓ Saved {snap}", flush=True)
 
         # Save at the end of each epoch.
         _save_edge_checkpoint(model, out_path, global_step=global_step)
@@ -631,7 +658,17 @@ def main():
     # RAM instead of OOM-ing -- 40% SLOWER than batch 2 while looking healthy.
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--grad-accum", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=2e-5)
+    parser.add_argument("--lr", type=float, default=2e-5,
+                        help="Only used by --optimizer adamw; prodigy ignores it.")
+    parser.add_argument("--optimizer", type=str, default="adamw",
+                        choices=["adamw", "prodigy"],
+                        help="Issue #134: 'prodigy' takes NO learning rate and beat "
+                             "a hand-tuned one by 0.18 nats on a continue-FT, at a "
+                             "step size 30x smaller. Default stays adamw so "
+                             "existing invocations are unchanged.")
+    parser.add_argument("--save-every", type=int, default=0,
+                        help="Also save <out>_step{N}.pt every N optimizer steps "
+                             "(0 = per-epoch save only, the old behaviour).")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--max-conversations", type=int, default=None)
     parser.add_argument("--grounded-replay", type=str, default=None,
@@ -839,7 +876,8 @@ def main():
 
     finetune(train_model, dataloader, device,
              lr=args.lr, epochs=epochs, grad_accum=args.grad_accum,
-             out_path=args.out, log_path=log_path)
+             out_path=args.out, log_path=log_path,
+             optimizer_name=args.optimizer, save_every=args.save_every)
 
     # --- Smoke generation ---
     print("\n  Sample replies from the fine-tuned model:")
