@@ -146,3 +146,50 @@ def test_build_prompt_multiturn_matches_training_format():
         {"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
         {"role": "user", "content": "c"}])
     assert got == "<|user|>\na\n<|assistant|>\nb<|endoftext|><|user|>\nc\n<|assistant|>\n"
+
+
+# --- #167: no repetition penalty inside a [TOOL_CALL] block ------------------
+
+_TC_VOCAB = {0: "", 1: "[TOOL_CALL]", 2: '{"expression":"', 3: "2", 4: "+",
+             5: "22", 6: '"}', 7: "[/TOOL_CALL]", 8: " x"}
+
+
+def _tc_decode(ids):
+    return "".join(_TC_VOCAB[i] for i in ids)
+
+
+class _ToolCallScript(torch.nn.Module):
+    """Wants ``[TOOL_CALL]{"expression":"2+2"}[/TOOL_CALL]`` then a plain-text
+    ``2``. Every ``2`` has the near-miss ``22`` just behind it (2.0 vs 1.8),
+    so a 1.3 penalty on an already-emitted ``2`` flips it -- the #167 bug."""
+    SCRIPT = [1, 2, 3, 4, 3, 6, 7, 3, 0]
+
+    def forward(self, x):
+        i = x.shape[1] - 1                       # prompt is one token
+        lg = torch.full((1, x.shape[1], len(_TC_VOCAB)), -5.0)
+        want = self.SCRIPT[min(i, len(self.SCRIPT) - 1)]
+        lg[0, -1, want] = 2.0
+        if want == 3:
+            lg[0, -1, 5] = 1.8
+        return lg
+
+
+def test_tool_call_args_survive_repetition_penalty():
+    from serve_openai import generate_ids
+    kw = dict(eos=0, device=torch.device("cpu"), max_new=12,
+              temperature=0.0, top_p=1.0, repetition_penalty=1.3)
+    out, stopped = generate_ids(_ToolCallScript(), [8], decode=_tc_decode, **kw)
+    text = _tc_decode(out)
+    assert '{"expression":"2+2"}' in text, text
+    # Outside the block the penalty still applies: the trailing 2 -> 22.
+    assert text.endswith("[/TOOL_CALL]22") and stopped, text
+
+
+def test_tool_call_script_reproduces_the_bug_without_span_awareness():
+    """Guard against a vacuous test above: with no decode (old behaviour) the
+    same script MUST corrupt the argument, or the harness proves nothing."""
+    from serve_openai import generate_ids
+    out, _ = generate_ids(_ToolCallScript(), [8], eos=0, device=torch.device("cpu"),
+                          max_new=12, temperature=0.0, top_p=1.0,
+                          repetition_penalty=1.3)
+    assert '"2+22' in _tc_decode(out)

@@ -222,7 +222,8 @@ def main() -> int:
         ids, stopped = generate_ids(
             model, render(p["messages"]), eos=eos, device=device,
             max_new=args.max_new, temperature=args.temperature,
-            top_p=args.top_p, repetition_penalty=args.repetition_penalty)
+            top_p=args.top_p, repetition_penalty=args.repetition_penalty,
+            decode=decode)
         replies.append({"text": decode(ids), "hit_eos": stopped,
                         "n_tokens": len(ids)})
         print(f"[chat-eval] {i + 1}/{len(prompts)} {p['id']} "

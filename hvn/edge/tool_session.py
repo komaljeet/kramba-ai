@@ -111,7 +111,7 @@ class EdgeToolCallingSession:
           - ``answer``: best-effort final answer -- the generated text with
             every ``[TOOL_CALL]...[/TOOL_RESULT]`` segment stripped.
           - ``tool_calls``: list of parsed tool calls actually executed, in
-            order.
+            order; each carries its ``result`` block.
           - ``num_tool_calls``: len(tool_calls), for the agentic gate (C6).
         """
         model = self.model
@@ -136,9 +136,14 @@ class EdgeToolCallingSession:
         seen_ids: set[int] = set(prompt_ids)
         tool_calls: list[dict] = []
         next_logits = logits_step[0, -1, :] / self.temperature
+        in_call = False
 
         while len(generated_ids) < self.max_new_tokens:
-            logits = model._apply_repetition_penalty(next_logits, seen_ids, self.repetition_penalty)
+            # #167: no penalty inside an unclosed [TOOL_CALL] block. Arguments
+            # legitimately repeat tokens -- a filename copied from the query,
+            # the 2 in "2+2" -- and the penalty pushed them to a near miss.
+            penalty = 1.0 if in_call else self.repetition_penalty
+            logits = model._apply_repetition_penalty(next_logits, seen_ids, penalty)
             logits = model._filter_top_k(logits, self.top_k)
             probs = torch.softmax(logits, dim=-1)
             next_id = int(torch.multinomial(probs, num_samples=1).item())
@@ -154,6 +159,7 @@ class EdgeToolCallingSession:
             next_logits = logits_step[0, -1, :] / self.temperature
 
             decoded_so_far = self.tokenizer.decode(generated_ids)
+            in_call = ToolCallParser.has_tool_call_start(decoded_so_far)
             calls = ToolCallParser.parse_tool_calls(decoded_so_far)
             if len(calls) > len(tool_calls):
                 if len(tool_calls) >= self.max_tool_calls:
@@ -164,6 +170,9 @@ class EdgeToolCallingSession:
                 result_block = self.executor.execute(
                     {"name": new_call["name"], "arguments": new_call["arguments"]}
                 )
+                # Kept so a caller can tell a call that ran from one that
+                # returned "Error: file not found" (#166).
+                new_call["result"] = result_block
                 result_ids = self.tokenizer.encode("\n" + result_block + "\n")
                 # Feed the result as CONTEXT via forward_step -- never
                 # sampled, matching ToolUseDataset's masking (the model was

@@ -99,3 +99,49 @@ def test_run_tests_rejects_injected_argument(executor):
     result = executor.execute({"name": "run_tests", "arguments": {"command": "echo pwned"}})
     assert "Error executing 'run_tests'" in result
     assert "unexpected keyword argument" in result
+
+
+# --- #166: GPT-2 copies a filename from running text WITH its leading space --
+
+@pytest.mark.parametrize("path", [" add.py", "add.py ", "\tadd.py\n"])
+def test_read_file_strips_whitespace_around_path(executor, path):
+    result = executor.execute({"name": "read_file", "arguments": {"path": path}})
+    assert "return a - b" in result and "Error" not in result
+
+
+def test_edit_file_strips_leading_space_and_really_edits(executor, sandbox):
+    result = executor.execute({
+        "name": "edit_file",
+        "arguments": {"path": " add.py", "old_text": "return a - b",
+                      "new_text": "return a + b"},
+    })
+    assert "OK" in result
+    with open(os.path.join(sandbox, "add.py"), encoding="utf-8") as f:
+        assert "return a + b" in f.read()
+
+
+def test_stripped_path_still_cannot_escape(executor):
+    result = executor.execute({"name": "read_file", "arguments": {"path": " ../../etc/passwd"}})
+    assert "escapes the sandbox root" in result
+
+
+def test_gate_flags_errored_tool_calls(executor):
+    """#166: three "file not found" calls in the right order used to PASS the
+    agentic gate. Results come from the real executor, not hand-written."""
+    from eval.agentic_coding_gate import tool_call_errors
+
+    def call(name, args):
+        return {"name": name, "arguments": args,
+                "result": executor.execute({"name": name, "arguments": args})}
+
+    broken = [call("read_file", {"path": "Gate_calc.py"}),
+              call("edit_file", {"path": "Gate_calc.py", "old_text": "a", "new_text": "b"}),
+              call("run_tests", {})]
+    errs = tool_call_errors(broken)
+    assert [n for n, _ in errs] == ["read_file", "edit_file"]
+    assert all("file not found" in e for _, e in errs)
+    # A failing test run is a real result, not a tool error.
+    assert "FAILED" in broken[2]["result"]
+
+    ok = [call("read_file", {"path": "add.py"})]
+    assert tool_call_errors(ok) == []
