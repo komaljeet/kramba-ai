@@ -27,8 +27,8 @@ Per candidate, the simplest config that fits is chosen by TRYING, in order:
     plain    -> no BCD (every parameter trains every step; fastest per token
                 of learning, see the BCD note below)
     bcd      -> --block-coordinate (balanced partition, the default since !181)
-    offload  -> --block-coordinate --offload (layer partition; balanced is not
-                supported with offload yet)
+    offload  -> --block-coordinate --offload (balanced partition since #164;
+                rows measured before it used the per-layer partition)
 A rung "fits" when the run completes with peak reserved VRAM under 85% of the
 card (the training script's own spill guard, plus the max over every logged
 step). A rung is skipped without launching only when a hard LOWER bound on its
@@ -221,7 +221,7 @@ def parse_run(log_path: str, csv_path: str, n_blocks: int | None) -> dict:
 
 
 def run_rung(name, d, L, rung, shape, args, card) -> dict:
-    partition = "layer" if rung == "offload" else "balanced"
+    partition = "balanced"   # the default for both BCD rungs since #164
     n_blocks = shape["blocks"][partition] if rung != "plain" else None
     tag = f"{name}_{rung}"
     ckpt = os.path.join(args.work_dir, tag)
@@ -302,7 +302,8 @@ def report(results: list[dict], data_tokens: float) -> None:
         tokens = TOKENS_PER_BODY_PARAM * s["body"]
         days = tokens / ok["tok_s"] / 86400
         cfg = {"plain": "no BCD", "bcd": f"BCD balanced/{ok.get('blocks_logged')}",
-               "offload": f"BCD layer/{ok.get('blocks_logged')}+offload"}[ok["rung"]]
+               "offload": f"BCD {ok.get('partition', 'layer')}/"
+                          f"{ok.get('blocks_logged')}+offload"}[ok["rung"]]
         cfg += f" b{BATCH}x{ACCUM}"
         vram = max(ok["reserved_gib"], ok["vram_pct"] / 100 * r["card_gib"])
         adj = ""

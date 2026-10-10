@@ -9,7 +9,8 @@ unchanged". These tests pin both halves and the ways it could silently break:
   2. the scheduler really trains the WHOLE active group (not just its first
      layer) and nothing outside it;
   3. the per-layer partition is still the default and is byte-identical;
-  4. combining it with CPU offload is refused, not silently wrong;
+  4. combined with CPU offload, the model is told every member of the active
+     group (#164; the GPU parity suite is tests/test_bcd_balanced_offload.py);
   5. resuming a run saved under the other partition is refused.
 """
 from __future__ import annotations
@@ -98,13 +99,28 @@ def test_layer_partition_is_default_and_unchanged():
     assert [n for n, _ in sched.blocks] == [n for n, _ in partition_named_blocks(m)]
 
 
-def test_balanced_with_offload_is_refused():
+def test_balanced_with_offload_exempts_every_group_member():
+    # #164: was refused. Now the model's exempt set must be exactly the active
+    # group's member segments -- never the '+'-joined name, which matches no
+    # forward() call site (the tail is itself called "final_norm+decoder").
     m = _model()
     m.grad_checkpoint = True
     opt = torch.optim.AdamW(m.parameters(), lr=1e-3)
-    with pytest.raises(ValueError, match="offload"):
-        BlockCoordinateScheduler(m, opt, partition="balanced",
-                                 offload_inactive_weights=True, device="cpu")
+    layer_names = [n for n, _ in partition_named_blocks(m)]
+    budget = 2 * _size(list(m.blocks[0].parameters())) + 1000
+    sched = BlockCoordinateScheduler(m, opt, steps_per_block=1, partition="balanced",
+                                     partition_budget=budget,
+                                     offload_inactive_weights=True, device="cpu")
+    assert max(len(g) for g in sched._block_members) > 1, "no merged group: vacuous"
+    seen = []
+    for _ in range(sched.num_blocks):
+        members = sched.active_block_members
+        assert m._offload_active_names == frozenset(members)
+        assert "+".join(members) == sched.active_block_name
+        assert all(n in layer_names for n in members), members
+        seen.extend(members)
+        sched.step()
+    assert seen == layer_names
 
 
 def test_resume_across_partitions_is_refused():
@@ -116,9 +132,10 @@ def test_resume_across_partitions_is_refused():
         other.load_state_dict(sd)
 
 
-def test_training_script_defaults_to_balanced_except_offload():
+def test_training_script_defaults_to_balanced_with_and_without_offload():
     # Pins the CLI default: if it silently reverts to per-layer, every BCD run
-    # loses the 8L A/B's ~0.33 nats again with no error.
+    # loses the 8L A/B's ~0.33 nats again with no error. #164: offload runs
+    # used to fall back to 'layer' here.
     assert resolve_bcd_partition(None, offload=False) == "balanced"
-    assert resolve_bcd_partition(None, offload=True) == "layer"
+    assert resolve_bcd_partition(None, offload=True) == "balanced"
     assert resolve_bcd_partition("layer", offload=False) == "layer"

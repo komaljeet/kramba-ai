@@ -77,7 +77,7 @@ def install_resident_tail(model: EdgeHVN, n_tail: int, num_layers: int):
     original = model._offload_wrap_checkpointed
 
     def patched(name, block, x_in, position_ids, doc_ids=None):
-        if name in resident and name != model._offload_active_name:
+        if name in resident and name not in model._offload_active_names:
             kw = {} if doc_ids is None else {"doc_ids": doc_ids}
             # Load once, run WITHOUT checkpoint, and register NO evict hook --
             # the weights stay for backward, so no recompute is needed.

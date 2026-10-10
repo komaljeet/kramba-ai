@@ -113,7 +113,10 @@ class EdgeHVN(nn.Module):
         # Issue #101: CPU weight offload for BCD-inactive blocks (extends
         # #99). Set externally by BlockCoordinateScheduler -- None disables
         # offload entirely (the default / back-compat path, unchanged).
-        self._offload_active_name: str | None = None
+        # #164: a SET of forward() segment names ("token_embedding",
+        # "blocks.i", "final_norm+decoder") -- every member of the active BCD
+        # block, which under the balanced partition spans several layers.
+        self._offload_active_names: frozenset[str] | None = None
         self._offload_device: torch.device | None = None
         # Optional explicit block override (A/B baseline). None → existing
         # use_deltanet/HVNBlock behaviour, unchanged.
@@ -267,7 +270,7 @@ class EdgeHVN(nn.Module):
           `native_layer_norm_backward: weight is on cpu` -- caught by
           tests/test_block_coordinate_offload.py's gradient-parity test.
         """
-        if name == self._offload_active_name:
+        if name in self._offload_active_names:
             return fn()
 
         params = [p for m in modules for p in m.parameters()]
@@ -343,7 +346,7 @@ class EdgeHVN(nn.Module):
         # checkpoint only needs to track tensors that carry grad. Kept out of
         # the kwargs entirely when unset, so the unpacked path is unchanged.
         _kw = {} if doc_ids is None else {"doc_ids": doc_ids}
-        if name == self._offload_active_name:
+        if name in self._offload_active_names:
             if doc_ids is None:
                 return checkpoint(block, x_in, position_ids, use_reentrant=False)
 
@@ -413,7 +416,7 @@ class EdgeHVN(nn.Module):
         # (HVNBlock, SharedWeightHVN) are unaffected.
         blk_kw = {} if doc_ids is None else {"doc_ids": doc_ids}
 
-        offload = (getattr(self, "_offload_active_name", None) is not None
+        offload = (getattr(self, "_offload_active_names", None) is not None
                    and self.training and torch.is_grad_enabled())
         if offload and not self.grad_checkpoint:
             raise RuntimeError(
@@ -487,7 +490,7 @@ class EdgeHVN(nn.Module):
                         else:
                             next_name = "final_norm+decoder"
                             next_params = list(self.final_norm.parameters()) + list(self.decoder.parameters())
-                        if next_name != self._offload_active_name:
+                        if next_name not in self._offload_active_names:
                             self._offload_pool.prefetch(next_name, next_params)
                 elif use_ckpt:
                     if doc_ids is None:

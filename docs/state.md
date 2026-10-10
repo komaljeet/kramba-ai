@@ -5,6 +5,55 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Balanced BCD now works with offload -- and offload was feeding blocks the wrong weights (#164, 2026-10-10)
+
+**One line: `--offload` runs now get the balanced partition instead of silently falling back to
+per-layer. Verifying that turned up a worse, older bug: every offload run with prefetch on
+was computing its inactive layers with some weights swapped between same-shaped matrices.**
+
+**The prefetch bug (fixed, `2f94d7a`).** `_PinnedStagingPool` (#118) caps each weight shape
+at 2 pinned staging buffers. A real DeltaNet block has six (d, d) matrices, so every prefetch
+went through the overflow branch. That branch reuses a buffer that is still held, and each
+holder released it, so one buffer ended up in the free list several times. The next prefetch
+then got the same pinned buffer for two weights, and the second host copy overwrote the first
+before its GPU copy ran. Measured on main (d=512, 8 layers, seq 1024, lr=0): offloaded logits
+off by **1.1-2.6 (max abs) on every forward** vs the same model without offload. **0.0
+after the fix.** Loss still went down and every value stayed finite, which is why
+`test_prefetch_does_not_corrupt_activations_at_depth` (it only checks finiteness) never saw it.
+Any offload training result from before this fix is suspect. Offload *throughput* numbers are
+not affected beyond the overflow syncs (see 1536x24 below).
+
+**The #164 change.** The model was told one active name and compared each layer against it.
+A balanced group's name ("blocks.0+blocks.1") matches no layer. Now the scheduler hands over
+the set of member names. Tests (`tests/test_bcd_balanced_offload.py`): loss and every
+parameter match the no-offload run exactly over 2.5 rotations (tied, untied, LRU cache 3);
+every group member is on the GPU and everything else on the CPU after every forward and
+backward; bf16-parked groups come back with their training. A guard test puts the old
+single-name check back and requires the suite to fail (it crashes on a CPU/GPU device
+mismatch).
+
+**Re-measured sizing rows (`results/pretrain_sizing/results.json`):**
+
+| shape | partition | blocks | tok/s | VRAM | before (layer) |
+|---|---|---:|---:|---:|---|
+| 1536x24 | **balanced** | 9 | **2,063** | 61% | 2,295 tok/s, 61%, 26 blocks |
+| 2048x24 | layer (old row) | 26 | 1,530 | 80% | **not re-measured** |
+| 2048x32 | layer (old row) | 34 | 1,182 | 84% | **not re-measured** |
+
+The training log confirms the new partition: `Block-coordinate-descent: 9 blocks (balanced
+partition)` + `CPU weight offload: ON`. 1536x24 is 10% slower per token: a balanced group
+backward reaches deeper than one layer's does. The re-run was killed partway through 2048x24
+because the laptop ran low on RAM (not a failure of the run). The two 2048 rows still show
+the old layer-partition measurement. Re-run with
+`scripts/size_for_pretrain.py --only 2048x24,2048x32` once memory allows.
+
+**Quality with offload is NOT measured yet.** The 41% gap closure (ppl 228 vs 317, full 142)
+is from the 8-layer A/B *without* offload. Offload is a placement change and the parity tests
+match exactly in fp32, but the real script parks inactive blocks in bf16, which rounds each
+block's weights on every switch. That cost is untested. The arm for it exists:
+`scripts/ab_bcd_partition.py --arms bcd_balanced bcd_balanced_offload --baseline
+results/bcd_partition/ab_d1024_L8.json` (~45 min). Until then, do not quote 41% for offload runs.
+
 ## Depth vs width at 1B: 1.21x is the whole lever, and half the sweep does not fit (2026-08-31)
 
 **One line: at matched parameters, trading depth for width is worth up to 1.21x -- but every

@@ -2150,15 +2150,17 @@ def build_model_and_config(
 # ---------------------------------------------------------------------------
 
 def resolve_bcd_partition(partition: str | None, offload: bool) -> str:
-    """--bcd-partition default: 'balanced', except 'layer' under --offload.
+    """--bcd-partition default: 'balanced', with or without --offload.
 
     Balanced keeps BCD's peak grad+state residency (set by the vocab table)
     while each layer trains ~3-4x as often -- 8L A/B ppl 228 vs 317, and ahead
-    at equal wall-clock too. Offload can only drive the per-layer partition.
+    at equal wall-clock too. Until #164 offload could only drive the per-layer
+    partition and silently fell back to it; `offload` is kept as a parameter so
+    callers need not change, but no longer affects the default.
     """
     if partition is not None:
         return partition
-    return "layer" if offload else "balanced"
+    return "balanced"
 
 
 def pre_training_audit(
@@ -3573,8 +3575,7 @@ def main():
                              "equal steps AND better at equal wall-clock). 'layer': "
                              "embedding | one block per layer | final_norm+decoder "
                              "(pre-2026-09-29 behaviour; pass it to resume a run saved "
-                             "under it). --offload defaults to 'layer' because "
-                             "'balanced' is not yet supported with it.")
+                             "under it). Works with --offload too (#164).")
     parser.add_argument("--grad-checkpoint", action="store_true",
                         help="Exact activation checkpointing (Issue #100, mirrors the "
                              "core model's #49): recompute each block's activations in "
@@ -3681,16 +3682,8 @@ def main():
             print("[#163] --offload requires --grad-checkpoint; enabling it "
                   "(offload evicts weights after the forward and relies on the "
                   "recompute to bring them back).")
-        if args.bcd_partition == "balanced":
-            # Fail before the model is built, not after: the scheduler refuses
-            # this too (hvn/core/block_coordinate.py), since offload matches one
-            # layer name per active block.
-            parser.error("--bcd-partition balanced is not supported with --offload yet")
     if args.bcd_partition is None:
         args.bcd_partition = resolve_bcd_partition(None, args.offload)
-        if args.offload:
-            print("[bcd] --offload: using --bcd-partition layer "
-                  "(balanced is not supported with offload yet)")
 
     # --- Issue #86: expand the --fast meta-flag into the recommended stack ---
     # One switch instead of five flags. Any lever the user passed explicitly on

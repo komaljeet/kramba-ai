@@ -71,6 +71,24 @@ class _PinnedStagingPool:
         self.max_per_shape = max(1, max_per_shape)
         self._free: dict[tuple, list[torch.Tensor]] = {}
         self._in_use: dict[tuple, list[torch.Tensor]] = {}
+        # #164 (found while verifying it): how many outstanding acquires hold
+        # each buffer. See release() for why a plain in-use list is not enough.
+        self._holders: dict[int, int] = {}
+        # Per-signature capacity, raised by reserve() to one block's worth.
+        self._cap: dict[tuple, int] = {}
+
+    def reserve(self, shape: torch.Size, dtype: torch.dtype, n: int) -> None:
+        """Let up to `n` buffers of this signature be in use at once.
+
+        One block's prefetch holds one staging buffer per parameter until that
+        block is load()-ed, and a real block has SIX (d, d) matrices (DeltaNet
+        q/k/v/o/...; four in an attention block). With the flat cap of 2 every
+        prefetch fell into acquire()'s device-synchronising overflow branch
+        four times. Sizing to the block keeps the bound independent of depth
+        (#118's actual requirement) while taking the overflow branch off the
+        hot path."""
+        sig = (tuple(shape), dtype)
+        self._cap[sig] = max(self._cap.get(sig, self.max_per_shape), n)
 
     def acquire(self, shape: torch.Size, dtype: torch.dtype) -> torch.Tensor:
         sig = (tuple(shape), dtype)
@@ -78,26 +96,48 @@ class _PinnedStagingPool:
         buf = free.pop() if free else None
         if buf is None:
             in_use = self._in_use.setdefault(sig, [])
-            if len(in_use) >= self.max_per_shape:
+            if len(in_use) >= self._cap.get(sig, self.max_per_shape):
                 # Rare fallback (shouldn't happen in the normal sequential
                 # prefetch-then-consume-next-iteration pattern this pool is
                 # sized for): every buffer of this shape is still in use.
                 # A full device sync is a blunt but always-correct way to
                 # guarantee it's safe to reclaim one -- acceptable here
-                # since this branch is not the common hot path.
+                # since this branch is not the common hot path. The buffer
+                # stays held by its earlier owner as well (see release()).
                 torch.cuda.synchronize()
                 buf = in_use.pop(0)
             else:
                 buf = torch.empty(shape, dtype=dtype).pin_memory()
         self._in_use.setdefault(sig, []).append(buf)
+        self._holders[id(buf)] = self._holders.get(id(buf), 0) + 1
         return buf
 
     def release(self, buf: torch.Tensor) -> None:
-        """Return `buf` to the free pool. Caller MUST have already
-        host-synchronized on any event tracking a copy FROM this buffer
-        (`event.synchronize()`, not just a stream-level `wait_event()` --
-        see `GPUBufferPool.load`) before calling this, since the buffer's
-        memory becomes safe to overwrite again the moment this is called."""
+        """Drop one hold on `buf`; it returns to the free pool when the last
+        holder releases it. Caller MUST have already host-synchronized on any
+        event tracking a copy FROM this buffer (`event.synchronize()`, not
+        just a stream-level `wait_event()` -- see `GPUBufferPool.load`) before
+        calling this.
+
+        Why holds are counted (#164, found while verifying it): acquire()'s
+        overflow branch hands out a buffer that an earlier acquire still
+        holds -- often the SAME prefetch, which then lists it twice. Without
+        counting, every one of those holds released it, so the buffer entered
+        the free list several times; the next prefetch popped the same pinned
+        buffer for two different parameters, and the host memcpy for the
+        second overwrote it while the first one's async H2D copy was still
+        queued behind the main stream. Inactive blocks then ran with one
+        weight's values in another weight's slot. Measured on main at d=512,
+        8 layers, seq 1024: max|dlogits| 1.1-2.6 vs the same model without
+        offload, on EVERY forward -- 0.0 once the double free is impossible.
+        The finiteness-only depth test could not see it; values stayed finite."""
+        n = self._holders.get(id(buf), 0) - 1
+        if n > 0:
+            self._holders[id(buf)] = n
+            return
+        if n < 0:
+            return  # not held (already free): never add it to the free list twice
+        del self._holders[id(buf)]
         sig = (tuple(buf.shape), buf.dtype)
         in_use = self._in_use.get(sig)
         if in_use:
@@ -412,6 +452,12 @@ class GPUBufferPool:
         # does. `record_stream` alone does not either -- it protects future
         # allocator reuse, not the in-flight kernels already holding the bytes.
         self._prefetch_stream.wait_stream(torch.cuda.current_stream(self.device))
+        _per_sig: dict[tuple, int] = {}
+        for p in params:
+            home = self._cpu_home[id(p)]
+            _per_sig[(tuple(home.shape), home.dtype)] = _per_sig.get((tuple(home.shape), home.dtype), 0) + 1
+        for (shape, dtype), n in _per_sig.items():
+            self._pinned_pool.reserve(shape, dtype, n)
         with torch.cuda.stream(self._prefetch_stream):
             for p, buf in zip(params, buffers):
                 home = self._cpu_home[id(p)]
@@ -564,22 +610,36 @@ def balance_blocks(
     slice of depth). A block larger than the budget stays alone. Names of merged
     blocks are joined with '+'.
     """
+    return [("+".join(names), params) for names, params in _balance_groups(blocks, budget)]
+
+
+def _balance_groups(
+    blocks: list[tuple[str, list[nn.Parameter]]],
+    budget: int | None = None,
+) -> list[tuple[list[str], list[nn.Parameter]]]:
+    """`balance_blocks`, but keeping each group's MEMBER names as a list (#164).
+
+    The joined name cannot be split back reliably: the tail block is itself
+    called "final_norm+decoder", so "blocks.7+final_norm+decoder" would split
+    into a "final_norm" and a "decoder" that no forward() call site ever uses.
+    The offload path needs the exact per-segment names, so it gets them here.
+    """
     sizes = [sum(p.numel() for p in params) for _, params in blocks]
     if budget is None:
         budget = max(sizes) if sizes else 0
-    out: list[tuple[str, list[nn.Parameter]]] = []
+    out: list[tuple[list[str], list[nn.Parameter]]] = []
     cur_names: list[str] = []
     cur_params: list[nn.Parameter] = []
     cur_size = 0
     for (name, params), size in zip(blocks, sizes):
         if cur_names and cur_size + size > budget:
-            out.append(("+".join(cur_names), cur_params))
+            out.append((cur_names, cur_params))
             cur_names, cur_params, cur_size = [], [], 0
         cur_names.append(name)
         cur_params = cur_params + list(params)
         cur_size += size
     if cur_names:
-        out.append(("+".join(cur_names), cur_params))
+        out.append((cur_names, cur_params))
     return out
 
 
@@ -655,7 +715,8 @@ class BlockCoordinateScheduler:
             The scheduler does NOT move tensors itself here (an earlier,
             reverted attempt tried that and it silently breaks correctness
             -- see the module docstring's warning). It only tells the model
-            which block name is exempt from offload (the active one);
+            which segment names are exempt from offload (every member of
+            the active block -- several layers under partition="balanced");
             `EdgeHVN.forward()` does the actual load-before-use / evict-
             via-backward-hook dance, timed against each block's checkpoint
             recompute window. Requires `model.grad_checkpoint = True` and
@@ -734,24 +795,23 @@ class BlockCoordinateScheduler:
             # could pass simply by never offloading anything.
         self.model = model
         self.blocks = partition_named_blocks(model)
-        # "layer" (library default) = one block per layer, BAdam's default and
-        # what the offload path needs. train_edge_conversational.py defaults to
-        # "balanced" (2026-09-29, 8L A/B). "balanced" packs consecutive layers into groups
-        # no larger than the largest block (see balance_blocks), so peak
-        # residency is unchanged while each layer trains more often.
+        # Per block, the forward() segment names it covers: one per block under
+        # "layer", several under "balanced". The offload path is told the WHOLE
+        # active set (#164) -- see _activate.
+        self._block_members: list[tuple[str, ...]] = [(n,) for n, _ in self.blocks]
+        # "layer" (library default) = one block per layer, BAdam's default.
+        # train_edge_conversational.py defaults to "balanced" (2026-09-29, 8L
+        # A/B). "balanced" packs consecutive layers into groups no larger than
+        # the largest block (see balance_blocks), so peak residency is unchanged
+        # while each layer trains more often.
         if partition == "balanced":
-            if offload_inactive_weights:
-                # EdgeHVN's offload path decides "is this the active block" by
-                # comparing ONE layer name to `_offload_active_name`
-                # (hvn/edge/model.py:270, :346, :490). A merged name like
-                # "blocks.0+blocks.1" matches none of them, so every layer of the
-                # active group would be treated as inactive and evicted mid-step.
-                # Refuse rather than train on silently wrong weights (#117).
-                raise ValueError(
-                    "partition='balanced' is not supported with "
-                    "offload_inactive_weights=True yet (offload matches one "
-                    "layer name per active block)")
-            self.blocks = balance_blocks(self.blocks, partition_budget)
+            # #164: this used to be refused under offload, because EdgeHVN
+            # compared each segment's name to ONE active name and a merged name
+            # like "blocks.0+blocks.1" matched none of them. The model now gets
+            # the member set instead (EdgeHVN._offload_active_names).
+            groups = _balance_groups(self.blocks, partition_budget)
+            self.blocks = [("+".join(names), params) for names, params in groups]
+            self._block_members = [tuple(names) for names, _ in groups]
             _validate_partition(model, self.blocks)
         elif partition != "layer":
             raise ValueError(f"unknown partition {partition!r} (layer|balanced)")
@@ -861,6 +921,11 @@ class BlockCoordinateScheduler:
         return self.blocks[self._active_idx][0]
 
     @property
+    def active_block_members(self) -> tuple[str, ...]:
+        """forward() segment names of the active block (several if balanced)."""
+        return self._block_members[self._active_idx]
+
+    @property
     def num_blocks(self) -> int:
         return len(self.blocks)
 
@@ -925,7 +990,13 @@ class BlockCoordinateScheduler:
             # calls -- see GPUBufferPool's docstring for why), timed against
             # each checkpointed block's recompute window (see
             # EdgeHVN._offload_wrap_checkpointed).
-            self.model._offload_active_name = active_name
+            #
+            # #164: the exempt set is EVERY member of the active block, not its
+            # (possibly '+'-joined) name. A balanced group's joined name matches
+            # no forward() segment, so with a single-name check each member
+            # would be load()-ed from its stale CPU home and evicted back to it
+            # after the optimizer had updated the GPU copy -- the #117 failure.
+            self.model._offload_active_names = frozenset(self._block_members[idx])
             self.model._offload_device = self.device
             # The now-active block's weights must be GPU-resident (it was
             # possibly offloaded while inactive under the previous cycle).
