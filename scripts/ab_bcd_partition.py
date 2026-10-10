@@ -96,6 +96,37 @@ def _state_bytes(model, opt) -> int:
     return n
 
 
+def evaluate_offloaded(model, probes, device, sched) -> float:
+    """evaluate() for an offloaded model, on the weights it is actually training.
+
+    EdgeHVN.forward() only runs the offload load/evict path when training with
+    grad enabled, so a plain eval forward hits the parked CPU (bf16) weights and
+    dies on a device mismatch. Bring every CPU-parked parameter to the GPU at its
+    native dtype for the eval, then put the SAME CPU tensor back: the pool's
+    registered CPU home is that tensor, so training resumes untouched. The
+    parked values are already bf16-rounded, which is the cost being measured.
+    """
+    if sched is None or not sched.offload_inactive_weights:
+        return evaluate(model, probes, device)
+    torch.cuda.synchronize()            # no prefetch copy may still be in flight
+    pool = sched.buffer_pool
+    homes = {}
+    for p in model.parameters():
+        if p.device.type == "cpu":
+            homes[p] = p.detach()       # same storage as the pool's CPU home
+            p.data = p.data.to(device=device, dtype=pool.native_dtype_for(p))
+    assert homes, "offload arm has no CPU-parked parameters -- not offloading"
+    try:
+        loss = evaluate(model, probes, device)
+    finally:
+        for p, home in homes.items():
+            p.data = home
+    # .data returns a fresh wrapper each access, so compare storage, not identity.
+    assert all(p.device.type == "cpu" and p.data_ptr() == h.data_ptr()
+               for p, h in homes.items())
+    return loss
+
+
 def run_arm(arm: str, args, batches, probes, device) -> dict:
     partition = ARMS[arm]
     torch.manual_seed(args.seed)
@@ -130,7 +161,7 @@ def run_arm(arm: str, args, batches, probes, device) -> dict:
         print(f"[ab]     {len(sched.blocks)} blocks x {args.steps_per_block} steps "
               f"= rotation {rot} steps; {args.steps / rot:.2f} rotations", flush=True)
 
-    traj = [{"step": 0, "heldout_loss": evaluate(model, probes, device)}]
+    traj = [{"step": 0, "heldout_loss": evaluate_offloaded(model, probes, device, sched)}]
     curve: List[dict] = []
     model.train()
     t0 = time.time()
@@ -165,15 +196,17 @@ def run_arm(arm: str, args, batches, probes, device) -> dict:
         curve.append({"step": i, "loss": float(loss.detach())})
 
         if i % args.eval_every == 0:
-            hl = evaluate(model, probes, device)
+            hl = evaluate_offloaded(model, probes, device, sched)
             traj.append({"step": i, "heldout_loss": hl,
                          "wall_sec": time.time() - t0})
             print(f"[ab]   step {i:>5}  held-out {hl:.5f}  "
                   f"({(time.time()-t0)/60:.1f} min)", flush=True)
             model.train()
 
+    # Offload parks inactive params on the CPU in bf16: compare against the init
+    # rounded the same way, so an untrained parked param still counts as unmoved.
     unmoved = [n for n, p in model.named_parameters()
-               if torch.equal(p.detach(), init[n])]
+               if torch.equal(p.detach().cpu(), init[n].to(p.dtype).cpu())]
     out = {"arm": arm, "partition": partition, "blocks": blocks_desc,
            "final_heldout_loss": traj[-1]["heldout_loss"],
            "final_ppl": math.exp(traj[-1]["heldout_loss"]),
