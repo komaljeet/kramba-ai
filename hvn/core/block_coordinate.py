@@ -610,22 +610,36 @@ def balance_blocks(
     slice of depth). A block larger than the budget stays alone. Names of merged
     blocks are joined with '+'.
     """
+    return [("+".join(names), params) for names, params in _balance_groups(blocks, budget)]
+
+
+def _balance_groups(
+    blocks: list[tuple[str, list[nn.Parameter]]],
+    budget: int | None = None,
+) -> list[tuple[list[str], list[nn.Parameter]]]:
+    """`balance_blocks`, but keeping each group's MEMBER names as a list (#164).
+
+    The joined name cannot be split back reliably: the tail block is itself
+    called "final_norm+decoder", so "blocks.7+final_norm+decoder" would split
+    into a "final_norm" and a "decoder" that no forward() call site ever uses.
+    The offload path needs the exact per-segment names, so it gets them here.
+    """
     sizes = [sum(p.numel() for p in params) for _, params in blocks]
     if budget is None:
         budget = max(sizes) if sizes else 0
-    out: list[tuple[str, list[nn.Parameter]]] = []
+    out: list[tuple[list[str], list[nn.Parameter]]] = []
     cur_names: list[str] = []
     cur_params: list[nn.Parameter] = []
     cur_size = 0
     for (name, params), size in zip(blocks, sizes):
         if cur_names and cur_size + size > budget:
-            out.append(("+".join(cur_names), cur_params))
+            out.append((cur_names, cur_params))
             cur_names, cur_params, cur_size = [], [], 0
         cur_names.append(name)
         cur_params = cur_params + list(params)
         cur_size += size
     if cur_names:
-        out.append(("+".join(cur_names), cur_params))
+        out.append((cur_names, cur_params))
     return out
 
 
@@ -701,7 +715,8 @@ class BlockCoordinateScheduler:
             The scheduler does NOT move tensors itself here (an earlier,
             reverted attempt tried that and it silently breaks correctness
             -- see the module docstring's warning). It only tells the model
-            which block name is exempt from offload (the active one);
+            which segment names are exempt from offload (every member of
+            the active block -- several layers under partition="balanced");
             `EdgeHVN.forward()` does the actual load-before-use / evict-
             via-backward-hook dance, timed against each block's checkpoint
             recompute window. Requires `model.grad_checkpoint = True` and
@@ -780,24 +795,23 @@ class BlockCoordinateScheduler:
             # could pass simply by never offloading anything.
         self.model = model
         self.blocks = partition_named_blocks(model)
-        # "layer" (library default) = one block per layer, BAdam's default and
-        # what the offload path needs. train_edge_conversational.py defaults to
-        # "balanced" (2026-09-29, 8L A/B). "balanced" packs consecutive layers into groups
-        # no larger than the largest block (see balance_blocks), so peak
-        # residency is unchanged while each layer trains more often.
+        # Per block, the forward() segment names it covers: one per block under
+        # "layer", several under "balanced". The offload path is told the WHOLE
+        # active set (#164) -- see _activate.
+        self._block_members: list[tuple[str, ...]] = [(n,) for n, _ in self.blocks]
+        # "layer" (library default) = one block per layer, BAdam's default.
+        # train_edge_conversational.py defaults to "balanced" (2026-09-29, 8L
+        # A/B). "balanced" packs consecutive layers into groups no larger than
+        # the largest block (see balance_blocks), so peak residency is unchanged
+        # while each layer trains more often.
         if partition == "balanced":
-            if offload_inactive_weights:
-                # EdgeHVN's offload path decides "is this the active block" by
-                # comparing ONE layer name to `_offload_active_name`
-                # (hvn/edge/model.py:270, :346, :490). A merged name like
-                # "blocks.0+blocks.1" matches none of them, so every layer of the
-                # active group would be treated as inactive and evicted mid-step.
-                # Refuse rather than train on silently wrong weights (#117).
-                raise ValueError(
-                    "partition='balanced' is not supported with "
-                    "offload_inactive_weights=True yet (offload matches one "
-                    "layer name per active block)")
-            self.blocks = balance_blocks(self.blocks, partition_budget)
+            # #164: this used to be refused under offload, because EdgeHVN
+            # compared each segment's name to ONE active name and a merged name
+            # like "blocks.0+blocks.1" matched none of them. The model now gets
+            # the member set instead (EdgeHVN._offload_active_names).
+            groups = _balance_groups(self.blocks, partition_budget)
+            self.blocks = [("+".join(names), params) for names, params in groups]
+            self._block_members = [tuple(names) for names, _ in groups]
             _validate_partition(model, self.blocks)
         elif partition != "layer":
             raise ValueError(f"unknown partition {partition!r} (layer|balanced)")
@@ -907,6 +921,11 @@ class BlockCoordinateScheduler:
         return self.blocks[self._active_idx][0]
 
     @property
+    def active_block_members(self) -> tuple[str, ...]:
+        """forward() segment names of the active block (several if balanced)."""
+        return self._block_members[self._active_idx]
+
+    @property
     def num_blocks(self) -> int:
         return len(self.blocks)
 
@@ -971,7 +990,13 @@ class BlockCoordinateScheduler:
             # calls -- see GPUBufferPool's docstring for why), timed against
             # each checkpointed block's recompute window (see
             # EdgeHVN._offload_wrap_checkpointed).
-            self.model._offload_active_name = active_name
+            #
+            # #164: the exempt set is EVERY member of the active block, not its
+            # (possibly '+'-joined) name. A balanced group's joined name matches
+            # no forward() segment, so with a single-name check each member
+            # would be load()-ed from its stale CPU home and evicted back to it
+            # after the optimizer had updated the GPU copy -- the #117 failure.
+            self.model._offload_active_names = frozenset(self._block_members[idx])
             self.model._offload_device = self.device
             # The now-active block's weights must be GPU-resident (it was
             # possibly offloaded while inactive under the previous cycle).

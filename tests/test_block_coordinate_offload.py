@@ -94,11 +94,11 @@ def test_offload_requires_device_and_checkpoint():
 
 def test_default_offload_off_forward_unaffected():
     """Regression guard: offload_inactive_weights=False must not touch the
-    model's _offload_active_name -- forward() takes the pre-#101 path."""
+    model's _offload_active_names -- forward() takes the pre-#101 path."""
     model = _tiny_model(grad_checkpoint=True)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
     BlockCoordinateScheduler(model, opt, steps_per_block=1)
-    assert model._offload_active_name is None
+    assert model._offload_active_names is None
 
 
 if not _HAS_CUDA:
