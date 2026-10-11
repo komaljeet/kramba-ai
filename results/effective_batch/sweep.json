@@ -1,0 +1,128 @@
+{
+  "issue": 152,
+  "tokens_per_arm": 100007936,
+  "checks": {
+    "repro": {
+      "max_loss_diff": 0.0,
+      "heldout_diff": 0.0,
+      "heldout_nll": 9.786937496866932
+    },
+    "prefix_max_diff": 0.0,
+    "identity_ga16": -5.000000005139782e-07
+  },
+  "arms": {
+    "ga8": {
+      "grad_accum": 8,
+      "optimizer_steps": 3052,
+      "tokens_per_step": 32768,
+      "tokens": 100007936,
+      "final_heldout_nll": 2.106953792857428,
+      "final_heldout_ppl": 8.223154067993164,
+      "trajectory": [
+        {
+          "tokens": 8388608,
+          "heldout_nll": 5.097997176714415
+        },
+        {
+          "tokens": 16777216,
+          "heldout_nll": 4.196315833706365
+        },
+        {
+          "tokens": 25165824,
+          "heldout_nll": 3.3803621039263994
+        },
+        {
+          "tokens": 33554432,
+          "heldout_nll": 2.8593551175649368
+        },
+        {
+          "tokens": 41943040,
+          "heldout_nll": 2.6020295590001674
+        },
+        {
+          "tokens": 50331648,
+          "heldout_nll": 2.4798878275499843
+        },
+        {
+          "tokens": 58720256,
+          "heldout_nll": 2.3642800943019093
+        },
+        {
+          "tokens": 67108864,
+          "heldout_nll": 2.2982307738324623
+        },
+        {
+          "tokens": 75497472,
+          "heldout_nll": 2.2225459400118392
+        },
+        {
+          "tokens": 83886080,
+          "heldout_nll": 2.173397048394489
+        },
+        {
+          "tokens": 92274688,
+          "heldout_nll": 2.133773648663864
+        }
+      ],
+      "delta_vs_ga8": 0.0,
+      "reading": "baseline (current default)"
+    },
+    "ga16": {
+      "grad_accum": 16,
+      "optimizer_steps": 1526,
+      "tokens_per_step": 65536,
+      "tokens": 100007936,
+      "final_heldout_nll": 2.23945708156878,
+      "final_heldout_ppl": 9.388233184814453,
+      "trajectory": [
+        {
+          "tokens": 8388608,
+          "heldout_nll": 5.728678275269757
+        },
+        {
+          "tokens": 16777216,
+          "heldout_nll": 4.507415445480119
+        },
+        {
+          "tokens": 25165824,
+          "heldout_nll": 3.9249345341843136
+        },
+        {
+          "tokens": 33554432,
+          "heldout_nll": 3.440840297432882
+        },
+        {
+          "tokens": 41943040,
+          "heldout_nll": 2.971995724684422
+        },
+        {
+          "tokens": 50331648,
+          "heldout_nll": 2.7229243644058254
+        },
+        {
+          "tokens": 58720256,
+          "heldout_nll": 2.5518120708676406
+        },
+        {
+          "tokens": 67108864,
+          "heldout_nll": 2.451865180953749
+        },
+        {
+          "tokens": 75497472,
+          "heldout_nll": 2.3624157917697644
+        },
+        {
+          "tokens": 83886080,
+          "heldout_nll": 2.3096642194715846
+        },
+        {
+          "tokens": 92274688,
+          "heldout_nll": 2.265086877579396
+        }
+      ],
+      "delta_vs_ga8": 0.13250328871135197,
+      "reading": "REAL: worse"
+    }
+  },
+  "failures": []
+}

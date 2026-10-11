@@ -5,6 +5,95 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Effective batch: 8 x 4096 beats 16 x 4096 by 0.13 nats at the same tokens -- at today's LR (#152, 2026-10-11)
+
+**One line: on the 48M code model, doubling grad_accum from 8 to 16 is 6.3% worse held-out
+at the same 100M tokens and fixed `muon_lr=0.02`. That is about 25x the noise floor. Keep
+grad_accum 8. The 32 arm was stopped part-way and gave no result.**
+
+Real trainer (`train_edge_conversational.py`), the 48M config (512x12, 16 heads, hvn-hybrid
+attn at 3,9, 32K FIM tokenizer, code corpus, seq 4096, batch 1, chunked loss, bf16 + Triton +
+megakernel). Only `--grad-accum` differs. `--seed 1234 --deterministic`. Scored by
+`eval/heldout_loss.py` on the pinned 398,970-token held-out slice -- never training loss.
+
+| grad_accum | tokens/step | optimizer steps | tokens | held-out NLL | vs 8 | wall |
+|---:|---:|---:|---:|---:|---:|---:|
+| **8** (current) | 32,768 | 3,052 | 100,007,936 | **2.10695** | -- | 212 min |
+| 16 | 65,536 | 1,526 | 100,007,936 | 2.23946 | **+0.13250** | 191 min |
+| 32 | 131,072 | 763 | -- | not completed | -- | -- |
+
+The gap is real at every matched-token checkpoint: +0.63 at 8M tokens, shrinking to +0.13 at
+92M. ga16 is ~11% faster per token (fewer optimizer steps). It still loses on wall clock:
+ga8 reaches ga16's final 2.2395 at about 74M tokens, ~157 min against ga16's 191.
+
+**Read it as "16 loses at muon_lr=0.02", not "16 loses".** LR was held fixed on purpose.
+Larger batches usually want a larger LR, so the honest claim is: without an LR change, a
+bigger batch costs quality here. With half the optimizer steps in a 100M-token run, the
+bigger batch is short on updates; an LR raise might close some or all of the gap. Not tested.
+
+**ga32 was not completed.** It was stopped at the maintainer's request at about step 566
+of 763 (~74%), because the direction was already clear and the GPU time was not judged
+worth it. The runner then restarted it from step 0 (it wipes rather than resumes, see
+below) and that was stopped too, so no ga32 checkpoint or held-out number exists. This does
+**not** show 32 would also lose. It only shows that finishing it was not worth the hours.
+
+### The known-answer cell had to be replaced
+
+The plan said the ga=8 arm must reproduce #148's `muon_lr=0.02` result, 6.03552. That cell
+could never pass. #148 is an 83M gpt2-vocab model on SlimPajama+OASST at seq 512, batch 4,
+grad_accum 1, 1,500 steps, scored on probe batches from its own training stream. Code
+models land around 2 on `heldout_loss.py`. #148's own script would not reproduce it on
+main either, since embeddings became tied by default in #151.
+
+Replaced with checks that can fail (`scripts/analyze_eb152.py`, all pass):
+
+1. **Repro cell.** Two seeded 40-step ga=8 runs give bit-identical losses and held-out NLL
+   (9.786937 both). The check also requires that the run trained (10.48 -> 9.94).
+2. **Prefix cell.** The real 3,052-step ga=8 arm's first 40 losses and LRs are identical
+   to the repro run. During warmup the LR does not depend on `--max-steps`, so this ties
+   the arm itself to the repro cell, as a sequence.
+3. **Same data in every arm.** This trainer's step 1 runs at LR 0, so ga16's step-1 loss
+   must equal the mean of ga8's steps 1-2: 10.483255 vs 10.483256. ga32 vs ga16:
+   10.492664 vs 10.492664. All three arms read the same micro-batches in the same order.
+4. **The flag does something.** ga8 and ga16 differ on 1,526 of 1,526 steps.
+5. **No vacuous arm.** Every step logged, exactly 100,007,936 tokens, same held-out size.
+
+**`--seed` alone is NOT reproducible -- found by check 1.** The first repro pair, seeded but
+without `--deterministic`, matched on steps 1-2, drifted from step 3 (the first non-zero
+update), and ended **0.0045 held-out NLL apart after 40 steps**. That is the size of the
+#159 noise floor, from kernel non-determinism alone. `--deterministic` (new; sets
+`use_deterministic_algorithms` + the cuBLAS workspace) makes it bit-exact at ~3% step cost
+(3.95 vs 3.83 s/step). **Any same-seed A/B on this trainer without it carries
+run-to-run noise of about the size of the effects usually being measured.**
+
+### Design choices (decided, with reasons)
+
+- **Matched tokens = 24,416 micro-batches** (the multiple of 32 nearest 100M/4096), so all
+  three arms divide it exactly: `--max-steps` 3,052 / 1,526 / 763.
+- **Warmup and cosine in each arm's own optimizer steps.** New `--warmup-steps` (was
+  hardcoded 500): 500 / 250 / 125, the same 16.38% of each run and the same 4,000
+  micro-batches. A fixed 500 would have spent 65% of the 763-step arm warming up. The
+  trainer's cosine runs over `--max-steps` after warmup, so every arm ends at the same
+  fraction of peak LR.
+- **Restart, never resume.** The resume path re-creates the data iterator and skips
+  warmup, so a resumed arm would not see the same tokens. The runner wipes an
+  incomplete arm and reruns it seeded. Cost found the hard way: that wipe also removed
+  ga32's partial checkpoints.
+
+### Limits
+
+- **Noise floor caveat.** #159's ±0.0035-0.0053 is **step-to-step wobble within one run**,
+  not seed-to-seed variance. Here it is the only floor there is. At +0.1325 the
+  conclusion does not depend on which floor is used. Close calls would.
+- One seed. 48M only. 100M tokens (~3 tokens per body param, far short of #159's ~30).
+- Fixed LR, as above.
+- The token budget is small. With more data the step-count handicap of the big batch
+  shrinks, and the trend over 8M -> 92M (+0.63 -> +0.13) is narrowing. Whether it closes
+  at a full ~1B-token 48M budget is not measured.
+
+Files: `results/effective_batch/` (final + trajectory JSONs, per-step CSVs, `sweep.json`);
+`scripts/run_eb152_arm.sh`, `scripts/run_eb152_sweep.sh`, `scripts/analyze_eb152.py`.
+
 ## Balanced BCD now works with offload -- and offload was feeding blocks the wrong weights (#164, 2026-10-10)
 
 **One line: `--offload` runs now get the balanced partition instead of silently falling back to
@@ -1205,7 +1294,9 @@ scales with vocabulary, so it only becomes interesting at a larger tokenizer.
 training choice or just what fit in VRAM -- then **stopped after one arm** when the session moved
 to evaluation. The script, its known-answer cell against #148, and its stated fixed-LR confound
 are committed; **no result was produced.** Recorded here so the question reads as open rather than
-answered.
+answered. **Answered 2026-10-11** on the real 48M trainer instead (see the #152 entry at the top).
+That script's known-answer cell could not have passed: its reference is #148's grad_accum-1
+run, and it never compares against it.
 
 ## Fixed-LR sweep: #147's restart win is a REAL schedule effect, not a mis-set LR (Issue #148, 2026-08-11)
 

@@ -3598,6 +3598,17 @@ def main():
                              "in the 4th decimal from accumulation order alone "
                              "-- 3.8e-03 on a loss of 10.5, i.e. 3.6e-04 "
                              "relative -- because slices reduce separately.")
+    parser.add_argument("--deterministic", action="store_true", default=False,
+                        help="torch.use_deterministic_algorithms + fixed cuBLAS "
+                             "workspace. Pair with --seed for an A/B whose arms "
+                             "must be bit-reproducible: --seed alone still drifts "
+                             "~4.5e-3 held-out NLL in 40 steps (#152).")
+    parser.add_argument("--warmup-steps", type=int, default=None,
+                        help="Linear-warmup length in OPTIMIZER steps (default "
+                             "500, previously hardcoded). #152 needs it: at a "
+                             "fixed token budget a larger --grad-accum takes "
+                             "fewer steps, and a fixed 500 would spend 65%% of a "
+                             "763-step run warming up. Scale it with the run.")
     parser.add_argument("--lr-schedule", choices=["cosine", "constant"],
                         default="cosine",
                         help="LR shape after warmup. 'constant' exists for #159: "
@@ -3780,6 +3791,17 @@ def main():
         torch.manual_seed(args.seed)
         torch.cuda.manual_seed_all(args.seed)
         print(f"Seeded all RNGs with {args.seed} (reproducible init + shuffling).")
+
+    # A seed alone does NOT make two runs identical: #152 measured two seeded
+    # 40-step runs agreeing on steps 1-2 (same data, same init) and drifting from
+    # step 3 -- the first non-zero update -- to 4.5e-3 held-out NLL apart, which
+    # is the size of the #159 noise floor. The drift is non-deterministic
+    # backward kernels (atomic accumulation), not data.
+    if args.deterministic:
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(True, warn_only=False)
+        print("Deterministic algorithms ON (bit-reproducible run-to-run).")
 
     # === Step 1: Hardware Scan ===
     hw = hardware_scan()
@@ -3969,6 +3991,10 @@ def main():
     config["dynamic_lr_log"] = args.dynamic_lr_log
     if args.val_every is not None:
         config["val_every_steps"] = args.val_every
+    if args.warmup_steps is not None:
+        config["warmup_steps"] = max(0, args.warmup_steps)
+        print(f"  warmup override:   {config['warmup_steps']} steps (--warmup-steps; "
+              f"the banner above shows the default)")
 
     # === Step 4: Pre-Training Audit ===
     audit_passed = pre_training_audit(

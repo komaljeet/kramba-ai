@@ -1,0 +1,18 @@
+{
+  "heldout_tokens": 400000,
+  "seq_len": 1024,
+  "rows": [
+    {
+      "heldout_nll": 9.786937496866932,
+      "heldout_ppl": 17799.71484375,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 40,
+      "checkpoint": "checkpoints/eb152_repro_b/edge_conversational.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 1310720,
+      "tokens_per_body_param": 0.04142742171539401
+    }
+  ]
+}
