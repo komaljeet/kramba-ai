@@ -106,6 +106,10 @@ def main() -> int:
     p.add_argument("--expect-tokens", type=int, default=None,
                    help="Fail if the held-out set is not exactly this many "
                         "tokens. Pin it once a curve has started.")
+    p.add_argument("--tokens-per-step", type=int, default=4096 * 8,
+                   help="Training tokens per optimizer step, used only to label "
+                        "tokens_seen (default seq 4096 x accum 8). Set it for "
+                        "any other --grad-accum, or the label is wrong (#152).")
     p.add_argument("--out")
     args = p.parse_args()
 
@@ -138,7 +142,7 @@ def main() -> int:
         r["checkpoint"] = path
         r["params"] = sum(p_.numel() for p_ in model.parameters())
         r["body"] = r["params"] - model.token_embedding.weight.numel()
-        r["tokens_seen"] = step * 4096 * 8
+        r["tokens_seen"] = step * args.tokens_per_step
         r["tokens_per_body_param"] = r["tokens_seen"] / max(1, r["body"])
         rows.append(r)
         print(f"{step:>8}{r['heldout_nll']:>15.4f}{r['heldout_ppl']:>10.3f}")
