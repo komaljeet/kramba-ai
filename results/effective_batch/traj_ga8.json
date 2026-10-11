@@ -1,0 +1,138 @@
+{
+  "heldout_tokens": 400000,
+  "seq_len": 1024,
+  "rows": [
+    {
+      "heldout_nll": 5.097997176714415,
+      "heldout_ppl": 163.6937255859375,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 256,
+      "checkpoint": "checkpoints/eb152_ga8\\edge_conversational_step256.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 8388608,
+      "tokens_per_body_param": 0.2651354989785216
+    },
+    {
+      "heldout_nll": 4.196315833706365,
+      "heldout_ppl": 66.44109344482422,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 512,
+      "checkpoint": "checkpoints/eb152_ga8\\edge_conversational_step512.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 16777216,
+      "tokens_per_body_param": 0.5302709979570432
+    },
+    {
+      "heldout_nll": 3.3803621039263994,
+      "heldout_ppl": 29.381406784057617,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 768,
+      "checkpoint": "checkpoints/eb152_ga8\\edge_conversational_step768.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 25165824,
+      "tokens_per_body_param": 0.7954064969355649
+    },
+    {
+      "heldout_nll": 2.8593551175649368,
+      "heldout_ppl": 17.450271606445312,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 1024,
+      "checkpoint": "checkpoints/eb152_ga8\\edge_conversational_step1024.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 33554432,
+      "tokens_per_body_param": 1.0605419959140865
+    },
+    {
+      "heldout_nll": 2.6020295590001674,
+      "heldout_ppl": 13.49109172821045,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 1280,
+      "checkpoint": "checkpoints/eb152_ga8\\edge_conversational_step1280.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 41943040,
+      "tokens_per_body_param": 1.3256774948926082
+    },
+    {
+      "heldout_nll": 2.4798878275499843,
+      "heldout_ppl": 11.939924240112305,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 1536,
+      "checkpoint": "checkpoints/eb152_ga8\\edge_conversational_step1536.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 50331648,
+      "tokens_per_body_param": 1.5908129938711297
+    },
+    {
+      "heldout_nll": 2.3642800943019093,
+      "heldout_ppl": 10.636377334594727,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 1792,
+      "checkpoint": "checkpoints/eb152_ga8\\edge_conversational_step1792.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 58720256,
+      "tokens_per_body_param": 1.8559484928496515
+    },
+    {
+      "heldout_nll": 2.2982307738324623,
+      "heldout_ppl": 9.956552505493164,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 2048,
+      "checkpoint": "checkpoints/eb152_ga8\\edge_conversational_step2048.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 67108864,
+      "tokens_per_body_param": 2.121083991828173
+    },
+    {
+      "heldout_nll": 2.2225459400118392,
+      "heldout_ppl": 9.230801582336426,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 2304,
+      "checkpoint": "checkpoints/eb152_ga8\\edge_conversational_step2304.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 75497472,
+      "tokens_per_body_param": 2.3862194908066945
+    },
+    {
+      "heldout_nll": 2.173397048394489,
+      "heldout_ppl": 8.788086891174316,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 2560,
+      "checkpoint": "checkpoints/eb152_ga8\\edge_conversational_step2560.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 83886080,
+      "tokens_per_body_param": 2.6513549897852164
+    },
+    {
+      "heldout_nll": 2.133773648663864,
+      "heldout_ppl": 8.446681022644043,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 2816,
+      "checkpoint": "checkpoints/eb152_ga8\\edge_conversational_step2816.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 92274688,
+      "tokens_per_body_param": 2.916490488763738
+    }
+  ]
+}
