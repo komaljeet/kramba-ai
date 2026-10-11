@@ -172,6 +172,12 @@ class TernaryLinear(nn.Module):
         it worse, so changing it on an existing model is not a free upgrade.
     """
 
+    #: Per-module switch for the fused #154 quantizer, set by ``apply_fast_stack``
+    #: under ``--fast`` (bf16 only). A class attribute, not an ``__init__`` field,
+    #: so it never enters a state_dict and modules built or unpickled before it
+    #: existed read False -- the same pattern as ``use_megakernel_scan``.
+    use_fused = False
+
     def __init__(self, in_features: int, out_features: int, bias: bool = False,
                  group_size: int = GROUP_PER_TENSOR):
         super().__init__()
@@ -201,11 +207,15 @@ class TernaryLinear(nn.Module):
         #
         # In the REAL loop it is worth only +1.9%, because the step is GPU-bound:
         # the host spends 68% of it blocked in cudaStreamSynchronize, so removing
-        # host work mostly removes waiting. Hence default OFF.
+        # host work mostly removes waiting. Default OFF at the module level;
+        # ``--fast`` with bf16 turns it on per module (``use_fused``), because the
+        # fused output is bit-identical to the eager one only after the bf16
+        # cast (fp32 differs by ~6e-8, see tests/test_ternary_fused.py).
         #
         # Only the per-tensor path is fused; grouped scales (#146) keep the eager
         # implementation rather than silently taking a different code path.
-        if _USE_FUSED_TERNARY and self.group_size == GROUP_PER_TENSOR:
+        if ((_USE_FUSED_TERNARY or self.use_fused)
+                and self.group_size == GROUP_PER_TENSOR):
             from .ternary_fused import ternary_quantize_ste_fused
             return ternary_quantize_ste_fused(self.weight).to(dtype)
         return ternary_quantize_ste(self.weight, group_size=self.group_size).to(dtype)

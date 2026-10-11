@@ -699,16 +699,15 @@ if _HAS_TRITON:
 
     @triton.jit
     def _mk_ckpt_kernel(
-        k_ptr, v_ptr, alpha_ptr, beta_ptr, ckpt_ptr, nblk_ptr,
+        k_ptr, v_ptr, alpha_ptr, beta_ptr, ckpt_ptr, nblk,
         S: tl.constexpr, D: tl.constexpr, B: tl.constexpr,
     ):
         """Forward recompute that checkpoints only block-BOUNDARY entering
         states. One program per sequence; full [D,D] state. ckpt layout:
         [N, nblocks, D(d_v), D(d_k)] where ckpt[b] = state before step b*B
-        (the entering state of block b). nblocks is a runtime tensor (rolled
+        (the entering state of block b). nblocks is a runtime int (rolled
         block loop); B is constexpr (unrolled inner step loop)."""
         n = tl.program_id(0)
-        nblk = tl.load(nblk_ptr)
         base = n * S * D
         bbase = n * S
         cbase = n * nblk * D * D
@@ -736,7 +735,7 @@ if _HAS_TRITON:
     @triton.jit
     def _mk_bwd_kernel(
         q_ptr, k_ptr, v_ptr, alpha_ptr, beta_ptr, ckpt_ptr, do_ptr,
-        dq_ptr, dk_ptr, dv_ptr, dalpha_ptr, dbeta_ptr, nblk_ptr,
+        dq_ptr, dk_ptr, dv_ptr, dalpha_ptr, dbeta_ptr, nblk,
         S: tl.constexpr, D: tl.constexpr, B: tl.constexpr,
     ):
         """Reverse-time adjoint with blockwise SRAM recompute. One program per
@@ -747,7 +746,6 @@ if _HAS_TRITON:
         run the validated per-step adjoint. The adjoint body is identical to
         _gd_bwd_kernel; only Sprev comes from recompute instead of HBM."""
         n = tl.program_id(0)
-        nblk = tl.load(nblk_ptr)
         base = n * S * D
         bbase = n * S
         cbase = n * nblk * D * D
@@ -811,7 +809,7 @@ if _HAS_TRITON:
     @triton.jit
     def _mk_bwd_kernel_buf(
         q_ptr, k_ptr, v_ptr, alpha_ptr, beta_ptr, ckpt_ptr, do_ptr,
-        dq_ptr, dk_ptr, dv_ptr, dalpha_ptr, dbeta_ptr, nblk_ptr,
+        dq_ptr, dk_ptr, dv_ptr, dalpha_ptr, dbeta_ptr, nblk,
         S: tl.constexpr, D: tl.constexpr, B: tl.constexpr,
     ):
         """Buffered variant of _mk_bwd_kernel: O(B) recompute instead of O(B^2).
@@ -822,7 +820,6 @@ if _HAS_TRITON:
         reads that capped the O(B^2) kernel at ~1.19x; trades B*16 KB of SRAM
         (B=4 -> 64 KB) -- the register-pressure risk. Adjoint body identical."""
         n = tl.program_id(0)
-        nblk = tl.load(nblk_ptr)
         base = n * S * D
         bbase = n * S
         cbase = n * nblk * D * D
@@ -924,15 +921,19 @@ class _MegaScan(torch.autograd.Function):
         assert S % B == 0, f"S={S} must be divisible by block B={B}"
         nblocks = S // B
         do = do.contiguous().float()
-        nblk_t = torch.tensor([nblocks], dtype=torch.int32, device=q.device)
+        # nblocks goes to the kernels as a plain runtime int. It used to be
+        # wrapped in a 1-element CUDA tensor, i.e. a pageable host->device copy
+        # that synchronises the stream -- once per DeltaNet block per backward,
+        # draining the launch queue every time. A scalar kernel arg is not a
+        # copy and is still a runtime value, so the block loop stays rolled.
         ckpt = torch.empty(N, nblocks, D, D, device=q.device, dtype=torch.float32)
-        _mk_ckpt_kernel[(N,)](k, v, alpha, beta2, ckpt, nblk_t, S=S, D=D, B=B)
+        _mk_ckpt_kernel[(N,)](k, v, alpha, beta2, ckpt, nblocks, S=S, D=D, B=B)
         dq = torch.empty_like(q); dk = torch.empty_like(q)
         dv = torch.empty_like(q); dalpha = torch.empty_like(q)
         dbeta2 = torch.empty_like(beta2)
         bwd = _mk_bwd_kernel_buf if _MegaScan.buffered else _mk_bwd_kernel
         bwd[(N,)](q, k, v, alpha, beta2, ckpt, do,
-                  dq, dk, dv, dalpha, dbeta2, nblk_t, S=S, D=D, B=B)
+                  dq, dk, dv, dalpha, dbeta2, nblocks, S=S, D=D, B=B)
         return dq, dk, dv, dalpha, dbeta2.reshape(ctx.beta_shape)
 
 

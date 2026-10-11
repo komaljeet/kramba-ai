@@ -1806,7 +1806,8 @@ def load_tokenizer(spec: str = "gpt2", **kwargs):
 
 def apply_fast_stack(model, triton_scan: bool = True,
                      megakernel_scan: bool = False, tf32: bool = True,
-                     compile_model: bool = True, verbose: bool = True):
+                     compile_model: bool = True, verbose: bool = True,
+                     fused_ternary: bool = False):
     """Put a built model into the execution mode training actually uses (#136).
 
     **The single implementation of what ``--fast`` means.** ``--fast`` is
@@ -1860,6 +1861,19 @@ def apply_fast_stack(model, triton_scan: bool = True,
     elif megakernel_scan and not triton_scan and verbose:
         print("\n  WARNING: megakernel_scan requires triton_scan; ignoring "
               "(the sequential forward must already be the scan).")
+
+    if fused_ternary:
+        # #154: one Triton pass instead of the six-op eager quantize chain.
+        # Bit-identical to eager after the bf16 cast, which is why --fast only
+        # turns it on under bf16 (see the preset in main()).
+        n = 0
+        for mod in model.modules():
+            if isinstance(mod, TernaryLinear):
+                mod.use_fused = True
+                n += 1
+        if verbose:
+            print(f"\n  Fused ternary quantizer enabled on {n} TernaryLinear "
+                  f"layer(s) (#154).")
 
     if compile_model:
         # Issue #158: torch.compile is a NET LOSS on this architecture. Measured
@@ -3410,6 +3424,13 @@ def main():
                              "Identity-preserving (grads match autograd ~1e-7); ~2.6x faster "
                              "full-model + less VRAM, stable at all decay. HVN arch only. Can "
                              "combine with --compile (compile fuses the non-scan parts).")
+    parser.add_argument("--fused-ternary", action=argparse.BooleanOptionalAction,
+                        default=False,
+                        help="Quantize TernaryLinear weights with the fused Triton "
+                             "kernel (#154) instead of the six-op eager chain. "
+                             "Bit-identical to eager after the bf16 cast (fp32 drifts "
+                             "~6e-8), so --fast enables it only under bf16. "
+                             "--no-fused-ternary opts out under --fast.")
     parser.add_argument("--megakernel-scan", action="store_true",
                         help="Route the DeltaNet scan through the Design B fused "
                              "blockwise-recompute backward (#96) when --triton-scan is on: "
@@ -3737,6 +3758,10 @@ def main():
                 args.triton_scan = True; fast_enabled.append("triton-scan")
             if "--megakernel-scan" not in explicit:
                 args.megakernel_scan = True; fast_enabled.append("megakernel-scan")
+        # #154: bf16 only -- that is where fused == eager bit for bit.
+        if (not {"--fused-ternary", "--no-fused-ternary"} & explicit
+                and args.precision == "bf16"):
+            args.fused_ternary = True; fast_enabled.append("fused-ternary")
         if "--num-workers" not in explicit and args.num_workers == 0:
             args.num_workers = 4; fast_enabled.append("num-workers=4")
         print(f"[--fast] Enabled recommended training stack: {', '.join(fast_enabled)}")
@@ -4058,6 +4083,7 @@ def main():
         megakernel_scan=args.megakernel_scan,
         tf32=args.tf32,
         compile_model=args.compile,
+        fused_ternary=args.fused_ternary,
     )
 
     # Adaptive-exact chunk (#95): pick the largest numerically-exact chunk per
