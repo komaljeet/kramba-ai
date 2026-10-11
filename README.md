@@ -8,6 +8,14 @@ parameter model trains in 4.51 GB**, and ~1.6B is the ceiling on the card.
 
 That's the whole project. The rest of this page is about what that does and doesn't mean.
 
+**Correction (2026-10-11):** the CPU weight-offload path used by the 1.11B run below had a bug
+from 2026-07-26 to 2026-10-10 that could swap weights between same-shaped matrices during
+training (fixed in commit `2f94d7a`, confirmed present as far back as the offload code itself,
+independently reproduced on the original historical code). **The VRAM/fits-in-4.51GB number is
+unaffected** — that bug was about weight correctness, not memory usage. **The loss curve from
+that specific run is not** — it needs re-running on fixed code before the "it trains" claim
+can be trusted again. See [`docs/state.md`](docs/state.md) for the full writeup.
+
 Full documentation is in [`docs/`](docs/index.md). If you're picking this up cold, start with
 [`docs/handoff.md`](docs/handoff.md).
 
@@ -57,8 +65,8 @@ Triton scan and megakernel, and the fixes that make them work together.
 | **not cheaper to train** — a transformer is 1.41× faster per step | measured; the win is at inference only |
 | the 1B step runs at **close to hardware limits** — matmuls hit 100.6% of the card's own measured GEMM ceiling | measured 2026-08-31 |
 | `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 |
-| **1.11B trains in 4.51 GB with 5-technique stack** (BCD + offload + ternary + grad checkpoint + chunked loss) | measured 2026-09-19, 1350 steps |
-| **tied embeddings + offload + BCD + chunked_loss now composes** (previously OOM, fixed by pinning + chunked loss) | measured 2026-09-26, 79% VRAM (4.85 GB of 6 GB) at 1.11B fp32 |
+| **1.11B fits and runs in 4.51 GB with 5-technique stack** (BCD + offload + ternary + grad checkpoint + chunked loss) | VRAM measured 2026-09-19, 1350 steps — **but see the correction above: this run used an offload path with a weight-corruption bug (fixed 2026-10-10), so the loss curve from this run needs re-verifying, the VRAM figure does not** |
+| **tied embeddings + offload + BCD + chunked_loss fit without OOM** (previously OOM, fixed by pinning + chunked loss) | measured 2026-09-26, 79% VRAM (4.85 GB of 6 GB) at 1.11B fp32 — "composes" here means *fits*; whether it trains *correctly* at this combination and scale was never checked before 2026-10-10, and is only confirmed at small scale since |
 
 One row deliberately removed: earlier versions led with "18.7% of attention's FLOPs" and
 "6.29 MB vs 2.46 GB of memory". Both were **hand-derived, never benchmarked**, and both

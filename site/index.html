@@ -113,6 +113,16 @@
   top. On a 6&nbsp;GB card the standard advice is to rent an A100.
 </p>
 
+<p style="border-left:3px solid var(--accent);padding-left:1rem;">
+  <strong>Correction (2026-10-11):</strong> the CPU weight-offload path used in the measured
+  run below had a bug, present from 2026-07-26 to 2026-10-10, that could swap weights between
+  same-shaped matrices during training &mdash; fixed in commit <code>2f94d7a</code>, and
+  independently confirmed on the original historical code. The <strong>VRAM numbers on this
+  page are unaffected</strong> (that bug was about weight correctness, not memory usage). Any
+  <strong>loss/"trains" claim from an offloaded run needs re-verifying</strong> on fixed code.
+  See the repo's <code>docs/state.md</code> for the full writeup.
+</p>
+
 <h2>How it is done</h2>
 <p class="sub">Five published techniques, one working integration</p>
 
@@ -163,10 +173,16 @@
 </p>
 <p>
   <strong>Update 2026-09-26:</strong> the previously OOM combination (tied embeddings + CPU offload)
-  now works when combined with <strong>chunked cross-entropy (--chunked-loss 512)</strong>.
+  now fits without OOM when combined with <strong>chunked cross-entropy (--chunked-loss 512)</strong>.
   A 5-step fp32 test at 1.11B parameters ran at <strong>79% of 6 GB = 4.85 GB</strong> without OOM.
   The pinned tied table (~206 MB bf16) plus chunked loss (~1.5 GB saved) makes the previously-untested
-  four-technique stack (BCD + offload + tied + chunked) fully composable.
+  four-technique stack (BCD + offload + tied + chunked) fit together in memory. 5-step
+  memory-fit test, not a graded training run.
+</p>
+<p>
+  <strong>Update 2026-10-11:</strong> a separate, unrelated offload bug (see the correction
+  above) could swap weights during training whenever <code>--offload</code> ran with prefetch
+  on. The "fits" numbers above hold; any "trains correctly" claim needs re-verifying.
 </p>
 
 <h2>What you get without any of this</h2>

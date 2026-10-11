@@ -109,6 +109,17 @@
   <div class="card"><div class="k">1,579</div><div class="l">tokens/sec at step 1350</div></div>
 </div>
 
+<p style="border-left:3px solid var(--accent, #c00);padding-left:1rem;">
+  <strong>Correction (2026-10-11):</strong> the CPU weight-offload path used in the run below
+  had a bug, present from 2026-07-26 to 2026-10-10, that could swap weights between
+  same-shaped matrices during training &mdash; fixed in commit <code>2f94d7a</code>, and
+  independently confirmed on the original historical code. The <strong>VRAM numbers on this
+  page are unaffected</strong> (that bug was about weight correctness, not memory usage). The
+  <strong>loss curve and "trains" claims below are not</strong> &mdash; the run needs
+  re-running on fixed code before that part can be trusted again. See the repo's
+  <code>docs/state.md</code> for the full writeup.
+</p>
+
 <p>
   A 1B-parameter model normally wants roughly 10 GB before it has processed a single
   token &mdash; about 4 GB of weights, 4 GB of gradients, and optimiser state on
@@ -165,10 +176,17 @@
 </p>
 <p>
   <strong>Update 2026-09-26:</strong> the previously OOM combination (tied embeddings + CPU offload)
-  now works when combined with <strong>chunked cross-entropy (--chunked-loss 512)</strong>.
+  now fits without OOM when combined with <strong>chunked cross-entropy (--chunked-loss 512)</strong>.
   A 5-step fp32 test at 1.11B parameters ran at <strong>79% of 6 GB = 4.85 GB</strong> without OOM.
   The pinned tied table (~206 MB bf16) plus chunked loss (~1.5 GB saved) makes the previously-untested
-  four-technique stack (BCD + offload + tied + chunked) fully composable.
+  four-technique stack (BCD + offload + tied + chunked) fit together in memory. This was a
+  5-step memory-fit test, not a graded training run.
+</p>
+<p>
+  <strong>Update 2026-10-11:</strong> a separate, unrelated bug in the offload path itself
+  (not the tying) could swap weights during training whenever <code>--offload</code> ran with
+  prefetch on — see the correction at the top of this page. The "fits" numbers above hold; any
+  "trains correctly" claim built on an offloaded run needs re-verifying.
 </p>
 
 <h2>What we measured</h2>
@@ -187,9 +205,18 @@
 </table>
 </div>
 
+<p style="border-left:3px solid var(--accent, #c00);padding-left:1rem;">
+  <strong>Correction (2026-10-11):</strong> this run used <code>--offload</code> with the
+  weight-corruption bug described at the top of this page still active (fixed 2026-10-10, after
+  this run). The VRAM/tokens-per-sec numbers above are unaffected. The loss column is not —
+  it needs re-measuring on fixed code. Also note steps 1000 and 1350 show the identical loss
+  and perplexity (8.25 / 3,828) — that repeat is itself unexplained and worth checking
+  separately, independent of the offload bug.
+</p>
 <p>
-  <strong>Key findings:</strong> VRAM flat at 3.48/4.51 GB (offload works), tokens/sec improves 1,058 &rarr; 1,579
-  as warmup completes, loss drops from 10.99 to 8.25 through cosine decay. Checkpoint saved at step 1000.
+  <strong>Key findings (as originally measured, now flagged uncertain):</strong> VRAM flat at
+  3.48/4.51 GB (fits), tokens/sec improves 1,058 &rarr; 1,579 as warmup completes, loss drops
+  from 10.99 to 8.25 through cosine decay. Checkpoint saved at step 1000.
 </p>
 
 <h2>The trade-off: Tied embeddings vs offload</h2>
@@ -204,7 +231,9 @@
 </p>
 <p>
   Without tied embeddings (1.11B params): all blocks offloadable, VRAM flat at 3.48/4.51 GB,
-  trains smoothly. The blog post's 1.07B at 4.00 GB claim was measured without BCD offload.
+  ran without OOM. The blog post's 1.07B at 4.00 GB claim was measured without BCD offload.
+  (2026-10-11: "trains smoothly" overstated what was verified — see the correction above;
+  it fit and ran without crashing, which is what was actually confirmed at the time.)
 </p>
 
 <div class="tw">
@@ -212,8 +241,8 @@
   <thead><tr><th>Config</th><th class="num">Params</th><th>Tied</th><th class="num">VRAM</th><th>Status</th></tr></thead>
   <tbody>
     <tr><td>Blog claim</td><td class="num">1.07B</td><td class="win">Yes</td><td class="num">4.00 GB</td><td class="win">Target (no BCD offload)</td></tr>
-    <tr><td>This run</td><td class="num">1.11B</td><td class="loss">No</td><td class="num">3.48/4.51 GB</td><td class="win">1350 steps, works</td></tr>
-    <tr><td>Target + offload + chunked_loss</td><td class="num">1.11B</td><td class="win">Yes</td><td class="num">4.85 GB (79%)</td><td class="win">5 steps fp32, works (fixed)</td></tr>
+    <tr><td>This run</td><td class="num">1.11B</td><td class="loss">No</td><td class="num">3.48/4.51 GB</td><td class="win">1350 steps, ran without OOM &mdash; loss needs re-verifying</td></tr>
+    <tr><td>Target + offload + chunked_loss</td><td class="num">1.11B</td><td class="win">Yes</td><td class="num">4.85 GB (79%)</td><td class="win">5 steps fp32, fits without OOM (fixed) &mdash; not a trained run</td></tr>
     <tr><td>Target + offload (no chunked)</td><td class="num">1.07B</td><td class="win">Yes</td><td class="num">>6 GB</td><td class="loss">OOM (pinned 250 MB + overhead)</td></tr>
     <tr><td>57M test</td><td class="num">57M</td><td class="win">Yes</td><td class="num">Works</td><td class="win">All 5 techniques integrate</td></tr>
   </tbody>

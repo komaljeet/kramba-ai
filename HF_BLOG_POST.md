@@ -2,6 +2,14 @@
 
 [DOI 10.5281/zenodo.22725431](https://zenodo.org/records/22725431)
 
+**Correction (2026-10-11):** the CPU weight-offload path used in the runs below had a bug,
+present from 2026-07-26 to 2026-10-10, that could swap weights between same-shaped matrices
+during training — fixed in commit `2f94d7a`, and independently confirmed on the original
+historical code. The **VRAM/fits-in-X-GB numbers throughout this post are unaffected** (that
+bug was about weight correctness, not memory). The **loss-curve and "it trains" claims for the
+offloaded runs below are not** — they need re-running on fixed code before being trusted again.
+See the repo's `docs/state.md` for the full writeup.
+
 I looked everywhere to be able to **pre-train** an LLM on my low-end GPU and could not find one. Everywhere I looked, the same conclusion was reached: "You need an A100", "You can only train a 20M toy model on your hardware". So being 'broke', I did the only thing I could do — subscribe to Claude and try to find a way... after much prompting and testing, I finally stitched together the stack that allowed me to **pre-train** a 1B LLM on my laptop. After much testing, we are at **100.6% of the card's *measured* GEMM peak** (I don't know how 100.6% is even possible, I'm not a scientist, just a broke guy).
 
 Though I can **pre-train** a 1B LLM on 6 GB VRAM, it still takes about **375 days** to finish **pretraining** it properly. More details below:
@@ -43,7 +51,7 @@ No new algorithms — every piece is published and attributed. The work was maki
 
 **Two of these did not previously work together.** Tied embeddings share one tensor between the input lookup and the output layer, and the offload system rejected that outright — it assigns every parameter to exactly one block, and this tensor belongs to two. The combination was guarded off as unsupported.
 
-**The fix (Issue #157):** Pin the tied table — a parameter reachable from two modules is never evicted, because the forward pass uses it at both ends and no single block's residency window covers both uses. Cost: one vocabulary table held resident (~250 MB at 1B scale). **When combined with chunked cross-entropy (`--chunked-loss 512`), the previously OOM combination (tied embeddings + CPU offload) now works** — a 5-step fp32 test at 1.11B parameters ran at **79% of 6 GB = 4.85 GB** without OOM. The pinned tied table (~206 MB bf16) plus chunked loss (~1.5 GB saved) makes the four-technique stack (BCD + offload + tied + chunked) fully composable.
+**The fix (Issue #157):** Pin the tied table — a parameter reachable from two modules is never evicted, because the forward pass uses it at both ends and no single block's residency window covers both uses. Cost: one vocabulary table held resident (~250 MB at 1B scale). **When combined with chunked cross-entropy (`--chunked-loss 512`), the previously OOM combination (tied embeddings + CPU offload) now fits without OOM** — a 5-step fp32 test at 1.11B parameters ran at **79% of 6 GB = 4.85 GB**. The pinned tied table (~206 MB bf16) plus chunked loss (~1.5 GB saved) makes the four-technique stack (BCD + offload + tied + chunked) fit together in memory. *(2026-10-11: "fits" is confirmed; "trains correctly" at this combination and scale was never separately checked before an unrelated offload bug was found and fixed on 2026-10-10 — see the correction at the top of this post.)*
 
 ---
 
@@ -167,8 +175,8 @@ The largest consumer is **not the model** — it's the cross-entropy over the vo
 | Config | Params | Tied | VRAM | Status |
 |--------|--------|------|------|--------|
 | Blog claim (no BCD offload) | 1.07B | ✓ | 4.00 GB | Target |
-| 1.11B run (untied) | 1.11B | ✗ | 3.48/4.51 GB | 1,350 steps, works |
-| **Tied + offload + chunked_loss** | **1.11B** | **✓** | **4.85 GB (79%)** | **5 steps fp32, works (fixed)** |
+| 1.11B run (untied) | 1.11B | ✗ | 3.48/4.51 GB | 1,350 steps, ran without OOM — **loss curve needs re-verifying, see correction above** |
+| **Tied + offload + chunked_loss** | **1.11B** | **✓** | **4.85 GB (79%)** | **5 steps fp32, fits without OOM (fixed) — not a trained/graded run** |
 | Tied + offload (no chunked) | 1.07B | ✓ | >6 GB | OOM (pinned 250 MB + overhead) |
 | 57M test | 57M | ✓ | Works | All 5 techniques integrate |
 
@@ -230,6 +238,11 @@ The first two are real projects here. The third is not — code models many time
 ---
 
 ## Pretraining Config Used (1.11B Run)
+
+**Note (2026-10-11):** this is the *recommended* config (tied embeddings, the fully-composable
+stack) — it does not exactly match the specific 1,350-step headline run earlier in this post,
+which used *untied* embeddings (see the table above). Shown here as the config to use going
+forward, not a literal transcript of that one run.
 
 ```bash
 python train_edge_conversational.py \
@@ -338,7 +351,16 @@ python train_edge_conversational.py \
 
 ## Updates
 
-**2026-09-26:** The previously OOM combination (tied embeddings + CPU offload + BCD) now works when combined with **chunked cross-entropy (`--chunked-loss 512`)**. A 5-step fp32 test at 1.11B parameters ran at **79% of 6 GB = 4.85 GB** without OOM. The pinned tied table (~206 MB bf16) plus chunked loss (~1.5 GB saved) makes the four-technique stack (BCD + offload + tied + chunked) fully composable. This was the missing piece — the blog's 1.11B run used untied embeddings (3.48/4.51 GB); the tied + offload combo was previously OOM (>6 GB) without chunked loss.
+**2026-09-26:** The previously OOM combination (tied embeddings + CPU offload + BCD) now fits without OOM when combined with **chunked cross-entropy (`--chunked-loss 512`)**. A 5-step fp32 test at 1.11B parameters ran at **79% of 6 GB = 4.85 GB** without OOM. The pinned tied table (~206 MB bf16) plus chunked loss (~1.5 GB saved) makes the four-technique stack (BCD + offload + tied + chunked) fit together in memory. This was the missing piece — the blog's 1.11B run used untied embeddings (3.48/4.51 GB); the tied + offload combo was previously OOM (>6 GB) without chunked loss. *(This was a memory-fit test only, 5 steps, not a graded training run.)*
+
+**2026-10-11:** A separate, unrelated bug in the CPU offload path (present since 2026-07-26,
+fixed in `2f94d7a`) could swap weights between same-shaped matrices during training whenever
+`--offload` was active with prefetch on. It did not affect any VRAM/fit numbers in this post,
+only the correctness of the weights during offloaded training. Every "trains"/"works"/"loss
+drops" claim above that came from an `--offload` run (the 1,350-step 1.11B headline run
+included) needs re-running on fixed code before it can be trusted again. The fix itself has
+been verified correct — confirmed at small scale (8-layer test), with the quality finding below
+(BCD balanced partition) confirmed to hold under offload too.
 
 ---
 
