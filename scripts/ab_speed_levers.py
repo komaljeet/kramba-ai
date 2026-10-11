@@ -174,6 +174,11 @@ def main() -> int:
           f"step-1 loss identical: {first_eq}")
     print(f"peak alloc GiB: base {vram_b:.3f} new {vram_n:.3f}; "
           f"reserved: base {res_b:.3f} new {res_n:.3f}")
+    # Step 1's loss is computed from the INITIAL weights (forward only), so
+    # bit-identical levers must reproduce it exactly. This is what caught the
+    # fused kernel's approximate division flipping one weight's code.
+    if not first_eq:
+        problems.append("step-1 loss differs between arms -- the forward changed")
     if vram_n > vram_b + 0.01:
         problems.append(f"new arm uses more VRAM ({vram_n:.3f} vs {vram_b:.3f} GiB)")
     for pr in problems:

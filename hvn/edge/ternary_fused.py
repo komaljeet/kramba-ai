@@ -79,7 +79,13 @@ if _HAS_TRITON:
         # tl.math.round rounds half AWAY from zero and would differ on exact
         # .5 values -- rare, but this is a quantizer in the training path, so
         # "rare" is not good enough.
-        q = tl.extra.cuda.libdevice.rint(w / scale)
+        #
+        # The division must be IEEE round-to-nearest (div_rn), NOT Triton's
+        # default fp32 `/`, which is approximate. Next to the .5 tie the two
+        # disagree: in the real 896x16 model (seed 0, blocks.11.out_proj) IEEE
+        # gives w/s = -0.50000006 -> code -1, and `/` gave -0.5 -> code 0. One
+        # weight in 117M, but it moved the step-1 loss.
+        q = tl.extra.cuda.libdevice.rint(tl.div_rn(w, scale))
         q = tl.minimum(tl.maximum(q, -1.0), 1.0)
         out = q * scale
         # Canonicalise NEGATIVE ZERO. rint(-0.3) is -0.0, and -0.0 * scale is
