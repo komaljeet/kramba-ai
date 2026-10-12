@@ -5,6 +5,89 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B pretrain: fused DeltaNet "glue" (q/k L2 norm + read RMSNorm) = 10.2% faster per step (2026-10-12)
+
+**One line: two small Triton kernels replace the bandwidth-bound PyTorch ops around the
+DeltaNet scan. At 2048x24 (hvn-hybrid, BCD balanced + offload) a full BCD cycle goes from
+21.81 to 19.58 s/step -- 2.23 s (10.2%) faster. Peak VRAM +10 MiB. Not bit-identical
+(step-0 loss differs by 2.4e-6 relative); the fused path is at least as accurate as the
+old one against an fp32 truth.**
+
+**Measured before building** (one DeltaNet layer at the 1B shape: B=1, S=4096, 64 heads x
+d_head 32, bf16 autocast):
+
+| glue op | fwd | fwd+bwd | per layer |
+|---|---:|---:|---|
+| `_l2norm` (q and k) | 1.94 ms | 7.70 ms | x2 |
+| `_read_normalize` + reshape copy | 2.47 ms | 8.25 ms | x1 |
+| scan wrapper `.contiguous().float()` (q, k, v) | 0.69 ms | -- | x3 |
+| dq/dk/dv fp32 -> bf16 casts | -- | 0.29 ms | x3 |
+
+That is ~15% of a DeltaNet layer's time. The two norms are most of it, and both are pure
+functions outside the scan, so they were fused as their OWN kernels. The latency-bound
+scan kernels were not touched.
+
+- `hvn/core/fused_l2norm.py`: one read and one write each way, fp32 math, hand-written
+  backward. 1.98 -> 0.20 ms fwd, 7.78 -> 0.80 ms fwd+bwd.
+- `hvn/core/fused_read_norm.py`: reads the scan output in its `[B*H, S, d]` layout and
+  writes `[B, S, D]` directly, so the permute copy is gone too. The weight gradient is a
+  two-stage reduction, deterministic (no atomics). 2.49 -> 0.42 ms fwd, 8.32 -> 1.61 ms
+  fwd+bwd.
+- Whole DeltaNet block: 33.3 -> 29.8 ms fwd, 111.1 -> 94.5 ms fwd+bwd.
+- On by default wherever `use_triton_scan` is on (`DeltaNetBlock.use_fused_l2norm` /
+  `use_fused_read_norm`: None follows it; True/False forces). CPU falls back.
+
+**1B A/B** (lean harness `scripts/ab_offload_bwd_prefetch_1b.py` with `H1B_GLUE`, main +
+this branch, one full 13-block cycle per arm, ABBA):
+
+| arm | s/step, cycle mean | peak reserved | peak allocated |
+|---|---:|---:|---:|
+| reference glue, run 1 / run 2 | 21.805 / 21.814 | 4904 MiB (79.9%) | 3058 MiB |
+| fused glue, run 1 / run 2 | 19.558 / 19.598 | 4914 MiB (80.0%) | 2992 MiB |
+
+Every active-block position gains, from -0.9 s (tail group active) to -3.4 s (embedding
+active). Loss drift fused vs reference 5.2e-3 over 14 steps, inside reference-vs-reference
+noise (6.5e-3).
+
+**All four of today's levers together** (forward prefetch overlap, loss-head cast/pad,
+backward recompute prefetch, this; one cycle, local combined checkout): **16.92 s/step vs
+main's 21.81 -- 22% faster.** Peak reserved 5078 MiB (82.7%), 141 MiB under the 85% guard;
+lower than the first two levers alone (5098 MiB), because the fused glue frees transient
+memory.
+
+**Tests** (`tests/test_fused_l2norm.py`, `tests/test_fused_read_norm.py`): fp32 parity;
+bf16 within one ulp for the forward; fp64 truth -- the fused result must be at least as
+accurate as the reference; zero and below-eps rows; non-contiguous input; non-power-of-2
+`d`; B=2 so a wrong head mapping is visible. Anti-vacuity: the classic wrong L2 gradient
+(no projection term) and a wrong weight gradient must land far outside the bounds. The
+block-level tests count kernel calls, so they fail if the fused path is silently skipped,
+and they require the fused block to be no less accurate than the reference block against
+an fp32 run.
+
+Two test-design traps hit and fixed on the way, worth knowing for any norm kernel:
+- A below-eps row has gradient g/eps (~1e6x everything else), so a max-relative
+  gradient comparison over inputs that include one only checks that row. The
+  anti-vacuity test caught it.
+- dx of an L2 norm is a difference of two terms. Per-element relative bounds fail for
+  ANY bf16 implementation near cancellation; bound by the row's scale instead.
+
+**Not done: folding glue INTO the scan kernels.** What remains is the scan wrapper's
+`.contiguous().float()` copies (q, k, v: ~2.1 ms per forward pass) and the dq/dk/dv casts
+(~0.9 ms per backward), about 3% of the step by the same arithmetic. The scan kernels
+already upcast with `.to(tl.float32)` on load, so the copies are pure layout/dtype. A
+complete fix:
+- passes `[B, S, H, d]` strides into `_gated_delta_fwd_kernel`, `_mk_ckpt_kernel` and
+  `_mk_bwd_kernel` (base = b*sB + h*sH, row = base + t*sS);
+- accepts bf16 q/k/v;
+- keeps `o` fp32 (the read norm needs it);
+- stores dq/dk/dv in the input dtype.
+It should be bit-identical (addressing only, same in-kernel upcast; Triton's fp32->bf16
+store must be checked to be round-to-nearest-even like autograd's cast). It touches the
+validated scan kernels, and the gain is a third of what was taken here, so it was left
+for its own session. Separately, `test_bcd_balanced_offload::...rotations[True-1]`
+failed once on its "loss went down" check (6.2195 vs 6.2054). It does not use the fused
+path, passes 3/3 on main and on this branch, and is a flaky assertion against the
+backward's run-to-run noise.
 ## 1B pretrain: prefetch the backward recompute's weights = 3.8% faster per step (2026-10-12)
 
 **One line: at 2048x24 (hvn-hybrid, BCD balanced + offload, on top of the two levers
