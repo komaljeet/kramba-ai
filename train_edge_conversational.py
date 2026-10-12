@@ -2577,14 +2577,24 @@ def _check_resume_matches_request(requested, ckpt: dict, path: str, args) -> Non
 def load_checkpoint_for_resume(
     checkpoint_path: str,
     device: torch.device,
+    offload: bool = False,
 ) -> tuple[EdgeHVN, int, dict]:
     """Load a checkpoint and return (model, global_step, ckpt_dict).
 
     Rebuilds the EdgeHVN with the same architecture metadata (including the
     per-layer block_plan for hybrid checkpoints), applies ternary weights,
     and loads the state dict.
+
+    ``offload=True`` leaves the model CPU-resident, as build_model_and_config
+    does for a fresh --offload run (#163): BlockCoordinateScheduler owns
+    placement. The state dict is always read onto the CPU. Both used to go
+    straight to the GPU, so a resumed offload run held the whole fp32 model
+    plus the whole checkpoint on the card at once, and the caller's reference
+    to the returned dict kept the checkpoint's tensors there for the rest of
+    the run (+0.67 GB peak allocated, +1 GB reserved at 262M, 2026-10-12;
+    the checkpoint is several GB at 1B -- past the card).
     """
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
     block_plan = ckpt.get("block_plan", None)
     attn_window = ckpt.get("attn_window", None)
@@ -2618,7 +2628,8 @@ def load_checkpoint_for_resume(
                         if not any(p in name for p in exclude_patterns)]
         apply_ternary_to_model(model, target_names=target_names)
 
-    model = model.to(device)
+    if not offload:
+        model = model.to(device)
     # strict=False + report so a hybrid checkpoint resumes cleanly (the state
     # dict matches the rebuilt block_plan) and any drift is surfaced, not fatal.
     missing, unexpected = model.load_state_dict(ckpt["model_state_dict"], strict=False)
@@ -4066,13 +4077,26 @@ def main():
     if resume_ckpt:
         print(f"\n  Found existing checkpoint: {resume_ckpt}")
         print(f"  Resuming training from this checkpoint...")
-        _resumed, resume_step, _ckpt = load_checkpoint_for_resume(resume_ckpt, device)
+        # The CLI-built model is about to be replaced; free it BEFORE building
+        # the second one rather than holding two full fp32 copies at once
+        # (4.4 GB each at 1B on a 16 GB box). The resume check below only
+        # needs its vocab size.
+        import gc
+        import types
+        _requested = types.SimpleNamespace(vocab_size=getattr(model, "vocab_size", None))
+        del model
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        _resumed, resume_step, _ckpt = load_checkpoint_for_resume(
+            resume_ckpt, device, offload=args.offload)
         # Resuming REPLACES the model built from the CLI flags. Without this
         # check that swap is silent: ask for d=896/16L, leave an unrelated
         # checkpoint in the default directory, and you train a 28M model while
         # the log says nothing. It also makes the pre-training audit decorative,
         # since the audit validated the model that just got thrown away.
-        _check_resume_matches_request(model, _ckpt, resume_ckpt, args)
+        _check_resume_matches_request(_requested, _ckpt, resume_ckpt, args)
+        del _ckpt     # holds the full state dict; nothing below reads it
         model = _resumed
         print(f"  Resumed at step {resume_step}")
         # Optimizer momentum + BCD cycle position (Issue #112) live in a separate
