@@ -61,6 +61,80 @@ def gpu_used_mib() -> int:
     return int(out.strip().splitlines()[0])
 
 
+def avail_ram_gib() -> float:
+    """System available physical RAM (Windows GlobalMemoryStatusEx; no psutil here)."""
+    import ctypes
+
+    class MS(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+    ms = MS(dwLength=ctypes.sizeof(MS))
+    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
+    return ms.ullAvailPhys / 2**30
+
+
+def proc_table() -> dict[int, tuple[int, str]]:
+    """{pid: (parent pid, image name)} for every live process."""
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         "Get-CimInstance Win32_Process | ForEach-Object "
+         "{ \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name)\" }"],
+        capture_output=True, text=True).stdout
+    table = {}
+    for line in out.splitlines():
+        parts = line.split(maxsplit=2)
+        if len(parts) == 3:
+            table[int(parts[0])] = (int(parts[1]), parts[2])
+    return table
+
+
+def descendants(root_pid: int, table=None) -> dict[int, str]:
+    """Live {pid: name} descended from root_pid. The chain is only followed
+    through LIVE processes (venv launcher -> real interpreter -> DataLoader
+    workers), so it must be sampled while the arm runs; once the interpreter
+    dies, an orphaned worker is no longer reachable from root_pid."""
+    table = proc_table() if table is None else table
+    kids: dict[int, list[int]] = {}
+    for pid, (ppid, _) in table.items():
+        kids.setdefault(ppid, []).append(pid)
+    found, stack = {}, [root_pid]
+    while stack:
+        for c in kids.get(stack.pop(), []):
+            if c != root_pid and c not in found:
+                found[c] = table[c][1]
+                stack.append(c)
+    return found
+
+
+def still_alive(seen: dict[int, str]) -> list[int]:
+    """Which of the processes seen during the run are still alive (same PID and
+    image name, so an unrelated process reusing a PID is not waited on)."""
+    table = proc_table()
+    return [p for p, name in seen.items() if p in table and table[p][1] == name]
+
+
+def wait_for_ram(tag, args) -> float:
+    """Block until available RAM >= --min-free-gib. Claude Code's low-RAM reaper
+    killed this sweep twice during an arm's start-up audit (the Check 3
+    checkpoint save/rebuild spike), so do not launch into a low-memory box."""
+    t0 = time.time()
+    while True:
+        gib = avail_ram_gib()
+        if gib >= args.min_free_gib:
+            print(f"    [{time.strftime('%H:%M:%S')}] {tag}: {gib:.2f} GiB RAM available "
+                  f"(need {args.min_free_gib}) -- ok", flush=True)
+            return gib
+        if time.time() - t0 > args.ram_wait_min * 60:
+            sys.exit(f"only {gib:.2f} GiB RAM available after {args.ram_wait_min} min "
+                     f"-- refusing to launch {tag}")
+        print(f"    [{time.strftime('%H:%M:%S')}] {tag}: only {gib:.2f} GiB RAM "
+              f"available (need {args.min_free_gib}) -- waiting", flush=True)
+        time.sleep(30)
+
+
 def build_cmd(repo, args, ckpt) -> list[str]:
     # The sizing tool's 896x16 plain rung (scripts/size_for_pretrain.py).
     return [sys.executable, "-u", os.path.join(repo, "train_edge_conversational.py"),
@@ -86,16 +160,45 @@ def run_arm(name, repo, idx, args) -> dict:
     used = gpu_used_mib()
     if used > args.max_idle_mib:
         sys.exit(f"GPU not idle ({used} MiB in use) -- refusing to launch {tag}")
+    ram_at_launch = wait_for_ram(tag, args)
     cmd = build_cmd(repo, args, ckpt)
     print(f"[{time.strftime('%H:%M:%S')}] {tag}: launching {args.steps} steps "
           f"from {repo}", flush=True)
     t0 = time.time()
+    min_ram, seen, last_kid_check = ram_at_launch, {}, 0.0
     with open(log_path, "w", encoding="utf-8") as fh:
         fh.write("$ " + " ".join(cmd) + "\n\n")
         fh.flush()
-        rc = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=repo,
-                            timeout=args.timeout_min * 60).returncode
+        proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=repo)
+        while proc.poll() is None:
+            min_ram = min(min_ram, avail_ram_gib())
+            if time.time() - last_kid_check > 20:
+                # Record the whole tree (real interpreter + 4 DataLoader workers
+                # under --fast) while it is reachable; the exit wait below uses it.
+                seen.update(descendants(proc.pid))
+                last_kid_check = time.time()
+            if time.time() - t0 > args.timeout_min * 60:
+                proc.kill()
+                break
+            time.sleep(1)
+        rc = proc.wait()
     wall = (time.time() - t0) / 60
+    # subprocess only waits for the launcher. Make sure every process it spawned
+    # (orphaned DataLoader workers included) is gone and its RAM is back before
+    # the next arm starts, then let the OS settle.
+    t_exit = time.time()
+    left = still_alive(seen)
+    while left and time.time() - t_exit < 300:
+        time.sleep(2)
+        left = still_alive(seen)
+    lingered = time.time() - t_exit
+    if left:
+        sys.exit(f"{tag}: processes {left} still alive {lingered:.0f}s after exit")
+    max_kids = len(seen)
+    time.sleep(args.settle_s)
+    print(f"    {tag}: min RAM available during run {min_ram:.2f} GiB; "
+          f"{max_kids} child processes seen; all gone {lingered:.0f}s after exit; "
+          f"{avail_ram_gib():.2f} GiB available after {args.settle_s}s settle", flush=True)
     text = open(log_path, encoding="utf-8", errors="replace").read()
     rows = list(csv.DictReader(open(os.path.join(ckpt, "training_log.csv"),
                                     encoding="utf-8")))
@@ -104,6 +207,8 @@ def run_arm(name, repo, idx, args) -> dict:
     sec = [TOKENS_PER_STEP / float(r["tokens_sec"]) for r in rows[WARMUP:]
            if float(r["tokens_sec"]) > 0]
     rec = {"tag": tag, "repo": repo, "rc": rc, "wall_min": wall,
+           "ram_avail_at_launch_gib": ram_at_launch, "ram_avail_min_gib": min_ram,
+           "max_child_procs": max_kids, "children_gone_after_s": lingered,
            "steps_logged": len(rows), "measured_steps": len(sec),
            "fused_on": FUSED_MARK in text,
            "median_s": statistics.median(sec) if sec else None,
@@ -128,6 +233,10 @@ def main() -> int:
     p.add_argument("--out", default="results/speed_levers/ab.json")
     p.add_argument("--timeout-min", type=float, default=90)
     p.add_argument("--max-idle-mib", type=int, default=1000)
+    p.add_argument("--min-free-gib", type=float, default=2.5,
+                   help="wait before each arm until this much RAM is available")
+    p.add_argument("--ram-wait-min", type=float, default=30)
+    p.add_argument("--settle-s", type=float, default=15)
     args = p.parse_args()
     os.makedirs(args.work_dir, exist_ok=True)
 

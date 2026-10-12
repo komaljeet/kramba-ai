@@ -1,0 +1,163 @@
+{
+  "config": {
+    "base_repo": "C:/Users/komal/Documents/Codes/kramba-ai-wt-speedbase",
+    "new_repo": "C:/Users/komal/Documents/Codes/kramba-ai-wt-speed",
+    "data_dir": "C:/Users/komal/Documents/Codes/kramba-ai/data_cache",
+    "steps": 150,
+    "rounds": 1,
+    "work_dir": "C:/Users/komal/AppData/Local/Temp/claude/C--Users-komal-Documents-Codes-kramba-ai/928e7447-f166-4af8-9f50-4098cb2392ce/scratchpad/ab3",
+    "out": "results/speed_levers/ab.json",
+    "timeout_min": 90,
+    "max_idle_mib": 1000,
+    "min_free_gib": 2.5,
+    "ram_wait_min": 30,
+    "settle_s": 15
+  },
+  "tokens_per_step": 32768,
+  "warmup_dropped": 10,
+  "base_s": 7.960512136774027,
+  "new_s": 7.794615956487463,
+  "gain_pct": 2.12834322066231,
+  "loss_maxdiff_base_vs_base": 0.007948999999999984,
+  "loss_maxdiff_new_vs_base": 0.00819100000000006,
+  "step1_loss_identical": true,
+  "peak_alloc_gib": {
+    "base": 2.9258,
+    "new": 2.9309
+  },
+  "reserved_gib": {
+    "base": 3.418,
+    "new": 3.418
+  },
+  "problems": [],
+  "runs": {
+    "base": [
+      {
+        "tag": "base_0",
+        "repo": "C:/Users/komal/Documents/Codes/kramba-ai-wt-speedbase",
+        "rc": 0,
+        "wall_min": 20.496205059687295,
+        "ram_avail_at_launch_gib": 6.815448760986328,
+        "ram_avail_min_gib": 2.008148193359375,
+        "max_child_procs": 5,
+        "children_gone_after_s": 5.387035608291626,
+        "steps_logged": 150,
+        "measured_steps": 140,
+        "fused_on": false,
+        "median_s": 7.968765009517429,
+        "mean_s": 7.981014918635606,
+        "peak_alloc_gib": 2.9258,
+        "reserved_gib": 3.418,
+        "loss_first5": [
+          11.006638,
+          11.008865,
+          11.009338,
+          11.009554,
+          11.010166
+        ],
+        "loss_last5": [
+          6.969615,
+          7.014176,
+          6.782041,
+          6.941539,
+          6.847579
+        ]
+      },
+      {
+        "tag": "base_3",
+        "repo": "C:/Users/komal/Documents/Codes/kramba-ai-wt-speedbase",
+        "rc": 0,
+        "wall_min": 20.426871597766876,
+        "ram_avail_at_launch_gib": 7.763969421386719,
+        "ram_avail_min_gib": 2.7404212951660156,
+        "max_child_procs": 5,
+        "children_gone_after_s": 5.312231540679932,
+        "steps_logged": 150,
+        "measured_steps": 140,
+        "fused_on": false,
+        "median_s": 7.9522592640306256,
+        "mean_s": 7.962954113983873,
+        "peak_alloc_gib": 2.9258,
+        "reserved_gib": 3.418,
+        "loss_first5": [
+          11.006638,
+          11.008865,
+          11.009552,
+          11.009474,
+          11.010126
+        ],
+        "loss_last5": [
+          6.969062,
+          7.012423,
+          6.783273,
+          6.939884,
+          6.843832
+        ]
+      }
+    ],
+    "new": [
+      {
+        "tag": "new_1",
+        "repo": "C:/Users/komal/Documents/Codes/kramba-ai-wt-speed",
+        "rc": 0,
+        "wall_min": 20.01590640147527,
+        "ram_avail_at_launch_gib": 7.162010192871094,
+        "ram_avail_min_gib": 2.113239288330078,
+        "max_child_procs": 5,
+        "children_gone_after_s": 5.313239574432373,
+        "steps_logged": 150,
+        "measured_steps": 140,
+        "fused_on": true,
+        "median_s": 7.795445678386825,
+        "mean_s": 7.803584346911301,
+        "peak_alloc_gib": 2.9309,
+        "reserved_gib": 3.418,
+        "loss_first5": [
+          11.006638,
+          11.008865,
+          11.009451,
+          11.009459,
+          11.010281
+        ],
+        "loss_last5": [
+          6.969009,
+          7.01721,
+          6.781515,
+          6.939575,
+          6.846708
+        ]
+      },
+      {
+        "tag": "new_2",
+        "repo": "C:/Users/komal/Documents/Codes/kramba-ai-wt-speed",
+        "rc": 0,
+        "wall_min": 19.996261902650197,
+        "ram_avail_at_launch_gib": 7.821094512939453,
+        "ram_avail_min_gib": 2.7038955688476562,
+        "max_child_procs": 5,
+        "children_gone_after_s": 5.612957239151001,
+        "steps_logged": 150,
+        "measured_steps": 140,
+        "fused_on": true,
+        "median_s": 7.793786234588101,
+        "mean_s": 7.797971961023767,
+        "peak_alloc_gib": 2.9309,
+        "reserved_gib": 3.418,
+        "loss_first5": [
+          11.006638,
+          11.008865,
+          11.009567,
+          11.009567,
+          11.010181
+        ],
+        "loss_last5": [
+          6.972453,
+          7.016318,
+          6.787634,
+          6.9437,
+          6.846275
+        ]
+      }
+    ]
+  }
+}
