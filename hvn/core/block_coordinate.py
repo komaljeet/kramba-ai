@@ -223,7 +223,11 @@ class GPUBufferPool:
         self.device = device
         self.cache_blocks = max(1, cache_blocks)
         self.park_dtype = park_dtype
-        self._free_buffers: dict[tuple, list[list[torch.Tensor]]] = {}
+        # Free buffer sets per shape signature, oldest release first. Each entry
+        # is (buffers, release_event): the event is recorded on the main stream
+        # when the set is released, i.e. after every kernel that reads it has
+        # been queued (2026-10-12; see prefetch() for why this is per-set).
+        self._free_buffers: dict[tuple, list[tuple[list[torch.Tensor], object]]] = {}
         self._resident: OrderedDict[str, dict] = OrderedDict()  # key -> {buffers, params, sig}
         self._cpu_home: dict[int, torch.Tensor] = {}  # id(p) -> its stable CPU tensor
         self._native_dtype: dict[int, torch.dtype] = {}  # id(p) -> its true training dtype
@@ -313,18 +317,45 @@ class GPUBufferPool:
             if force or id(p) not in self._cpu_home:
                 self._cpu_home[id(p)] = p.data
 
-    def _acquire_buffers(self, key: str, params: list[nn.Parameter]) -> list[torch.Tensor]:
+    #: Marker returned by `_acquire_buffers` for a freshly allocated set.
+    FRESH = "fresh"
+
+    def _acquire_buffers(self, key: str, params: list[nn.Parameter],
+                         for_prefetch: bool = False) -> tuple[list[torch.Tensor], object]:
         """Get (reusing a freed one if available, else allocating) a set of
         GPU buffers for `params`' shape signature, and register `key` as
         resident -- evicting the least-recently-used OTHER entry if this
         pushes the cache past `cache_blocks`. Does NOT copy data or touch
         `p.data` -- shared by both `load()` and `prefetch()`, which differ
-        only in how/when the actual H2D copy happens."""
+        only in how/when the actual H2D copy happens.
+
+        Returns ``(buffers, ready)``. ``ready`` is `FRESH` for a new
+        allocation, else the reused set's release event (None on CPU).
+
+        Which free set is handed out (2026-10-12):
+        - `load()` copies on the main stream, so stream order alone makes any
+          free set safe. It takes the NEWEST one, leaving older sets (whose
+          readers finished longer ago) for the prefetcher.
+        - `prefetch()` copies on the side stream and must wait for the set's
+          release event. It takes the OLDEST set (FIFO), and only when at
+          least two are free. With one free set, that set is usually the one
+          the block just computed released -- its event is recorded after that
+          block's kernels, so waiting on it would serialize the copy behind
+          the compute exactly as the old blanket `wait_stream` did. A fresh
+          allocation instead costs one extra set of this signature, once
+          (bounded: a set is only allocated while fewer than two are free).
+        """
         sig = self._signature(params)
         free = self._free_buffers.get(sig)
-        buffers = free.pop() if free else [
-            torch.empty(p.shape, dtype=p.dtype, device=self.device) for p in params
-        ]
+        if for_prefetch:
+            entry = free.pop(0) if free and len(free) >= 2 else None
+        else:
+            entry = free.pop() if free else None
+        if entry is None:
+            buffers = [torch.empty(p.shape, dtype=p.dtype, device=self.device) for p in params]
+            ready = self.FRESH
+        else:
+            buffers, ready = entry
         self._resident[key] = {"buffers": buffers, "params": params, "sig": sig}
         while len(self._resident) > self.cache_blocks:
             oldest_key, oldest = next(iter(self._resident.items()))
@@ -337,7 +368,7 @@ class GPUBufferPool:
             # same reasoning as evict()/evict_all().
             self._wait_and_clear_pending(oldest_key)
             self._release(oldest)
-        return buffers
+        return buffers, ready
 
     def _offloadable(self, params: list[nn.Parameter]) -> list[nn.Parameter]:
         """Params that actually have a CPU home, i.e. ones that get offloaded.
@@ -395,7 +426,7 @@ class GPUBufferPool:
         params = self._offloadable(params)
         if not params:
             return
-        buffers = self._acquire_buffers(key, params)
+        buffers, _ = self._acquire_buffers(key, params)
         for p, buf in zip(params, buffers):
             buf.copy_(self._cpu_home[id(p)], non_blocking=True)
             p.data = buf
@@ -431,27 +462,9 @@ class GPUBufferPool:
         params = self._offloadable(params)
         if not params:
             return
-        buffers = self._acquire_buffers(key, params)
+        buffers, ready = self._acquire_buffers(key, params, for_prefetch=True)
         staging_bufs = []
-        # CORRECTNESS, not tuning (2026-08-27). `load()` already makes the MAIN
-        # stream wait for this prefetch's event, but nothing made the PREFETCH
-        # stream wait for the main one -- so the H2D copies below started the
-        # instant the GPU reached them, while the previous block's kernels were
-        # still running.
-        #
-        # `_acquire_buffers` gets its memory from `torch.empty` on the main
-        # stream, and PyTorch's caching allocator hands back blocks freed (in
-        # Python) microseconds earlier by activation tensors whose kernels have
-        # NOT finished. The side stream then wrote weights over that memory,
-        # corrupting live activations mid-kernel. The result was NaN in the
-        # forward from roughly the third block onward -- silently, since the
-        # step still ran.
-        #
-        # Ruled in rather than guessed: waiting on a STALE event, or sleeping
-        # 5 ms before the prefetch, does NOT fix it; only real stream ordering
-        # does. `record_stream` alone does not either -- it protects future
-        # allocator reuse, not the in-flight kernels already holding the bytes.
-        self._prefetch_stream.wait_stream(torch.cuda.current_stream(self.device))
+        self._order_prefetch_after(ready)
         _per_sig: dict[tuple, int] = {}
         for p in params:
             home = self._cpu_home[id(p)]
@@ -466,7 +479,7 @@ class GPUBufferPool:
                 buf.copy_(staging, non_blocking=True)
                 # Tell the allocator this buffer is in use on the side stream,
                 # so it is not recycled out from under the copy. Necessary but
-                # NOT sufficient on its own -- see the wait_stream above.
+                # NOT sufficient on its own -- see _order_prefetch_after.
                 buf.record_stream(self._prefetch_stream)
                 p.data = buf
                 staging_bufs.append(staging)
@@ -474,6 +487,64 @@ class GPUBufferPool:
         event.record(self._prefetch_stream)
         self._pending_events[key] = event
         self._staging_in_use[key] = staging_bufs
+
+    def _order_prefetch_after(self, ready) -> None:
+        """Make the side stream wait until the buffers it is about to overwrite
+        are no longer in use by the main stream.
+
+        FRESH set -- wait for the whole main stream (2026-08-27, unchanged).
+        A reused set -- wait only for that set's release event (2026-10-12).
+
+        Why the fresh case needs the blanket wait (2026-08-27). `load()`
+        already made the MAIN stream wait for the prefetch event, but nothing
+        made the PREFETCH stream wait for the main one. A fresh set comes from
+        `torch.empty` on the main stream, and the caching allocator hands back
+        blocks freed (in Python) microseconds earlier by activation tensors
+        whose kernels have NOT finished. The side stream then wrote weights
+        over that memory, corrupting live activations mid-kernel: NaN in the
+        forward from about the third block on, silently. Ruled in, not
+        guessed: waiting on a STALE event or sleeping 5 ms does NOT fix it;
+        only real stream ordering does. `record_stream` alone does not either
+        -- it protects future allocator reuse, not kernels already in flight.
+
+        Why a reused set only needs its own event (2026-10-12). The blanket
+        wait was also applied to reused sets, and prefetch() runs right after
+        the current block's kernels are queued -- so the next block's copy
+        waited for the current block to FINISH. Measured at 2048x24: 0% of the
+        forward H2D hidden under compute, the opposite of what prefetch is for.
+        A reused set cannot hit the allocator hazard above: the pool holds a
+        Python reference to it the whole time, so the allocator never gives
+        its memory to anything else. The only thing that can still be using
+        it is main-stream work queued while it belonged to its previous block.
+        All of that is queued BEFORE `_release` runs, because `_release` is
+        only ever called from
+          - `evict()` straight after the block's compute is queued (call #1,
+            no recompute coming), or from the hook on the block's INPUT
+            gradient, which fires after the block's whole local backward has
+            been queued (call #2);
+          - the LRU capacity eviction in `_acquire_buffers`. For a
+            checkpointed block, forward call #1 saved only its inputs
+            (non-reentrant checkpoint), so nothing later reads these weights;
+            the recompute re-loads them. The plain-wrapped tail does save its
+            weights for backward, but no pool load happens between its forward
+            and its backward, so it is never capacity-evicted in that window
+            (true before this change too: a main-stream load into its set
+            would have been just as wrong);
+          - `evict_all()` at a BCD switch, between steps.
+        `_release` also points `p.data` back at the CPU home, so no LATER
+        kernel can reach the set through the parameter. The release event,
+        recorded on the main stream inside `_release`, is therefore after
+        every reader. Waiting on it is never weaker than the old blanket wait
+        (which was recorded later still) and lets the copy start as soon as
+        the set's previous block is done instead of the current one.
+        `tests/test_block_coordinate_offload.py` has a deterministic stress
+        test that fails if this wait is skipped, and a test that fails if the
+        copy is serialized behind the main stream again.
+        """
+        if ready is self.FRESH or ready is None:
+            self._prefetch_stream.wait_stream(torch.cuda.current_stream(self.device))
+        else:
+            self._prefetch_stream.wait_event(ready)
 
     def _release_staging(self, key: str) -> None:
         """Return `key`'s staging buffers (if any) to the pinned pool.
@@ -530,7 +601,14 @@ class GPUBufferPool:
             home = self._cpu_home.get(id(p))
             if home is not None:
                 p.data = home
-        self._free_buffers.setdefault(entry["sig"], []).append(entry["buffers"])
+        # Recorded on the CURRENT (main) stream after every kernel reading this
+        # set was queued -- the per-set ordering point prefetch() waits on (see
+        # _order_prefetch_after for why that holds at every call site).
+        released = None
+        if self._prefetch_stream is not None:
+            released = torch.cuda.Event()
+            released.record(torch.cuda.current_stream(self.device))
+        self._free_buffers.setdefault(entry["sig"], []).append((entry["buffers"], released))
 
 
 def partition_named_blocks(model: nn.Module) -> list[tuple[str, list[nn.Parameter]]]:

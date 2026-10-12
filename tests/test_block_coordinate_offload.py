@@ -948,3 +948,235 @@ def test_prefetched_weights_match_no_offload_at_scale():
             f"offloaded forward differs from the resident one by {drift:.3f} "
             f"(reserve={'on' if reserve_enabled else 'off'}) -- prefetched "
             f"weights are not the weights")
+
+
+# ---------------------------------------------------------------------------
+# Per-buffer release events for the forward prefetch (2026-10-12).
+#
+# The prefetch used to make the side stream wait for the WHOLE main stream, so
+# the next block's weight copy waited for the current block's compute to
+# finish (0% overlap, measured at 2048x24). It now waits only for the release
+# event of the specific buffer set it reuses (fresh allocations keep the
+# blanket wait -- the 2026-08-27 allocator race). These tests cover both sides:
+# the copy must not overwrite a set something still reads, and it must not be
+# serialized behind unrelated main-stream work.
+# ---------------------------------------------------------------------------
+
+def _stress_blocks():
+    import torch.nn as nn
+    blocks = {}
+    for k in range(6):
+        shape = (256, 256) if k % 3 else (128, 512)      # two shape signatures
+        blocks[f"b{k}"] = ([nn.Parameter(torch.full(shape, float(k + 1)), requires_grad=False)
+                            for _ in range(3)], float(k + 1))
+    return blocks
+
+
+def _pool_stress(*, broken: bool, cache_blocks: int, seed: int, iters: int = 160,
+                 sleep_cycles: int = 3_000_000):
+    """Drive GPUBufferPool through randomized block switches while the main
+    stream is held far behind the host by `torch.cuda._sleep`, then check every
+    read saw its own block's weights.
+
+    Each iteration: (maybe) prefetch, load, sleep on the main stream, READ the
+    weights on the main stream, then release by one of the real patterns --
+    immediate evict (forward call #1), or left resident for LRU capacity
+    eviction (deferred, like the backward hook). Because the read is queued
+    behind a sleep, a prefetch that does not wait for the right release event
+    overwrites the set before the read runs. That makes the race deterministic
+    instead of the ~1-in-3 the model-level depth test gets.
+
+    Returns (n_bad_reads, n_reads, n_reused_prefetches)."""
+    import random
+    from hvn.core.block_coordinate import GPUBufferPool
+    dev = torch.device("cuda")
+    pool = GPUBufferPool(dev, cache_blocks=cache_blocks)
+    blocks = _stress_blocks()
+    for params, _ in blocks.values():
+        pool.register_cpu_home(params)
+    reused = [0]
+    orig = pool._order_prefetch_after
+
+    def _order(ready):
+        if ready is not pool.FRESH:
+            reused[0] += 1
+            if broken:
+                return               # the bug under test: skip the per-set wait
+        orig(ready)
+    pool._order_prefetch_after = _order
+
+    rng = random.Random(seed)
+    keys = list(blocks)
+    reads, prev = [], None
+    for _ in range(iters):
+        key = rng.choice([k for k in keys if k != prev])
+        prev = key
+        params, val = blocks[key]
+        if rng.random() < 0.75:
+            pool.prefetch(key, params)
+        pool.load(key, params)
+        torch.cuda._sleep(sleep_cycles)
+        reads.append(torch.stack([(p.data == val).all() for p in params]).all())
+        if rng.random() < 0.5:
+            pool.evict(key)
+    pool.evict_all()
+    torch.cuda.synchronize()
+    bad = sum(1 for r in reads if not bool(r))
+    return bad, len(reads), reused[0]
+
+
+def test_prefetch_release_events_survive_randomized_stress():
+    """No read may ever see another block's weights, across cache sizes and
+    seeds, with the main stream deliberately lagging."""
+    if not torch.cuda.is_available():
+        return
+    for cache_blocks in (1, 2, 3):
+        for seed in (0, 1):
+            bad, n, reused = _pool_stress(broken=False, cache_blocks=cache_blocks, seed=seed)
+            assert reused > 20, (
+                f"cache={cache_blocks} seed={seed}: only {reused} prefetches reused a "
+                f"set -- the stress is not exercising the release-event path")
+            assert bad == 0, (
+                f"cache={cache_blocks} seed={seed}: {bad}/{n} reads saw the wrong "
+                f"weights -- a prefetch overwrote a buffer still being read")
+
+
+def test_prefetch_stress_catches_a_missing_release_wait():
+    """Anti-vacuity: the stress above must FAIL when the per-set wait is
+    skipped. Without this, it could pass because the race window never opened."""
+    if not torch.cuda.is_available():
+        return
+    bad, n, reused = _pool_stress(broken=True, cache_blocks=1, seed=0)
+    assert reused > 20
+    assert bad > 0, (
+        f"skipping the release-event wait corrupted 0/{n} reads -- the stress "
+        f"test cannot see the race it exists to catch")
+
+
+def test_prefetch_free_sets_are_fifo_and_bounded():
+    """Prefetch takes the OLDEST free set, and only when two are free;
+    otherwise it allocates. LIFO handed out the set the current block had just
+    released, whose event is after that block's compute -- serializing again."""
+    if not torch.cuda.is_available():
+        return
+    import torch.nn as nn
+    from hvn.core.block_coordinate import GPUBufferPool
+    pool = GPUBufferPool(torch.device("cuda"), cache_blocks=1)
+
+    def mk(v):
+        return [nn.Parameter(torch.full((64, 64), v), requires_grad=False)]
+    a, b, c = mk(1.0), mk(2.0), mk(3.0)
+    for ps in (a, b, c):
+        pool.register_cpu_home(ps)
+    pool.load("a", a)
+    set_a = a[0].data.data_ptr()
+    pool.evict("a")
+    # one free set -> prefetch must allocate, not reuse it
+    pool.prefetch("b", b)
+    assert b[0].data.data_ptr() != set_a, "prefetch reused the only free set"
+    pool.load("b", b)
+    pool.evict("b")
+    sig = next(iter(pool._free_buffers))
+    assert len(pool._free_buffers[sig]) == 2
+    # two free -> FIFO: the older one (a's), not b's just-released set
+    pool.prefetch("c", c)
+    assert c[0].data.data_ptr() == set_a, "prefetch did not take the oldest free set"
+    pool.load("c", c)
+    torch.cuda.synchronize()
+    assert torch.equal(c[0].data.cpu(), torch.full((64, 64), 3.0))
+    pool.evict_all()
+    total = len(pool._free_buffers[sig])
+    assert total == 2, f"{total} sets for one signature -- pool grew past the 2-free bound"
+
+
+def test_prefetch_copy_overlaps_main_stream_work():
+    """The point of the change: a reused set's copy must run WHILE unrelated
+    main-stream work is still going. Under the old blanket `wait_stream` this
+    fails -- the copy cannot start until the main stream's queued sleep ends."""
+    if not torch.cuda.is_available():
+        return
+    import torch.nn as nn
+    from hvn.core.block_coordinate import GPUBufferPool
+    pool = GPUBufferPool(torch.device("cuda"), cache_blocks=2)
+
+    def mk(v):
+        return [nn.Parameter(torch.full((1024, 1024), v), requires_grad=False)]
+    a, b, c = mk(1.0), mk(2.0), mk(3.0)
+    for ps in (a, b, c):
+        pool.register_cpu_home(ps)
+    pool.load("a", a)
+    pool.load("b", b)
+    pool.evict("a")
+    pool.evict("b")                                # two free sets, both released
+    torch.cuda.synchronize()
+
+    torch.cuda._sleep(600_000_000)                 # a few hundred ms of main-stream work
+    main_done = torch.cuda.Event()
+    main_done.record()
+    pool.prefetch("c", c)
+    pool._pending_events["c"].synchronize()        # host waits for the copy only
+    overlapped = not main_done.query()
+    torch.cuda.synchronize()
+    pool.load("c", c)
+    torch.cuda.synchronize()
+    assert torch.equal(c[0].data.cpu(), torch.full((1024, 1024), 3.0)), "prefetched wrong values"
+    assert overlapped, ("the prefetch copy finished only after the main stream's "
+                        "unrelated work -- it is serialized behind compute again")
+
+
+def test_prefetch_many_block_switches_match_resident_model():
+    """End to end, many rapid BCD switches: steps_per_block=1 over two full
+    cycles, so every block is active once per cycle and the free-set FIFO is
+    driven through a different reuse pattern on each step. lr=0, so every
+    step's logits must equal the never-offloaded model's -- values, not
+    finiteness (swapped weights are finite). Cache sizes 1 and 2, hybrid plan
+    (two shape signatures), tied embeddings (the 1B config).
+
+    WHAT THIS TEST CANNOT DO, measured 2026-10-12: it does not detect the race
+    the per-set release wait prevents. With that wait removed it still PASSED
+    (4/4 runs), even with a 25 ms `torch.cuda._sleep` queued before every block.
+    Instrumented: the host never gets more than ~1 block ahead of the GPU in
+    this forward, and FIFO hands the prefetch a set released >= 2 blocks
+    earlier, so its release event had already completed in 138/138 reuses --
+    there was nothing left to race. The deterministic detector is
+    `test_prefetch_release_events_survive_randomized_stress` (and its
+    anti-vacuity twin, which proves it fails without the wait). This test
+    guards VALUES across block switches and reuse patterns."""
+    if not torch.cuda.is_available():
+        return
+    d, L, S, V = 512, 8, 1024, 4096
+
+    def mk():
+        torch.manual_seed(0)
+        return EdgeHVN(vocab_size=V, d_model=d, num_layers=L, n_heads=16,
+                       block_plan=["deltanet"] * 3 + ["transformer"] + ["deltanet"] * 4,
+                       grad_checkpoint=True, tie_embeddings=True, dropout=0.0).to("cuda")
+
+    torch.manual_seed(1)
+    ids = torch.randint(0, V, (1, S), device="cuda")
+    ref = mk()
+    with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        ref_logits = ref(ids).float()
+    del ref
+    for cache_blocks in (1, 2):
+        model = mk()
+        opt = torch.optim.SGD(model.parameters(), lr=0.0)
+        sched = BlockCoordinateScheduler(model, opt, steps_per_block=1, device="cuda",
+                                         offload_inactive_weights=True,
+                                         offload_cache_blocks=cache_blocks)
+        worst, actives = 0.0, set()
+        for _ in range(2 * sched.num_blocks):
+            actives.add(sched.active_block_name)
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                out = model(ids)
+                loss = F.cross_entropy(out.float().reshape(-1, V), ids.reshape(-1))
+            loss.backward()
+            opt.step()
+            opt.zero_grad(set_to_none=True)
+            sched.step()
+            worst = max(worst, (out.float() - ref_logits).abs().max().item())
+        assert len(actives) == sched.num_blocks, "not every block was active"
+        assert worst < 1e-3, (
+            f"cache={cache_blocks}: offloaded logits differ from resident by "
+            f"{worst:.3f} across block switches -- prefetched weights are not the weights")
+        del model, opt, sched
