@@ -224,6 +224,50 @@ def _save_resume_state(checkpoint_dir: str, global_step: int, optimizer,
     os.replace(tmp, path)
 
 
+def _restore_optimizer_and_bcd(optimizer, bcd_scheduler, resume_state: dict) -> None:
+    """Restore Issue #112 resume state: BCD cycle position, then optimizer state.
+
+    Split out of train() so tests/test_offload_resume.py can drive exactly the
+    ordering the trainer uses; the order is the whole point (see below).
+    """
+    # The BCD position is restored BEFORE the optimizer state, not after.
+    # optimizer.load_state_dict() casts every saved moment to its param's
+    # CURRENT device and dtype. Under --offload the fresh scheduler above has
+    # activated block 0 and parked every other block on CPU in bf16, so if
+    # the saved active block was not block 0 its momentum was loaded onto
+    # the CPU in bf16; _activate then moved the weights back to the GPU and
+    # left the momentum behind. The first optimizer.step() after resume died
+    # with "Expected all tensors to be on the same device" -- every resume
+    # past the first BCD block, i.e. essentially every real resume (found
+    # 2026-10-12 by the 1024x20 offload integration run). Activating the
+    # saved block first puts its weights on the GPU at native dtype, so the
+    # moments land there too, at full precision.
+    bcd_sd = resume_state.get("bcd_state_dict")
+    if bcd_sd is not None and bcd_scheduler is not None:
+        if bcd_sd.get("steps_per_block") != bcd_scheduler.steps_per_block:
+            print(f"  [resume] WARNING --bcd-steps-per-block changed "
+                  f"({bcd_sd.get('steps_per_block')} -> {bcd_scheduler.steps_per_block}); "
+                  f"restoring the saved cycle position anyway, which is what keeps "
+                  f"block coverage even")
+        bcd_scheduler.load_state_dict(bcd_sd)
+        print(f"  [resume] BCD cycle restored: block {bcd_scheduler._cycle_pos}, "
+              f"{bcd_scheduler._step_in_block} steps into it, "
+              f"active={bcd_scheduler.active_block_name!r}")
+    elif bcd_sd is not None and bcd_scheduler is None:
+        print("  [resume] saved BCD state ignored — this run has no --block-coordinate")
+    elif bcd_sd is None and bcd_scheduler is not None:
+        print("  [resume] no saved BCD state — cycle starts at block 0")
+    try:
+        optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+        print(f"  [resume] optimizer state restored ({type(optimizer).__name__})")
+    except Exception as e:
+        # A changed --optimizer or param-group layout lands here. Continuing with
+        # a fresh optimizer is correct-but-slower; silently proceeding as if the
+        # state had loaded would not be.
+        print(f"  [resume] WARNING optimizer state NOT restored ({e}) — "
+              f"continuing with fresh optimizer state")
+
+
 def build_cosine_scheduler(optimizer, total_steps: int, resume_step: int = 0,
                            schedule: str = "cosine"):
     """Cosine schedule that CONTINUES across a resume instead of restarting (Issue #112).
@@ -2820,30 +2864,7 @@ def train(
     # uninterrupted stretches. BCD is mandatory at 355M (docs/training.md), so this
     # is a correctness issue for the run, not a convenience.
     if resume_state is not None:
-        try:
-            optimizer.load_state_dict(resume_state["optimizer_state_dict"])
-            print(f"  [resume] optimizer state restored ({type(optimizer).__name__})")
-        except Exception as e:
-            # A changed --optimizer or param-group layout lands here. Continuing with
-            # a fresh optimizer is correct-but-slower; silently proceeding as if the
-            # state had loaded would not be.
-            print(f"  [resume] WARNING optimizer state NOT restored ({e}) — "
-                  f"continuing with fresh optimizer state")
-        bcd_sd = resume_state.get("bcd_state_dict")
-        if bcd_sd is not None and bcd_scheduler is not None:
-            if bcd_sd.get("steps_per_block") != bcd_scheduler.steps_per_block:
-                print(f"  [resume] WARNING --bcd-steps-per-block changed "
-                      f"({bcd_sd.get('steps_per_block')} -> {bcd_scheduler.steps_per_block}); "
-                      f"restoring the saved cycle position anyway, which is what keeps "
-                      f"block coverage even")
-            bcd_scheduler.load_state_dict(bcd_sd)
-            print(f"  [resume] BCD cycle restored: block {bcd_scheduler._cycle_pos}, "
-                  f"{bcd_scheduler._step_in_block} steps into it, "
-                  f"active={bcd_scheduler.active_block_name!r}")
-        elif bcd_sd is not None and bcd_scheduler is None:
-            print("  [resume] saved BCD state ignored — this run has no --block-coordinate")
-        elif bcd_sd is None and bcd_scheduler is not None:
-            print("  [resume] no saved BCD state — cycle starts at block 0")
+        _restore_optimizer_and_bcd(optimizer, bcd_scheduler, resume_state)
 
     # --- LR schedule (cosine by default) with warmup ---
     _lr_schedule = config.get("lr_schedule", "cosine")
@@ -4161,13 +4182,20 @@ def main():
 
 
 if __name__ == "__main__":
+    # The os._exit below used to hard-code 0, so a crash mid-training (traceback
+    # printed, run dead) and even a parser.error() refusal both exited 0 -- a
+    # wrapper, a relaunch loop or size_for_pretrain's returncode check could not
+    # tell a dead run from a finished one. The failure code is carried through.
+    _exit_code = 0
     try:
         main()
-    except SystemExit:
+    except SystemExit as e:
+        _exit_code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
         raise
-    except Exception:
+    except BaseException:
         import traceback
         traceback.print_exc()
+        _exit_code = 1
     finally:
         # HuggingFace `datasets` leaves background threads that crash the
         # interpreter on normal shutdown (Fatal Python error:
@@ -4175,4 +4203,4 @@ if __name__ == "__main__":
         # skip the broken thread join. This is a well-known HF issue on Windows.
         sys.stdout.flush()
         sys.stderr.flush()
-        os._exit(0)
+        os._exit(_exit_code)
