@@ -357,12 +357,34 @@ class EdgeHVN(nn.Module):
         pool = self._offload_pool
         params = list(block.parameters())
 
+        # Backward recompute prefetch (2026-10-12). Backward recomputes the
+        # offloaded blocks in REVERSE forward order, so when block i's
+        # recompute starts, the next one needed is the previous entry of this
+        # forward's recompute list. Prefetching it here, on the side stream,
+        # overlaps its copy with block i's recompute + backward instead of
+        # paying a synchronous pageable copy (which also drains the host's
+        # launch queue) when its own turn comes.
+        order = getattr(self, "_offload_recompute_order", None)
+        recompute_coming = x_in.requires_grad and order is not None
+        pos = len(order) if recompute_coming else 0
+        if recompute_coming:
+            order.append((name, params))
+        calls = [0]
+
         def _self_loading_forward(x_arg, pos_arg):
             # Runs on EVERY invocation checkpoint makes (call #1 here, call
             # #2 later during backward) -- a cache hit on the second call
             # is a cheap no-op (Issue #103), a miss re-copies into a reused
             # buffer (Issue #101). Either way, safe to call unconditionally.
             pool.load(name, params)
+            calls[0] += 1
+            if calls[0] == 2 and recompute_coming and pos > 0:
+                # Issued after this block's load() (so it is resident and
+                # most-recently-used) and BEFORE its recompute kernels are
+                # queued. `behind=True`: this block stays resident for its
+                # own backward -- see GPUBufferPool.prefetch.
+                prev_name, prev_params = order[pos - 1]
+                pool.prefetch(prev_name, prev_params, behind=True)
             return block(x_arg, position_ids=pos_arg, **_kw)
 
         pool.load(name, params)  # ensure call #1 itself has weights present
@@ -444,6 +466,12 @@ class EdgeHVN(nn.Module):
                 )
 
         if offload:
+            # Offloaded blocks whose backward recompute is coming, in forward
+            # order (filled by _offload_wrap_checkpointed). None disables the
+            # backward recompute prefetch (2026-10-12).
+            self._offload_recompute_order = (
+                [] if (getattr(self, "_offload_prefetch", True)
+                       and getattr(self, "_offload_bwd_prefetch", True)) else None)
             x = self._offload_wrap_plain(
                 "token_embedding", [self.token_embedding],
                 lambda: self.token_embedding(input_ids),
@@ -507,15 +535,25 @@ class EdgeHVN(nn.Module):
 
         if offload:
             if return_hidden:
-                return self._offload_wrap_plain(
+                out = self._offload_wrap_plain(
                     "final_norm+decoder", [self.final_norm],
                     lambda: self.final_norm(x), input_tensor=x,
                 )
-            return self._offload_wrap_plain(
-                "final_norm+decoder", [self.final_norm, self.decoder],
-                lambda: self.decoder(self.final_norm(x)),
-                input_tensor=x,
-            )
+            else:
+                out = self._offload_wrap_plain(
+                    "final_norm+decoder", [self.final_norm, self.decoder],
+                    lambda: self.decoder(self.final_norm(x)),
+                    input_tensor=x,
+                )
+            # Backward recompute prefetch: the FIRST block backward recomputes
+            # is the last entry of the list; nothing earlier can fetch it, so
+            # start it now, alongside the loss and the tail's backward. Behind
+            # the tail, which stays resident until its own backward is done.
+            order = getattr(self, "_offload_recompute_order", None)
+            if order:
+                last_name, last_params = order[-1]
+                self._offload_pool.prefetch(last_name, last_params, behind=True)
+            return out
 
         x = self.final_norm(x)
         # #158: with return_hidden the caller does the vocabulary projection

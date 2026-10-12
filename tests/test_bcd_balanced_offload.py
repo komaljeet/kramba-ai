@@ -81,8 +81,18 @@ def _check_residency(m, sched, when: str, strict_inactive: bool = True) -> int:
     Returns how many parameters were checked as OFFLOADED (caller asserts > 0,
     so this cannot pass by offloading nothing)."""
     active = set(sched.active_block_members)
+    # Backward recompute prefetch (2026-10-12): at the end of forward the FIRST
+    # block backward will recompute is fetched ahead on purpose. Exactly that
+    # one block is exempt after forward, and it must actually be on the GPU.
+    order = getattr(m, "_offload_recompute_order", None)
+    ahead = order[-1][0] if (order and when == "after forward") else None
     n_cpu = 0
     for name, params in _segments(m):
+        if name == ahead:
+            for p in params:
+                if id(p) not in sched._pinned:
+                    assert p.device.type == "cuda", f"{name} was prefetched for backward but sits on {p.device}"
+            continue
         for p in params:
             if id(p) in sched._pinned:
                 assert p.device.type == "cuda", f"pinned table in {name} evicted ({when})"

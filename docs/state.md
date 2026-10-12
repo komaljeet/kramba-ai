@@ -5,6 +5,156 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B pretrain: fused DeltaNet "glue" (q/k L2 norm + read RMSNorm) = 10.2% faster per step (2026-10-12)
+
+**One line: two small Triton kernels replace the bandwidth-bound PyTorch ops around the
+DeltaNet scan. At 2048x24 (hvn-hybrid, BCD balanced + offload) a full BCD cycle goes from
+21.81 to 19.58 s/step -- 2.23 s (10.2%) faster. Peak VRAM +10 MiB. Not bit-identical
+(step-0 loss differs by 2.4e-6 relative); the fused path is at least as accurate as the
+old one against an fp32 truth.**
+
+**Measured before building** (one DeltaNet layer at the 1B shape: B=1, S=4096, 64 heads x
+d_head 32, bf16 autocast):
+
+| glue op | fwd | fwd+bwd | per layer |
+|---|---:|---:|---|
+| `_l2norm` (q and k) | 1.94 ms | 7.70 ms | x2 |
+| `_read_normalize` + reshape copy | 2.47 ms | 8.25 ms | x1 |
+| scan wrapper `.contiguous().float()` (q, k, v) | 0.69 ms | -- | x3 |
+| dq/dk/dv fp32 -> bf16 casts | -- | 0.29 ms | x3 |
+
+That is ~15% of a DeltaNet layer's time. The two norms are most of it, and both are pure
+functions outside the scan, so they were fused as their OWN kernels. The latency-bound
+scan kernels were not touched.
+
+- `hvn/core/fused_l2norm.py`: one read and one write each way, fp32 math, hand-written
+  backward. 1.98 -> 0.20 ms fwd, 7.78 -> 0.80 ms fwd+bwd.
+- `hvn/core/fused_read_norm.py`: reads the scan output in its `[B*H, S, d]` layout and
+  writes `[B, S, D]` directly, so the permute copy is gone too. The weight gradient is a
+  two-stage reduction, deterministic (no atomics). 2.49 -> 0.42 ms fwd, 8.32 -> 1.61 ms
+  fwd+bwd.
+- Whole DeltaNet block: 33.3 -> 29.8 ms fwd, 111.1 -> 94.5 ms fwd+bwd.
+- On by default wherever `use_triton_scan` is on (`DeltaNetBlock.use_fused_l2norm` /
+  `use_fused_read_norm`: None follows it; True/False forces). CPU falls back.
+
+**1B A/B** (lean harness `scripts/ab_offload_bwd_prefetch_1b.py` with `H1B_GLUE`, on main
+as of 786392e -- i.e. WITHOUT the forward-prefetch / loss-head / backward-prefetch levers --
+plus this change, one full 13-block cycle per arm, ABBA):
+
+| arm | s/step, cycle mean | peak reserved | peak allocated |
+|---|---:|---:|---:|
+| reference glue, run 1 / run 2 | 21.805 / 21.814 | 4904 MiB (79.9%) | 3058 MiB |
+| fused glue, run 1 / run 2 | 19.558 / 19.598 | 4914 MiB (80.0%) | 2992 MiB |
+
+Every active-block position gains, from -0.9 s (tail group active) to -3.4 s (embedding
+active). Loss drift fused vs reference 5.2e-3 over 14 steps, inside reference-vs-reference
+noise (6.5e-3).
+
+**All four of today's levers together** (forward prefetch overlap, loss-head cast/pad,
+backward recompute prefetch, this; one cycle, local combined checkout): **16.92 s/step vs
+main's 21.81 -- 22% faster.** Peak reserved 5078 MiB (82.7%), 141 MiB under the 85% guard;
+lower than the first two levers alone (5098 MiB), because the fused glue frees transient
+memory.
+
+**Tests** (`tests/test_fused_l2norm.py`, `tests/test_fused_read_norm.py`): fp32 parity;
+bf16 within one ulp for the forward; fp64 truth -- the fused result must be at least as
+accurate as the reference; zero and below-eps rows; non-contiguous input; non-power-of-2
+`d`; B=2 so a wrong head mapping is visible. Anti-vacuity: the classic wrong L2 gradient
+(no projection term) and a wrong weight gradient must land far outside the bounds. The
+block-level tests count kernel calls, so they fail if the fused path is silently skipped,
+and they require the fused block to be no less accurate than the reference block against
+an fp32 run.
+
+Two test-design traps hit and fixed on the way, worth knowing for any norm kernel:
+- A below-eps row has gradient g/eps (~1e6x everything else), so a max-relative
+  gradient comparison over inputs that include one only checks that row. The
+  anti-vacuity test caught it.
+- dx of an L2 norm is a difference of two terms. Per-element relative bounds fail for
+  ANY bf16 implementation near cancellation; bound by the row's scale instead.
+
+**Not done: folding glue INTO the scan kernels.** What remains is the scan wrapper's
+`.contiguous().float()` copies (q, k, v: ~2.1 ms per forward pass) and the dq/dk/dv casts
+(~0.9 ms per backward), about 3% of the step by the same arithmetic. The scan kernels
+already upcast with `.to(tl.float32)` on load, so the copies are pure layout/dtype. A
+complete fix:
+- passes `[B, S, H, d]` strides into `_gated_delta_fwd_kernel`, `_mk_ckpt_kernel` and
+  `_mk_bwd_kernel` (base = b*sB + h*sH, row = base + t*sS);
+- accepts bf16 q/k/v;
+- keeps `o` fp32 (the read norm needs it);
+- stores dq/dk/dv in the input dtype.
+It should be bit-identical (addressing only, same in-kernel upcast; Triton's fp32->bf16
+store must be checked to be round-to-nearest-even like autograd's cast). It touches the
+validated scan kernels, and the gain is a third of what was taken here, so it was left
+for its own session. Separately, `test_bcd_balanced_offload::...rotations[True-1]`
+failed once on its "loss went down" check (6.2195 vs 6.2054). It does not use the fused
+path, passes 3/3 on main and on this branch, and is a flaky assertion against the
+backward's run-to-run noise.
+## 1B pretrain: prefetch the backward recompute's weights = 3.8% faster per step (2026-10-12)
+
+**One line: at 2048x24 (hvn-hybrid, BCD balanced + offload, on top of the two levers
+below), a full BCD cycle goes from 19.94 to 19.18 s/step -- 0.76 s (3.8%) faster. No extra
+VRAM (peak reserved 5098 MiB / 83.0% in both arms). Step-0 loss bit-identical.**
+
+**Validated before building.** Grad checkpointing recomputes every inactive block
+downstream of the active one during backward. With `cache_blocks=1` each of those
+recomputes was a `load()` miss: a synchronous copy from PAGEABLE memory that also blocks the
+host, so the launch queue drains every time. Timed in the real 1B harness on main: 96 misses
+and 0.80 s of main-stream copy per step averaged over a cycle (144-192 and 1.2-1.7 s when the
+active block is early). The counts match 8 micro-batches x downstream layers exactly, so the
+instrument counts the right thing. The estimate (0.7-0.88 s, ~4%) held.
+
+**The fix.** `EdgeHVN.forward` records which offloaded blocks will be recomputed, in
+forward order. When block i's recompute starts, after its own `load()` and before its
+kernels are queued, it prefetches block i-1 on the side stream. The end of forward
+prefetches the first one (the last block). `GPUBufferPool.prefetch(..., behind=True)`
+does two things differently:
+- lets the cache hold ONE entry over `cache_blocks`, because block i must stay resident
+  for its own backward;
+- takes the oldest free buffer set even when it is the only one. Every free set was
+  released by a block whose backward was queued before block i's recompute, so waiting
+  on its release event never serializes the copy behind block i.
+Toggle: `model._offload_bwd_prefetch` (default on whenever offload prefetch is on).
+
+| arm (both include the forward-prefetch + loss-head levers) | s/step, cycle mean | bwd misses/step | peak reserved |
+|---|---:|---:|---:|
+| backward prefetch OFF, run 1 / run 2 | 19.938 / 19.937 | 96 | 5098 MiB (83.0%) |
+| backward prefetch ON, run 1 / run 2 | 19.194 / 19.166 | 0 | 5098 MiB (83.0%) |
+
+- The saving scales with downstream depth, as the mechanism predicts: -1.56 s/step with
+  every layer downstream (embedding active), -0.6 s mid-stack, +0.01 s with nothing
+  downstream (tail group active).
+- VRAM: identical peak reserved and allocated (3218 MiB), and the pool holds the same
+  buffer sets in both arms (3 DeltaNet, 2 attention, 2 tail). The second set the backward
+  prefetch needs already exists for the forward prefetch. So this lever does not eat any
+  of the ~117 MiB of headroom left under the 85% guard.
+- Loss: step-0 bit-identical. Later drift ON vs OFF 5.9e-3, inside the backward's own
+  run-to-run noise (OFF vs OFF 4.9e-3 here; up to 1.0e-2 in the entry below).
+
+**Tests** (`tests/test_offload_bwd_prefetch.py`):
+- backward misses are 0 with it on and exactly L with it off (so the counter can fire);
+- gradients match a never-offloaded model over a full cycle, and a twin that serves the
+  wrong block's weights in backward must FAIL the same bound;
+- a pool-level race stress with the main stream held behind a GPU sleep and only two sets,
+  so every backward prefetch must reuse the set released one step earlier. Its twin skips
+  the release wait and must corrupt reads. It also asserts no third set is allocated.
+- A model-level sleep version of the race test was tried first. It was BLIND: with the
+  wait removed it still passed, because the set it reused had been released long before.
+  It was deleted rather than kept as false comfort.
+Two existing residency tests now exempt exactly the one block fetched at the end of
+forward, and assert that block IS on the GPU.
+
+**Found on the way: the never-offloaded reference is not repeatable.** Gradient parity
+first failed at 1.8e-3 and 4.05e-3 relative. Root-caused by elimination: across 8 fresh
+processes, 2 showed a mismatch; in one, all four offload arms (ON and OFF) differed from
+the reference by the same 4.05e-3, so the reference run was the odd one out. It was also
+seen with backward prefetch OFF. A resident model under timing perturbation or concurrent
+SM load did NOT reproduce it, so the trigger is unknown. Same finding as the "main against
+itself drifts" line below. The parity bound is 2e-2 for that reason; corrupt weights give
+O(1) errors (#164: 1.1-2.6), and the twin test proves the bound sees them.
+
+Harness: `scripts/ab_offload_bwd_prefetch_1b.py`. Results: `results/offload_bwd_prefetch_1b/`
+(`validate_main.*` is the pre-build miss timing on main; `ab1b_*` the A/B arms).
+
 ## 1B pretrain: offload prefetch overlap + loss-head cast/pad = 8.7% faster per step (2026-10-12)
 
 **One line: at 2048x24 (hvn-hybrid, BCD balanced + offload), a full BCD cycle goes from
@@ -79,9 +229,10 @@ reaches the GPU only because the tail prefetch happens to include all decoder pa
 Latent, but the bias's placement depends on that coincidence.
 
 **Open, not built here** (named by the same investigation, not validated):
-- prefetching weights for the backward checkpoint recompute (those loads are still
-  synchronous);
-- the elementwise "glue" ops around the DeltaNet scan.
+- prefetching weights for the backward checkpoint recompute -- now built, see the entry
+  above (3.8%);
+- the elementwise "glue" ops around the DeltaNet scan -- see the fused-glue entry
+  (`feat/fused-l2norm-glue`).
 
 Also seen: free RAM drops ~50 MB per step inside one harness process, on main's code too
 (3.9 to 3.1 GB over 15 steps). Not chased; may matter for long runs. One harness arm

@@ -73,6 +73,19 @@ except Exception:  # pragma: no cover
     _triton_megakernel_scan = None
     _HAS_TRITON_SCAN = False
 
+try:
+    from .fused_l2norm import fused_l2norm as _fused_l2norm
+    from .fused_l2norm import fused_l2norm_available as _fused_l2norm_available
+except Exception:  # pragma: no cover
+    _fused_l2norm = None
+    _fused_l2norm_available = None
+try:
+    from .fused_read_norm import fused_read_norm as _fused_read_norm
+    from .fused_read_norm import fused_read_norm_available as _fused_read_norm_available
+except Exception:  # pragma: no cover
+    _fused_read_norm = None
+    _fused_read_norm_available = None
+
 
 # Floor for the intra-chunk cumulative decay ``P`` in the chunked scan (Issue
 # #44).  Keys/queries are L2-normalized (|·| ≤ 1), so ``1/P`` reaches at most
@@ -192,6 +205,15 @@ class DeltaNetBlock(nn.Module):
         # Still explicitly enabled where already proven (continue_ft_hybrid.py
         # / continue_ft_looped.py's enable_scan_flags), just not the bare default.
         self.use_megakernel_scan = bool(use_megakernel_scan)
+        # Speed lever 3 (2026-10-12): q/k L2 norm as one fused Triton kernel
+        # (hvn/core/fused_l2norm.py) instead of four bandwidth-bound PyTorch
+        # ops plus their autograd chain. None = follow use_triton_scan (the
+        # training fast path); True/False forces it. ulp-level, not
+        # bit-identical -- see that module's docstring and its tests.
+        self.use_fused_l2norm = None
+        # Same lever, same default rule: the read RMSNorm as one Triton kernel
+        # (hvn/core/fused_read_norm.py).
+        self.use_fused_read_norm = None
         assert d_model % n_heads == 0, (
             f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"
         )
@@ -344,8 +366,8 @@ class DeltaNetBlock(nn.Module):
         B, S, _ = xc.shape
         H, d = self.n_heads, self.d_head
 
-        q = _l2norm(self.q_proj(xc).view(B, S, H, d))
-        k = _l2norm(self.k_proj(xc).view(B, S, H, d))
+        q = self._l2(self.q_proj(xc).view(B, S, H, d))
+        k = self._l2(self.k_proj(xc).view(B, S, H, d))
         v = self.v_proj(xc).view(B, S, H, d)
 
         # Gates in fp32 (Issue #44): β is the write strength and α is the decay
@@ -365,6 +387,15 @@ class DeltaNetBlock(nn.Module):
             gate = F.silu(self.gate_proj(xc))  # [B, S, D]
 
         return q, k, v, alpha, beta, gate
+
+    def _l2(self, x: torch.Tensor) -> torch.Tensor:
+        """`_l2norm`, through the fused Triton kernel when enabled (lever 3)."""
+        use = getattr(self, "use_fused_l2norm", None)
+        if use is None:
+            use = self.use_triton_scan
+        if use and _fused_l2norm is not None and _fused_l2norm_available(x):
+            return _fused_l2norm(x)
+        return _l2norm(x)
 
     def _read_normalize(self, o: torch.Tensor) -> torch.Tensor:
         """Per-head RMSNorm on the read output.  o: [B, S, H, d] → [B, S, H, d].
@@ -722,9 +753,18 @@ class DeltaNetBlock(nn.Module):
         if return_state:
             oN, S_final = oN  # unpack (oN, final recurrent state)
 
-        o = oN.view(B, H, S, d).permute(0, 2, 1, 3)  # [B, S, H, d]
-        o = self._read_normalize(o)                 # normalizer (lever 1)
-        o = o.reshape(B, S, D)
+        use_frn = getattr(self, "use_fused_read_norm", None)
+        if use_frn is None:
+            use_frn = self.use_triton_scan
+        if (use_frn and _fused_read_norm is not None
+                and _fused_read_norm_available(oN, self.read_norm_weight)):
+            # Speed lever 3: same normalizer, one kernel, written straight to
+            # [B, S, D] (no permute copy). See hvn/core/fused_read_norm.py.
+            o = _fused_read_norm(oN, self.read_norm_weight, B, H, self.read_norm_eps)
+        else:
+            o = oN.view(B, H, S, d).permute(0, 2, 1, 3)  # [B, S, H, d]
+            o = self._read_normalize(o)                 # normalizer (lever 1)
+            o = o.reshape(B, S, D)
 
         if gate is not None:
             o = o * gate                            # output gate (lever 3)

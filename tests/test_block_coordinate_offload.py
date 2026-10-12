@@ -239,10 +239,17 @@ else:
         # of active (i.e. essentially always, since it's positionally last)
         # -- that is by design (see _offload_wrap_plain), not a regression,
         # and is a small, fixed-size exception that doesn't scale with depth.
+        # Backward recompute prefetch (2026-10-12): the FIRST block backward
+        # will recompute is fetched at the end of forward on purpose -- one
+        # fixed block, not a pileup. Exactly that one is expected on the GPU.
+        order = model._offload_recompute_order
+        assert order, "downstream blocks exist, so a recompute list must too"
+        ahead = order[-1][0]
+        assert ahead == f"blocks.{num_layers - 1}"
         for name, params in sched.blocks:
             if name == "final_norm+decoder":
                 continue
-            expected = "cuda" if name == "blocks.0" else "cpu"
+            expected = "cuda" if name in ("blocks.0", ahead) else "cpu"
             for p in params:
                 if _pinned_ok(sched, p, name):
                     continue
@@ -353,9 +360,9 @@ else:
         calls = {"n": 0}
         orig_prefetch = GPUBufferPool.prefetch
 
-        def _counting_prefetch(self, key, params):
+        def _counting_prefetch(self, key, params, behind=False):
             calls["n"] += 1
-            orig_prefetch(self, key, params)
+            orig_prefetch(self, key, params, behind=behind)
 
         pool.prefetch = _counting_prefetch.__get__(pool, GPUBufferPool)
 

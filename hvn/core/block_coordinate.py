@@ -321,7 +321,8 @@ class GPUBufferPool:
     FRESH = "fresh"
 
     def _acquire_buffers(self, key: str, params: list[nn.Parameter],
-                         for_prefetch: bool = False) -> tuple[list[torch.Tensor], object]:
+                         for_prefetch: bool = False,
+                         behind: bool = False) -> tuple[list[torch.Tensor], object]:
         """Get (reusing a freed one if available, else allocating) a set of
         GPU buffers for `params`' shape signature, and register `key` as
         resident -- evicting the least-recently-used OTHER entry if this
@@ -344,10 +345,20 @@ class GPUBufferPool:
           the compute exactly as the old blanket `wait_stream` did. A fresh
           allocation instead costs one extra set of this signature, once
           (bounded: a set is only allocated while fewer than two are free).
+        - `behind=True` (backward recompute prefetch, see `prefetch`) takes
+          the OLDEST free set even when it is the only one, and lets the cache
+          hold ONE entry over `cache_blocks`. Both are safe only because of
+          when the caller issues it: at the start of block i's recompute, while
+          block i (resident, its backward not yet queued) must not be evicted,
+          and every free set was released by a block whose backward was queued
+          BEFORE block i's recompute -- so its release event never orders the
+          copy behind block i's own compute.
         """
         sig = self._signature(params)
         free = self._free_buffers.get(sig)
-        if for_prefetch:
+        if behind:
+            entry = free.pop(0) if free else None
+        elif for_prefetch:
             entry = free.pop(0) if free and len(free) >= 2 else None
         else:
             entry = free.pop() if free else None
@@ -357,7 +368,8 @@ class GPUBufferPool:
         else:
             buffers, ready = entry
         self._resident[key] = {"buffers": buffers, "params": params, "sig": sig}
-        while len(self._resident) > self.cache_blocks:
+        capacity = self.cache_blocks + (1 if behind else 0)
+        while len(self._resident) > capacity:
             oldest_key, oldest = next(iter(self._resident.items()))
             if oldest_key == key:
                 break
@@ -431,7 +443,7 @@ class GPUBufferPool:
             buf.copy_(self._cpu_home[id(p)], non_blocking=True)
             p.data = buf
 
-    def prefetch(self, key: str, params: list[nn.Parameter]) -> None:
+    def prefetch(self, key: str, params: list[nn.Parameter], behind: bool = False) -> None:
         """Issue #115: kick off `key`'s CPU->GPU copy on a dedicated side
         stream, so it can run CONCURRENTLY with compute already queued on
         the main/default stream for a DIFFERENT (e.g. currently-active or
@@ -455,6 +467,19 @@ class GPUBufferPool:
         copied (a fast plain host memcpy, not PCIe-bound) into a small,
         bounded, reusable pinned STAGING buffer, and the actual async H2D
         copy reads from that instead.
+
+        `behind` (2026-10-12, backward recompute prefetch): the caller is
+        still using another resident block -- block i, whose recompute is
+        starting and whose backward will read its weights -- while it fetches
+        block i-1, the next block backward will recompute. With the default
+        `cache_blocks=1` an ordinary prefetch would capacity-evict block i out
+        from under its own backward. `behind=True` lets the cache exceed its
+        capacity by exactly one for this entry. No extra VRAM in practice: the
+        forward prefetch already keeps a second set of each shape signature in
+        the pool, and backward only ever has two blocks in flight. Before
+        this, every backward recompute was a synchronous PAGEABLE copy that
+        also blocked the host: measured at 2048x24 (bf16 parked, balanced
+        BCD), 144-192 misses and 1.2-1.7 s of main-stream copy time per step.
         """
         self.register_cpu_home(params)
         if self._prefetch_stream is None or key in self._resident:
@@ -462,7 +487,7 @@ class GPUBufferPool:
         params = self._offloadable(params)
         if not params:
             return
-        buffers, ready = self._acquire_buffers(key, params, for_prefetch=True)
+        buffers, ready = self._acquire_buffers(key, params, for_prefetch=True, behind=behind)
         staging_bufs = []
         self._order_prefetch_after(ready)
         _per_sig: dict[tuple, int] = {}
