@@ -1,0 +1,49 @@
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:/Users/komal/Documents/Codes/kramba-ai-wt-levers2/results/offload_losshead_1b/C_branch_blanket_ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:/Users/komal/Documents/Codes/kramba-ai-wt-levers2/results/offload_losshead_1b/C_branch_blanket_ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+[build] 1,113,059,793 params, 13 BCD blocks, 10s, ram 5.6G
+[warm  0] token_embedding                    wall  33.74 fwd  9.73 loss 11.2365494 (0x1.6791d00000000p+3) peak-rsv 4.98G (83.0%) ram 5.8G
+[warm  1] blocks.0+blocks.1                  wall  29.28 fwd  8.01 loss 11.0623875 (0x1.61ff140000000p+3) peak-rsv 4.98G (83.0%) ram 5.5G
+[step  2] blocks.2+blocks.3                  wall  27.71 fwd  8.07 loss 10.9516478 (0x1.5e73e60000000p+3) peak-rsv 4.98G (83.0%) ram 5.5G
+[step  3] blocks.4+blocks.5                  wall  26.03 fwd  8.05 loss 10.8941298 (0x1.5c9cb60000000p+3) peak-rsv 4.98G (83.0%) ram 5.4G
+[step  4] blocks.6+blocks.7                  wall  24.36 fwd  8.04 loss 10.8695002 (0x1.5bd2f20000000p+3) peak-rsv 4.98G (83.0%) ram 5.4G
+[step  5] blocks.8+blocks.9                  wall  22.81 fwd  8.04 loss 10.8364973 (0x1.5ac4960000000p+3) peak-rsv 4.98G (83.0%) ram 5.3G
+[step  6] blocks.10+blocks.11                wall  21.20 fwd  8.06 loss 10.8046112 (0x1.59bf600000000p+3) peak-rsv 4.98G (83.0%) ram 5.3G
+[step  7] blocks.12+blocks.13                wall  19.50 fwd  8.01 loss 10.7823744 (0x1.5909360000000p+3) peak-rsv 4.98G (83.0%) ram 5.3G
+[step  8] blocks.14+blocks.15                wall  17.90 fwd  8.04 loss 10.7603579 (0x1.5854da0000000p+3) peak-rsv 4.98G (83.0%) ram 5.2G
+[step  9] blocks.16+blocks.17                wall  16.32 fwd  8.05 loss 10.7331572 (0x1.5776060000000p+3) peak-rsv 4.98G (83.0%) ram 5.2G
+[step 10] blocks.18+blocks.19                wall  14.64 fwd  8.06 loss 10.7019939 (0x1.5676bc0000000p+3) peak-rsv 4.98G (83.0%) ram 5.2G
+[step 11] blocks.20+blocks.21                wall  13.09 fwd  8.03 loss 10.6773729 (0x1.55ad0a0000000p+3) peak-rsv 4.98G (83.0%) ram 5.1G
+[step 12] blocks.22+blocks.23+final_norm+decoder wall  11.42 fwd  8.04 loss 10.6610832 (0x1.5527980000000p+3) peak-rsv 4.98G (83.0%) ram 5.1G
+[step 13] token_embedding                    wall  30.23 fwd  8.08 loss 10.6403770 (0x1.547df80000000p+3) peak-rsv 4.98G (83.0%) ram 5.0G
+[step 14] blocks.0+blocks.1                  wall  29.22 fwd  7.99 loss 10.4640541 (0x1.4ed9880000000p+3) peak-rsv 4.98G (83.0%) ram 5.0G
+[done]
