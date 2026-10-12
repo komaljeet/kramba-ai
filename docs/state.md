@@ -37,8 +37,9 @@ scan kernels were not touched.
 - On by default wherever `use_triton_scan` is on (`DeltaNetBlock.use_fused_l2norm` /
   `use_fused_read_norm`: None follows it; True/False forces). CPU falls back.
 
-**1B A/B** (lean harness `scripts/ab_offload_bwd_prefetch_1b.py` with `H1B_GLUE`, main +
-this branch, one full 13-block cycle per arm, ABBA):
+**1B A/B** (lean harness `scripts/ab_offload_bwd_prefetch_1b.py` with `H1B_GLUE`, on main
+as of 786392e -- i.e. WITHOUT the forward-prefetch / loss-head / backward-prefetch levers --
+plus this change, one full 13-block cycle per arm, ABBA):
 
 | arm | s/step, cycle mean | peak reserved | peak allocated |
 |---|---:|---:|---:|
