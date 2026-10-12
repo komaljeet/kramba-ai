@@ -166,3 +166,44 @@ def test_the_difference_vanishes_where_the_model_operates():
     assert torch.equal(torch.nn.functional.linear(x, rb),
                        torch.nn.functional.linear(x, gb)), \
         "the layer this feeds now produces different output"
+
+
+def _kernel_vs_torch(w, scale):
+    """Run the quantize kernel with a CHOSEN scale, bypassing the mean, so the
+    division can be aimed at the rounding tie directly."""
+    import triton
+    from hvn.edge.ternary_fused import _quantize_kernel
+    s = torch.tensor(scale, device="cuda", dtype=torch.float32)
+    out = torch.empty_like(w)
+    _quantize_kernel[(triton.cdiv(w.numel(), 1024),)](w, s, out, w.numel(), BLOCK=1024)
+    ref = torch.clamp(torch.round(w / s), -1, 1) * s
+    return ref, out
+
+
+@cuda_only
+def test_division_is_correctly_rounded_at_the_tie():
+    """Found in the real 896x16 loop: ``blocks.11.out_proj`` at seed 0 has
+    w = -0.014454979449510574 with scale 0.028909957036376. IEEE w/s is
+    -0.50000006 (code -1); Triton's default fp32 ``/`` is approximate and gave
+    -0.5 (code 0). One weight in 117M -- invisible to random-normal parity
+    tests, and enough to make the training trajectory differ from step 1."""
+    w = torch.tensor([-0.014454979449510574, 0.014454979449510574], device="cuda")
+    ref, got = _kernel_vs_torch(w, 0.028909957036376)
+    assert torch.equal(ref, got), f"code flipped at the tie: ref {ref.tolist()} got {got.tolist()}"
+
+
+@cuda_only
+def test_division_matches_ieee_near_the_tie_across_scales():
+    """Sweep +/-512 fp32 ulps around +/-0.5*s for many scales: every element
+    sits next to the rounding boundary, where an approximate division shows."""
+    torch.manual_seed(7)
+    scales = (torch.rand(64) * 0.1 + 1e-3).tolist()
+    steps = torch.arange(-512, 512, device="cuda", dtype=torch.int32)
+    bad = 0
+    for s in scales:
+        half = torch.tensor([0.5 * s], device="cuda", dtype=torch.float32)
+        pos = (half.view(torch.int32) + steps).view(torch.float32)
+        w = torch.cat([pos, -pos, 3 * pos, -3 * pos])     # 1.5 tie too
+        ref, got = _kernel_vs_torch(w, s)
+        bad += (ref != got).sum().item()
+    assert bad == 0, f"{bad} elements quantized differently from IEEE w/s"

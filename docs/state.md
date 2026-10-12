@@ -5,6 +5,62 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Pretrain speed levers: +2.1% per step, same loss, same VRAM (#154 context, 2026-10-12)
+
+**One line: on the 896x16 hybrid at seq 4096, the branch steps in 7.795 s against 7.961 s
+on main -- 2.1% faster. The step-1 loss is bit-identical and peak VRAM is the same. Small,
+but free: it is on under `--fast` and changes nothing else.**
+
+Two levers, measured together in the real trainer (`scripts/ab_speed_levers.py`, ABBA,
+150 steps per arm, first 10 dropped, identical command and `--seed 0` in two checkouts):
+
+1. **Fused ternary quantizer (#154) on under `--fast`, bf16 only.** It already existed; it
+   was just never switched on in the training stack. bf16 is where fused == eager bit for bit.
+   `--no-fused-ternary` opts out.
+2. **No host sync per DeltaNet block in the megakernel backward.** `nblocks` went to the
+   kernels as `torch.tensor([nblocks], device=cuda)`, a pageable copy that forced a
+   `cudaStreamSynchronize` once per block per backward. Now a plain int argument.
+
+| arm | per-run median s/step | peak alloc GiB | reserved GiB | step-1 loss |
+|---|---|---:|---:|---|
+| main (165d44c) | 7.969, 7.952 | 2.926 | 3.418 | 11.006638 |
+| branch | 7.795, 7.794 | 2.931 | 3.418 | 11.006638 |
+
+The two branch runs agree to 0.001 s and the two main runs to 0.017 s, so the 0.166 s gap
+is not noise. Loss over 150 steps drifts apart by at most 0.0082 between arms, the same as
+main against itself (0.0079) -- the trainer's own run-to-run spread. `results/speed_levers/ab.json`.
+
+**A bug the A/B caught that every parity test missed.** The first run of this A/B had
+step-1 losses of 11.006638 vs 11.006550. Step 1 is computed from the initial weights, so a
+bit-identical lever must reproduce it exactly. Cause: Triton's default fp32 `/` is not
+correctly rounded. Right next to the 0.5 rounding tie it disagrees with torch: in the real
+model (seed 0, `blocks.11.out_proj`) torch gives w/s = -0.50000006 -> code -1, Triton gives
+-0.5 -> code 0. One weight in 117M. Random-normal parity tests almost never land that close
+to the tie, so they all passed. Fixed with `tl.div_rn`. New tests: the exact failing pair,
+plus a +/-512-ulp sweep around the tie at 64 scales (26 code flips before, 0 after). The
+A/B now fails outright on any step-1 mismatch. The buggy run is kept as
+`results/speed_levers/ab_divbug.json` (it measured the same +2.2%, so speed was never the issue).
+
+**Lever skipped: caching the quantized weight across a step's micro-batches.** In training
+the STE needs the live shadow weight inside the autograd graph, and that weight changes every
+optimizer step, so a cache could only be reused across the 8 grad-accum micro-batches. Today
+the quantized copy only exists briefly during each forward/recompute and is freed before peak
+memory; a cache would instead hold it for the whole step. At 896x16 (110 layers, 117.2M
+ternary weights) that's **about +224 MiB of VRAM held continuously**, for an estimated ~2-3%
+gain — and under `--offload` it would also keep GPU copies of weights that offload is actively
+trying to move off the card, working against that system directly. It also carries the same
+silent-staleness risk #117 and the #131 inference cache had to guard against. With the
+quantizer now fused and cheap (this entry), the ~2-3% no longer clearly justifies either the
+VRAM cost or the offload interaction. Not measured, correctness-wise or otherwise.
+
+**Harness note: the A/B was killed twice by Claude Code's low-RAM reaper.** It was not RAM
+building up from arm to arm. The trainer uses about 4.5 GB of system RAM (main process
+~2.6 GB + 4 DataLoader workers ~0.58 GB each), and the box only has ~7 GB free. Both kills
+happened during a start-up audit (Check 3, checkpoint save + rebuild), and one of them was a
+first arm with nothing before it. The harness now waits for every child process of an arm
+to exit (workers outlived the trainer by 5-6 s every time), settles 15 s, and checks free
+RAM before each launch (`--min-free-gib 2.5`). The clean run's lowest free RAM was 2.01 GiB.
+
 ## Effective batch: 8 x 4096 beats 16 x 4096 by 0.13 nats at the same tokens -- at today's LR (#152, 2026-10-11)
 
 **One line: on the 48M code model, doubling grad_accum from 8 to 16 is 6.3% worse held-out

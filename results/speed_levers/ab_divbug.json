@@ -1,0 +1,144 @@
+{
+  "config": {
+    "base_repo": "C:/Users/komal/Documents/Codes/kramba-ai-wt-speedbase",
+    "new_repo": "C:/Users/komal/Documents/Codes/kramba-ai-wt-speed",
+    "data_dir": "C:/Users/komal/Documents/Codes/kramba-ai/data_cache",
+    "steps": 150,
+    "rounds": 1,
+    "work_dir": "C:/Users/komal/AppData/Local/Temp/claude/C--Users-komal-Documents-Codes-kramba-ai/928e7447-f166-4af8-9f50-4098cb2392ce/scratchpad/ab_work",
+    "out": "results/speed_levers/ab.json",
+    "timeout_min": 90,
+    "max_idle_mib": 1000
+  },
+  "tokens_per_step": 32768,
+  "warmup_dropped": 10,
+  "base_s": 7.962244588157237,
+  "new_s": 7.791957835366718,
+  "gain_pct": 2.1854167641617517,
+  "loss_maxdiff_base_vs_base": 0.007326999999998307,
+  "loss_maxdiff_new_vs_base": 0.009692000000001144,
+  "step1_loss_identical": false,
+  "peak_alloc_gib": {
+    "base": 2.9258,
+    "new": 2.9309
+  },
+  "reserved_gib": {
+    "base": 3.418,
+    "new": 3.418
+  },
+  "problems": [],
+  "runs": {
+    "base": [
+      {
+        "tag": "base_0",
+        "repo": "C:/Users/komal/Documents/Codes/kramba-ai-wt-speedbase",
+        "rc": 0,
+        "wall_min": 20.486698579788207,
+        "steps_logged": 150,
+        "measured_steps": 140,
+        "fused_on": false,
+        "median_s": 7.963255486348171,
+        "mean_s": 7.974940326655626,
+        "peak_alloc_gib": 2.9258,
+        "reserved_gib": 3.418,
+        "loss_first5": [
+          11.006638,
+          11.008865,
+          11.009495,
+          11.009706,
+          11.01009
+        ],
+        "loss_last5": [
+          6.973328,
+          7.013862,
+          6.783766,
+          6.941126,
+          6.849064
+        ]
+      },
+      {
+        "tag": "base_3",
+        "repo": "C:/Users/komal/Documents/Codes/kramba-ai-wt-speedbase",
+        "rc": 0,
+        "wall_min": 20.46255430380503,
+        "steps_logged": 150,
+        "measured_steps": 140,
+        "fused_on": false,
+        "median_s": 7.961233689966304,
+        "mean_s": 7.976917259121412,
+        "peak_alloc_gib": 2.9258,
+        "reserved_gib": 3.418,
+        "loss_first5": [
+          11.006638,
+          11.008865,
+          11.009518,
+          11.009628,
+          11.010372
+        ],
+        "loss_last5": [
+          6.970441,
+          7.01501,
+          6.78411,
+          6.940411,
+          6.847023
+        ]
+      }
+    ],
+    "new": [
+      {
+        "tag": "new_1",
+        "repo": "C:/Users/komal/Documents/Codes/kramba-ai-wt-speed",
+        "rc": 0,
+        "wall_min": 19.992542394002278,
+        "steps_logged": 150,
+        "measured_steps": 140,
+        "fused_on": true,
+        "median_s": 7.78828453574553,
+        "mean_s": 7.790966836039325,
+        "peak_alloc_gib": 2.9309,
+        "reserved_gib": 3.418,
+        "loss_first5": [
+          11.00655,
+          11.008869,
+          11.009523,
+          11.009512,
+          11.010294
+        ],
+        "loss_last5": [
+          6.9696,
+          7.016514,
+          6.785266,
+          6.94228,
+          6.847057
+        ]
+      },
+      {
+        "tag": "new_2",
+        "repo": "C:/Users/komal/Documents/Codes/kramba-ai-wt-speed",
+        "rc": 0,
+        "wall_min": 20.018919964631397,
+        "steps_logged": 150,
+        "measured_steps": 140,
+        "fused_on": true,
+        "median_s": 7.7956311349879055,
+        "mean_s": 7.804380811895435,
+        "peak_alloc_gib": 2.9309,
+        "reserved_gib": 3.418,
+        "loss_first5": [
+          11.00655,
+          11.008869,
+          11.009516,
+          11.009497,
+          11.010277
+        ],
+        "loss_last5": [
+          6.969986,
+          7.016072,
+          6.786978,
+          6.942272,
+          6.845901
+        ]
+      }
+    ]
+  }
+}
