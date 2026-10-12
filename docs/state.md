@@ -5,6 +5,72 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B pretrain: prefetch the backward recompute's weights = 3.8% faster per step (2026-10-12)
+
+**One line: at 2048x24 (hvn-hybrid, BCD balanced + offload, on top of the two levers
+below), a full BCD cycle goes from 19.94 to 19.18 s/step -- 0.76 s (3.8%) faster. No extra
+VRAM (peak reserved 5098 MiB / 83.0% in both arms). Step-0 loss bit-identical.**
+
+**Validated before building.** Grad checkpointing recomputes every inactive block
+downstream of the active one during backward. With `cache_blocks=1` each of those
+recomputes was a `load()` miss: a synchronous copy from PAGEABLE memory that also blocks the
+host, so the launch queue drains every time. Timed in the real 1B harness on main: 96 misses
+and 0.80 s of main-stream copy per step averaged over a cycle (144-192 and 1.2-1.7 s when the
+active block is early). The counts match 8 micro-batches x downstream layers exactly, so the
+instrument counts the right thing. The estimate (0.7-0.88 s, ~4%) held.
+
+**The fix.** `EdgeHVN.forward` records which offloaded blocks will be recomputed, in
+forward order. When block i's recompute starts, after its own `load()` and before its
+kernels are queued, it prefetches block i-1 on the side stream. The end of forward
+prefetches the first one (the last block). `GPUBufferPool.prefetch(..., behind=True)`
+does two things differently:
+- lets the cache hold ONE entry over `cache_blocks`, because block i must stay resident
+  for its own backward;
+- takes the oldest free buffer set even when it is the only one. Every free set was
+  released by a block whose backward was queued before block i's recompute, so waiting
+  on its release event never serializes the copy behind block i.
+Toggle: `model._offload_bwd_prefetch` (default on whenever offload prefetch is on).
+
+| arm (both include the forward-prefetch + loss-head levers) | s/step, cycle mean | bwd misses/step | peak reserved |
+|---|---:|---:|---:|
+| backward prefetch OFF, run 1 / run 2 | 19.938 / 19.937 | 96 | 5098 MiB (83.0%) |
+| backward prefetch ON, run 1 / run 2 | 19.194 / 19.166 | 0 | 5098 MiB (83.0%) |
+
+- The saving scales with downstream depth, as the mechanism predicts: -1.56 s/step with
+  every layer downstream (embedding active), -0.6 s mid-stack, +0.01 s with nothing
+  downstream (tail group active).
+- VRAM: identical peak reserved and allocated (3218 MiB), and the pool holds the same
+  buffer sets in both arms (3 DeltaNet, 2 attention, 2 tail). The second set the backward
+  prefetch needs already exists for the forward prefetch. So this lever does not eat any
+  of the ~117 MiB of headroom left under the 85% guard.
+- Loss: step-0 bit-identical. Later drift ON vs OFF 5.9e-3, inside the backward's own
+  run-to-run noise (OFF vs OFF 4.9e-3 here; up to 1.0e-2 in the entry below).
+
+**Tests** (`tests/test_offload_bwd_prefetch.py`):
+- backward misses are 0 with it on and exactly L with it off (so the counter can fire);
+- gradients match a never-offloaded model over a full cycle, and a twin that serves the
+  wrong block's weights in backward must FAIL the same bound;
+- a pool-level race stress with the main stream held behind a GPU sleep and only two sets,
+  so every backward prefetch must reuse the set released one step earlier. Its twin skips
+  the release wait and must corrupt reads. It also asserts no third set is allocated.
+- A model-level sleep version of the race test was tried first. It was BLIND: with the
+  wait removed it still passed, because the set it reused had been released long before.
+  It was deleted rather than kept as false comfort.
+Two existing residency tests now exempt exactly the one block fetched at the end of
+forward, and assert that block IS on the GPU.
+
+**Found on the way: the never-offloaded reference is not repeatable.** Gradient parity
+first failed at 1.8e-3 and 4.05e-3 relative. Root-caused by elimination: across 8 fresh
+processes, 2 showed a mismatch; in one, all four offload arms (ON and OFF) differed from
+the reference by the same 4.05e-3, so the reference run was the odd one out. It was also
+seen with backward prefetch OFF. A resident model under timing perturbation or concurrent
+SM load did NOT reproduce it, so the trigger is unknown. Same finding as the "main against
+itself drifts" line below. The parity bound is 2e-2 for that reason; corrupt weights give
+O(1) errors (#164: 1.1-2.6), and the twin test proves the bound sees them.
+
+Harness: `scripts/ab_offload_bwd_prefetch_1b.py`. Results: `results/offload_bwd_prefetch_1b/`
+(`validate_main.*` is the pre-build miss timing on main; `ab1b_*` the A/B arms).
+
 ## 1B pretrain: offload prefetch overlap + loss-head cast/pad = 8.7% faster per step (2026-10-12)
 
 **One line: at 2048x24 (hvn-hybrid, BCD balanced + offload), a full BCD cycle goes from
@@ -79,9 +145,10 @@ reaches the GPU only because the tail prefetch happens to include all decoder pa
 Latent, but the bias's placement depends on that coincidence.
 
 **Open, not built here** (named by the same investigation, not validated):
-- prefetching weights for the backward checkpoint recompute (those loads are still
-  synchronous);
-- the elementwise "glue" ops around the DeltaNet scan.
+- prefetching weights for the backward checkpoint recompute -- now built, see the entry
+  above (3.8%);
+- the elementwise "glue" ops around the DeltaNet scan -- see the fused-glue entry
+  (`feat/fused-l2norm-glue`).
 
 Also seen: free RAM drops ~50 MB per step inside one harness process, on main's code too
 (3.9 to 3.1 GB over 15 steps). Not chased; may matter for long runs. One harness arm

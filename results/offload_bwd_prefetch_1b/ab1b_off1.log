@@ -1,0 +1,64 @@
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:/Users/komal/AppData/Local/Temp/claude/C--Users-komal-Documents-Codes-kramba-ai/928e7447-f166-4af8-9f50-4098cb2392ce/scratchpad/ab1b_off1_ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:/Users/komal/AppData/Local/Temp/claude/C--Users-komal-Documents-Codes-kramba-ai/928e7447-f166-4af8-9f50-4098cb2392ce/scratchpad/ab1b_off1_ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+[cfg] bwd_prefetch False
+[build] 1,113,059,793 params, 13 BCD blocks, 11s, ram 6.1G
+        misses: fwd 8 (gpu 0.070s host 0.709s)  bwd 192 (gpu 1.599s host 21.536s, 16.16 GB)
+[warm  0] token_embedding                    wall  31.84 fwd  8.36 loss 11.2365494 (0x1.6791d00000000p+3) peak-rsv 4.98G (83.0%) ram 5.6G
+        misses: fwd 0 (gpu 0.000s host 0.000s)  bwd 176 (gpu 1.465s host 18.021s, 14.81 GB)
+[step  1] blocks.0+blocks.1                  wall  28.05 fwd  6.78 loss 11.0626078 (0x1.6200e20000000p+3) peak-rsv 4.98G (83.0%) ram 5.4G
+        misses: fwd 8 (gpu 0.062s host 2.161s)  bwd 160 (gpu 1.351s host 16.478s, 13.47 GB)
+[step  2] blocks.2+blocks.3                  wall  26.49 fwd  6.88 loss 10.9507093 (0x1.5e6c360000000p+3) peak-rsv 4.98G (83.0%) ram 5.4G
+        misses: fwd 8 (gpu 0.069s host 2.114s)  bwd 144 (gpu 1.197s host 14.996s, 12.12 GB)
+[step  3] blocks.4+blocks.5                  wall  24.89 fwd  6.90 loss 10.8911180 (0x1.5c840a0000000p+3) peak-rsv 4.98G (83.0%) ram 5.3G
+        misses: fwd 8 (gpu 0.058s host 2.092s)  bwd 128 (gpu 1.055s host 13.436s, 10.77 GB)
+[step  4] blocks.6+blocks.7                  wall  23.16 fwd  6.87 loss 10.8664017 (0x1.5bb9900000000p+3) peak-rsv 4.98G (83.0%) ram 5.2G
+        misses: fwd 8 (gpu 0.075s host 2.179s)  bwd 112 (gpu 0.965s host 11.936s, 9.43 GB)
+[step  5] blocks.8+blocks.9                  wall  21.70 fwd  6.89 loss 10.8388252 (0x1.5ad7a80000000p+3) peak-rsv 4.98G (83.0%) ram 5.2G
+        misses: fwd 8 (gpu 0.069s host 2.162s)  bwd 96 (gpu 0.825s host 10.395s, 8.08 GB)
+[step  6] blocks.10+blocks.11                wall  20.06 fwd  6.90 loss 10.8077278 (0x1.59d8e80000000p+3) peak-rsv 4.98G (83.0%) ram 5.2G
+        misses: fwd 8 (gpu 0.069s host 2.171s)  bwd 80 (gpu 0.670s host 8.832s, 6.73 GB)
+[step  7] blocks.12+blocks.13                wall  18.40 fwd  6.90 loss 10.7847071 (0x1.591c520000000p+3) peak-rsv 4.98G (83.0%) ram 5.1G
+        misses: fwd 8 (gpu 0.066s host 2.170s)  bwd 64 (gpu 0.519s host 7.280s, 5.39 GB)
+[step  8] blocks.14+blocks.15                wall  16.73 fwd  6.89 loss 10.7594013 (0x1.584d040000000p+3) peak-rsv 4.98G (83.0%) ram 5.1G
+        misses: fwd 8 (gpu 0.067s host 2.108s)  bwd 48 (gpu 0.408s host 5.833s, 4.04 GB)
+[step  9] blocks.16+blocks.17                wall  15.14 fwd  6.90 loss 10.7342567 (0x1.577f080000000p+3) peak-rsv 4.98G (83.0%) ram 5.0G
+        misses: fwd 8 (gpu 0.071s host 2.121s)  bwd 32 (gpu 0.273s host 4.289s, 2.69 GB)
+[step 10] blocks.18+blocks.19                wall  13.45 fwd  6.87 loss 10.7054996 (0x1.5693740000000p+3) peak-rsv 4.98G (83.0%) ram 5.0G
+        misses: fwd 8 (gpu 0.074s host 2.189s)  bwd 16 (gpu 0.133s host 3.581s, 1.35 GB)
+[step 11] blocks.20+blocks.21                wall  11.94 fwd  6.90 loss 10.6797237 (0x1.55c04c0000000p+3) peak-rsv 4.98G (83.0%) ram 5.0G
+        misses: fwd 8 (gpu 0.067s host 2.743s)  bwd 0 (gpu 0.000s host 0.000s, 0.00 GB)
+[step 12] blocks.22+blocks.23+final_norm+decoder wall  10.25 fwd  6.87 loss 10.6630487 (0x1.5537b20000000p+3) peak-rsv 4.98G (83.0%) ram 4.9G
+        misses: fwd 8 (gpu 0.075s host 0.804s)  bwd 192 (gpu 1.605s host 20.690s, 16.16 GB)
+[step 13] token_embedding                    wall  28.92 fwd  6.83 loss 10.6451149 (0x1.54a4c80000000p+3) peak-rsv 4.98G (83.0%) ram 4.9G
+[pool] [{'n_params': 18, 'sets': 3, 'mib_per_set': 80.2969970703125}, {'n_params': 9, 'sets': 2, 'mib_per_set': 80.01953125}, {'n_params': 3, 'sets': 2, 'mib_per_set': 0.10367012023925781}]
+[done]
