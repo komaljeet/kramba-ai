@@ -43,10 +43,15 @@ A/B now fails outright on any step-1 mismatch. The buggy run is kept as
 
 **Lever skipped: caching the quantized weight across a step's micro-batches.** In training
 the STE needs the live shadow weight inside the autograd graph, and that weight changes every
-optimizer step, so a cache could only be reused across the 8 grad-accum micro-batches. That
-means holding a second copy of every weight in VRAM, and it carries the exact silent-staleness
-risk that #117 and the #131 inference cache had to guard against. With the quantizer
-now fused and cheap, the remaining gain did not justify the risk. Not measured.
+optimizer step, so a cache could only be reused across the 8 grad-accum micro-batches. Today
+the quantized copy only exists briefly during each forward/recompute and is freed before peak
+memory; a cache would instead hold it for the whole step. At 896x16 (110 layers, 117.2M
+ternary weights) that's **about +224 MiB of VRAM held continuously**, for an estimated ~2-3%
+gain — and under `--offload` it would also keep GPU copies of weights that offload is actively
+trying to move off the card, working against that system directly. It also carries the same
+silent-staleness risk #117 and the #131 inference cache had to guard against. With the
+quantizer now fused and cheap (this entry), the ~2-3% no longer clearly justifies either the
+VRAM cost or the offload interaction. Not measured, correctness-wise or otherwise.
 
 **Harness note: the A/B was killed twice by Claude Code's low-RAM reaper.** It was not RAM
 building up from arm to arm. The trainer uses about 4.5 GB of system RAM (main process
