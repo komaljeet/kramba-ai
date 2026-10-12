@@ -91,3 +91,30 @@ def test_resume_mid_block_past_block_zero_trains():
     assert n > 0, "no optimizer state restored -- test would be vacuous"
     for _ in range(2 * STEPS_PER_BLOCK):           # crosses a block switch too
         _step(m, opt, sched)
+
+
+def test_offload_resume_load_stays_on_cpu(tmp_path):
+    """An --offload resume must not put the whole model, or the checkpoint,
+    on the GPU (#163's CPU-resident start). Before the fix both went to the
+    card and the returned dict kept the checkpoint there for the whole run."""
+    from train_edge_conversational import (_save_edge_checkpoint,
+                                           load_checkpoint_for_resume)
+    m, opt, sched = _build()
+    _step(m, opt, sched)
+    path = str(tmp_path / "edge_conversational_step1.pt")
+    _save_edge_checkpoint(m, path, global_step=1)
+    ref = {k: v.detach().float().cpu().clone() for k, v in m.state_dict().items()}
+
+    loaded, step, ck = load_checkpoint_for_resume(path, DEV, offload=True)
+    assert step == 1
+    assert all(p.device.type == "cpu" for p in loaded.parameters())
+    assert all(t.device.type == "cpu" for t in ck["model_state_dict"].values()
+               if torch.is_tensor(t))
+    # and the weights are the saved ones, not a fresh init
+    got = loaded.state_dict()
+    assert set(ref) == set(got)
+    assert all(torch.equal(got[k].float(), ref[k]) for k in ref)
+
+    # non-offload resume still lands on the device
+    loaded2, _, _ = load_checkpoint_for_resume(path, DEV, offload=False)
+    assert all(p.device.type == "cuda" for p in loaded2.parameters())
