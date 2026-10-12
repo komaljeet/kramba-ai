@@ -153,7 +153,19 @@ for s in range(n_steps):
     sched.step()
     torch.cuda.synchronize()
     wall = time.perf_counter() - w0
-    free_dev, _ = torch.cuda.mem_get_info()
+    free_dev, total_dev = torch.cuda.mem_get_info()
+    # GPU-contention guard: memory used on the card by anything OTHER than
+    # this process's allocator (context + other processes). A second job on
+    # the card would corrupt the timings, so stop instead of measuring it.
+    other = (total_dev - free_dev) - torch.cuda.memory_reserved()
+    if s == 0:
+        out["other_used_baseline"] = other
+    elif other - out["other_used_baseline"] > 300 * 2 ** 20:
+        out["aborted"] = (f"GPU contention: non-self use grew "
+                          f"{(other - out['other_used_baseline']) / 2**20:.0f} MiB at step {s}")
+        dump()
+        print("[abort]", out["aborted"], flush=True)
+        sys.exit(4)
     r = {"step": s, "warmup": s < args.warmup, "active": active, "wall": wall,
          "fwd_gpu": fwd_gpu, "loss": loss_acc.item(), "loss_hex": loss_acc.float().item().hex(),
          "peak_alloc": torch.cuda.max_memory_allocated(),

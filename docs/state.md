@@ -5,6 +5,91 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B pretrain: offload prefetch overlap + loss-head cast/pad = 8.7% faster per step (2026-10-12)
+
+**One line: at 2048x24 (hvn-hybrid, BCD balanced + offload), a full BCD cycle goes from
+21.83 to 19.93 s/step -- 1.90 s (8.7%) faster. Step-0 loss is bit-identical. Peak VRAM goes
+from 79.9% to 83.0% of the card, under the 85% guard but only ~117 MiB below it.**
+
+Two levers found by a debugger investigation earlier today, built properly here:
+
+1. **Offload prefetch now overlaps compute.** `GPUBufferPool.prefetch` made the copy stream
+   wait for the WHOLE main stream (added in eb2b97b to fix a real race). Prefetch runs
+   right after block i is queued, so block i+1's weight copy waited for block i to finish:
+   0% overlap. Now each released buffer set gets its own event, recorded on the main stream
+   in `_release`, and a prefetch that reuses a set waits only for that set's event. Fresh
+   `torch.empty` sets keep the blanket wait (that is the case eb2b97b fixed). Prefetch takes
+   the oldest free set, and only when two are free -- otherwise it is handed the set the
+   current block just released and serializes again. Costs one extra buffer set per shape
+   (+190 MiB at 1B). Why this is safe, call site by call site, is in
+   `_order_prefetch_after`'s docstring.
+2. **Loss head: cast the decoder weight once, pad the vocab.** Autocast re-cast the fp32
+   tied table [50257, 2048] to bf16 on every slice call (16 per micro-batch). Autocast's
+   own cache never applied: it only caches leaf tensors that require grad, and under BCD the
+   table is frozen. And 50257 is odd, so cuBLAS used an `align1` GEMM. Now the weight is cast
+   once per call into a buffer padded to 50304 rows (zeros, -inf bias on the pad). Only used
+   under bf16 autocast, with a plain Linear decoder and a frozen weight -- in practice BCD
+   steps where the embedding block is not active. Padding is local to the call: model,
+   state_dict and checkpoints keep 50257.
+
+Measured with a lean harness (`scripts/ab_offload_losshead_1b.py`: the trainer's own
+`build_model_and_config` / `apply_fast_stack` / `build_optimizer` / `BlockCoordinateScheduler`,
+synthetic tokens, no DataLoader, no audit). 2 warmup steps, then one full 13-block cycle,
+because step time runs 10-30 s depending on the active block.
+
+| arm | s/step (cycle mean) | forward GPU s | peak reserved |
+|---|---:|---:|---:|
+| main, run 1 / run 2 | 21.818 / 21.844 | 8.05 | 4.79 GiB (79.9%) |
+| branch, run 1 / run 2 | 19.928 / 19.926 | 6.88 | 4.98 GiB (83.0%) |
+| branch, old blanket wait (lever 2 only) | 21.110 | 8.04 | 4.98 GiB (83.0%) |
+
+- Repeat runs agree to 0.03 s; the gap is 1.90 s.
+- Split: lever 2 is 0.72 s, lever 1 is 1.18 s. The combined result equals the sum of the
+  two, so they don't interact. The scratch estimates were -1.15 s and -0.76 s.
+- VRAM: all +190 MiB is lever 1. Lever 2 adds nothing to the peak: the cast copy just
+  replaces the per-slice transient copy it used to make.
+
+**Correctness.**
+- Step-0 loss (initial weights) is bit-identical across every arm.
+- After step 0 the runs drift, but **main against itself drifts too**: identical code,
+  max 4.4e-3 in loss over 15 steps. The backward is not bit-repeatable run to run. Branch vs
+  branch drifts 4.9e-3, branch vs main up to 7.5e-3, and new vs old prefetch ordering
+  (same values expected) up to 8.1e-3. As a control, main with loss chunk 256 instead of
+  512 (a bf16 change already accepted here) is 7.9-10.3e-3 off main and already differs
+  at step 0. So nothing here is outside normal noise.
+- The race lever 1 must not reopen is covered by a deterministic test:
+  `test_prefetch_release_events_survive_randomized_stress` holds the main stream behind
+  with `torch.cuda._sleep`. It passes, and its twin proves it FAILS when the per-set wait is
+  skipped. `test_prefetch_copy_overlaps_main_stream_work` fails 3/3 on the old blanket wait.
+- A model-level test cannot catch this race at small size. Measured: the host is never
+  more than ~1 block ahead of the GPU, and the set prefetch reuses was released 2+ blocks
+  earlier, so its event had already completed in 138/138 reuses.
+- Lever 2: per-token losses are bit-identical at 3 vocab sizes. Gradients are not. The
+  cause is PyTorch's default `allow_bf16_reduced_precision_reduction=True`: cuBLAS picks
+  bf16 split-K kernels depending on the GEMM shape. With it off, both paths are equally far
+  from fp32 to 4 digits. With it on, at d=2048 both are 3.5e-3 from fp32 (identical); at
+  d=896/1024 the fast path is 1.45-1.6x further, still inside the band the old path already
+  has at d=512 (7e-3). Tests gate on that band.
+
+**Found on the way, not fixed: offload + chunked loss + `offload_prefetch=False` crashes on
+main.** The decoder bias lives in the tail BCD block. The `return_hidden` path only loads
+`final_norm`, so the chunked loss reads a bias still parked on CPU ("mat1 is on cuda:0,
+different from other tensors on cpu"). With prefetch on (the trainer's only mode) the bias
+reaches the GPU only because the tail prefetch happens to include all decoder params.
+Latent, but the bias's placement depends on that coincidence.
+
+**Open, not built here** (named by the same investigation, not validated):
+- prefetching weights for the backward checkpoint recompute (those loads are still
+  synchronous);
+- the elementwise "glue" ops around the DeltaNet scan.
+
+Also seen: free RAM drops ~50 MB per step inside one harness process, on main's code too
+(3.9 to 3.1 GB over 15 steps). Not chased; may matter for long runs. One harness arm
+(lever 1 alone) died at start-up with Triton's `Cannot find ptxas.exe`, unexplained; the
+lever split above uses the old-wait arm instead.
+
+Results: `results/offload_losshead_1b/` (per-arm JSON + logs, `summary.json`).
+
 ## Pretrain speed levers: +2.1% per step, same loss, same VRAM (#154 context, 2026-10-12)
 
 **One line: on the 896x16 hybrid at seq 4096, the branch steps in 7.795 s against 7.961 s
