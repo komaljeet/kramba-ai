@@ -151,6 +151,24 @@ def scale_count(out_features: int, in_features: int, group_size: int) -> int:
     return out_features * (in_features // group_size)
 
 
+def _advance_cpu_rng_like_uniform(numel: int, chunk: int = 1 << 20) -> None:
+    """Advance the global CPU RNG exactly as ``uniform_`` on ``numel`` fp32 values would.
+
+    CPU ``uniform_`` draws one value per element regardless of tensor size, so a
+    bounded 4 MB buffer filled repeatedly lands on the identical generator state
+    (checked against ``xavier_uniform_`` on 1B-size and odd shapes, and pinned by
+    tests/test_ternary_inplace.py) without allocating the full matrix.
+    """
+    if numel <= 0:
+        return
+    buf = torch.empty(min(numel, chunk))
+    left = numel
+    while left > 0:
+        k = min(left, chunk)
+        buf[:k].uniform_()
+        left -= k
+
+
 class TernaryLinear(nn.Module):
     """``nn.Linear`` drop-in with BitNet b1.58 ternary weights.
 
@@ -179,16 +197,26 @@ class TernaryLinear(nn.Module):
     use_fused = False
 
     def __init__(self, in_features: int, out_features: int, bias: bool = False,
-                 group_size: int = GROUP_PER_TENSOR):
+                 group_size: int = GROUP_PER_TENSOR, *,
+                 _weight: nn.Parameter | None = None,
+                 _bias: nn.Parameter | None = None):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.group_size = int(group_size)
         # Fail at construction, not at the first forward halfway through a run.
-        _absmean_scale(torch.zeros(out_features, in_features), self.group_size, 1e-6)
-        self.weight = nn.Parameter(torch.empty(out_features, in_features))
-        nn.init.xavier_uniform_(self.weight)
-        self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
+        # A meta tensor: the check only needs the shape, and a real zeros matrix
+        # here was a throwaway full-size allocation per layer (1B RAM finding).
+        _absmean_scale(torch.empty(out_features, in_features, device="meta"),
+                       self.group_size, 1e-6)
+        if _weight is not None:
+            # from_linear: adopt the dense layer's Parameter -- no copy.
+            self.weight = _weight
+            self.bias = _bias
+        else:
+            self.weight = nn.Parameter(torch.empty(out_features, in_features))
+            nn.init.xavier_uniform_(self.weight)
+            self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
         self._frozen_codes: torch.Tensor | None = None
         self._frozen_scale: torch.Tensor | None = None
         # Issue #131: dequantized weight reused across inference-only forwards.
@@ -295,19 +323,38 @@ class TernaryLinear(nn.Module):
 
     @classmethod
     def from_linear(cls, linear: nn.Linear,
-                    group_size: int = GROUP_PER_TENSOR) -> "TernaryLinear":
+                    group_size: int = GROUP_PER_TENSOR, *,
+                    clone: bool = False) -> "TernaryLinear":
         """Build a (still-trainable) :class:`TernaryLinear` seeded from a dense layer.
 
         Useful for a short fine-tuning "recovery" pass after converting an
         already-trained model (as opposed to training ternary from scratch).
+
+        By default the new layer ADOPTS ``linear``'s Parameters (same objects,
+        same storage): ``linear`` must not be used afterwards. The old version
+        cloned the weight on top of a fresh xavier init and a zeros probe -- three
+        full copies of every weight at once, which at 1B (2048x24, --offload) put
+        the build at 8.25 GB working set on a 15 GB machine. ``clone=True`` keeps
+        the old copy semantics, for a weight that is tied to another module.
         """
-        module = cls(linear.in_features, linear.out_features,
-                     bias=linear.bias is not None, group_size=group_size)
-        module.weight.data = linear.weight.data.clone()
-        if module.bias is not None:
-            module.bias.data = linear.bias.data.clone()
-        module.to(linear.weight.device)
-        return module
+        if clone:
+            weight = nn.Parameter(linear.weight.detach().clone())
+            bias = (nn.Parameter(linear.bias.detach().clone())
+                    if linear.bias is not None else None)
+        else:
+            weight, bias = linear.weight, linear.bias
+            weight.requires_grad_(True)
+            if bias is not None:
+                bias.requires_grad_(True)
+        # The old path ran xavier_uniform_ on a throwaway CPU matrix, which
+        # advanced the global CPU RNG. The DataLoader's shuffle seed is drawn
+        # from that RNG after the model is built, so dropping the draw would
+        # silently change a seeded run's data order versus every earlier run.
+        # Advance it by exactly the same amount, in bounded chunks.
+        _advance_cpu_rng_like_uniform(linear.out_features * linear.in_features)
+        return cls(linear.in_features, linear.out_features,
+                   bias=bias is not None, group_size=group_size,
+                   _weight=weight, _bias=bias)
 
 
 class TernaryHamiltonian:
@@ -368,20 +415,38 @@ def apply_ternary_to_model(model: nn.Module, target_names: list[str] | None = No
     dict[str, TernaryLinear]
         Layer name -> the new ternary module.
     """
-    linear_modules = {name: mod for name, mod in model.named_modules() if isinstance(mod, nn.Linear)}
-    names = target_names or list(linear_modules.keys())
+    # Names only -- holding the Linear modules themselves for the whole loop is
+    # what kept every old weight alive until the last of 166 layers converted.
+    linear_names = [name for name, mod in model.named_modules() if isinstance(mod, nn.Linear)]
+    linear_name_set = set(linear_names)
+    names = target_names or linear_names
+    # A Parameter owned by more than one module (tied embedding/decoder) is
+    # cloned, as before: adopting it would turn a tie the old code broke into
+    # one that persists, changing what trains. Counted over DISTINCT modules so
+    # shared_weights blocks (one module reached by many paths) are not "tied".
+    owners: dict[int, int] = {}
+    for mod in model.modules():
+        for p in mod._parameters.values():
+            if p is not None:
+                owners[id(p)] = owners.get(id(p), 0) + 1
     results: dict[str, TernaryLinear] = {}
 
     for name in names:
-        if name not in linear_modules:
+        if name not in linear_name_set:
             continue
         *parent_path, attr = name.split(".")
         parent = model
         for p in parent_path:
             parent = getattr(parent, p)
-        ternary_layer = TernaryLinear.from_linear(linear_modules[name],
-                                                  group_size=group_size)
+        linear = getattr(parent, attr)
+        if not isinstance(linear, nn.Linear):
+            continue
+        tied = any(owners.get(id(p), 0) > 1
+                   for p in (linear.weight, linear.bias) if p is not None)
+        ternary_layer = TernaryLinear.from_linear(linear, group_size=group_size,
+                                                  clone=tied)
         setattr(parent, attr, ternary_layer)
+        del linear
         results[name] = ternary_layer
 
     return results
