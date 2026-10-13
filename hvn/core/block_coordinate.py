@@ -258,8 +258,19 @@ class GPUBufferPool:
         return self._native_dtype.get(id(p), p.dtype)
 
     def park_dtype_for(self, p: nn.Parameter) -> torch.dtype:
-        """The dtype `p` should be stored at while parked (inactive)."""
+        """The dtype `p` should be stored at while parked (inactive).
+
+        1-D params (biases, norm gains) always park at their native dtype.
+        Each park rounds the active tenure's accumulated update to the park
+        dtype with no fp32 master kept, so any tenure whose total update is
+        under half a bf16 ulp is erased. Near 3.0 (DeltaNet's alpha_proj.bias
+        init) that ulp is 2^-6: measured, those biases sat at exactly 3.0 in
+        every block after a 300-step --block-coordinate --offload run. They
+        are a negligible share of parameter bytes, so keeping them exact is
+        nearly free."""
         native = self.native_dtype_for(p)
+        if p.dim() <= 1:
+            return native
         if self.park_dtype is not None and _dtype_itemsize(self.park_dtype) < _dtype_itemsize(native):
             return self.park_dtype
         return native

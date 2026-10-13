@@ -229,7 +229,9 @@ def test_bf16_parked_groups_return_with_their_training():
     """--offload in train_edge_conversational.py parks inactive blocks in bf16.
     Each group must (a) be fp32 in full while active and bf16 in full while
     parked, and (b) come back holding the value it left with -- for EVERY
-    member, including non-first ones, across two tenures."""
+    member, including non-first ones, across two tenures. 1-D params (biases,
+    norm gains) stay fp32 while parked and must come back bit-exact: bf16
+    parking rounded their small updates away entirely."""
     device = torch.device("cuda")
     torch.manual_seed(0)
     m = _model(True).to(device)
@@ -241,6 +243,7 @@ def test_bf16_parked_groups_return_with_their_training():
     init = {id(p): p.detach().float().cpu().clone() for p in m.parameters()}
     left_with: dict[int, torch.Tensor] = {}
     returns_checked = 0
+    returns_1d = 0
 
     def _dtypes_ok():
         active = set(sched.active_block_members)
@@ -249,7 +252,8 @@ def test_bf16_parked_groups_return_with_their_training():
                 if id(p) in sched._pinned:
                     assert p.dtype == torch.float32
                     continue
-                want = torch.float32 if name in active else torch.bfloat16
+                want = (torch.float32 if name in active or p.dim() <= 1
+                        else torch.bfloat16)
                 assert p.dtype == want, (
                     f"{name} is {p.dtype}, want {want} "
                     f"(active={sched.active_block_name!r})")
@@ -280,10 +284,15 @@ def test_bf16_parked_groups_return_with_their_training():
                     assert (was - init[id(p)]).abs().max().item() > tol, (
                         "group left without having trained -- vacuous")
                     returns_checked += 1
+                elif id(p) in left_with:
+                    assert torch.equal(p.detach().float().cpu(), left_with[id(p)]), (
+                        "1-D param came back changed -- parked at reduced precision")
+                    returns_1d += 1
     # Every non-pinned matrix in every group must have been checked on return.
     expected = sum(1 for _, ps in sched.blocks for p in ps
                    if id(p) not in sched._pinned and p.dim() >= 2)
     assert returns_checked >= expected, (returns_checked, expected)
+    assert returns_1d > 0, "no 1-D param was checked on return -- vacuous"
 
 
 if __name__ == "__main__":
