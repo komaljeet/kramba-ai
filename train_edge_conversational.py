@@ -36,11 +36,13 @@ import sys
 import time
 
 # torch's Windows CPU allocator is mimalloc, which by default keeps freed pages
-# committed for a delay before returning them to the OS. Building a 1B model
-# frees GBs of temporaries in a burst, and the hoarded pages counted against
-# this 15 GB machine's commit limit (private memory 15.97 GB -> 9.27 GB after a
-# 1B --offload build with this set). mimalloc reads it once, when the DLL that
-# embeds it loads -- so it must be set before torch (and pandas/pyarrow) import.
+# committed for a delay before returning them to the OS. On a 1B --offload
+# resume, deleting the CLI-built model freed only 0.8 of 8.2 GB without this,
+# and rebuilding the checkpoint's model on top then ran the 15 GB machine out
+# of RAM; with it the delete returns to baseline and the resume fits (peak
+# working set 7.6 GB). Throughput unchanged (1.41 vs 1.42 s/step, 1024x12
+# --offload, 2026-10-13). mimalloc reads it once, when the DLL that embeds it
+# loads -- so it must be set before torch (and pandas/pyarrow) import.
 os.environ.setdefault("MIMALLOC_PURGE_DELAY", "0")
 
 import numpy as np
