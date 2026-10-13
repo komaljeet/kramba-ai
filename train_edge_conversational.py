@@ -35,6 +35,16 @@ import subprocess
 import sys
 import time
 
+# torch's Windows CPU allocator is mimalloc, which by default keeps freed pages
+# committed for a delay before returning them to the OS. On a 1B --offload
+# resume, deleting the CLI-built model freed only 0.8 of 8.2 GB without this,
+# and rebuilding the checkpoint's model on top then ran the 15 GB machine out
+# of RAM; with it the delete returns to baseline and the resume fits (peak
+# working set 7.6 GB). Throughput unchanged (1.41 vs 1.42 s/step, 1024x12
+# --offload, 2026-10-13). mimalloc reads it once, when the DLL that embeds it
+# loads -- so it must be set before torch (and pandas/pyarrow) import.
+os.environ.setdefault("MIMALLOC_PURGE_DELAY", "0")
+
 import numpy as np
 
 # pandas is imported HERE, at module scope, and must stay ahead of `import
@@ -2151,8 +2161,8 @@ def build_model_and_config(
     # Apply ternary BitNet b1.58 weights (skipped for the fp32 A/B)
     if apply_ternary:
         print(f"  Applying ternary BitNet b1.58 weight quantization...")
-        all_linears = {name: mod for name, mod in model.named_modules()
-                       if isinstance(mod, nn.Linear)}
+        all_linears = [name for name, mod in model.named_modules()
+                       if isinstance(mod, nn.Linear)]
         exclude_patterns = ("beta_proj", "alpha_proj", "decoder")
         target_names = [name for name in all_linears
                         if not any(p in name for p in exclude_patterns)]
@@ -2429,8 +2439,8 @@ def pre_training_audit(
             # Apply ternary to rebuilt model (same layers as original) — only if the
             # checkpoint was ternary (fp32 A/B runs skip it).
             if ckpt.get("ternary", True):
-                all_linears = {name: mod for name, mod in rebuilt.named_modules()
-                               if isinstance(mod, nn.Linear)}
+                all_linears = [name for name, mod in rebuilt.named_modules()
+                               if isinstance(mod, nn.Linear)]
                 exclude_patterns = ("beta_proj", "alpha_proj", "decoder")
                 target_names = [name for name in all_linears
                                 if not any(p in name for p in exclude_patterns)]
@@ -2621,8 +2631,8 @@ def load_checkpoint_for_resume(
     # Apply ternary to match the saved model — only if it was ternary. Older
     # checkpoints predate the "ternary" flag, so default True for back-compat.
     if ckpt.get("ternary", True):
-        all_linears = {name: mod for name, mod in model.named_modules()
-                       if isinstance(mod, nn.Linear)}
+        all_linears = [name for name, mod in model.named_modules()
+                       if isinstance(mod, nn.Linear)]
         exclude_patterns = ("beta_proj", "alpha_proj", "decoder")
         target_names = [name for name in all_linears
                         if not any(p in name for p in exclude_patterns)]
