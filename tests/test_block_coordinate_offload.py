@@ -633,9 +633,16 @@ else:
             offload_park_dtype=torch.bfloat16,
         )
 
+        def _expected(name, p):
+            # 1-D params (biases, norm gains) always park at native dtype --
+            # see test_bf16_parking_keeps_1d_params_trainable.
+            if name == sched.active_block_name or p.dim() <= 1:
+                return torch.float32
+            return torch.bfloat16
+
         for name, params in sched.blocks:
-            expected = torch.float32 if name == sched.active_block_name else torch.bfloat16
             for p in params:
+                expected = _expected(name, p)
                 assert p.dtype == expected, (
                     f"block {name!r} (active={sched.active_block_name!r}) is "
                     f"{p.dtype}, expected {expected}"
@@ -646,8 +653,8 @@ else:
         for _ in range(sched.num_blocks):
             sched.step()
             for name, params in sched.blocks:
-                expected = torch.float32 if name == sched.active_block_name else torch.bfloat16
                 for p in params:
+                    expected = _expected(name, p)
                     if id(p) in getattr(sched, "_pinned", ()):
                         # #157: a pinned (two-module) parameter is never parked,
                         # so it keeps its native dtype. Assert that rather than
@@ -734,6 +741,53 @@ else:
             f"loss did not decrease with bf16 parking enabled: "
             f"early={early_mean:.4f} late={late_mean:.4f}"
         )
+
+    def test_bf16_parking_keeps_1d_params_trainable():
+        """Each park rounds the block to the park dtype with no fp32 master,
+        so a tenure whose total update is under half a bf16 ulp is erased.
+        DeltaNet's alpha_proj.bias starts at 3.0 (ulp 2^-6): with bf16-parked
+        1-D params it stayed at exactly 3.0 in every block across a whole run.
+        1-D params must park at native dtype and keep their training."""
+        device = torch.device("cuda")
+        torch.manual_seed(0)
+        model = _tiny_model(num_layers=3, grad_checkpoint=True).to(device)
+        lr, spb = 1e-4, 3
+        # Non-vacuity: one tenure's largest possible AdamW move (~lr per step)
+        # must be below half a bf16 ulp at 3.0, or bf16 parking would let the
+        # bias move too and this test could not fail.
+        assert lr * spb < 2.0 ** -7
+        opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0)
+        sched = BlockCoordinateScheduler(
+            model, opt, steps_per_block=spb,
+            offload_inactive_weights=True, device=device,
+            offload_park_dtype=torch.bfloat16,
+        )
+        biases = {n: p for n, p in model.named_parameters() if n.endswith("alpha_proj.bias")}
+        assert len(biases) == 3
+        init = {n: p.detach().float().cpu().clone() for n, p in biases.items()}
+
+        torch.manual_seed(1)
+        ids = torch.randint(0, 64, (2, 16), device=device)
+        for _ in range(sched.num_blocks * spb * 3):  # 3 full cycles
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                loss = F.cross_entropy(model(ids).reshape(-1, 64), ids.reshape(-1))
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            sched.step()
+            # Parking must still shrink matrices -- the fix is 1-D only.
+            for name, params in sched.blocks:
+                if name == sched.active_block_name:
+                    continue
+                for p in params:
+                    if id(p) not in sched._pinned and p.dim() >= 2:
+                        assert p.dtype == torch.bfloat16, f"{name} matrix parked as {p.dtype}"
+
+        for n, p in biases.items():
+            moved = (p.detach().float().cpu() - init[n]).abs().max().item()
+            assert moved > 1e-4, (
+                f"{n} moved only {moved:.2e} after 3 cycles -- its training is "
+                f"being rounded away on every bf16 park")
 
     def test_training_converges_with_offload():
         torch.manual_seed(0)
