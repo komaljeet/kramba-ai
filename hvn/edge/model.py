@@ -23,6 +23,7 @@ and are demonstrated individually in ``test_edge_devices.py``.
 
 from __future__ import annotations
 
+import math
 from typing import Callable, Optional
 
 import torch
@@ -34,7 +35,8 @@ from ..core.hvn_block import HVNBlock
 from ..core.deltanet import DeltaNetBlock
 from ..core.transformer_block import TransformerBlock
 from .shared import SharedWeightHVN
-from .ternary import TernaryLinear, apply_ternary_to_model
+from .ternary import (TernaryLinear, _advance_cpu_rng_like_uniform,
+                      apply_ternary_to_model)
 
 
 class EdgeHVN(nn.Module):
@@ -203,7 +205,30 @@ class EdgeHVN(nn.Module):
             self.shared_block = None
 
         self.final_norm = nn.LayerNorm(d_model)
-        self.decoder = HVNDecoder(d_model=d_model, vocab_size=vocab_size, dropout=dropout)
+        # #168: when tied, the decoder's own [vocab, d_model] weight is thrown
+        # away a few lines below -- at 1B (50257x2048) that was a 0.38 GiB fp32
+        # allocation that only existed to be freed, and it set the constructor's
+        # physical-RAM peak. Build the decoder on meta instead and advance the
+        # CPU RNG exactly as its init would have, so every parameter (and the
+        # generator state left behind) is bit-identical to the old path
+        # (pinned by tests/test_edge_ctor_ram.py). CPU only: elsewhere the
+        # discarded init would have drawn from a different generator.
+        _lean_tied = (tie_embeddings
+                      and self.token_embedding.weight.device.type == "cpu")
+        if _lean_tied:
+            with torch.device("meta"):
+                self.decoder = HVNDecoder(d_model=d_model, vocab_size=vocab_size,
+                                          dropout=dropout)
+            # nn.Linear.reset_parameters: kaiming_uniform_ on the weight, then
+            # uniform_(-1/sqrt(fan_in), 1/sqrt(fan_in)) on the bias.
+            _advance_cpu_rng_like_uniform(vocab_size * d_model)
+            _bias = torch.empty(vocab_size)
+            _bound = 1 / math.sqrt(d_model) if d_model > 0 else 0
+            nn.init.uniform_(_bias, -_bound, _bound)
+            self.decoder.decoder.bias = nn.Parameter(_bias)
+        else:
+            self.decoder = HVNDecoder(d_model=d_model, vocab_size=vocab_size,
+                                      dropout=dropout)
 
         # Issue #106: tie the input embedding and output projection weights
         # (classic GPT-2/ALBERT trick). Both are [vocab_size, d_model]
