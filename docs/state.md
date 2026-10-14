@@ -5,6 +5,217 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B pretrain: today's three levers stacked, measured together = 15.706 s/step, -7.2% on top of the 16.92 baseline (2026-10-14)
+
+**One line: the within-step ternary cache, the frozen-block scale cache, the fused
+short-conv, and the strided scan IO (four entries below) were each measured
+separately. Stacked together on fully-merged main, one real full BCD cycle (26 steps,
+2048x24 hvn-hybrid, --offload --block-coordinate --fast) averages 15.706 s/step --
+**-7.2%** on top of today's earlier 16.92 s/step starting point, not the ~8.6% a naive
+multiply of the four separate percentages would predict. Amdahl overlap between the
+levers eats the difference, which is exactly why this was measured instead of
+computed. Against the ORIGINAL pre-this-week main (21.81 s/step), that's -28.0%
+overall, a 1.39x speedup.**
+
+Peak reserved VRAM is 5060 MiB -- slightly LOWER than the 5078 MiB measured with just
+the first four (pre-today) levers, because the new fusions also free transient copy
+buffers the old path held. Loss trajectory over the real run is sane (11.24 -> 9.95
+over 26 steps), no NaN.
+
+This closes out the "chase the real remaining levers instead of re-asserting
+'exhausted'" pass prompted directly by a repeat of this project's oldest mistake: a
+session claimed "no big lever left" off a stale attribution table, was called out for
+it (this exact claim has been wrong before -- the scan megakernel was declared
+non-breaking-exhausted before Design B landed, and "the step is finished" at 21.81
+s/step was itself overturned by this week's first four levers), and a fresh
+measurement on current code found three more real, smaller wins instead of
+confirming nothing was left. See the four entries immediately below for each lever's
+own numbers, and the "fresh 1B step attribution" entry for the corrected attribution
+table and the two measurement bugs (#131 double-count on the optimizer row; the old
+"232ms weight cast" claim being 94% mislabeled offload copy) found while re-checking
+the old one.
+
+Also fixed in the same pass, not speed levers but real bugs found and fixed on the way
+(all merged): a resume crash under --offload whenever the saved active block wasn't
+block 0; BCD's bf16 parking silently freezing 1-D params (biases/norms) for the whole
+run; ternary conversion doubling host RAM and crashing 1B builds outright; a
+swallowed-error-message bug that made argument mistakes look like silent crashes; and
+a smaller RAM waste building a throwaway decoder weight when embeddings are tied.
+
+## Real pretrain-time numbers at 270M, 300M, 500M, measured on current code (2026-10-13)
+
+**One line: using the real trainer (chunked loss, fused kernels, real ternary) rather
+than a synthetic benchmark missing the loss-head optimization (which showed every size
+spilling past VRAM -- a methodology bug caught before reporting, not a real result):**
+
+| size | shape | fits plain? | measured | days @ 30 tok/body-param |
+|---|---|---|---:|---:|
+| 270M | 1024x20 | yes, 71.5% VRAM | 3,239 tok/s | 22.6 |
+| 300M | 1024x24 | yes, right at the 85% guard line | 2,768 tok/s | 31.7 |
+| 500M | 1024x44 | **no** -- 126% of VRAM, WDDM spill | n/a (175 s/step is a spill artifact, not a real number) | n/a |
+
+**500M needs `--block-coordinate --offload`** (1024x44, 12 balanced blocks,
+`--attn-layers 5,16,27,38`): real, stable, 18 steps across 3 block switches, flat
+RAM/VRAM at 46% of the card. **17.8 s/step, ~1,841 tok/s.** Two honest framings for
+"how long":
+- **1x, no quality lost** (BCD-trained matched to full-training quality, i.e. training
+  long enough to make up for BCD's own cost): **~139 days**.
+- **1.6x, BCD's real measured quality cost accepted as-is** (just the raw wall-clock
+  budget, output included): **~87 days**. The shorter number is the one with the
+  quality cost baked in, not the other way around -- worth stating explicitly since
+  it's easy to get backwards.
+
+The 500M build initially appeared to crash silently (no traceback, no process left
+alive) -- root cause was a missing `--attn-layers` flag combined with the
+swallowed-error-message bug above, not RAM or a real crash. Fixed as part of that bug.
+
+## BCD+offload: four real bugs found and fixed before trusting it on a long 1B run (2026-10-13/14)
+
+**One line: an end-to-end integration test (1024x20 real trainer, offload+BCD vs
+BCD-only vs plain, hard-killed and resumed mid-block three times, then confirmed on a
+real 1.1B build+resume) found main was NOT safe for a real long run. All four fixed,
+all validated together afterward with no bad interaction.**
+
+1. **Resume under `--offload` crashed on step 1** whenever the saved active block
+   wasn't block 0 (true on almost every real resume). `train()` loaded the optimizer
+   state while the fresh scheduler still had every other block parked on CPU in bf16,
+   so momentum landed on CPU in bf16 and the first `optimizer.step()` failed with
+   "Expected all tensors to be on the same device". Fixed by restoring the BCD
+   position before the optimizer state. New test `tests/test_offload_resume.py`.
+2. **BCD's bf16 parking silently froze 1-D params** (biases, norm weights) for the
+   whole run. `park_dtype_for` returned bf16 for every parameter with no fp32 copy
+   kept; near a typical init value (e.g. `alpha_proj.bias` at 3.0) bf16's granularity
+   swallowed the optimizer's tiny per-step update at EVERY park, so progress made
+   during a block's active turn got erased the moment it parked again. Reproduced
+   directly: a bias stayed exactly 3.0000 for an entire 300-step offloaded run; moves
+   normally under plain/BCD-only training. Fixed: 1-D params (ndim<=1) now park at
+   native dtype; matrices still park in bf16 (a smaller residual gap -- 6-11% of
+   large-matrix values still lose their sub-step update per park, not yet fixed).
+3. **Ternary conversion doubled host RAM and crashed 1B builds outright** on this
+   15.29GB-RAM machine. `apply_ternary_to_model` kept every old dense `nn.Linear`
+   alive in a dict until all 166 layers converted, and cloned each weight onto a
+   fresh xavier-initialized matrix instead of converting in place -- briefly 3 copies
+   of each layer's weight. Old main: ran out of RAM building a real 1.1B model, had to
+   be killed. Fixed: `from_linear` now adopts the dense Parameter directly (no clone,
+   no throwaway init); build peak 8.25GB -> 4.91GB working-set. `MIMALLOC_PURGE_DELAY=0`
+   set before torch import, needed in ADDITION to the in-place fix for resume to
+   survive (fix alone still crashed resume; the allocator doesn't give back the first
+   model's freed memory without it).
+4. **A swallowed-error-message bug** turned plain argument mistakes into silent-looking
+   crashes: the trainer's `finally` block called `os._exit(1)` before Python could
+   print a `SystemExit`'s message, so e.g. the "--arch hvn-hybrid requires
+   --attn-layers" refusal exited 1 with empty stderr -- indistinguishable from a real
+   crash without a full investigation (one was dispatched for exactly this, suspecting
+   a RAM/OOM crash, before finding the real cause). Fixed: the except-SystemExit branch
+   now prints `e.code` before the exit fires.
+
+Smaller, found alongside #3: the decoder built its own full `50257x2048` fp32 weight
+(0.38GB) and immediately discarded it when embeddings are tied. Fixed by building the
+tied decoder on the `meta` device instead. Bit-identical weights and RNG state (a test
+pins this and is checked to actually fail). Build peak 5.22->4.84GB, resume peak
+7.56->7.18GB -- resume still bottoms out tight (checkpoint + fresh model coexist in
+RAM; a Windows-safe mmap fix was deliberately left for later, see issue #168) but less
+so.
+
+**Validated together afterward**, not just individually: full test suite on merged
+main, a real 300-step run with 3 hard-kill resumes (checked optimizer moments, BCD
+position, and parked weights match exactly across each kill), and a real 1.1B
+fresh-build + resume. No interaction bugs between the four. Two small non-blocking
+things surfaced during that check and filed rather than chased: issue #169 (resume
+rounds the restored block's matrices through bf16 once, pre-dates all four fixes
+above, traces to #113) and issue #170 (a test leaks TF32 global state across the
+process, pure test hygiene, unrelated to BCD/offload correctness).
+
+## Fresh 1B step attribution on current main -- the old table was stale, GEMM's share grew to 43% (2026-10-14)
+
+**One line: re-measured the real step attribution (CUDA-kernel-rows only, no #131
+double-count) on current main instead of trusting the pre-this-week table. GEMM's
+share grew from 33% to 43% now that this week's other fixes shrank everything else.
+The old table also had two real mistakes in it.**
+
+| category | share now | old table |
+|---|---:|---:|
+| gemm | 43% | 33% |
+| elementwise | 34% | 36% |
+| scan | 19% | 15% |
+| PCIe copies | 12% (hidden on side stream, costs ~nothing) | 15% "other" |
+| ternary quantize | 1% | n/a |
+| optimizer | 2% | 2% |
+
+Step time measured 16.89 s, matching the documented 16.92. The old table came from a
+different, no-ternary harness at 3.67 s/step -- not a like-for-like baseline, which is
+why it needed replacing, not just re-trusting.
+
+**Two mistakes in the old method, found while re-checking it:**
+- the old "optimizer 1.6%" row was a GPU annotation range (`Optimizer.step#Muon.step`),
+  not real kernels -- the #131 double-count again, on a different profiling call this
+  time.
+- the old "[2048,2048] `copy_`, 232ms, suspected BitNet STE/autocast cast" claim was
+  94% offload H2D copy mislabeled as a weight cast. Real on-GPU weight casts were only
+  ~66ms/step. That probe had no ternary layers in it at all, so the STE explanation was
+  a guess dressed as a measurement.
+
+This directly motivated the within-step ternary cache below (built to fix the "6%"
+the old number implied, landed anyway once the real number turned out to be smaller)
+and is the reason the scan-copy and short-conv entries below state their own
+before-fixing confirmation step explicitly -- re-measure before trusting a stale
+number, this project has been burned by it more than once now.
+
+## 1B pretrain: ternary weight quantized once per optimizer step, not once per micro-batch/recompute = 0.8% faster per step (2026-10-14)
+
+**One line: each trainable ternary weight is quantized once per optimizer step and
+reused across all 8 micro-batches and the checkpoint recompute, instead of
+re-quantizing on every call. At 2048x24 (same config as above) 16.92 -> 16.78 s/step.**
+
+Built to chase the old table's "232ms/6%" weight-cast claim above -- the real cause
+turned out to be mostly mislabeled (see the attribution entry), so the win here is
+small (0.8%, not ~6%) because the premise that motivated building it was wrong. Landed
+anyway because it's free and fully correctness-tested, not because the number is big.
+
+`hvn/edge/ternary.py`: `_dequantized` / `_CachedSTE`. Cache cleared on every optimizer
+step (pre/post hooks) plus a `data_ptr`/version check; frozen (BCD-parked) weights are
+never cached here (see the next entry for those). Correctness: bit-identical
+losses/gradients/weights vs the uncached path over multiple steps, including a real
+BCD+offload+Muon run over a full block cycle; deliberately-stale twins fail the same
+check. VRAM: peak reserved unchanged (5078 MiB); peak allocated +192 MiB. Loss: step-0
+identical; on-vs-off drift (6.4e-3) matches off-vs-off noise (5.7e-3). On by default
+under `--fast`; `--no-ternary-step-cache` disables it. Tests:
+`tests/test_ternary_step_cache.py` (10), plus the ternary/fast-stack/BCD/offload
+suites (136 + 73 passed).
+
+## 1B pretrain: cache the quantize SCALE of BCD-frozen weights too = 0.9% faster per step (2026-10-14)
+
+**One line: the entry above only covers trainable weights (keyed on `data_ptr`, which
+changes every time an offloaded block reloads) -- frozen/parked blocks were still
+re-quantized on every forward+recompute even though their weights don't change between
+BCD switches, ~0.4s/step (2.5%) confirmed real by profiling before fixing. Stacked on
+the entry above: 16.78/16.79 -> 16.62/16.63 s/step.**
+
+Caching the whole quantized weight for every frozen block would mean keeping them all
+GPU-resident, defeating offload -- so only the absmean SCALE is cached, once per
+optimizer step; the quantize pass itself still runs. Cache clears on every optimizer
+step and on every BCD block switch (a callback list added in `block_coordinate.py`, so
+`hvn/core/` still doesn't import `hvn/edge/`). Correctness: bit-exact over a full BCD
+cycle on the real model, ~92% cache hit rate; a deliberately-stale-cache twin fails the
+same bit-exact comparison. 133 tests passed (ternary suite).
+
+## 1B pretrain: fuse the short-conv transpose+cast = 3.7% faster per step (2026-10-14)
+
+**One line: `hvn/core/deltanet.py`'s `_causal_conv` ran `F.pad` on a transposed fp32
+tensor (a slow strided copy), then autocast made a SECOND copy to bf16 -- backward paid
+both copies again. Confirmed real by profiling before fixing: per 1B layer (fwd+bwd),
+pad copy 0.94ms, cast 0.27ms, conv 0.65ms, conv backward 0.88ms, pad-backward clone
+0.36ms, grad cast 0.26ms. At 2048x24, 16.92 -> 16.26-16.29 s/step.**
+
+Fix: a new Triton kernel, `hvn/core/fused_causal_conv.py` -- reads `[B,S,D]` directly,
+reproduces PyTorch's depthwise-conv arithmetic exactly, in the same order. Weight/bias
+grads (active block only) still use the original aten call. bf16 only -- fp16 goes
+through cuDNN and came out ~1 ulp off, so fp16/fp32/CPU/the packed `doc_ids` path all
+keep the old code unchanged. Correctness: `torch.equal` (zero sign bits included) on
+output, dx, dw, db at 5 shapes including the real 1B shape, plus a 4-step full-block
+sequence; anti-vacuity checks confirm the fast path actually ran. 251 tests passed
+(DeltaNet, scan, BCD, offload, ternary suites).
+
 ## 1B pretrain: scan reads q/k/v in place, no layout/cast copies = 3.5% faster per step (2026-10-14)
 
 **One line: the megakernel scan now reads q/k/v/alpha/beta straight from the block's

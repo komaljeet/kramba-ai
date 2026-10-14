@@ -16,6 +16,19 @@ unaffected** — that bug was about weight correctness, not memory usage. **The 
 that specific run is not** — it needs re-running on fixed code before the "it trains" claim
 can be trusted again. See [`docs/state.md`](docs/state.md) for the full writeup.
 
+**Update (2026-10-14):** the offload+BCD path that correction refers to has since been
+validated end-to-end — a real 300-step run hard-killed and resumed mid-block three times,
+plus a real 1.1B fresh-build and resume, checked against a plain and a BCD-only reference.
+Along the way four more real bugs were found and fixed (a resume crash whenever the saved
+active block wasn't block 0, BCD's bf16 parking silently freezing bias/norm params for the
+whole run, ternary conversion doubling host RAM and crashing 1B builds outright, and an
+error-swallowing bug that made argument mistakes look like crashes) — all merged, all
+tested together, no bad interaction found. Separately, four more real step-time levers
+landed this week, cutting the measured 1B step from 21.81 to **15.706 s/step** (-28%, a
+1.39× speedup), stacked and re-measured together, not just added up on paper. **The
+"reality check" section below is now corrected for these numbers — see
+[`docs/state.md`](docs/state.md) for the full measured trail.**
+
 Full documentation is in [`docs/`](docs/index.md). If you're picking this up cold, start with
 [`docs/handoff.md`](docs/handoff.md).
 
@@ -64,7 +77,7 @@ Triton scan and megakernel, and the fixes that make them work together.
 | chunked cross-entropy saves **1436 MB at 48M** | measured 2026-08-17 |
 | **not cheaper to train** — a transformer is 1.41× faster per step | measured; the win is at inference only |
 | the 1B step runs at **close to hardware limits** — matmuls hit 100.6% of the card's own measured GEMM ceiling | measured 2026-08-31 |
-| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 |
+| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 — **stale**: current measured step is 15.706 s/step (~168-269 days depending on BCD quality framing, see the reality check below), from four more real speed levers landed 2026-10-12/14 |
 | **1.11B fits and runs in 4.51 GB with 5-technique stack** (BCD + offload + ternary + grad checkpoint + chunked loss) | VRAM measured 2026-09-19, 1350 steps — **but see the correction above: this run used an offload path with a weight-corruption bug (fixed 2026-10-10), so the loss curve from this run needs re-verifying, the VRAM figure does not** |
 | **tied embeddings + offload + BCD + chunked_loss fit without OOM** (previously OOM, fixed by pinning + chunked loss) | measured 2026-09-26, 79% VRAM (4.85 GB of 6 GB) at 1.11B fp32 — "composes" here means *fits*; whether it trains *correctly* at this combination and scale was never checked before 2026-10-10, and is only confirmed at small scale since |
 
@@ -91,20 +104,35 @@ Training cost is roughly `6 × parameters × tokens`, and the tokens you need sc
 parameters — so cost grows with the **square** of model size.
 
 The memory engineering got a 6B model to run forward and backward on this card at
-~1 GB peak. **That is not the same as being able to train it.** 6B would take about 33 years
-here. Even 1B is roughly a year — **375 days**, measured 2026-08-31 at the current best config.
+~1 GB peak. **That is not the same as being able to train it.** 6B is still out of reach here.
+1B, with `--block-coordinate --offload`, is real but slow: at the current measured
+**15.706 s/step** (2,086 tok/s), hitting this project's 30-tokens-per-body-param convention
+takes **~168 days** accepting BCD's own ~1.6× quality cost as measured, or **~269 days**
+if you want BCD's output to actually match full-training quality instead (that's the
+multiplier's actual direction — the shorter number is the one with the quality cost baked
+in, not the other way around). This was **375 days at a smaller, un-fixed config as of
+2026-08-31**; four real speed levers and a from-scratch BCD-quality fix (balanced block
+partitioning, cutting BCD's quality cost from ~4× to ~1.6×) landed since, measured together,
+not assumed additive. See [`docs/state.md`](docs/state.md) for the full trail.
 
-And that year is not waiting on better code. A roofline against the card's own measured
-ceilings (2026-08-31) puts the matmuls at **100.6% of peak**, the recurrent scan at 14.9% of
-the step and capped at 1.16× by Amdahl, and two thirds of the remaining copies structural.
-Every optimisation left, added up optimistically, is 20–25%. The cost is
-`6 × params × tokens ÷ card speed`, and only the first two terms are still open.
+Everything smaller than 1B fits and trains *without* BCD/offload at all, measured directly
+on current code: **270M in ~23 days, 300M in ~32 days** (both plain, no memory tricks). A
+synthetic benchmark without the real loss-head optimization will make all three look like
+they spill past VRAM — that's a measurement bug, not a real result; it's what a real-trainer
+run with the actual chunked loss path shows.
 
-**The local ceiling is ~142M parameters** (about 3.6 days). Anything above that needs
-rented compute, and no architecture choice changes that arithmetic.
+**This is not a wall anymore, but it is still a real cost.** The roofline work (2026-08-31)
+that put matmuls at 100.6% of the card's own GEMM ceiling and the scan capped at 1.16× by
+Amdahl still holds broadly — GEMM's own share of the step has since grown to 43% as other
+costs shrank. The remaining real levers found this week (fusing more of the DeltaNet glue
+into the scan kernels, the short causal conv, a few percent of quantize overhead) added up
+to real, measured wins, not the "nothing left" verdict this file used to state — don't
+trust an "exhausted" claim here without a fresh number behind it, this project has been
+wrong about that more than once.
 
-So: the *inference* half of the goal is real and measured. The *train-it-yourself* half isn't
-achievable on this hardware.
+So: the *inference* half of the goal is real and measured. The *train-it-yourself* half is
+real up to ~1B on this hardware, at real but multi-month cost — not the "isn't achievable"
+this section used to say, and not free either.
 
 (A note for anyone reading the compute-wall analysis in [`docs/training.md`](docs/training.md):
 its "~2× offload inefficiency" term is stale and the real figure is *smaller*, which makes that
