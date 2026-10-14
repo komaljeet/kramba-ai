@@ -4225,6 +4225,11 @@ if __name__ == "__main__":
         main()
     except SystemExit as e:
         _exit_code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        # os._exit in `finally` kills the process before the interpreter would
+        # print a SystemExit("message"), so `raise SystemExit("...")` refusals
+        # (e.g. missing --attn-layers) used to exit 1 with NO output at all.
+        if not isinstance(e.code, int) and e.code is not None:
+            print(e.code, file=sys.stderr)
         raise
     except BaseException:
         import traceback
