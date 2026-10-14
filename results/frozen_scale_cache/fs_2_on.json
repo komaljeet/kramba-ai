@@ -1,0 +1,292 @@
+{
+ "config": {
+  "repo": ".",
+  "out": "C:/Users/komal/AppData/Local/Temp/claude/C--Users-komal-Documents-Codes-kramba-ai/928e7447-f166-4af8-9f50-4098cb2392ce/scratchpad/fs_2_on.json",
+  "warmup": 2,
+  "min_free_ram_gib": 1.5,
+  "no_profile": true,
+  "cycles_a": 1,
+  "frozen_scale": "on",
+  "step_cache": true
+ },
+ "steps_a": [
+  {
+   "cycle": 0,
+   "active": "blocks.2+blocks.3",
+   "wall": 21.688966600006097,
+   "loss": 10.951366424560547,
+   "fwd": 6.460213317871093,
+   "bwd": 14.854605590820313,
+   "opt": 0.372626953125,
+   "loss_hex": "0x1.5e71980000000p+3",
+   "cache_stats": {
+    "hits": 420,
+    "misses": 28
+   },
+   "frozen_stats": {
+    "hits": 6938,
+    "misses": 470
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 3290358784,
+   "ram": 5.9506072998046875
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.4+blocks.5",
+   "wall": 20.447066000000632,
+   "loss": 10.891817092895508,
+   "fwd": 6.465157043457031,
+   "bwd": 13.607755615234375,
+   "opt": 0.37304827880859376,
+   "loss_hex": "0x1.5c89c40000000p+3",
+   "cache_stats": {
+    "hits": 630,
+    "misses": 42
+   },
+   "frozen_stats": {
+    "hits": 8994,
+    "misses": 622
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 3223274496,
+   "ram": 5.9235992431640625
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.6+blocks.7",
+   "wall": 19.17188829999941,
+   "loss": 10.86428451538086,
+   "fwd": 6.455669799804687,
+   "bwd": 12.35776904296875,
+   "opt": 0.35746221923828125,
+   "loss_hex": "0x1.5ba8380000000p+3",
+   "cache_stats": {
+    "hits": 825,
+    "misses": 55
+   },
+   "frozen_stats": {
+    "hits": 10953,
+    "misses": 775
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 3188531200,
+   "ram": 5.857730865478516
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.8+blocks.9",
+   "wall": 17.911454799999774,
+   "loss": 10.83354377746582,
+   "fwd": 6.4588330078125,
+   "bwd": 11.074210815429685,
+   "opt": 0.3774539794921875,
+   "loss_hex": "0x1.5aac640000000p+3",
+   "cache_stats": {
+    "hits": 1035,
+    "misses": 69
+   },
+   "frozen_stats": {
+    "hits": 12793,
+    "misses": 927
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 3089032192,
+   "ram": 5.855628967285156
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.10+blocks.11",
+   "wall": 16.649074000000837,
+   "loss": 10.8084077835083,
+   "fwd": 6.447457458496094,
+   "bwd": 9.826304931640625,
+   "opt": 0.37442593383789063,
+   "loss_hex": "0x1.59de7a0000000p+3",
+   "cache_stats": {
+    "hits": 1245,
+    "misses": 83
+   },
+   "frozen_stats": {
+    "hits": 14521,
+    "misses": 1079
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 3021923328,
+   "ram": 5.823726654052734
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.12+blocks.13",
+   "wall": 15.400506699996185,
+   "loss": 10.78283977508545,
+   "fwd": 6.451504089355469,
+   "bwd": 8.581966796875,
+   "opt": 0.36598599243164065,
+   "loss_hex": "0x1.590d060000000p+3",
+   "cache_stats": {
+    "hits": 1455,
+    "misses": 97
+   },
+   "frozen_stats": {
+    "hits": 16137,
+    "misses": 1231
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 2954814464,
+   "ram": 5.815212249755859
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.14+blocks.15",
+   "wall": 14.175299900001846,
+   "loss": 10.758991241455078,
+   "fwd": 6.475692993164062,
+   "bwd": 7.333784545898438,
+   "opt": 0.36497503662109376,
+   "loss_hex": "0x1.5849a80000000p+3",
+   "cache_stats": {
+    "hits": 1665,
+    "misses": 111
+   },
+   "frozen_stats": {
+    "hits": 17641,
+    "misses": 1383
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 2887705600,
+   "ram": 5.7700958251953125
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.16+blocks.17",
+   "wall": 12.946439000006649,
+   "loss": 10.733113288879395,
+   "fwd": 6.478403320312499,
+   "bwd": 6.096818115234375,
+   "opt": 0.37029534912109374,
+   "loss_hex": "0x1.5775aa0000000p+3",
+   "cache_stats": {
+    "hits": 1875,
+    "misses": 125
+   },
+   "frozen_stats": {
+    "hits": 19033,
+    "misses": 1535
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 2820596736,
+   "ram": 5.723613739013672
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.18+blocks.19",
+   "wall": 11.66432260000147,
+   "loss": 10.707918167114258,
+   "fwd": 6.4614492187499994,
+   "bwd": 4.837439453125,
+   "opt": 0.36456524658203127,
+   "loss_hex": "0x1.56a7440000000p+3",
+   "cache_stats": {
+    "hits": 2070,
+    "misses": 138
+   },
+   "frozen_stats": {
+    "hits": 20328,
+    "misses": 1688
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 2785878016,
+   "ram": 5.691429138183594
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.20+blocks.21",
+   "wall": 10.385371899996244,
+   "loss": 10.68309497833252,
+   "fwd": 6.461584411621094,
+   "bwd": 3.558266906738281,
+   "opt": 0.3647900390625,
+   "loss_hex": "0x1.55dbea0000000p+3",
+   "cache_stats": {
+    "hits": 2280,
+    "misses": 152
+   },
+   "frozen_stats": {
+    "hits": 21504,
+    "misses": 1840
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 2686379008,
+   "ram": 5.6854400634765625
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.22+blocks.23+final_norm+decoder",
+   "wall": 9.11288760000025,
+   "loss": 10.662582397460938,
+   "fwd": 6.4539270629882814,
+   "bwd": 2.3384503173828124,
+   "opt": 0.32000509643554687,
+   "loss_hex": "0x1.5533e00000000p+3",
+   "cache_stats": {
+    "hits": 2490,
+    "misses": 166
+   },
+   "frozen_stats": {
+    "hits": 22568,
+    "misses": 1992
+   },
+   "peak_reserved": 5324668928,
+   "peak_alloc": 2645149696,
+   "ram": 5.651111602783203
+  },
+  {
+   "cycle": 0,
+   "active": "token_embedding",
+   "wall": 23.6908454000004,
+   "loss": 10.643692016601562,
+   "fwd": 6.597515930175782,
+   "bwd": 16.98020361328125,
+   "opt": 0.11159561920166015,
+   "loss_hex": "0x1.5499200000000p+3",
+   "cache_stats": {
+    "hits": 2490,
+    "misses": 166
+   },
+   "frozen_stats": {
+    "hits": 25058,
+    "misses": 2158
+   },
+   "peak_reserved": 5324668928,
+   "peak_alloc": 3305970688,
+   "ram": 5.6381988525390625
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.0+blocks.1",
+   "wall": 22.86127149999811,
+   "loss": 10.463883399963379,
+   "fwd": 6.380286071777343,
+   "bwd": 16.113996704101563,
+   "opt": 0.36571450805664063,
+   "loss_hex": "0x1.4ed8220000000p+3",
+   "cache_stats": {
+    "hits": 2700,
+    "misses": 180
+   },
+   "frozen_stats": {
+    "hits": 27338,
+    "misses": 2310
+   },
+   "peak_reserved": 5324668928,
+   "peak_alloc": 3357467648,
+   "ram": 5.571342468261719
+  }
+ ],
+ "steps_b": [],
+ "aborted": null,
+ "step_cache_modules": 166,
+ "params": 1113059793,
+ "bcd_blocks": 13
+}

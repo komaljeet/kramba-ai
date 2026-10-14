@@ -1,0 +1,292 @@
+{
+ "config": {
+  "repo": ".",
+  "out": "C:/Users/komal/AppData/Local/Temp/claude/C--Users-komal-Documents-Codes-kramba-ai/928e7447-f166-4af8-9f50-4098cb2392ce/scratchpad/fs_1_off.json",
+  "warmup": 2,
+  "min_free_ram_gib": 1.5,
+  "no_profile": true,
+  "cycles_a": 1,
+  "frozen_scale": "off",
+  "step_cache": true
+ },
+ "steps_a": [
+  {
+   "cycle": 0,
+   "active": "blocks.2+blocks.3",
+   "wall": 21.86456679999901,
+   "loss": 10.951187133789062,
+   "fwd": 6.550869934082032,
+   "bwd": 14.935493652343752,
+   "opt": 0.376237060546875,
+   "loss_hex": "0x1.5e70200000000p+3",
+   "cache_stats": {
+    "hits": 420,
+    "misses": 28
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 3290273792,
+   "ram": 5.880229949951172
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.4+blocks.5",
+   "wall": 20.61190209999768,
+   "loss": 10.895071983337402,
+   "fwd": 6.55193408203125,
+   "bwd": 13.686924194335937,
+   "opt": 0.37162396240234374,
+   "loss_hex": "0x1.5ca46e0000000p+3",
+   "cache_stats": {
+    "hits": 630,
+    "misses": 42
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 3223189504,
+   "ram": 5.857421875
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.6+blocks.7",
+   "wall": 19.341998399999284,
+   "loss": 10.86786937713623,
+   "fwd": 6.554209289550782,
+   "bwd": 12.428547119140624,
+   "opt": 0.3582078857421875,
+   "loss_hex": "0x1.5bc5960000000p+3",
+   "cache_stats": {
+    "hits": 825,
+    "misses": 55
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 3188446208,
+   "ram": 5.830474853515625
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.8+blocks.9",
+   "wall": 18.04596339999989,
+   "loss": 10.83440113067627,
+   "fwd": 6.543558593749999,
+   "bwd": 11.135170654296875,
+   "opt": 0.36596441650390626,
+   "loss_hex": "0x1.5ab36a0000000p+3",
+   "cache_stats": {
+    "hits": 1035,
+    "misses": 69
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 3088947200,
+   "ram": 5.839485168457031
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.10+blocks.11",
+   "wall": 16.823869799998647,
+   "loss": 10.805130004882812,
+   "fwd": 6.561996887207032,
+   "bwd": 9.89075439453125,
+   "opt": 0.37004110717773436,
+   "loss_hex": "0x1.59c3a00000000p+3",
+   "cache_stats": {
+    "hits": 1245,
+    "misses": 83
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 3021838336,
+   "ram": 6.154918670654297
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.12+blocks.13",
+   "wall": 15.560585999999603,
+   "loss": 10.787586212158203,
+   "fwd": 6.560720825195312,
+   "bwd": 8.632732666015626,
+   "opt": 0.36610659790039063,
+   "loss_hex": "0x1.5933e80000000p+3",
+   "cache_stats": {
+    "hits": 1455,
+    "misses": 97
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 2954729472,
+   "ram": 6.0944366455078125
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.14+blocks.15",
+   "wall": 14.300431200004823,
+   "loss": 10.757819175720215,
+   "fwd": 6.560303894042969,
+   "bwd": 7.371557922363281,
+   "opt": 0.36766915893554686,
+   "loss_hex": "0x1.58400e0000000p+3",
+   "cache_stats": {
+    "hits": 1665,
+    "misses": 111
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 2887620608,
+   "ram": 6.058406829833984
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.16+blocks.17",
+   "wall": 13.106451300001936,
+   "loss": 10.73241901397705,
+   "fwd": 6.619965454101562,
+   "bwd": 6.115490783691407,
+   "opt": 0.37030023193359374,
+   "loss_hex": "0x1.576ffa0000000p+3",
+   "cache_stats": {
+    "hits": 1875,
+    "misses": 125
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 2820511744,
+   "ram": 6.075099945068359
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.18+blocks.19",
+   "wall": 11.769230800004152,
+   "loss": 10.705382347106934,
+   "fwd": 6.550025146484375,
+   "bwd": 4.856466430664063,
+   "opt": 0.3621808471679687,
+   "loss_hex": "0x1.56927e0000000p+3",
+   "cache_stats": {
+    "hits": 2070,
+    "misses": 138
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 2785793024,
+   "ram": 6.0168914794921875
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.20+blocks.21",
+   "wall": 10.491263299998536,
+   "loss": 10.689543724060059,
+   "fwd": 6.549358642578126,
+   "bwd": 3.56583935546875,
+   "opt": 0.37544964599609376,
+   "loss_hex": "0x1.5610be0000000p+3",
+   "cache_stats": {
+    "hits": 2280,
+    "misses": 152
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5322571776,
+   "peak_alloc": 2686294016,
+   "ram": 5.9640350341796875
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.22+blocks.23+final_norm+decoder",
+   "wall": 9.207293799998297,
+   "loss": 10.66319751739502,
+   "fwd": 6.55033856201172,
+   "bwd": 2.3371602478027342,
+   "opt": 0.3191561279296875,
+   "loss_hex": "0x1.5538ea0000000p+3",
+   "cache_stats": {
+    "hits": 2490,
+    "misses": 166
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5324668928,
+   "peak_alloc": 2645064704,
+   "ram": 5.927360534667969
+  },
+  {
+   "cycle": 0,
+   "active": "token_embedding",
+   "wall": 23.928490900005272,
+   "loss": 10.64608383178711,
+   "fwd": 6.7089755859375,
+   "bwd": 17.102635986328124,
+   "opt": 0.11566284942626953,
+   "loss_hex": "0x1.54acb80000000p+3",
+   "cache_stats": {
+    "hits": 2490,
+    "misses": 166
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5324668928,
+   "peak_alloc": 3305885696,
+   "ram": 5.916858673095703
+  },
+  {
+   "cycle": 0,
+   "active": "blocks.0+blocks.1",
+   "wall": 23.06608260000212,
+   "loss": 10.46195125579834,
+   "fwd": 6.4786831054687495,
+   "bwd": 16.221978515624997,
+   "opt": 0.3640778198242188,
+   "loss_hex": "0x1.4ec84e0000000p+3",
+   "cache_stats": {
+    "hits": 2700,
+    "misses": 180
+   },
+   "frozen_stats": {
+    "hits": 0,
+    "misses": 0
+   },
+   "peak_reserved": 5324668928,
+   "peak_alloc": 3357382656,
+   "ram": 5.857814788818359
+  }
+ ],
+ "steps_b": [],
+ "aborted": null,
+ "step_cache_modules": 166,
+ "params": 1113059793,
+ "bcd_blocks": 13
+}
