@@ -26,6 +26,18 @@ import torch
 import torch.nn as nn
 
 
+#: Called at the start of every ``BlockCoordinateScheduler._activate``. A
+#: registry rather than an import so core/ never depends on edge/ (the ternary
+#: quantize caches in hvn/edge/ternary.py register themselves here).
+_ACTIVATE_CALLBACKS: list = []
+
+
+def register_activate_callback(fn) -> None:
+    """Run ``fn()`` on every BCD block switch (idempotent per function)."""
+    if fn not in _ACTIVATE_CALLBACKS:
+        _ACTIVATE_CALLBACKS.append(fn)
+
+
 def _dtype_itemsize(dtype: torch.dtype) -> int:
     """Bytes per element for `dtype` (Issue #113: used to decide whether
     parking at `park_dtype` actually shrinks a given parameter, rather than
@@ -1049,6 +1061,11 @@ class BlockCoordinateScheduler:
                 p.requires_grad_(False)
 
     def _activate(self, idx: int) -> None:
+        # Every switch re-parks weights (possibly at a lower dtype, so their
+        # bits change) and flips requires_grad: weight-derived caches must
+        # drop here rather than rely on an optimizer step just before.
+        for cb in list(_ACTIVATE_CALLBACKS):
+            cb()
         self._freeze_all()
         active_name, active_params = self.blocks[idx]
         for p in active_params:

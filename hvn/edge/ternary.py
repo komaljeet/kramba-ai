@@ -191,12 +191,15 @@ _STEP_EPOCH = [0]
 _STEP_LIVE: "weakref.WeakSet" = weakref.WeakSet()
 _STEP_HOOKS: list = []
 STEP_CACHE_STATS = {"hits": 0, "misses": 0}
+#: Frozen-weight scale cache (see ``TernaryLinear._frozen_step_scale``).
+FROZEN_SCALE_STATS = {"hits": 0, "misses": 0}
 
 
 def _invalidate_step_cache(*_args, **_kwargs) -> None:
     _STEP_EPOCH[0] += 1
     for m in list(_STEP_LIVE):
         m._scache = None
+        m._fscale = None
     _STEP_LIVE.clear()
 
 
@@ -212,11 +215,16 @@ def enable_ternary_step_cache(model: nn.Module, enabled: bool = True) -> int:
                                            register_optimizer_step_pre_hook)
         _STEP_HOOKS.append(register_optimizer_step_pre_hook(_invalidate_step_cache))
         _STEP_HOOKS.append(register_optimizer_step_post_hook(_invalidate_step_cache))
+        # A BCD switch re-parks frozen weights without an optimizer step in
+        # between being guaranteed; the frozen-scale cache must drop there too.
+        from hvn.core.block_coordinate import register_activate_callback
+        register_activate_callback(_invalidate_step_cache)
     n = 0
     for mod in model.modules():
         if isinstance(mod, TernaryLinear):
             mod.use_step_cache = bool(enabled)
             mod._scache = None
+            mod._fscale = None
             n += 1
     _invalidate_step_cache()
     return n
@@ -269,6 +277,7 @@ class TernaryLinear(nn.Module):
     #: Within-step quantized-weight cache (see ``enable_ternary_step_cache``).
     use_step_cache = False
     _scache = None
+    _fscale = None
 
     def __init__(self, in_features: int, out_features: int, bias: bool = False,
                  group_size: int = GROUP_PER_TENSOR, *,
@@ -336,8 +345,46 @@ class TernaryLinear(nn.Module):
         if ((_USE_FUSED_TERNARY or self.use_fused)
                 and self.group_size == GROUP_PER_TENSOR):
             from .ternary_fused import ternary_quantize_ste_fused
-            return ternary_quantize_ste_fused(w).to(dtype)
+            scale = None
+            # self.weight, not w: the trainable miss path above passes a
+            # detached w, which must NOT take the frozen-weight cache.
+            if self.use_step_cache and not self.weight.requires_grad and w.is_cuda:
+                scale = self._frozen_step_scale(w)
+            if scale is None:
+                return ternary_quantize_ste_fused(w).to(dtype)
+            return ternary_quantize_ste_fused(w, scale=scale).to(dtype)
         return ternary_quantize_ste(w, group_size=self.group_size).to(dtype)
+
+    def _frozen_step_scale(self, w: torch.Tensor) -> torch.Tensor:
+        """The absmean scale of a FROZEN weight, computed once per step epoch.
+
+        A BCD-inactive block is quantized on every forward, recompute and
+        micro-batch (16x per step at GA 8) although its weight cannot change
+        until the next optimizer step or block switch. Its quantized weight
+        cannot be kept -- it is offloaded and streamed back per use, and a
+        GPU copy of every frozen block would undo the offload -- but its scale
+        is one scalar. Reusing it skips the abs + mean passes (two full reads
+        and a full-size temporary); the quantize pass itself still runs.
+
+        Staleness guard (#117): keyed on the step epoch, which every optimizer
+        step (pre and post), every BCD switch (``_activate``, which re-parks
+        weights at a lower dtype) and every enable/disable bumps, plus the
+        weight's version counter, dtype, shape and device. NOT on data_ptr:
+        an offloaded weight lands in a different pool buffer on each load,
+        with the same contents.
+        """
+        from .ternary_fused import ternary_absmean_scale
+        key = (_STEP_EPOCH[0], w._version, w.dtype, tuple(w.shape), w.device)
+        c = self._fscale
+        if c is None or c[0] != key:
+            c = (key, ternary_absmean_scale(w))
+            # Not added to _STEP_LIVE: the epoch in the key already expires
+            # it, and the live set is the trainable cache's (#199) to manage.
+            self._fscale = c
+            FROZEN_SCALE_STATS["misses"] += 1
+        else:
+            FROZEN_SCALE_STATS["hits"] += 1
+        return c[1]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.training or torch.is_grad_enabled():
@@ -378,11 +425,13 @@ class TernaryLinear(nn.Module):
         """
         self._wcache = None
         self._scache = None
+        self._fscale = None
         return super().train(mode)
 
     def _load_from_state_dict(self, *args, **kwargs):
         self._wcache = None
         self._scache = None
+        self._fscale = None
         return super()._load_from_state_dict(*args, **kwargs)
 
     def freeze(self) -> None:

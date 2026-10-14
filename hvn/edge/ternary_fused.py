@@ -98,7 +98,18 @@ if _HAS_TRITON:
         tl.store(out_ptr + offs, out.to(w.dtype), mask=mask)
 
 
-def _fused_forward(w: torch.Tensor, eps: float) -> torch.Tensor:
+def ternary_absmean_scale(w: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """The per-tensor scale exactly as :func:`_fused_forward` computes it.
+
+    Split out so a caller holding a weight that provably has not changed (a
+    BCD-frozen block, within one optimizer step) can compute it once and pass
+    it back in. Same ops, same order -> the same bits.
+    """
+    return w.detach().contiguous().abs().mean().clamp(min=eps).to(torch.float32)
+
+
+def _fused_forward(w: torch.Tensor, eps: float,
+                   scale: torch.Tensor | None = None) -> torch.Tensor:
     """Scale from PyTorch, quantization from Triton.
 
     The scale is deliberately NOT computed here. A hand-written two-stage
@@ -116,7 +127,8 @@ def _fused_forward(w: torch.Tensor, eps: float) -> torch.Tensor:
     """
     n = w.numel()
     wf = w.detach().contiguous()
-    scale = wf.abs().mean().clamp(min=eps).to(torch.float32)
+    if scale is None:
+        scale = ternary_absmean_scale(wf, eps)
     out = torch.empty_like(wf)
     BLOCK = 1024
     _quantize_kernel[(triton.cdiv(n, BLOCK),)](wf, scale, out, n, BLOCK=BLOCK)
@@ -127,23 +139,26 @@ class _FusedTernarySTE(torch.autograd.Function):
     """Straight-through estimator: forward quantizes, backward is identity."""
 
     @staticmethod
-    def forward(ctx, w: torch.Tensor, eps: float) -> torch.Tensor:
-        return _fused_forward(w, eps)
+    def forward(ctx, w: torch.Tensor, eps: float, scale=None) -> torch.Tensor:
+        return _fused_forward(w, eps, scale)
 
     @staticmethod
     def backward(ctx, grad_output):
         # d(out)/d(w) == 1 by construction of the STE -- the original returns
         # `w + (w_ternary - w).detach()`, whose only differentiable term is `w`.
-        return grad_output, None
+        return grad_output, None, None
 
 
-def ternary_quantize_ste_fused(w: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+def ternary_quantize_ste_fused(w: torch.Tensor, eps: float = 1e-6,
+                               scale: torch.Tensor | None = None) -> torch.Tensor:
     """Drop-in replacement for ``ternary_quantize_ste`` (#154).
 
     Bit-identical to the eager version on CUDA; falls back to it otherwise.
+    ``scale``: a precomputed :func:`ternary_absmean_scale` of this same ``w``
+    (CUDA path only; the CPU fallback always recomputes).
     """
     if not (_HAS_TRITON and w.is_cuda):
         scale = w.detach().abs().mean().clamp(min=eps)
         w_ternary = torch.clamp(torch.round(w / scale), -1, 1) * scale
         return w + (w_ternary - w).detach()
-    return _FusedTernarySTE.apply(w, eps)
+    return _FusedTernarySTE.apply(w, eps, scale)

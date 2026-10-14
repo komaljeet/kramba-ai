@@ -1,0 +1,52 @@
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:/Users/komal/AppData/Local/Temp/claude/C--Users-komal-Documents-Codes-kramba-ai/928e7447-f166-4af8-9f50-4098cb2392ce/scratchpad/fs_1_off_ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:/Users/komal/AppData/Local/Temp/claude/C--Users-komal-Documents-Codes-kramba-ai/928e7447-f166-4af8-9f50-4098cb2392ce/scratchpad/fs_1_off_ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+[cfg] within-step ternary cache ON for 166 modules
+[cfg] frozen-scale cache off
+[build] 1,113,059,793 params, 13 BCD blocks, 9s, ram 6.4G
+[warm 0] token_embedding                    wall  24.42 loss 11.236576
+[warm 1] blocks.0+blocks.1                  wall  23.05 loss 11.062654
+[A0  0] blocks.2+blocks.3                  wall  21.86 fwd  6.55 bwd 14.94 opt  0.38 loss 10.951187 rsv 4.96G
+[A0  1] blocks.4+blocks.5                  wall  20.61 fwd  6.55 bwd 13.69 opt  0.37 loss 10.895072 rsv 4.96G
+[A0  2] blocks.6+blocks.7                  wall  19.34 fwd  6.55 bwd 12.43 opt  0.36 loss 10.867869 rsv 4.96G
+[A0  3] blocks.8+blocks.9                  wall  18.05 fwd  6.54 bwd 11.14 opt  0.37 loss 10.834401 rsv 4.96G
+[A0  4] blocks.10+blocks.11                wall  16.82 fwd  6.56 bwd  9.89 opt  0.37 loss 10.805130 rsv 4.96G
+[A0  5] blocks.12+blocks.13                wall  15.56 fwd  6.56 bwd  8.63 opt  0.37 loss 10.787586 rsv 4.96G
+[A0  6] blocks.14+blocks.15                wall  14.30 fwd  6.56 bwd  7.37 opt  0.37 loss 10.757819 rsv 4.96G
+[A0  7] blocks.16+blocks.17                wall  13.11 fwd  6.62 bwd  6.12 opt  0.37 loss 10.732419 rsv 4.96G
+[A0  8] blocks.18+blocks.19                wall  11.77 fwd  6.55 bwd  4.86 opt  0.36 loss 10.705382 rsv 4.96G
+[A0  9] blocks.20+blocks.21                wall  10.49 fwd  6.55 bwd  3.57 opt  0.38 loss 10.689544 rsv 4.96G
+[A0 10] blocks.22+blocks.23+final_norm+decoder wall   9.21 fwd  6.55 bwd  2.34 opt  0.32 loss 10.663198 rsv 4.96G
+[A0 11] token_embedding                    wall  23.93 fwd  6.71 bwd 17.10 opt  0.12 loss 10.646084 rsv 4.96G
+[A0 12] blocks.0+blocks.1                  wall  23.07 fwd  6.48 bwd 16.22 opt  0.36 loss 10.461951 rsv 4.96G
+[A] cycle-mean wall 16.778 s/step over 13 steps; max peak reserved 5078 MiB
+[done]
