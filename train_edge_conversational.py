@@ -1861,7 +1861,8 @@ def load_tokenizer(spec: str = "gpt2", **kwargs):
 def apply_fast_stack(model, triton_scan: bool = True,
                      megakernel_scan: bool = False, tf32: bool = True,
                      compile_model: bool = True, verbose: bool = True,
-                     fused_ternary: bool = False):
+                     fused_ternary: bool = False,
+                     ternary_step_cache: bool = False):
     """Put a built model into the execution mode training actually uses (#136).
 
     **The single implementation of what ``--fast`` means.** ``--fast`` is
@@ -1928,6 +1929,21 @@ def apply_fast_stack(model, triton_scan: bool = True,
         if verbose:
             print(f"\n  Fused ternary quantizer enabled on {n} TernaryLinear "
                   f"layer(s) (#154).")
+
+    if ternary_step_cache and not compile_model:
+        # 2026-10-14: quantize each TRAINABLE ternary weight once per optimizer
+        # step instead of 2 x grad_accum times (forward + checkpoint recompute
+        # per micro-batch). Bit-identical losses/grads/weights (tests/
+        # test_ternary_step_cache.py, incl. BCD + offload + Muon). Measured at
+        # 2048x24: 16.92 -> 16.78 s/step (0.8%), peak reserved unchanged,
+        # peak allocated +192 MiB. Skipped under --compile: the cache keys on
+        # Python-side state (an epoch counter, data_ptr) that compile would
+        # guard on.
+        from hvn.edge.ternary import enable_ternary_step_cache
+        n = enable_ternary_step_cache(model, True)
+        if verbose:
+            print(f"\n  Within-step ternary weight cache enabled on {n} "
+                  f"TernaryLinear layer(s).")
 
     if compile_model:
         # Issue #158: torch.compile is a NET LOSS on this architecture. Measured
@@ -3473,6 +3489,13 @@ def main():
                              "Bit-identical to eager after the bf16 cast (fp32 drifts "
                              "~6e-8), so --fast enables it only under bf16. "
                              "--no-fused-ternary opts out under --fast.")
+    parser.add_argument("--ternary-step-cache", action=argparse.BooleanOptionalAction,
+                        default=False,
+                        help="Quantize each trainable TernaryLinear weight once per "
+                             "optimizer step and reuse it across micro-batches and the "
+                             "grad-checkpoint recompute (bit-identical; 0.8%% at 1B, "
+                             "+192 MiB allocated). On under --fast; "
+                             "--no-ternary-step-cache opts out.")
     parser.add_argument("--megakernel-scan", action="store_true",
                         help="Route the DeltaNet scan through the Design B fused "
                              "blockwise-recompute backward (#96) when --triton-scan is on: "
@@ -3804,6 +3827,8 @@ def main():
         if (not {"--fused-ternary", "--no-fused-ternary"} & explicit
                 and args.precision == "bf16"):
             args.fused_ternary = True; fast_enabled.append("fused-ternary")
+        if not {"--ternary-step-cache", "--no-ternary-step-cache"} & explicit:
+            args.ternary_step_cache = True; fast_enabled.append("ternary-step-cache")
         if "--num-workers" not in explicit and args.num_workers == 0:
             args.num_workers = 4; fast_enabled.append("num-workers=4")
         print(f"[--fast] Enabled recommended training stack: {', '.join(fast_enabled)}")
@@ -4139,6 +4164,7 @@ def main():
         tf32=args.tf32,
         compile_model=args.compile,
         fused_ternary=args.fused_ternary,
+        ternary_step_cache=args.ternary_step_cache,
     )
 
     # Adaptive-exact chunk (#95): pick the largest numerically-exact chunk per
