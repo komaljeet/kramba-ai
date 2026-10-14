@@ -85,6 +85,12 @@ try:
 except Exception:  # pragma: no cover
     _fused_read_norm = None
     _fused_read_norm_available = None
+try:
+    from .fused_causal_conv import fused_causal_conv as _fused_causal_conv
+    from .fused_causal_conv import fused_causal_conv_dtype as _fused_causal_conv_dtype
+except Exception:  # pragma: no cover
+    _fused_causal_conv = None
+    _fused_causal_conv_dtype = None
 
 
 # Floor for the intra-chunk cumulative decay ``P`` in the chunked scan (Issue
@@ -214,6 +220,10 @@ class DeltaNetBlock(nn.Module):
         # Same lever, same default rule: the read RMSNorm as one Triton kernel
         # (hvn/core/fused_read_norm.py).
         self.use_fused_read_norm = None
+        # Same default rule: the short causal conv read straight from [B, S, D]
+        # (hvn/core/fused_causal_conv.py) instead of transpose + pad + cast
+        # copies. Bit-identical to the eager conv, forward and backward.
+        self.use_fused_conv = None
         assert d_model % n_heads == 0, (
             f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"
         )
@@ -323,6 +333,13 @@ class DeltaNetBlock(nn.Module):
         if not self.conv_kernel:
             return x
         if doc_ids is None:
+            use = getattr(self, "use_fused_conv", None)
+            if use is None:
+                use = self.use_triton_scan
+            if use and _fused_causal_conv is not None:
+                cdt = _fused_causal_conv_dtype(x, self.conv.weight, self.conv.bias)
+                if cdt is not None:
+                    return _fused_causal_conv(x, self.conv.weight, self.conv.bias, cdt)
             xt = x.transpose(1, 2)  # [B, D, S]
             xt = F.pad(xt, (self.conv_kernel - 1, 0))  # left-pad → causal
             y = self.conv(xt)  # [B, D, S]
