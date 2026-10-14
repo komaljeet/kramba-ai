@@ -67,10 +67,14 @@ try:
     # transient backward VRAM. Opt-in; gate-passed at d=64 but not yet verified
     # end-to-end under --fast.
     from .deltanet_triton import megakernel_scan as _triton_megakernel_scan
+    from .deltanet_triton import megakernel_scan_bshd as _triton_megakernel_scan_bshd
+    from .deltanet_triton import _MegaScan as _TritonMegaScan
     _HAS_TRITON_SCAN = True
 except Exception:  # pragma: no cover
     _triton_gated_delta_scan = None
     _triton_megakernel_scan = None
+    _triton_megakernel_scan_bshd = None
+    _TritonMegaScan = None
     _HAS_TRITON_SCAN = False
 
 try:
@@ -224,6 +228,11 @@ class DeltaNetBlock(nn.Module):
         # (hvn/core/fused_causal_conv.py) instead of transpose + pad + cast
         # copies. Bit-identical to the eager conv, forward and backward.
         self.use_fused_conv = None
+        # Megakernel scan reads q/k/v/alpha/beta straight from [B,S,H,d] in
+        # their own dtype (megakernel_scan_bshd) instead of permute + fp32-cast
+        # copies, and returns dq/dk/dv in bf16. Bit-identical to the copy path.
+        # None = on whenever the megakernel scan is; False restores the copies.
+        self.use_fused_scan_io = None
         assert d_model % n_heads == 0, (
             f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"
         )
@@ -725,17 +734,28 @@ class DeltaNetBlock(nn.Module):
         def to_N(t):  # [B, S, H, *] → [N, S, *]
             return t.permute(0, 2, 1, 3).reshape(N, S, -1)
 
-        qN = to_N(q)          # [N, S, d]
-        kN = to_N(k)          # [N, S, d]
-        vN = to_N(v)          # [N, S, d]
-        betaN = to_N(beta)    # [N, S, 1]
-        alphaN = to_N(alpha) if alpha is not None else None  # [N, S, d]
+        triton_ok = (self.use_triton_scan and _HAS_TRITON_SCAN and not return_state
+                     and S > 1 and q.is_cuda)
+        fused_io = getattr(self, "use_fused_scan_io", None)
+        if fused_io is None:
+            fused_io = True
+        # Strided-IO megakernel: no [N, S, d] permute / fp32 cast copies.
+        fused_io = (fused_io and triton_ok and self.use_megakernel_scan
+                    and alpha is not None and not _TritonMegaScan.buffered)
 
+        if not fused_io:
+            qN = to_N(q)          # [N, S, d]
+            kN = to_N(k)          # [N, S, d]
+            vN = to_N(v)          # [N, S, d]
+            betaN = to_N(beta)    # [N, S, 1]
+            alphaN = to_N(alpha) if alpha is not None else None  # [N, S, d]
+
+        if fused_io:
+            oN = _triton_megakernel_scan_bshd(q, k, v, alpha, beta)  # fp32 [N,S,d]
         # Fused Triton scan (#83): 9x faster fwd+bwd, numerically stable at all
         # decay. Used for the training forward when enabled and available; not
         # for incremental/return_state generation (that path stays eager).
-        if (self.use_triton_scan and _HAS_TRITON_SCAN and not return_state
-                and S > 1 and qN.is_cuda):
+        elif triton_ok:
             if self.use_megakernel_scan:
                 oN = _triton_megakernel_scan(qN, kN, vN, alphaN, betaN)
             else:

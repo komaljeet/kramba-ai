@@ -937,6 +937,235 @@ class _MegaScan(torch.autograd.Function):
         return dq, dk, dv, dalpha, dbeta2.reshape(ctx.beta_shape)
 
 
+# ============================================================================
+# Strided-IO variant (2026-10-14): read q/k/v/alpha/beta straight from the
+# block's [B, S, H, d] projections, in their own dtype.
+# ============================================================================
+# `_MegaScan` takes [N, S, d] fp32: the caller permutes [B,S,H,d] -> [N,S,d]
+# (a copy) and the wrapper casts bf16 -> fp32 (a second copy), and on the way
+# back autograd casts dq/dk/dv fp32 -> bf16 and permutes again. The kernels
+# already upcast every load with `.to(tl.float32)`, so those copies are pure
+# layout/dtype prep. Here the kernels address the [B,S,H,d] tensors directly
+#     n = b*H + h;  base = b*sB + h*sH;  row = base + t*sS
+# and store dq/dk/dv/dalpha/dbeta in the inputs' dtypes, in contiguous
+# [B,S,H,d] (the layout the l2norm / projection backward wants). `o` stays the
+# fp32 [N,S,d] the fused read-norm consumes. The math -- every load, every
+# fp32 op, in order -- is the validated kernels' verbatim; only addresses and
+# the final store dtype change. Selected by DeltaNetBlock.use_fused_scan_io.
+# ============================================================================
+
+if _HAS_TRITON:
+
+    @triton.jit
+    def _gated_delta_fwd_kernel_s(
+        q_ptr, k_ptr, v_ptr, alpha_ptr, beta_ptr, o_ptr,
+        H, sB, sS, sH,
+        S: tl.constexpr, D: tl.constexpr, BV: tl.constexpr,
+    ):
+        """`_gated_delta_fwd_kernel` reading [B,S,H,D] inputs by stride.
+        beta is contiguous [B,S,H]; o is contiguous fp32 [B*H, S, D]."""
+        pid_n = tl.program_id(0)
+        pid_v = tl.program_id(1)
+        bi = pid_n // H
+        hi = pid_n % H
+
+        offs_k = tl.arange(0, D)
+        offs_v = pid_v * BV + tl.arange(0, BV)
+
+        base = bi * sB + hi * sH
+        obase = pid_n * S * D
+
+        state = tl.zeros((BV, D), dtype=tl.float32)
+
+        for t in range(S):
+            row = base + t * sS
+            k_t = tl.load(k_ptr + row + offs_k).to(tl.float32)
+            q_t = tl.load(q_ptr + row + offs_k).to(tl.float32)
+            a_t = tl.load(alpha_ptr + row + offs_k).to(tl.float32)
+            v_t = tl.load(v_ptr + row + offs_v).to(tl.float32)
+            b_t = tl.load(beta_ptr + (bi * S + t) * H + hi).to(tl.float32)
+
+            state = state * a_t[None, :]
+            Sk = tl.sum(state * k_t[None, :], axis=1)
+            u = v_t - Sk
+            state = state + b_t * (u[:, None] * k_t[None, :])
+            o_t = tl.sum(state * q_t[None, :], axis=1)
+
+            tl.store(o_ptr + obase + t * D + offs_v, o_t.to(o_ptr.dtype.element_ty))
+
+    @triton.jit
+    def _mk_ckpt_kernel_s(
+        k_ptr, v_ptr, alpha_ptr, beta_ptr, ckpt_ptr, nblk,
+        H, sB, sS, sH,
+        S: tl.constexpr, D: tl.constexpr, B: tl.constexpr,
+    ):
+        """`_mk_ckpt_kernel` reading [B,S,H,D] inputs by stride."""
+        n = tl.program_id(0)
+        bi = n // H
+        hi = n % H
+        base = bi * sB + hi * sH
+        cbase = n * nblk * D * D
+        rk = tl.arange(0, D)
+        ov = tl.arange(0, D)[:, None]
+        ok = tl.arange(0, D)[None, :]
+        state = tl.zeros((D, D), dtype=tl.float32)
+        b = tl.zeros((), tl.int32)
+        while b < nblk:
+            tl.store(ckpt_ptr + cbase + b * D * D + ov * D + ok, state)
+            for j in range(B):
+                t = b * B + j
+                row = base + t * sS
+                k_t = tl.load(k_ptr + row + rk).to(tl.float32)
+                a_t = tl.load(alpha_ptr + row + rk).to(tl.float32)
+                v_t = tl.load(v_ptr + row + rk).to(tl.float32)
+                b_t = tl.load(beta_ptr + (bi * S + t) * H + hi).to(tl.float32)
+                state = state * a_t[None, :]
+                Sk = tl.sum(state * k_t[None, :], axis=1)
+                u = v_t - Sk
+                state = state + b_t * (u[:, None] * k_t[None, :])
+            b = b + 1
+
+    @triton.jit
+    def _mk_bwd_kernel_s(
+        q_ptr, k_ptr, v_ptr, alpha_ptr, beta_ptr, ckpt_ptr, do_ptr,
+        dq_ptr, dk_ptr, dv_ptr, dalpha_ptr, dbeta_ptr, nblk,
+        H, sB, sS, sH,
+        S: tl.constexpr, D: tl.constexpr, B: tl.constexpr,
+    ):
+        """`_mk_bwd_kernel` reading [B,S,H,D] inputs by stride. Gradients go
+        to contiguous [B,S,H,D] (dbeta: [B,S,H]) in each pointer's dtype; do
+        is contiguous [B*H, S, D]."""
+        n = tl.program_id(0)
+        bi = n // H
+        hi = n % H
+        base = bi * sB + hi * sH
+        gbase = (bi * S * H + hi) * D       # contiguous [B,S,H,D] grads
+        obase = n * S * D                   # contiguous [N,S,D] do
+        cbase = n * nblk * D * D
+        rk = tl.arange(0, D)
+        rv = tl.arange(0, D)
+        ov = tl.arange(0, D)[:, None]
+        ok = tl.arange(0, D)[None, :]
+        dS = tl.zeros((D, D), dtype=tl.float32)
+        b = nblk - 1
+        while b >= 0:
+            s = b * B
+            S_start = tl.load(ckpt_ptr + cbase + b * D * D + ov * D + ok)
+            for j in range(B - 1, -1, -1):
+                t = s + j
+                row = base + t * sS
+                grow = gbase + t * H * D
+                bidx = (bi * S + t) * H + hi
+                Sprev = S_start
+                for jj in range(j):
+                    tt = s + jj
+                    rrow = base + tt * sS
+                    k_tt = tl.load(k_ptr + rrow + rk).to(tl.float32)
+                    a_tt = tl.load(alpha_ptr + rrow + rk).to(tl.float32)
+                    v_tt = tl.load(v_ptr + rrow + rk).to(tl.float32)
+                    b_tt = tl.load(beta_ptr + (bi * S + tt) * H + hi).to(tl.float32)
+                    Sprev = Sprev * a_tt[None, :]
+                    Skk = tl.sum(Sprev * k_tt[None, :], axis=1)
+                    uu = v_tt - Skk
+                    Sprev = Sprev + b_tt * (uu[:, None] * k_tt[None, :])
+                # --- validated adjoint body (verbatim from _mk_bwd_kernel) ---
+                k_t = tl.load(k_ptr + row + rk).to(tl.float32)
+                q_t = tl.load(q_ptr + row + rk).to(tl.float32)
+                a_t = tl.load(alpha_ptr + row + rk).to(tl.float32)
+                v_t = tl.load(v_ptr + row + rv).to(tl.float32)
+                b_t = tl.load(beta_ptr + bidx).to(tl.float32)
+                do_t = tl.load(do_ptr + obase + t * D + rv).to(tl.float32)
+                Sd = Sprev * a_t[None, :]
+                Sk = tl.sum(Sd * k_t[None, :], axis=1)
+                u = v_t - Sk
+                S_t = Sd + b_t * (u[:, None] * k_t[None, :])
+                dS_t = dS + do_t[:, None] * q_t[None, :]
+                dq_t = tl.sum(S_t * do_t[:, None], axis=0)
+                tl.store(dq_ptr + grow + rk, dq_t.to(dq_ptr.dtype.element_ty))
+                dSd = dS_t
+                dSk_via = tl.sum(dS_t * k_t[None, :], axis=1)
+                dbeta_t = tl.sum(u * dSk_via)
+                tl.store(dbeta_ptr + bidx, dbeta_t.to(dbeta_ptr.dtype.element_ty))
+                du = b_t * dSk_via
+                dk_t = b_t * tl.sum(dS_t * u[:, None], axis=0)
+                tl.store(dv_ptr + grow + rv, du.to(dv_ptr.dtype.element_ty))
+                dSd = dSd - du[:, None] * k_t[None, :]
+                dk_t = dk_t - tl.sum(Sd * du[:, None], axis=0)
+                tl.store(dk_ptr + grow + rk, dk_t.to(dk_ptr.dtype.element_ty))
+                dalpha_t = tl.sum(Sprev * dSd, axis=0)
+                tl.store(dalpha_ptr + grow + rk, dalpha_t.to(dalpha_ptr.dtype.element_ty))
+                dS = dSd * a_t[None, :]
+                # --- end adjoint body ---
+            b = b - 1
+
+
+SCAN_IO_STATS = {"fallback_copies": 0}
+
+
+class _MegaScanBSHD(torch.autograd.Function):
+    """`_MegaScan` on [B,S,H,d] inputs in their own dtype (no permute/cast
+    copies). Same kernels' math, same `_MegaScan.block`. Returns o as fp32
+    [B*H, S, d] -- exactly what `_MegaScan` returns for the permuted inputs."""
+
+    @staticmethod
+    def forward(ctx, q, k, v, alpha, beta):
+        Bt, S, H, D = q.shape
+        ts = [t if t.stride(-1) == 1 else t.contiguous() for t in (q, k, v, alpha)]
+        # One stride set is passed to the kernels (a size-1 dim's stride is
+        # never used). Mixed layouts -- never the block's own -- fall back to
+        # contiguous copies, counted so a test can assert the block avoids it.
+        if len({tuple(st if sz > 1 else 0 for st, sz in zip(t.stride(), t.shape))
+                for t in ts}) != 1:
+            SCAN_IO_STATS["fallback_copies"] += 1
+            ts = [t.contiguous() for t in ts]
+        q, k, v, alpha = ts
+        beta3 = beta.reshape(Bt, S, H)
+        if not beta3.is_contiguous():
+            beta3 = beta3.contiguous()
+        sB, sS, sH, _ = q.stride()
+        o = torch.empty(Bt * H, S, D, device=q.device, dtype=torch.float32)
+        BV = 16 if D % 16 == 0 else 1
+        _gated_delta_fwd_kernel_s[(Bt * H, D // BV)](
+            q, k, v, alpha, beta3, o, H, sB, sS, sH, S=S, D=D, BV=BV)
+        ctx.save_for_backward(q, k, v, alpha, beta3)
+        ctx.beta_shape = beta.shape
+        return o
+
+    @staticmethod
+    def backward(ctx, do):
+        q, k, v, alpha, beta3 = ctx.saved_tensors
+        Bt, S, H, D = q.shape
+        N = Bt * H
+        B = _MegaScan.block
+        assert S % B == 0, f"S={S} must be divisible by block B={B}"
+        nblocks = S // B
+        do = do.contiguous().float()
+        sB, sS, sH, _ = q.stride()
+        ckpt = torch.empty(N, nblocks, D, D, device=q.device, dtype=torch.float32)
+        _mk_ckpt_kernel_s[(N,)](k, v, alpha, beta3, ckpt, nblocks, H, sB, sS, sH,
+                                S=S, D=D, B=B)
+        shp = (Bt, S, H, D)
+        dq = torch.empty(shp, device=q.device, dtype=q.dtype)
+        dk = torch.empty(shp, device=q.device, dtype=k.dtype)
+        dv = torch.empty(shp, device=q.device, dtype=v.dtype)
+        dalpha = torch.empty(shp, device=q.device, dtype=alpha.dtype)
+        dbeta3 = torch.empty_like(beta3)
+        _mk_bwd_kernel_s[(N,)](q, k, v, alpha, beta3, ckpt, do,
+                               dq, dk, dv, dalpha, dbeta3, nblocks, H, sB, sS, sH,
+                               S=S, D=D, B=B)
+        return dq, dk, dv, dalpha, dbeta3.reshape(ctx.beta_shape)
+
+
+def megakernel_scan_bshd(q, k, v, alpha, beta):
+    """Strided-IO megakernel scan. q, k, v, alpha : [B, S, H, d] (any float
+    dtype, last dim unit-stride); beta : [B, S, H, 1]. Returns o : fp32
+    [B*H, S, d], bit-identical to `megakernel_scan` on the permuted, fp32-cast
+    inputs; gradients come back in each input's dtype."""
+    assert _HAS_TRITON and q.is_cuda, "CUDA + triton required"
+    assert not _MegaScan.buffered, "strided IO implements the O(B^2) backward only"
+    return _MegaScanBSHD.apply(q, k, v, alpha, beta)
+
+
 def megakernel_scan(q, k, v, alpha, beta, block: int | None = None,
                     buffered: bool | None = None):
     """Design B: optimal sequential forward + fused blockwise-recompute

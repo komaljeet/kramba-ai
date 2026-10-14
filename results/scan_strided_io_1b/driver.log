@@ -1,0 +1,17 @@
+13:02:52 driver2 start, meas at ac3e338 perf(ternary): within-step cache of the quantized trainable weight (0.8% at 1B) + real-harness step attribution + M  hvn/core/deltanet.py M  hvn/core/deltanet_triton.py A  tests/test_scan_strided_io.py 
+13:05:28 start off_t1: --scan-io off --no-profile --cycles-a 2
+13:05:31 CONTAMINATED off_t1 (foreign python appeared), retrying
+13:34:21 start off_t1: --scan-io off --no-profile --cycles-a 2
+13:42:39 end off_t1 OK [A] cycle-mean wall 16.787 s/step over 26 steps; max peak reserved 5078 MiB
+13:43:45 start on_t1: --scan-io on --no-profile --cycles-a 2
+13:51:50 end on_t1 OK [A] cycle-mean wall 16.207 s/step over 26 steps; max peak reserved 5064 MiB
+13:52:56 start off_t2: --scan-io off --no-profile --cycles-a 2
+14:01:12 end off_t2 OK [A] cycle-mean wall 16.782 s/step over 26 steps; max peak reserved 5078 MiB
+14:02:18 start on_t2: --scan-io on --no-profile --cycles-a 2
+14:10:23 end on_t2 OK [A] cycle-mean wall 16.204 s/step over 26 steps; max peak reserved 5064 MiB
+14:11:29 start on_prof: --scan-io on
+14:30:18 end on_prof OK [A] cycle-mean wall 16.203 s/step over 13 steps; max peak reserved 5064 MiB
+14:30:18 driver2 done
+12:07:47 driver start, meas at ac3e338 perf(ternary): within-step cache of the quantized trainable weight (0.8% at 1B) + real-harness step attribution
+12:27:29 start base_prof: 
+12:47:33 end base_prof rc=0 [A] cycle-mean wall 16.793 s/step over 13 steps; max peak reserved 5078 MiB

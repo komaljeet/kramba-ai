@@ -5,6 +5,64 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B pretrain: scan reads q/k/v in place, no layout/cast copies = 3.5% faster per step (2026-10-14)
+
+**One line: the megakernel scan now reads q/k/v/alpha/beta straight from the block's
+`[B, S, H, d]` tensors in their own dtype, so the permute + fp32-cast copies around it
+are gone. At 2048x24 (hvn-hybrid, BCD balanced + offload + prefetch + ternary step
+cache) a full BCD cycle goes from 16.78 to 16.21 s/step -- 0.58 s (3.5%) faster. Peak
+reserved 5078 -> 5064 MiB, peak allocated 3202 -> 3073 MiB. Bit-identical.**
+
+**Measured before building** (attribution harness, kernel rows only, one profiled cycle):
+copies of scan-shaped tensors (`[64, 4096, 32]` and friends) cost 0.74 s/step of device
+time -- `.contiguous()` and `.float()` in `_MegaScan` (fwd and checkpoint recompute),
+autograd's dq/dk/dv fp32 -> bf16 casts, and the permute-back copies in the l2norm /
+view backward. After: 0.00 s/step, every row gone.
+
+**Why the gain is 0.58 s, not 0.74 s:** the scan kernels got 0.18 s/step slower
+(`_mk_ckpt_kernel` 0.38 -> 0.47 s, fwd 1.51 -> 1.60 s, bwd unchanged). Micro-benchmark at
+the 1B shape: the cost is the head-interleaved layout (each step's row is 4 KB away from
+the last, not adjacent), not bf16 and not the index math -- the same strided kernel on an
+`[N, S, d]` layout is as fast as the old one, and on bf16 `[N, S, d]` faster. Triton loop
+pipelining (`tl.range(num_stages=2..4)`) does not win it back (slower or equal).
+
+**1B A/B** (`scripts/ab_scan_strided_io_1b.py`, main ff2867c + MR !199's ternary step
+cache + this, two full cycles per run, ABAB, each run on an otherwise-empty GPU -- the
+driver killed and retried any run another process touched):
+
+| arm | s/step, run 1 / run 2 | fwd | bwd | peak reserved |
+|---|---:|---:|---:|---:|
+| copies (`use_fused_scan_io=False`) | 16.787 / 16.782 | 6.56 s | 9.87 s | 5078 MiB |
+| strided IO (default) | 16.207 / 16.204 | 6.26 s | 9.60 s | 5064 MiB |
+
+**Code.** `hvn/core/deltanet_triton.py`: new `_gated_delta_fwd_kernel_s`,
+`_mk_ckpt_kernel_s`, `_mk_bwd_kernel_s` and `megakernel_scan_bshd` -- copies of the
+validated kernels with only addressing (`n = b*H + h; row = b*sB + h*sH + t*sS`) and
+store dtype changed; the old kernels are untouched. `o` stays fp32 `[N, S, d]` for the
+fused read norm; dq/dk/dv/dalpha/dbeta come back contiguous in each input's dtype.
+`DeltaNetBlock.use_fused_scan_io`: None (default) = on whenever the megakernel scan is;
+False = the old copy path, exactly. Inputs whose strides differ fall back to
+`.contiguous()` and bump `SCAN_IO_STATS["fallback_copies"]`.
+
+**Correctness** (`tests/test_scan_strided_io.py`, all `torch.equal`, no tolerances):
+- o and all five grads vs the old path, bf16 and fp32, five shapes (B 1-3, H 1-64,
+  d 8-64, S not a power of 2);
+- oddly strided inputs -- last-dim slice of a wider buffer, head-major storage, every
+  other time step -- inside NaN-filled buffers, and the test asserts they took the stride
+  path, not the copy fallback;
+- whole DeltaNetBlock under bf16 autocast, with and without packed `doc_ids`: output,
+  x.grad and every parameter grad bit-identical, with call counters proving which path ran;
+- `torch.empty` is NaN-poisoned in the comparisons, so an unwritten gradient row fails
+  instead of inheriting the old path's freed, identical bytes;
+- Triton's fp32 -> bf16 store matches torch's cast on 4.2M random bit patterns plus 786K
+  exact/near ties, NaN, Inf, denormals; the same inputs fail for round-toward-zero, so
+  the test can tell the two apart.
+Mutation check: a stride bug only the strided inputs can see, RTZ rounding on dq, beta
+read from the wrong head, dalpha never stored, and the block silently not using the new
+path each fail the suite (3, 11, 12, 16, 2 failures). Note the 1B loss itself cannot
+show bit-identity: the step is not deterministic run to run (warm-step-1 loss varies by
+~5e-4 between identical old-path runs).
+
 ## 1B pretrain: fused DeltaNet "glue" (q/k L2 norm + read RMSNorm) = 10.2% faster per step (2026-10-12)
 
 **One line: two small Triton kernels replace the bandwidth-bound PyTorch ops around the
@@ -72,7 +130,8 @@ Two test-design traps hit and fixed on the way, worth knowing for any norm kerne
 - dx of an L2 norm is a difference of two terms. Per-element relative bounds fail for
   ANY bf16 implementation near cancellation; bound by the row's scale instead.
 
-**Not done: folding glue INTO the scan kernels.** What remains is the scan wrapper's
+**Not done: folding glue INTO the scan kernels.** (Done 2026-10-14, 3.5% -- see the
+entry above.) What remains is the scan wrapper's
 `.contiguous().float()` copies (q, k, v: ~2.1 ms per forward pass) and the dq/dk/dv casts
 (~0.9 ms per backward), about 3% of the step by the same arithmetic. The scan kernels
 already upcast with `.to(tl.float32)` on load, so the copies are pure layout/dtype. A
