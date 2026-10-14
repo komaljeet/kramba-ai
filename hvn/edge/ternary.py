@@ -19,6 +19,7 @@ the true gradient of ``round()`` is zero almost everywhere.
 from __future__ import annotations
 
 import os
+import weakref
 
 import torch
 import torch.nn as nn
@@ -169,6 +170,76 @@ def _advance_cpu_rng_like_uniform(numel: int, chunk: int = 1 << 20) -> None:
         left -= k
 
 
+# ---------------------------------------------------------------------------
+# Within-step cache of the quantized TRAINABLE weight (2026-10-14).
+#
+# Under grad accumulation + grad checkpointing, a trainable TernaryLinear
+# re-derives the same quantized weight 2 x grad_accum times per optimizer step
+# (forward + checkpoint recompute, per micro-batch), although the shadow weight
+# only changes at optimizer.step(). This caches the detached quantized weight
+# for the rest of the step and routes the gradient through an explicit
+# straight-through Function, so the backward is the SAME arithmetic as the
+# uncached path (grad -> cast to the weight dtype -> identity).
+#
+# Invalidation is deliberately blunt, because a weight cache's failure mode is
+# silent staleness (#117): every optimizer step (global pre AND post hooks)
+# clears every live entry, and each hit is also keyed on the weight's storage
+# pointer, version counter, dtype and the epoch. Opt-in only
+# (``enable_ternary_step_cache``); off by default.
+# ---------------------------------------------------------------------------
+_STEP_EPOCH = [0]
+_STEP_LIVE: "weakref.WeakSet" = weakref.WeakSet()
+_STEP_HOOKS: list = []
+STEP_CACHE_STATS = {"hits": 0, "misses": 0}
+
+
+def _invalidate_step_cache(*_args, **_kwargs) -> None:
+    _STEP_EPOCH[0] += 1
+    for m in list(_STEP_LIVE):
+        m._scache = None
+    _STEP_LIVE.clear()
+
+
+def enable_ternary_step_cache(model: nn.Module, enabled: bool = True) -> int:
+    """Turn the within-step quantized-weight cache on/off for every TernaryLinear.
+
+    Installs (once, process-wide) optimizer step pre/post hooks that drop every
+    cached entry, so a cache can never outlive the weights it was built from.
+    Returns the number of modules switched.
+    """
+    if enabled and not _STEP_HOOKS:
+        from torch.optim.optimizer import (register_optimizer_step_post_hook,
+                                           register_optimizer_step_pre_hook)
+        _STEP_HOOKS.append(register_optimizer_step_pre_hook(_invalidate_step_cache))
+        _STEP_HOOKS.append(register_optimizer_step_post_hook(_invalidate_step_cache))
+    n = 0
+    for mod in model.modules():
+        if isinstance(mod, TernaryLinear):
+            mod.use_step_cache = bool(enabled)
+            mod._scache = None
+            n += 1
+    _invalidate_step_cache()
+    return n
+
+
+class _CachedSTE(torch.autograd.Function):
+    """Return a precomputed quantized weight; gradient passes straight to ``w``.
+
+    Equals the uncached chain's backward exactly: there the gradient goes
+    through ``.to(dtype)`` (ToCopyBackward: cast back to the weight dtype) and
+    the STE (identity).
+    """
+
+    @staticmethod
+    def forward(ctx, w, wq):
+        ctx.w_dtype = w.dtype
+        return wq.view_as(wq)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output.to(ctx.w_dtype), None
+
+
 class TernaryLinear(nn.Module):
     """``nn.Linear`` drop-in with BitNet b1.58 ternary weights.
 
@@ -195,6 +266,9 @@ class TernaryLinear(nn.Module):
     #: so it never enters a state_dict and modules built or unpickled before it
     #: existed read False -- the same pattern as ``use_megakernel_scan``.
     use_fused = False
+    #: Within-step quantized-weight cache (see ``enable_ternary_step_cache``).
+    use_step_cache = False
+    _scache = None
 
     def __init__(self, in_features: int, out_features: int, bias: bool = False,
                  group_size: int = GROUP_PER_TENSOR, *,
@@ -227,6 +301,23 @@ class TernaryLinear(nn.Module):
         if self._frozen_codes is not None:
             return dequantize_codes(self._frozen_codes, self._frozen_scale,
                                     self.group_size, dtype)
+        w = self.weight
+        if self.use_step_cache and w.requires_grad and torch.is_grad_enabled():
+            key = (_STEP_EPOCH[0], w.data_ptr(), w._version, w.dtype, w.device, dtype)
+            c = self._scache
+            if c is None or c[0] != key:
+                with torch.no_grad():
+                    wq = self._quantize_raw(w.detach(), dtype)
+                c = (key, wq)
+                self._scache = c
+                _STEP_LIVE.add(self)
+                STEP_CACHE_STATS["misses"] += 1
+            else:
+                STEP_CACHE_STATS["hits"] += 1
+            return _CachedSTE.apply(w, c[1])
+        return self._quantize_raw(w, dtype)
+
+    def _quantize_raw(self, w: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
         # Issue #154: an optional fused Triton path for the default per-tensor
         # case. It replaces a six-op chain (abs/mean/clamp/div/round/clamp/mul)
         # that cProfile measured at 0.395 s of an 8.58 s step -- it runs 1,760
@@ -245,8 +336,8 @@ class TernaryLinear(nn.Module):
         if ((_USE_FUSED_TERNARY or self.use_fused)
                 and self.group_size == GROUP_PER_TENSOR):
             from .ternary_fused import ternary_quantize_ste_fused
-            return ternary_quantize_ste_fused(self.weight).to(dtype)
-        return ternary_quantize_ste(self.weight, group_size=self.group_size).to(dtype)
+            return ternary_quantize_ste_fused(w).to(dtype)
+        return ternary_quantize_ste(w, group_size=self.group_size).to(dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.training or torch.is_grad_enabled():
@@ -286,10 +377,12 @@ class TernaryLinear(nn.Module):
         aggressively rather than cleverly.
         """
         self._wcache = None
+        self._scache = None
         return super().train(mode)
 
     def _load_from_state_dict(self, *args, **kwargs):
         self._wcache = None
+        self._scache = None
         return super()._load_from_state_dict(*args, **kwargs)
 
     def freeze(self) -> None:
