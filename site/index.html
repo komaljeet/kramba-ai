@@ -123,6 +123,16 @@
   See the repo's <code>docs/state.md</code> for the full writeup.
 </p>
 
+<p style="border-left:3px solid var(--accent);padding-left:1rem;">
+  <strong>Update (2026-10-14):</strong> that offload+BCD path has since been validated
+  end-to-end (a real run hard-killed and resumed mid-training three times, plus a real 1.1B
+  fresh-build and resume), with four more real bugs found and fixed along the way. Separately,
+  four more real speed levers landed this week &mdash; throughput is now <strong>2,086 tok/s</strong>
+  (up from 1,579) and pretrain time is <strong>~168-269 days</strong> (down from ~375), depending
+  on how you count block-coordinate descent's own quality cost. See <code>docs/state.md</code>
+  for the full trail.
+</p>
+
 <h2>How it is done</h2>
 <p class="sub">Five published techniques, one working integration</p>
 
@@ -224,10 +234,13 @@
 
 <blockquote>
   <p>
-    Fitting is still not finishing. A 1B model runs at about 1,100 tokens/sec here, and
-    training one properly needs roughly 36 billion of them &mdash; about
-    <strong>375 days</strong>. The ceiling this stack raises is what you can <em>hold</em>;
-    the wall it does not touch is arithmetic.
+    Fitting is still not finishing. A 1B model ran at about 1,100 tokens/sec here in August;
+    <strong>2,086 tok/s measured 2026-10-14</strong> after real speed fixes. Training one
+    properly still needs roughly 30 billion+ tokens &mdash; now
+    <strong>~168-269 days</strong>, down from 375, depending on how you count
+    block-coordinate descent's own quality cost. The ceiling this stack raises is what you
+    can <em>hold</em>; the wall it does not touch is arithmetic &mdash; just a smaller wall
+    than it was in August.
   </p>
 </blockquote>
 
@@ -288,7 +301,7 @@
     <tr><td>48M</td><td class="num win">yes</td><td class="num">~1 day</td></tr>
     <tr><td>108M</td><td class="num win">yes</td><td class="num">~5 days</td></tr>
     <tr><td>157M</td><td class="num win">yes</td><td class="num">~10 days</td></tr>
-    <tr><td>1B</td><td class="num win">yes &mdash; 4.05 GB</td><td class="num loss">~375 days</td></tr>
+    <tr><td>1B</td><td class="num win">yes &mdash; 4.05 GB</td><td class="num loss">~168-269 days<br><span style="font-size:0.8em;opacity:0.7;">(was ~375, Aug)</span></td></tr>
   </tbody>
 </table>
 </div>
@@ -305,24 +318,32 @@
 <table>
   <thead><tr><th>Part of one training step</th><th class="num">Share</th><th>How close to the limit?</th></tr></thead>
   <tbody>
-    <tr><td>Multiplying matrices &mdash; the actual maths</td><td class="num">33%</td><td class="win">100.6% &mdash; at the ceiling</td></tr>
-    <tr><td>Small operations between the big ones</td><td class="num">36%</td><td>limited by memory speed</td></tr>
-    <tr><td>Stepping through the sequence</td><td class="num">15%</td><td>waiting, not calculating</td></tr>
-    <tr><td>Moving data around</td><td class="num">15%</td><td>the price of fitting in 6 GB</td></tr>
+    <tr><td>Multiplying matrices &mdash; the actual maths</td><td class="num">43%</td><td class="win">100.6% &mdash; at the ceiling</td></tr>
+    <tr><td>Small operations between the big ones</td><td class="num">34%</td><td>limited by memory speed</td></tr>
+    <tr><td>Stepping through the sequence</td><td class="num">19%</td><td>waiting, not calculating</td></tr>
+    <tr><td>Moving data around</td><td class="num">12%</td><td>hidden on a side stream &mdash; costs almost nothing now</td></tr>
   </tbody>
 </table>
+<p style="font-size:0.85em;opacity:0.7;">Re-measured 2026-10-14 on current code (the August
+row-shares above are stale &mdash; matmul's own share actually <em>grew</em>, from 33% to
+43%, once this week's fixes shrank everything else).</p>
 </div>
 
 <p>
-  The maths runs at <strong>100.6%</strong> of the fastest this GPU was seen to go. Nothing
-  left there. The part that looked promising &mdash; the 15% spent waiting instead of
-  calculating &mdash; caps out at a <strong>16% gain overall</strong> even if made instant,
-  because it is a sixth of the work.
+  The maths still runs at <strong>100.6%</strong> of the fastest this GPU was seen to go
+  &mdash; that part held up. <strong>"Nothing left there" did not.</strong> This page said in
+  August that every remaining improvement added up to 20-25%; four more real levers landed in
+  October anyway (fusing more of the DeltaNet glue into its scan kernels, fixing a short
+  causal-conv transpose, two ternary-quantize caches), cutting the step a further 7% on top of
+  what was already captured.
 </p>
 
 <p>
-  Every remaining improvement added up comes to <strong>20&ndash;25%</strong>, turning 375
-  days into about 300. The year is not bad code. It is 36 billion tokens.
+  Measured together: <strong>15.706 s/step</strong>, 2,086 tok/s, down from 21.81 s/step in
+  August &mdash; a 28% cut overall. The 1B run now needs <strong>~168-269 days</strong>
+  instead of ~375-300, depending on how block-coordinate descent's quality cost is counted.
+  The lesson that kept recurring this week: don't trust an "exhausted" claim without a fresh
+  number behind it.
 </p>
 
 <p>
