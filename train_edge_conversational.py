@@ -205,7 +205,8 @@ RESUME_STATE_FILENAME = "resume_state.pt"
 
 
 def _save_resume_state(checkpoint_dir: str, global_step: int, optimizer,
-                       bcd_scheduler=None, lr_scheduler=None) -> None:
+                       bcd_scheduler=None, lr_scheduler=None,
+                       data_state: dict | None = None) -> None:
     """Persist optimizer + BCD-cycle + LR-schedule state so a restart continues.
 
     Written atomically (temp file + os.replace) because this file is overwritten in
@@ -220,6 +221,10 @@ def _save_resume_state(checkpoint_dir: str, global_step: int, optimizer,
     left the LR at 41% of intended by step 20000, and the training curve showed
     nothing. Saving the scheduler's own ``last_epoch`` removes the replay
     entirely.
+
+    ``data_state`` (#172) is the train loader's position -- shuffle seed, epoch,
+    and how many samples of that epoch the loop has consumed -- so a resume
+    continues the batch sequence instead of reshuffling and starting over.
     """
     state = {
         "global_step": global_step,
@@ -227,6 +232,7 @@ def _save_resume_state(checkpoint_dir: str, global_step: int, optimizer,
         "bcd_state_dict": bcd_scheduler.state_dict() if bcd_scheduler is not None else None,
         "sched_state_dict": (lr_scheduler.state_dict()
                              if lr_scheduler is not None else None),
+        "data_state": data_state,
     }
     path = os.path.join(checkpoint_dir, RESUME_STATE_FILENAME)
     tmp = path + ".tmp"
@@ -276,6 +282,34 @@ def _restore_optimizer_and_bcd(optimizer, bcd_scheduler, resume_state: dict) -> 
         # state had loaded would not be.
         print(f"  [resume] WARNING optimizer state NOT restored ({e}) — "
               f"continuing with fresh optimizer state")
+
+
+def _restore_data_position(sampler, resume_state: dict | None) -> tuple[int, int]:
+    """Return the (epoch, sample offset) the train loop should start at (#172).
+
+    Restores the saved shuffle seed into ``sampler`` too: an unseeded run's
+    seed is torch's per-process default, so the resumed process must not
+    rebuild the order from its own. Falls back to (0, 0) -- the pre-#172
+    behaviour -- with a printed reason whenever an exact continuation is not
+    possible.
+    """
+    ds = (resume_state or {}).get("data_state")
+    if resume_state is None or not isinstance(sampler, ResumableShuffleSampler):
+        return 0, 0
+    if ds is None:
+        print("  [resume] no saved data position (pre-#172 checkpoint) — the data "
+              "order restarts from the beginning of an epoch")
+        return 0, 0
+    if ds.get("num_samples") != sampler.num_samples:
+        print(f"  [resume] WARNING dataset size changed ({ds.get('num_samples'):,} -> "
+              f"{sampler.num_samples:,} samples) — the saved data position does not "
+              f"apply; restarting epoch {ds['epoch']} from its first sample")
+        sampler.seed = int(ds["seed"])
+        return int(ds["epoch"]), 0
+    sampler.seed = int(ds["seed"])
+    print(f"  [resume] data position restored: epoch {ds['epoch']}, sample "
+          f"{ds['sample_offset']:,}/{sampler.num_samples:,} (shuffle seed {ds['seed']})")
+    return int(ds["epoch"]), int(ds["sample_offset"])
 
 
 def build_cosine_scheduler(optimizer, total_steps: int, resume_step: int = 0,
@@ -1628,6 +1662,54 @@ class WikiText103LocalDataset(Dataset):
         return x, y
 
 
+class ResumableShuffleSampler(torch.utils.data.Sampler):
+    """Seeded per-epoch shuffle that can restart mid-epoch (#172).
+
+    The train loader used ``shuffle=True``, i.e. a RandomSampler that draws a
+    fresh seed from the GLOBAL torch RNG on every ``iter()``. The order was
+    therefore a function of how much RNG the process had consumed before that
+    call, which a resumed process cannot reproduce (it builds the model twice,
+    loads a checkpoint, ...), and nothing saved the position either. A resume
+    reshuffled and started the epoch over.
+
+    Here epoch ``e``'s order is ``randperm(n)`` under a generator seeded from
+    ``(seed, e)`` only, so any process can rebuild it, and ``set_position``
+    starts the next ``iter()`` at a sample offset. Skipping is a list slice: no
+    sample before the offset is read, so a resume deep into an epoch costs the
+    same as one at its start (one ``randperm``, as RandomSampler already did).
+
+    Each ``iter()`` consumes the pending position and advances to the next
+    epoch, so callers that just re-``iter()`` the loader every epoch (the ghost
+    harnesses) still get a fresh order per epoch. ``train()`` sets the position
+    explicitly before every ``iter()``, so the pre-training audit's peek at one
+    batch does not move the training order.
+    """
+
+    def __init__(self, num_samples: int, seed: int):
+        self.num_samples = int(num_samples)
+        self.seed = int(seed)
+        self.epoch = 0
+        self.start = 0
+
+    def set_position(self, epoch: int, start: int = 0) -> None:
+        self.epoch = int(epoch)
+        self.start = int(start)
+
+    def permutation(self, epoch: int) -> torch.Tensor:
+        g = torch.Generator()
+        g.manual_seed((self.seed * 1_000_003 + int(epoch)) % (2 ** 63))
+        return torch.randperm(self.num_samples, generator=g)
+
+    def __iter__(self):
+        perm = self.permutation(self.epoch)
+        start = self.start
+        self.epoch, self.start = self.epoch + 1, 0
+        return iter(perm[start:].tolist())
+
+    def __len__(self) -> int:
+        return self.num_samples
+
+
 def _check_fim_tokenizer(tokenizer) -> None:
     """Refuse --fim unless the tokenizer carries the sentinels as single tokens.
 
@@ -1673,6 +1755,7 @@ def build_dataset_pipeline(
     max_repeat: int = 3,
     code_corpus: str | None = None,
     fim: dict | None = None,
+    shuffle_seed: int | None = None,
 ) -> tuple[DataLoader, "DataLoader | None", dict]:
     """Build the mixed-source train (and held-out val) DataLoaders + stats.
 
@@ -1743,9 +1826,16 @@ def build_dataset_pipeline(
     # Issue #91: num_workers > 0 enables async batch preparation overlapping
     # with GPU compute. persistent_workers avoids per-epoch spawn overhead.
     # prefetch_factor=2 (default) keeps 2 batches ready per worker.
+    # #172: a seeded, position-resumable shuffle instead of shuffle=True, so a
+    # resume continues the exact batch sequence. The seed defaults to
+    # torch.initial_seed() -- what --seed set, read WITHOUT consuming any RNG,
+    # so model init is unchanged -- and train() saves/restores it with the data
+    # position, so a resume is exact even for an unseeded run.
+    if shuffle_seed is None:
+        shuffle_seed = torch.initial_seed()
     loader_kwargs = dict(
         batch_size=batch_size,
-        shuffle=True,
+        sampler=ResumableShuffleSampler(len(dataset), shuffle_seed),
         # Issue #105: a smaller final batch would be a fresh dynamic shape
         # torch.compile hasn't seen, forcing a recompile/guard-fail once per
         # epoch instead of reusing the steady-state compiled graph. The val
@@ -3027,7 +3117,6 @@ def train(
     print(f"  Logging every {config['log_every_steps']} steps | Checkpoint every {config['save_every_steps']} steps")
     print("-" * 70)
 
-    epoch = 0
     start_time = time.time()
     step_start_time = start_time
     optimizer.zero_grad()
@@ -3052,7 +3141,24 @@ def train(
     src_loss_t = torch.zeros(3, device=device)         # per-source summed per-sample loss
     src_count_t = torch.zeros(3, device=device)        # per-source sample count
 
-    # For iterable datasets, we need to cycle through epochs manually
+    # #172: continue the batch sequence exactly where the checkpoint left it.
+    # The position is (epoch, samples of that epoch consumed by THIS loop) --
+    # counted here, not read off the loader, because workers prefetch ahead.
+    sampler = getattr(dataloader, "sampler", None)
+    resumable = isinstance(sampler, ResumableShuffleSampler)
+    epoch, epoch_start = _restore_data_position(sampler, resume_state)
+    epoch_batches = 0
+    loader_bs = dataloader.batch_size or 1
+
+    def _data_state():
+        if not resumable:
+            return None
+        return {"seed": sampler.seed, "epoch": epoch,
+                "sample_offset": epoch_start + epoch_batches * loader_bs,
+                "num_samples": sampler.num_samples}
+
+    if resumable:
+        sampler.set_position(epoch, epoch_start)
     data_iter = iter(dataloader)
     micro_step = 0  # micro-batches within a grad-accum window
 
@@ -3069,12 +3175,16 @@ def train(
             batch = next(data_iter)
         except StopIteration:
             epoch += 1
+            epoch_start, epoch_batches = 0, 0
+            if resumable:
+                sampler.set_position(epoch, 0)
             data_iter = iter(dataloader)
             try:
                 batch = next(data_iter)
             except StopIteration:
                 print(f"\n  Dataset exhausted after {epoch} epochs.")
                 break
+        epoch_batches += 1
 
         # MixedLocalDataset returns (x, y, src_id); WikiText103LocalDataset returns (x, y)
         if len(batch) == 3:
@@ -3266,7 +3376,7 @@ def train(
                 ckpt_path = os.path.join(checkpoint_dir, f"edge_conversational_step{global_step}.pt")
                 _save_edge_checkpoint(model, ckpt_path, global_step=global_step)
                 _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler,
-                       lr_scheduler=scheduler)
+                       lr_scheduler=scheduler, data_state=_data_state())
                 print(f"  ✓ Checkpoint saved: {ckpt_path}")
                 _prune_checkpoints(checkpoint_dir,
                                    keep_last=config.get("keep_checkpoints", 5),
@@ -3314,7 +3424,7 @@ def train(
     final_ckpt_path = os.path.join(checkpoint_dir, "edge_conversational.pt")
     _save_edge_checkpoint(model, final_ckpt_path, global_step=global_step)
     _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler,
-                       lr_scheduler=scheduler)
+                       lr_scheduler=scheduler, data_state=_data_state())
 
     if dyn_lr is not None:
         dyn_lr.close()
