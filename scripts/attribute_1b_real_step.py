@@ -143,7 +143,8 @@ model, _ = tec.build_model_and_config(
     grad_checkpoint=True, tie_embeddings=True, chunked_loss=CHUNK, optimizer="muon",
     precision="bf16", lr=3e-4, vocab_size=VOCAB, offload_weights=True)
 model = tec.apply_fast_stack(model, triton_scan=True, megakernel_scan=True, tf32=True,
-                             compile_model=False, verbose=False, fused_ternary=True)
+                             compile_model=False, verbose=False, fused_ternary=True,
+                             fused_rmsnorm=True)
 model.train()
 if args.step_cache:
     from hvn.edge.ternary import enable_ternary_step_cache
