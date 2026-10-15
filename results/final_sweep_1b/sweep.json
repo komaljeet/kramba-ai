@@ -1,0 +1,3921 @@
+{
+ "config": {
+  "repo": "C:\\Users\\komal\\Documents\\Codes\\kramba-wt-sweep",
+  "out": "results/final_sweep_1b/sweep.json",
+  "warmup": 2,
+  "min_free_ram_gib": 1.5,
+  "skip_ops": false
+ },
+ "steps_a": [
+  {
+   "active": "blocks.2+blocks.3",
+   "wall": 20.238776500002132,
+   "loss": 10.951995849609375,
+   "ram": 5.655994415283203
+  },
+  {
+   "active": "blocks.4+blocks.5",
+   "wall": 19.060240999999223,
+   "loss": 10.892102241516113,
+   "ram": 5.671783447265625
+  },
+  {
+   "active": "blocks.6+blocks.7",
+   "wall": 17.874376200008555,
+   "loss": 10.865987777709961,
+   "ram": 5.678577423095703
+  },
+  {
+   "active": "blocks.8+blocks.9",
+   "wall": 16.67697749999934,
+   "loss": 10.836443901062012,
+   "ram": 5.663005828857422
+  },
+  {
+   "active": "blocks.10+blocks.11",
+   "wall": 15.507327500003157,
+   "loss": 10.805130004882812,
+   "ram": 5.673088073730469
+  },
+  {
+   "active": "blocks.12+blocks.13",
+   "wall": 14.369676200003596,
+   "loss": 10.785134315490723,
+   "ram": 5.668251037597656
+  },
+  {
+   "active": "blocks.14+blocks.15",
+   "wall": 13.242104100005236,
+   "loss": 10.757966041564941,
+   "ram": 5.673007965087891
+  },
+  {
+   "active": "blocks.16+blocks.17",
+   "wall": 12.06567310000537,
+   "loss": 10.735031127929688,
+   "ram": 5.674919128417969
+  },
+  {
+   "active": "blocks.18+blocks.19",
+   "wall": 10.884110800005146,
+   "loss": 10.709188461303711,
+   "ram": 5.670806884765625
+  },
+  {
+   "active": "blocks.20+blocks.21",
+   "wall": 9.684357599995565,
+   "loss": 10.679944038391113,
+   "ram": 5.67926025390625
+  },
+  {
+   "active": "blocks.22+blocks.23+final_norm+decoder",
+   "wall": 8.488521799998125,
+   "loss": 10.660816192626953,
+   "ram": 5.680217742919922
+  },
+  {
+   "active": "token_embedding",
+   "wall": 22.063352700002724,
+   "loss": 10.642526626586914,
+   "ram": 5.696468353271484
+  },
+  {
+   "active": "blocks.0+blocks.1",
+   "wall": 21.3003638000082,
+   "loss": 10.469473838806152,
+   "ram": 5.707744598388672
+  }
+ ],
+ "steps_b": [
+  {
+   "active": "blocks.2+blocks.3",
+   "device_s": 22.126839862999834,
+   "ram": 5.540672302246094
+  },
+  {
+   "active": "blocks.4+blocks.5",
+   "device_s": 21.133510268000087,
+   "ram": 5.4853668212890625
+  },
+  {
+   "active": "blocks.6+blocks.7",
+   "device_s": 19.82580301000036,
+   "ram": 5.431682586669922
+  },
+  {
+   "active": "blocks.8+blocks.9",
+   "device_s": 18.59338141999992,
+   "ram": 5.424587249755859
+  },
+  {
+   "active": "blocks.10+blocks.11",
+   "device_s": 17.29085029500017,
+   "ram": 5.447414398193359
+  },
+  {
+   "active": "blocks.12+blocks.13",
+   "device_s": 16.172218966000038,
+   "ram": 5.429481506347656
+  },
+  {
+   "active": "blocks.14+blocks.15",
+   "device_s": 14.8856647039999,
+   "ram": 5.412326812744141
+  },
+  {
+   "active": "blocks.16+blocks.17",
+   "device_s": 13.58919883700006,
+   "ram": 5.430263519287109
+  },
+  {
+   "active": "blocks.18+blocks.19",
+   "device_s": 12.40242495900004,
+   "ram": 5.127742767333984
+  },
+  {
+   "active": "blocks.20+blocks.21",
+   "device_s": 11.067076729000012,
+   "ram": 5.404720306396484
+  },
+  {
+   "active": "blocks.22+blocks.23+final_norm+decoder",
+   "device_s": 9.773932368000008,
+   "ram": 5.187664031982422
+  },
+  {
+   "active": "token_embedding",
+   "device_s": 24.54823425600002,
+   "ram": 5.075630187988281
+  },
+  {
+   "active": "blocks.0+blocks.1",
+   "device_s": 23.68409737100015,
+   "ram": 5.4560699462890625
+  }
+ ],
+ "aborted": null,
+ "static_flags": {
+  "deltanet.use_triton_scan=True": 22,
+  "deltanet.use_megakernel_scan=True": 22,
+  "deltanet.use_fused_l2norm=None": 22,
+  "deltanet.use_fused_read_norm=None": 22,
+  "deltanet.use_fused_conv=None": 22,
+  "deltanet.use_fused_scan_io=None": 22,
+  "deltanet.adaptive_chunk=False": 22,
+  "deltanet.train_chunk=32": 22,
+  "TransformerBlock(window=4096)": 2,
+  "TernaryLinear n=166 use_fused=166 use_step_cache=166": 1,
+  "dropout p counts={0.1: 72}": 1
+ },
+ "params": 1113059793,
+ "bcd_blocks": 13,
+ "runtime_calls_per_cycle": {
+  "deltanet._fused_causal_conv": 3600,
+  "deltanet._fused_l2norm": 7200,
+  "deltanet._triton_megakernel_scan_bshd": 3600,
+  "deltanet._fused_read_norm": 3600,
+  "sdpa(is_causal=True)": 336
+ },
+ "step_cache": {
+  "hits": 2490,
+  "misses": 166
+ },
+ "frozen_scale": {
+  "hits": 22568,
+  "misses": 1992
+ },
+ "scan_io_fallback_copies": 0,
+ "peak_reserved_mib": 5060.0,
+ "ref_step_s": 15.496604523079721,
+ "device_s_per_step": 17.314864080461582,
+ "top_kernels": [
+  [
+   "ampere_bf16_s1688gemm_bf16_128x128_ldg8_relu_f2f_stages_32x1_tn",
+   2.2168372493846156
+  ],
+  [
+   "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tt",
+   2.141139082846157
+  ],
+  [
+   "Memcpy HtoD (Pinned -> Device)",
+   1.835229855538465
+  ],
+  [
+   "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nn",
+   1.7671711650000017
+  ],
+  [
+   "_gated_delta_fwd_kernel_s",
+   1.5999086107692306
+  ],
+  [
+   "_mk_bwd_kernel_s",
+   1.4007210886153798
+  ],
+  [
+   "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tn",
+   0.5876765610769301
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_25bfloat16_copy_kernel_cudaERNS_18TensorIteratorBaseEEUlfE_St5arrayIPcLy2EEEEviT0_T1_",
+   0.5582770940769269
+  ],
+  [
+   "_mk_ckpt_kernel_s",
+   0.4706505950769259
+  ],
+  [
+   "_ZN2at6native27unrolled_elementwise_kernelIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE5_clEvEUlfE_St5arrayIPcLy2EELi4E23TrivialOffsetCalculatorILi1EjESB_NS0_6memory12LoadWithCastILi1EEENSC_13StoreWithCastILi1EEEEEviT_T0_T2_T3_T4_T5_",
+   0.38510842353846625
+  ],
+  [
+   "_ZN2at6native18elementwise_kernelILi128ELi2EZNS0_22gpu_kernel_impl_nocastINS0_13BinaryFunctorIfffNS0_15binary_internal10MulFunctorIfEEEEEEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+   0.3237200532307703
+  ],
+  [
+   "_ZN2at6native43_GLOBAL__N__5ad584b7_10_Dropout_cu_0e96ed3824fused_dropout_kernel_vecIN3c108BFloat16EfjLi1ELi8EbEEvNS_4cuda6detail10TensorInfoIKT_T1_EENS7_IS8_SA_EENS7_IT4_SA_EESA_T0_NS_15PhiloxCudaStateE",
+   0.2891511786153889
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIfEESt5arrayIPcLy3EEEEviT0_T1_",
+   0.26755240823077187
+  ],
+  [
+   "_Z52fmha_cutlassB_bf16_aligned_64x64_k32_seqaligned_sm80N22PyTorchMemEffAttention23AttentionBackwardKernelIN7cutlass4arch4Sm80ENS1_10bfloat16_tELb1ELb0ELb1ELi64ELi64ELi32ELb1EE6ParamsE",
+   0.24011958453846122
+  ],
+  [
+   "_quantize_kernel",
+   0.2159630142307895
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13BinaryFunctorIfffNS0_15binary_internal10MulFunctorIfEEEESt5arrayIPcLy3EEEEviT0_T1_",
+   0.18638677938461598
+  ],
+  [
+   "_ZN2at6native27unrolled_elementwise_kernelINS0_13BinaryFunctorIfffNS0_15binary_internal10MulFunctorIfEEEESt5arrayIPcLy3EELi4E23TrivialOffsetCalculatorILi2EjESA_ILi1EjENS0_6memory12LoadWithCastILi2EEENSD_13StoreWithCastILi1EEEEEviT_T0_T2_T3_T4_T5_",
+   0.1842064221538476
+  ],
+  [
+   "_ZN2at6native27unrolled_elementwise_kernelINS0_15CUDAFunctor_addIfEESt5arrayIPcLy3EELi4E23TrivialOffsetCalculatorILi2EjES7_ILi1EjENS0_6memory12LoadWithCastILi2EEENSA_13StoreWithCastILi1EEEEEviT_T0_T2_T3_T4_T5_",
+   0.1811074503846164
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIN3c108BFloat16EEESt5arrayIPcLy3EEEEviT0_T1_",
+   0.15474546292306252
+  ],
+  [
+   "_Z40fmha_cutlassF_bf16_aligned_64x64_rf_sm80N22PyTorchMemEffAttention15AttentionKernelIN7cutlass10bfloat16_tENS1_4arch4Sm80ELb1ELi64ELi64ELi64ELb1ELb1EE6ParamsE",
+   0.15255280676923116
+  ],
+  [
+   "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_15CUDAFunctor_addIN3c108BFloat16EEEEEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+   0.14131010138461098
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_50_GLOBAL__N__7dd5f103_12_PowKernel_cu_9ffbb073_441629pow_tensor_scalar_kernel_implIffEEvRNS_18TensorIteratorBaseET0_EUlfE_St5arrayIPcLy2EEEEviS6_T1_",
+   0.12910655446153668
+  ],
+  [
+   "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nt",
+   0.12167171323076804
+  ],
+  [
+   "Memcpy HtoD (Pageable -> Device)",
+   0.1174473556153854
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_19sigmoid_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE0_clEvEUlfE_St5arrayIPcLy2EEEEviT0_T1_",
+   0.1092111387692356
+  ],
+  [
+   "_l2n_fwd_kernel",
+   0.10346688830769514
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_18GeluCUDAKernelImplERNS_18TensorIteratorBaseENS0_8GeluTypeEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EEEEviT0_T1_",
+   0.10069016615384209
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_43_GLOBAL__N__5ad584b7_10_Dropout_cu_0e96ed3819masked_scale_kernelIbN3c108BFloat16EfEEvRNS_6TensorERKS6_S9_T1_EUlS5_bE_St5arrayIPcLy3EEEEviT0_SA_",
+   0.10002907000000097
+  ],
+  [
+   "_rn_fwd_kernel",
+   0.09081337869231257
+  ],
+  [
+   "_cc_fwd_kernel",
+   0.08518673453846161
+  ],
+  [
+   "_ZN2at6native13reduce_kernelILi512ELi1ENS0_8ReduceOpIfNS0_7MeanOpsIffffEEjfLi4ELi4EEEEEvT1_",
+   0.08093845861538505
+  ],
+  [
+   "_ZN2at6native43_GLOBAL__N__bcfaaeff_10_SoftMax_cu_0af7be2119cunn_SoftMaxForwardILi8EN3c108BFloat16EfS4_NS1_25LogSoftMaxForwardEpilogueEEEvPT2_PKT0_i",
+   0.0701833155384605
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_26GeluBackwardCUDAKernelImplERNS_18TensorIteratorBaseENS0_8GeluTypeEENKUlvE0_clEvENKUlvE2_clEvEUlN3c108BFloat16ES8_E_St5arrayIPcLy3EEEEviT0_T1_",
+   0.06802409076923348
+  ],
+  [
+   "_ZN7cutlass7Kernel2I57cutlass_75_tensorop_bf16_s1688gemm_bf16_128x256_tn_align1EEvNT_6ParamsE",
+   0.06022527115384774
+  ],
+  [
+   "_rn_bwd_kernel",
+   0.059915479000000355
+  ],
+  [
+   "_ZN2at6native43_GLOBAL__N__bcfaaeff_10_SoftMax_cu_0af7be2120cunn_SoftMaxBackwardILi8EN3c108BFloat16EfS4_NS1_26LogSoftMaxBackwardEpilogueEEEvPT0_PKT2_SA_x",
+   0.0594131295384625
+  ],
+  [
+   "_l2n_bwd_kernel",
+   0.058600745999995485
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_28sigmoid_backward_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE0_clEvEUlffE_St5arrayIPcLy3EEEEviT0_T1_",
+   0.056958941076925555
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIfffNS0_15binary_internal10MulFunctorIfEEEESt5arrayIPcLy2EEEEviT0_T1_",
+   0.04652144023076833
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIfEESt5arrayIPcLy1EEEEviT0_T1_",
+   0.04584205546154094
+  ],
+  [
+   "Memcpy DtoD (Device -> Device)",
+   0.0445064292307689
+  ],
+  [
+   "Memcpy DtoH (Device -> Pageable)",
+   0.0335398964615394
+  ],
+  [
+   "_ZN7cutlass7Kernel2I57cutlass_75_tensorop_bf16_s1688gemm_bf16_256x128_nn_align1EEvNT_6ParamsE",
+   0.027909797769231262
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_10AbsFunctorIN3c108BFloat16EEESt5arrayIPcLy2EEEEviT0_T1_",
+   0.02705925869230754
+  ],
+  [
+   "_cc_bwd_kernel",
+   0.02689336492307696
+  ],
+  [
+   "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_13BinaryFunctorIN3c108BFloat16ES5_S5_NS0_15binary_internal10MulFunctorIfEEEEEEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+   0.0264833248461533
+  ],
+  [
+   "_ZN2at6native13reduce_kernelILi512ELi1ENS0_8ReduceOpIfNS0_14func_wrapper_tIfZNS0_11sum_functorIfffEclERNS_14TensorIteratorEEUlffE_EEjfLi4ELi4EEEEEvT1_",
+   0.026189660769233094
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_62_GLOBAL__N__a30504db_23_ActivationSiluKernel_cu_9ffbb073_1539620silu_backward_kernelERNS_18TensorIteratorBaseEENKUlvE_clEvENKUlvE2_clEvEUlN3c108BFloat16ES8_E_St5arrayIPcLy3EEEEviT0_T1_",
+   0.024666510153845876
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_62_GLOBAL__N__a30504db_23_ActivationSiluKernel_cu_9ffbb073_1539611silu_kernelERNS_18TensorIteratorBaseEENKUlvE_clEvENKUlvE4_clEvEUlN3c108BFloat16EE_St5arrayIPcLy2EEEEviT0_T1_",
+   0.023790157307696628
+  ],
+  [
+   "ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_f2f_tt",
+   0.023342427923074824
+  ],
+  [
+   "_ZN7cutlass7Kernel2I57cutlass_75_tensorop_bf16_s1688gemm_bf16_128x128_nt_align1EEvNT_6ParamsE",
+   0.02311093369230805
+  ],
+  [
+   "_ZN2at6native40_GLOBAL__N__27eda9f4_8_Shape_cu_85d9f36c19CatArrayBatchedCopyINS1_10OpaqueTypeILj2EEEjLi4ELi64ELi64EEEvPT_NS1_25CatArrInputTensorMetadataIS5_T0_XT2_EXT3_EEENS1_16TensorSizeStrideIS8_Lj4EEEiS8_",
+   0.018537306076920723
+  ],
+  [
+   "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIN3c108BFloat16ES4_S4_NS0_15binary_internal10MulFunctorIfEEEESt5arrayIPcLy2EEEEviT0_T1_",
+   0.01799916561538332
+  ],
+  [
+   "_ZN2at6native18elementwise_kernelILi128ELi2EZNS0_22gpu_kernel_impl_nocastINS0_13BUnaryFunctorIfffNS0_15binary_internal10MulFunctorIfEEEEEEvRNS_18TensorIteratorBaseERKT_EUliE_EEviT1_",
+   0.016209149307689727
+  ],
+  [
+   "_ZN2at6native18elementwise_kernelILi128ELi2EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE5_clEvEUlfE_EEvS4_RKT_EUliE_EEviT1_",
+   0.012677312615385386
+  ],
+  [
+   "_ZN2at6native24vectorized_gather_kernelILi16ExEEvPcS2_PT0_ixxxxb",
+   0.009354741153846428
+  ],
+  [
+   "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE10_clEvEUlN3c108BFloat16EE_EEvS4_RKT_EUliE_EEviT1_",
+   0.008873932461538872
+  ],
+  [
+   "_ZN2at6native13reduce_kernelILi128ELi4ENS0_8ReduceOpIN3c108BFloat16ENS0_14func_wrapper_tIS4_ZNS0_11sum_functorIS4_fS4_EclERNS_14TensorIteratorEEUlffE_EEjS4_Li4ELi8EEEEEvT1_",
+   0.007267066923077747
+  ],
+  [
+   "_ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_15neg_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKUlvE7_clEvEUlN3c108BFloat16EE_EEvS4_RKT_EUliE_EEviT1_",
+   0.00716655115384782
+  ],
+  [
+   "_ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f39layer_norm_grad_input_kernel_vectorizedIffLb0EEEvPKT_S5_PKT0_S8_S5_PS3_i",
+   0.004826998153845752
+  ]
+ ],
+ "op_rows": [
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn>",
+    "_MegaScanBSHD",
+    "[1, 4096, 64, 32]"
+   ],
+   2.230601625846155,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: _MegaScanBSHDBackward]",
+    "_MegaScanBSHDBackward",
+    "[64, 4096, 32]"
+   ],
+   1.87385796923077,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.out_proj",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   1.1316324621538463,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn",
+    "_MegaScanBSHD",
+    "[1, 4096, 64, 32]"
+   ],
+   1.0478870910769233,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.7488291932307697,
+   1045.5384615384614
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: BmmBackward0]",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.5992052676923078,
+   436.9230769230769
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.0",
+    "aten::addmm",
+    "[4096]"
+   ],
+   0.5007925015384612,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.3",
+    "aten::addmm",
+    "[2048]"
+   ],
+   0.49832790276923,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.34080282215384716,
+   514.4615384615385
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddmmBackward0]",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.3154191599999993,
+   110.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddmmBackward0]",
+    "aten::mm",
+    "[4096, 4096]"
+   ],
+   0.3112371224615374,
+   114.46153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.0>",
+    "aten::addmm",
+    "[4096]"
+   ],
+   0.2781901747692306,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.3>",
+    "aten::addmm",
+    "[2048]"
+   ],
+   0.2754822473846177,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: MulBackward0]",
+    "aten::mul",
+    "[1, 4096, 2048]"
+   ],
+   0.2522777070769228,
+   526.7692307692307
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ScaledDotProductEfficientAttentionBackward0]",
+    "aten::_efficient_attention_backward",
+    "[1, 4096, 64, 32]"
+   ],
+   0.2504343643076927,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NllLossBackward0]",
+    "aten::addmm",
+    "[50304]"
+   ],
+   0.2468556953846157,
+   59.07692307692308
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::addmm",
+    "[50304]"
+   ],
+   0.24595916492307607,
+   59.07692307692308
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.k_proj",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.24403649538461566,
+   161.23076923076923
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddmmBackward0]",
+    "aten::mm",
+    "[512, 50304]"
+   ],
+   0.24277852000000055,
+   59.07692307692308
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.alpha_proj",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.24246664123076928,
+   162.46153846153845
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.gate_proj",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.2422494036923068,
+   162.46153846153845
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.q_proj",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.24198068430769223,
+   159.3846153846154
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.v_proj",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.24191487323076946,
+   162.46153846153845
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::copy_",
+    "[4096, 2048]"
+   ],
+   0.2319515870769229,
+   164.92307692307693
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::copy_",
+    "[2048, 4096]"
+   ],
+   0.227660022153846,
+   164.92307692307693
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: MmBackward0]",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.192281977230771,
+   140.30769230769232
+  ],
+  [
+   [
+    "mb",
+    "mod:dn",
+    "aten::add",
+    "[1, 4096, 2048]"
+   ],
+   0.17020915876923062,
+   352.0
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::mm",
+    "[2048, 2048]"
+   ],
+   0.15060669884615366,
+   197.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.norm",
+    "aten::mul",
+    "[1, 4096, 2048]"
+   ],
+   0.14370574646153736,
+   343.38461538461536
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.out_proj>",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.1388071458461533,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.v_proj>",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.11987874215384602,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.k_proj>",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.11967022461538632,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.alpha_proj>",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.11942301107692274,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.gate_proj>",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.11941921230769287,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.q_proj>",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.11934318338461757,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: MmBackward0]",
+    "aten::mm",
+    "[2048, 4096]"
+   ],
+   0.1174164104615379,
+   86.15384615384616
+  ],
+  [
+   [
+    "mb",
+    "mod:dn",
+    "aten::mul",
+    "[1, 4096, 2048]"
+   ],
+   0.10835930584615468,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]",
+    "aten::copy_",
+    "[4096, 2048]"
+   ],
+   0.10490354646153777,
+   80.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: PowBackward0]",
+    "aten::mul",
+    "[1, 4096, 2048]"
+   ],
+   0.1043790436923071,
+   206.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]",
+    "aten::copy_",
+    "[2048, 4096]"
+   ],
+   0.1020221993846162,
+   80.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.0",
+    "aten::copy_",
+    "[4096, 2048]"
+   ],
+   0.0975206240000006,
+   338.46153846153845
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn>",
+    "aten::add",
+    "[1, 4096, 2048]"
+   ],
+   0.09497871261538494,
+   201.84615384615384
+  ],
+  [
+   [
+    "mb",
+    "mod:attn",
+    "aten::_efficient_attention_forward",
+    "[1, 4096, 64, 32]"
+   ],
+   0.0946980615384616,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: MmBackward0]",
+    "aten::mm",
+    "[2048, 2048]"
+   ],
+   0.09289542030769092,
+   67.6923076923077
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.2",
+    "aten::native_dropout",
+    "[1, 4096, 4096]"
+   ],
+   0.09172021969230726,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ToCopyBackward0]",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.08838802030769234,
+   342.15384615384613
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ExpandBackward0]",
+    "aten::add_",
+    "[1, 4096, 2048]"
+   ],
+   0.08832888861538268,
+   349.53846153846155
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.norm",
+    "aten::pow",
+    "[1, 4096, 2048]"
+   ],
+   0.07392521969230709,
+   171.07692307692307
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.norm>",
+    "aten::mul",
+    "[1, 4096, 2048]"
+   ],
+   0.0734598067692322,
+   201.84615384615384
+  ],
+  [
+   [
+    "mb",
+    "mod:dn",
+    "aten::sigmoid",
+    "[1, 4096, 2048]"
+   ],
+   0.07119081969230752,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddBackward0]",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.06798176923077044,
+   221.53846153846155
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.3",
+    "aten::addmm",
+    "[2048]"
+   ],
+   0.06561754953846151,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn",
+    "_FusedL2Norm",
+    "[1, 4096, 64, 32]"
+   ],
+   0.0655637507692313,
+   348.3076923076923
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.0",
+    "aten::addmm",
+    "[6144]"
+   ],
+   0.06520727938461521,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn",
+    "_FusedReadNorm",
+    "[64, 4096, 32]"
+   ],
+   0.05985310092307702,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: _FusedReadNormBackward]",
+    "_FusedReadNormBackward",
+    "[1, 4096, 2048]"
+   ],
+   0.05983419938461404,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: GeluBackward0]",
+    "aten::gelu_backward",
+    "[1, 4096, 4096]"
+   ],
+   0.059340996307693926,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: PowBackward0]",
+    "aten::add_",
+    "[1, 4096, 2048]"
+   ],
+   0.058757440615383835,
+   103.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: _FusedL2NormBackward]",
+    "_FusedL2NormBackward",
+    "[1, 4096, 64, 32]"
+   ],
+   0.05833992184615472,
+   201.84615384615384
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn>",
+    "aten::_efficient_attention_forward",
+    "[1, 4096, 64, 32]"
+   ],
+   0.05804197107692278,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.1",
+    "aten::gelu",
+    "[1, 4096, 4096]"
+   ],
+   0.05667105969230756,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: SigmoidBackward0]",
+    "aten::sigmoid_backward",
+    "[1, 4096, 2048]"
+   ],
+   0.054893568615385184,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: LogSoftmaxBackward0]",
+    "aten::_log_softmax_backward_data",
+    "[512, 50304]"
+   ],
+   0.05485074646153853,
+   59.07692307692308
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.0>",
+    "aten::copy_",
+    "[4096, 2048]"
+   ],
+   0.05470672923076726,
+   188.30769230769232
+  ],
+  [
+   [
+    "mb",
+    "mod:dn",
+    "_FusedCausalConv",
+    "[1, 4096, 2048]"
+   ],
+   0.054120866461538165,
+   171.69230769230768
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: _FusedCausalConvBackward]",
+    "aten::add_",
+    "[1, 4096, 2048]"
+   ],
+   0.05365420615384584,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ToCopyBackward0]",
+    "aten::copy_",
+    "[512, 50304]"
+   ],
+   0.053516929846153666,
+   59.07692307692308
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]",
+    "aten::native_dropout_backward",
+    "[1, 4096, 2048]"
+   ],
+   0.052883916307690335,
+   221.53846153846155
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.2>",
+    "aten::native_dropout",
+    "[1, 4096, 4096]"
+   ],
+   0.05183865169230856,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.0",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.05180459753846203,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.out_proj",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.051674643692307454,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::copy_",
+    "[512, 50304]"
+   ],
+   0.05137906276923103,
+   59.07692307692308
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: MulBackward0]",
+    "aten::add_",
+    "[1, 4096, 2048]"
+   ],
+   0.05132467815384641,
+   103.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NllLossBackward0]",
+    "aten::copy_",
+    "[512, 50304]"
+   ],
+   0.051323606153845715,
+   59.07692307692308
+  ],
+  [
+   [
+    "mb",
+    "mod:dn",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.051201812307692614,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn>",
+    "aten::mul",
+    "[1, 4096, 2048]"
+   ],
+   0.04885318030769156,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.norm",
+    "aten::mean",
+    "[1, 4096, 2048]"
+   ],
+   0.04566091753846129,
+   171.07692307692307
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.dropout",
+    "aten::native_dropout",
+    "[1, 4096, 2048]"
+   ],
+   0.04393630953846176,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]",
+    "aten::native_dropout_backward",
+    "[1, 4096, 4096]"
+   ],
+   0.04234487446153723,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddmmBackward0]",
+    "aten::mm",
+    "[2048, 4096]"
+   ],
+   0.042225064000000895,
+   14.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: PowBackward0]",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.041455462769230116,
+   103.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.gate_proj",
+    "aten::add_",
+    "[1, 4096, 2048]"
+   ],
+   0.040622572923076306,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.ffn.3>",
+    "aten::addmm",
+    "[2048]"
+   ],
+   0.04018686276923092,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddmmBackward0]",
+    "aten::mm",
+    "[4096, 6144]"
+   ],
+   0.04011285661538389,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.ffn.0>",
+    "aten::addmm",
+    "[6144]"
+   ],
+   0.040090242461538944,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.norm>",
+    "aten::pow",
+    "[1, 4096, 2048]"
+   ],
+   0.039602194461539106,
+   100.92307692307692
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.03764067807692309,
+   43.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn>",
+    "aten::sigmoid",
+    "[1, 4096, 2048]"
+   ],
+   0.03698850338461343,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn>",
+    "_FusedL2Norm",
+    "[1, 4096, 64, 32]"
+   ],
+   0.03573699999999806,
+   201.84615384615384
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.alpha_proj",
+    "aten::add_",
+    "[1, 4096, 2048]"
+   ],
+   0.035071596307692764,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.3",
+    "aten::abs",
+    "[2048, 4096]"
+   ],
+   0.03286878646153827,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn>",
+    "_FusedReadNorm",
+    "[64, 4096, 32]"
+   ],
+   0.032656219692308815,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NllLossBackward0]",
+    "aten::_log_softmax",
+    "[512, 50304]"
+   ],
+   0.032623563076923386,
+   59.07692307692308
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::_log_softmax",
+    "[512, 50304]"
+   ],
+   0.03244845784615396,
+   59.07692307692308
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.1>",
+    "aten::gelu",
+    "[1, 4096, 4096]"
+   ],
+   0.03174967507692176,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: SliceBackward0]",
+    "aten::add_",
+    "[1, 4096, 2048]"
+   ],
+   0.031664861538461625,
+   56.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.4",
+    "aten::native_dropout",
+    "[1, 4096, 2048]"
+   ],
+   0.03066574338461401,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NllLossBackward0]",
+    "aten::fill_",
+    "[512, 50304]"
+   ],
+   0.03039941969230814,
+   59.07692307692308
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NllLossBackward0]<mod:decoder>",
+    "aten::addmm",
+    "[50257]"
+   ],
+   0.030181233230769204,
+   4.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "mod:decoder",
+    "aten::addmm",
+    "[50257]"
+   ],
+   0.030073852923076957,
+   4.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: MulBackward0]",
+    "aten::sum",
+    "[1, 4096, 2048]"
+   ],
+   0.029678731692305692,
+   118.15384615384616
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: MulBackward0]",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.02920609538461655,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.out_proj>",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.029050061538462884,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.0",
+    "aten::abs",
+    "[4096, 2048]"
+   ],
+   0.028945190769230637,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.0",
+    "_FusedTernarySTE",
+    "[4096, 2048]"
+   ],
+   0.028927699076922987,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.0>",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.028895982153844806,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.3",
+    "_FusedTernarySTE",
+    "[2048, 4096]"
+   ],
+   0.028820189538462066,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::copy_",
+    "[6144, 2048]"
+   ],
+   0.028706264615384898,
+   14.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::copy_",
+    "[2048, 6144]"
+   ],
+   0.028315489230769222,
+   14.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddmmBackward0]",
+    "aten::mm",
+    "[512, 50257]"
+   ],
+   0.02799218707692315,
+   4.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::copy_",
+    "[50257, 2048]"
+   ],
+   0.027988304615384613,
+   7.384615384615385
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn>",
+    "_FusedCausalConv",
+    "[1, 4096, 2048]"
+   ],
+   0.027857816615385146,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: _FusedCausalConvBackward]",
+    "_FusedCausalConvBackward",
+    "[1, 4096, 2048]"
+   ],
+   0.026719731692308058,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: SiluBackward0]",
+    "aten::silu_backward",
+    "[1, 4096, 2048]"
+   ],
+   0.026490587076922593,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn>",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.025384931692308606,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.dropout>",
+    "aten::native_dropout",
+    "[1, 4096, 2048]"
+   ],
+   0.02511779138461178,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.norm>",
+    "aten::mean",
+    "[1, 4096, 2048]"
+   ],
+   0.0240149470769235,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddmmBackward0]",
+    "aten::mm",
+    "[50257, 512]"
+   ],
+   0.023176136615384584,
+   4.923076923076923
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::mm",
+    "[2048, 4096]"
+   ],
+   0.023019337692307722,
+   16.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ExpandBackward0]",
+    "aten::add",
+    "[1, 4096, 2048]"
+   ],
+   0.022444200615386264,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.v_proj",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.022383859692307904,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.k_proj",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.022080420923076678,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.q_proj",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.022073863384615505,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.out_proj",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.0219790849230768,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.gate_proj",
+    "aten::abs",
+    "[2048, 2048]"
+   ],
+   0.021208270769230337,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.out_proj",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.021080282461538834,
+   338.46153846153845
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.v_proj",
+    "aten::abs",
+    "[2048, 2048]"
+   ],
+   0.020840001846153245,
+   175.3846153846154
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.k_proj",
+    "aten::abs",
+    "[2048, 2048]"
+   ],
+   0.020455372307691615,
+   174.15384615384616
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.gate_proj>",
+    "aten::add_",
+    "[1, 4096, 2048]"
+   ],
+   0.019783367384613705,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.q_proj",
+    "aten::abs",
+    "[2048, 2048]"
+   ],
+   0.019404396923076394,
+   171.69230769230768
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.v_proj",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.018607281230769136,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.alpha_proj",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.018594760000000023,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.gate_proj",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.018591805538461362,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.v_proj>",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.01857983323076919,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.k_proj>",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.01857579630769223,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.gate_proj>",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.018571422769231433,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.q_proj>",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.018534025230768712,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.alpha_proj>",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.01848804307692319,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.alpha_proj>",
+    "aten::add_",
+    "[1, 4096, 2048]"
+   ],
+   0.018341408000000396,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.q_proj",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.017770992615384725,
+   12.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.k_proj",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.017769612923076952,
+   12.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NllLossBackward0]<mod:decoder>",
+    "aten::copy_",
+    "[50257, 2048]"
+   ],
+   0.017573482461538382,
+   4.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.4>",
+    "aten::native_dropout",
+    "[1, 4096, 2048]"
+   ],
+   0.01729933046153818,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.out_proj",
+    "aten::abs",
+    "[2048, 2048]"
+   ],
+   0.017130443692308314,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn",
+    "aten::silu",
+    "[1, 4096, 2048]"
+   ],
+   0.01674054030769256,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]",
+    "aten::copy_",
+    "[2048, 6144]"
+   ],
+   0.01633586215384641,
+   8.615384615384615
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]",
+    "aten::copy_",
+    "[6144, 2048]"
+   ],
+   0.016205891692307923,
+   8.615384615384615
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: MeanBackward1]",
+    "aten::div",
+    "[1, 4096, 2048]"
+   ],
+   0.0161788258461551,
+   103.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ToCopyBackward0]",
+    "aten::add_",
+    "[1, 4096, 2048]"
+   ],
+   0.01617087323076851,
+   29.53846153846154
+  ],
+  [
+   [
+    "mb",
+    "mod:attn",
+    "aten::add",
+    "[1, 4096, 2048]"
+   ],
+   0.015196096615384333,
+   32.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.3>",
+    "_FusedTernarySTE",
+    "[2048, 4096]"
+   ],
+   0.015045543999998473,
+   87.38461538461539
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::mul",
+    "[2048, 2048]"
+   ],
+   0.014648406769230765,
+   197.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.out_proj>",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.014532575384614702,
+   188.30769230769232
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.beta_proj",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.013927821538462089,
+   162.46153846153845
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ReshapeAliasBackward0]",
+    "aten::add_",
+    "[1, 4096, 2048]"
+   ],
+   0.013916360615385625,
+   54.15384615384615
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.k_proj>",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.013523073846153486,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.v_proj>",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.013517459692307677,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.q_proj>",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.013515020923077917,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.0",
+    "aten::copy_",
+    "[6144, 2048]"
+   ],
+   0.013503020307692359,
+   30.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.out_proj>",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.013456718769230665,
+   9.846153846153847
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::add",
+    "[2048, 2048]"
+   ],
+   0.013298348230769306,
+   136.3846153846154
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: TBackward0]",
+    "aten::add_",
+    "[50257, 2048]"
+   ],
+   0.013109784615384559,
+   3.6923076923076925
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.0>",
+    "_FusedTernarySTE",
+    "[4096, 2048]"
+   ],
+   0.012843594461537898,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: _FusedCausalConvBackward]",
+    "aten::copy_",
+    "[1, 2048, 4096]"
+   ],
+   0.012664547076922553,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.2",
+    "aten::native_dropout",
+    "[1, 4096, 6144]"
+   ],
+   0.012320461538461431,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.norm",
+    "aten::mul",
+    "[1, 4096, 2048]"
+   ],
+   0.01206767076923064,
+   32.0
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::copy_",
+    "[4096, 2048]"
+   ],
+   0.011802120538461549,
+   6.769230769230769
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::copy_",
+    "[2048, 4096]"
+   ],
+   0.01175624507692312,
+   6.769230769230769
+  ],
+  [
+   [
+    "mb",
+    "mod:attn",
+    "aten::mul",
+    "[1, 64, 4096, 32]"
+   ],
+   0.011728868307692429,
+   64.0
+  ],
+  [
+   [
+    "mb",
+    "mod:attn",
+    "aten::cat",
+    "[]"
+   ],
+   0.011519967384615377,
+   48.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: SliceBackward0]",
+    "aten::add_",
+    "[1, 64, 4096, 32]"
+   ],
+   0.010923766769232372,
+   39.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn>",
+    "aten::add",
+    "[1, 4096, 2048]"
+   ],
+   0.009325427692307158,
+   19.692307692307693
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: SliceBackward0]",
+    "aten::copy_",
+    "[1, 64, 4096, 16]"
+   ],
+   0.008961586461538449,
+   39.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn>",
+    "aten::add",
+    "[1, 64, 4096, 32]"
+   ],
+   0.008894367384615713,
+   19.692307692307693
+  ],
+  [
+   [
+    "mb",
+    "mod:attn",
+    "aten::add",
+    "[1, 64, 4096, 32]"
+   ],
+   0.008855867692307747,
+   32.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.v_proj>",
+    "_FusedTernarySTE",
+    "[2048, 2048]"
+   ],
+   0.008789404923077672,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.k_proj>",
+    "_FusedTernarySTE",
+    "[2048, 2048]"
+   ],
+   0.008713443076921054,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: GeluBackward0]",
+    "aten::gelu_backward",
+    "[1, 4096, 6144]"
+   ],
+   0.008651942769230987,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.gate_proj>",
+    "_FusedTernarySTE",
+    "[2048, 2048]"
+   ],
+   0.008445148307692331,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.0",
+    "aten::mean",
+    "[4096, 2048]"
+   ],
+   0.008391247384614584,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn>",
+    "aten::silu",
+    "[1, 4096, 2048]"
+   ],
+   0.008269346461539227,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.1",
+    "aten::gelu",
+    "[1, 4096, 6144]"
+   ],
+   0.008268471384615422,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.3",
+    "aten::mean",
+    "[2048, 4096]"
+   ],
+   0.008233760615384219,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.q_proj>",
+    "_FusedTernarySTE",
+    "[2048, 2048]"
+   ],
+   0.008096824615385885,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.ffn.0>",
+    "aten::copy_",
+    "[6144, 2048]"
+   ],
+   0.007950300923077103,
+   18.46153846153846
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.out_proj>",
+    "_FusedTernarySTE",
+    "[2048, 2048]"
+   ],
+   0.007793464615385407,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: MulBackward0]",
+    "aten::mul",
+    "[1, 64, 4096, 32]"
+   ],
+   0.007698588923076312,
+   39.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: SliceBackward0]",
+    "aten::fill_",
+    "[1, 4096, 2048]"
+   ],
+   0.007572173538461758,
+   64.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.ffn.2>",
+    "aten::native_dropout",
+    "[1, 4096, 6144]"
+   ],
+   0.007541868307692357,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn>",
+    "aten::mul",
+    "[1, 64, 4096, 32]"
+   ],
+   0.0074643575384615414,
+   39.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: _CachedSTEBackward]",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.0073546018461544205,
+   55.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.norm>",
+    "aten::mul",
+    "[1, 4096, 2048]"
+   ],
+   0.007144936000000255,
+   19.692307692307693
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn>",
+    "aten::cat",
+    "[]"
+   ],
+   0.0070769636923080454,
+   29.53846153846154
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::add",
+    "[2048, 4096]"
+   ],
+   0.007050930230769114,
+   18.615384615384617
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.k_proj",
+    "_FusedTernarySTE",
+    "[2048, 2048]"
+   ],
+   0.00680477107692309,
+   174.15384615384616
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.norm",
+    "aten::pow",
+    "[1, 4096, 2048]"
+   ],
+   0.006590120615384774,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]",
+    "aten::native_dropout_backward",
+    "[1, 4096, 6144]"
+   ],
+   0.006548527999999861,
+   9.846153846153847
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "Command Buffer Full",
+    "[]"
+   ],
+   0.006487756076923192,
+   23.615384615384617
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.beta_proj>",
+    "aten::bmm",
+    "[1, 4096, 2048]"
+   ],
+   0.006420158153845857,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.gate_proj",
+    "_FusedTernarySTE",
+    "[2048, 2048]"
+   ],
+   0.006406272000000069,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.q_proj",
+    "_FusedTernarySTE",
+    "[2048, 2048]"
+   ],
+   0.00636600492307687,
+   171.69230769230768
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.v_proj",
+    "_FusedTernarySTE",
+    "[2048, 2048]"
+   ],
+   0.005885727999999974,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "mod:token_embedding",
+    "aten::gather",
+    "[50257, 2048]"
+   ],
+   0.005879484923076923,
+   1.8461538461538463
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: BmmBackward0]",
+    "aten::bmm",
+    "[1, 4096, 64]"
+   ],
+   0.005655402461538951,
+   87.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.out_proj",
+    "_FusedTernarySTE",
+    "[2048, 2048]"
+   ],
+   0.005426232615385148,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.v_proj",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.005237107076923095,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.q_proj",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.005131731076923217,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.k_proj",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.005124781538461711,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeLayerNormBackward0]",
+    "aten::native_layer_norm_backward",
+    "[1, 4096, 2048]"
+   ],
+   0.005088215384615227,
+   8.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.ffn.1>",
+    "aten::gelu",
+    "[1, 4096, 6144]"
+   ],
+   0.005073036307692528,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddmmBackward0]",
+    "aten::mm",
+    "[6144, 4096]"
+   ],
+   0.005021860923076766,
+   1.2307692307692308
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.0",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.004725129230769244,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.3",
+    "aten::abs",
+    "[2048, 6144]"
+   ],
+   0.0046760387692306405,
+   16.0
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::add_",
+    "[2048, 2048]"
+   ],
+   0.004622112153846207,
+   21.46153846153846
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: LogSoftmaxBackward0]",
+    "aten::_log_softmax_backward_data",
+    "[512, 50257]"
+   ],
+   0.004559301538461389,
+   4.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.0",
+    "aten::abs",
+    "[6144, 2048]"
+   ],
+   0.0045558172307690395,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ToCopyBackward0]",
+    "aten::copy_",
+    "[512, 50257]"
+   ],
+   0.004445481230769307,
+   4.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: EmbeddingBackward0]",
+    "aten::add_",
+    "[50257, 2048]"
+   ],
+   0.004357047999999844,
+   0.6153846153846154
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.0",
+    "_FusedTernarySTE",
+    "[6144, 2048]"
+   ],
+   0.004285639384615342,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ToCopyBackward0]",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.004284332307693405,
+   30.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: _FusedCausalConvBackward]",
+    "aten::convolution_backward",
+    "[1, 2048, 4096]"
+   ],
+   0.004281256000000769,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::copy_",
+    "[512, 50257]"
+   ],
+   0.004278649230769191,
+   4.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NllLossBackward0]",
+    "aten::copy_",
+    "[512, 50257]"
+   ],
+   0.0042779796923077314,
+   4.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.3",
+    "_FusedTernarySTE",
+    "[2048, 6144]"
+   ],
+   0.0042167944615382445,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::copy_",
+    "[64, 2048]"
+   ],
+   0.004075718153846862,
+   164.30769230769232
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.ffn.3",
+    "aten::copy_",
+    "[2048, 4096]"
+   ],
+   0.004040649230769564,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.dropout",
+    "aten::native_dropout",
+    "[1, 4096, 2048]"
+   ],
+   0.003996636307692335,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.norm>",
+    "aten::pow",
+    "[1, 4096, 2048]"
+   ],
+   0.0038611987692309686,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.norm",
+    "aten::mean",
+    "[1, 4096, 2048]"
+   ],
+   0.0038544972307692784,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ToCopyBackward0]",
+    "aten::copy_",
+    "[4096, 2048]"
+   ],
+   0.0038255975384618368,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: _FusedCausalConvBackward]",
+    "aten::copy_",
+    "[1, 2048, 4099]"
+   ],
+   0.0037144713846152077,
+   13.538461538461538
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::mm",
+    "[2048, 6144]"
+   ],
+   0.0036154978461538467,
+   1.5384615384615385
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::_log_softmax",
+    "[512, 50257]"
+   ],
+   0.00358660369230771,
+   4.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::copy_",
+    "[2048]"
+   ],
+   0.003502633846152868,
+   866.4615384615385
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ReshapeAliasBackward0]",
+    "aten::add",
+    "[1, 4096, 2048]"
+   ],
+   0.003302784615383913,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.q_proj",
+    "aten::mean",
+    "[2048, 2048]"
+   ],
+   0.0032655169230771794,
+   171.69230769230768
+  ],
+  [
+   [
+    "mb",
+    "mod:final_norm",
+    "aten::native_layer_norm",
+    "[1, 4096, 2048]"
+   ],
+   0.0032044763076925077,
+   8.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: _CachedSTEBackward]",
+    "aten::copy_",
+    "[2048, 4096]"
+   ],
+   0.003154023384615564,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "mod:attn",
+    "aten::neg",
+    "[1, 64, 4096, 16]"
+   ],
+   0.003108459076923157,
+   32.0
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::mul",
+    "[2048, 4096]"
+   ],
+   0.0030954300769230106,
+   16.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.v_proj",
+    "aten::mean",
+    "[2048, 2048]"
+   ],
+   0.0030694695384619855,
+   175.3846153846154
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: SliceBackward0]",
+    "aten::copy_",
+    "[1, 512, 2048]"
+   ],
+   0.003040245538461595,
+   64.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.k_proj",
+    "aten::mean",
+    "[2048, 2048]"
+   ],
+   0.003021494769230645,
+   174.15384615384616
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ScaledDotProductEfficientAttentionBackward0]",
+    "aten::fill_",
+    "[67174400]"
+   ],
+   0.003001272000000597,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.v_proj>",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.002988715076923084,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.k_proj>",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.002980664615383945,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.q_proj>",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.0029798873846156953,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.gate_proj",
+    "aten::mean",
+    "[2048, 2048]"
+   ],
+   0.002842844307692358,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.ffn.0>",
+    "aten::copy_",
+    "[1, 4096, 2048]"
+   ],
+   0.002832554461538505,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.4",
+    "aten::native_dropout",
+    "[1, 4096, 2048]"
+   ],
+   0.0026919673846154298,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NllLossBackward0]",
+    "aten::_log_softmax",
+    "[512, 50257]"
+   ],
+   0.0026781624615385127,
+   4.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.out_proj",
+    "aten::mean",
+    "[2048, 2048]"
+   ],
+   0.002658726153845836,
+   176.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NllLossBackward0]",
+    "aten::fill_",
+    "[512, 50257]"
+   ],
+   0.0025258036923076098,
+   4.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddmmBackward0]",
+    "aten::sum",
+    "[4096, 4096]"
+   ],
+   0.002492786461538707,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.dropout>",
+    "aten::native_dropout",
+    "[1, 4096, 2048]"
+   ],
+   0.002439416000000273,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "mod:decoder",
+    "aten::copy_",
+    "[50257, 2048]"
+   ],
+   0.0023528670769230675,
+   0.6153846153846154
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.norm>",
+    "aten::mean",
+    "[1, 4096, 2048]"
+   ],
+   0.0023427070769227753,
+   9.846153846153847
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.ffn.3>",
+    "_FusedTernarySTE",
+    "[2048, 6144]"
+   ],
+   0.002290216000000588,
+   8.615384615384615
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.q_proj",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.0022664018461538587,
+   30.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.ffn.0>",
+    "_FusedTernarySTE",
+    "[6144, 2048]"
+   ],
+   0.0022282073846151334,
+   8.615384615384615
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.v_proj",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.002226464615385084,
+   30.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NegBackward0]",
+    "aten::neg",
+    "[1, 64, 4096, 16]"
+   ],
+   0.0021999969230764188,
+   19.692307692307693
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.k_proj",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.002192808000000104,
+   30.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NllLossBackward0]",
+    "aten::copy_",
+    "[1, 512, 2048]"
+   ],
+   0.002187471999999852,
+   59.07692307692308
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: TBackward0]",
+    "aten::add",
+    "[50257, 2048]"
+   ],
+   0.002186428307692305,
+   0.6153846153846154
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ToCopyBackward0]",
+    "aten::copy_",
+    "[50257, 2048]"
+   ],
+   0.002124043076923117,
+   0.6153846153846154
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: _FusedCausalConvBackward]",
+    "aten::fill_",
+    "[1, 2048, 4099]"
+   ],
+   0.002103415999999843,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.3",
+    "aten::mean",
+    "[2048, 6144]"
+   ],
+   0.0020934799999997485,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.ffn.0",
+    "aten::mean",
+    "[6144, 2048]"
+   ],
+   0.0019959249230768676,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "(no module)",
+    "aten::copy_",
+    "[1, 512, 2048]"
+   ],
+   0.001995020307692699,
+   59.07692307692308
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]",
+    "aten::copy_",
+    "[64, 2048]"
+   ],
+   0.0019754892307698294,
+   80.0
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::_foreach_mul_",
+    "[]"
+   ],
+   0.001967669384615393,
+   0.8461538461538461
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::add_",
+    "[4096, 2048]"
+   ],
+   0.001926601307692351,
+   3.3846153846153846
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::add_",
+    "[2048, 4096]"
+   ],
+   0.0019259000769230635,
+   3.3846153846153846
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn>",
+    "aten::neg",
+    "[1, 64, 4096, 16]"
+   ],
+   0.001899561230769524,
+   19.692307692307693
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::mul_",
+    "[2048, 2048]"
+   ],
+   0.001898372846153847,
+   21.46153846153846
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: SigmoidBackward0]",
+    "aten::sigmoid_backward",
+    "[1, 4096, 64]"
+   ],
+   0.0018656043076920683,
+   100.92307692307692
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.q_proj",
+    "aten::abs",
+    "[2048, 2048]"
+   ],
+   0.0018106227692308156,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "mod:dn.alpha_proj",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.0018086307692306122,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddBackward0]",
+    "aten::sum",
+    "[1, 4096, 2048]"
+   ],
+   0.001768897846152361,
+   27.076923076923077
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: SliceBackward0]",
+    "aten::fill_",
+    "[1, 64, 4096, 32]"
+   ],
+   0.0017278590769230458,
+   39.38461538461539
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]",
+    "aten::copy_",
+    "[2048]"
+   ],
+   0.0016994012307686586,
+   417.2307692307692
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: MmBackward0]",
+    "aten::mm",
+    "[64, 4096]"
+   ],
+   0.0016758036923088277,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.ffn.4>",
+    "aten::native_dropout",
+    "[1, 4096, 2048]"
+   ],
+   0.0016406375384615877,
+   9.846153846153847
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::copy_",
+    "[6144, 2048]"
+   ],
+   0.0016383220000000035,
+   0.6153846153846154
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::copy_",
+    "[2048, 6144]"
+   ],
+   0.0015621623076922976,
+   0.6153846153846154
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.q_proj>",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.0015245686153841135,
+   18.46153846153846
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.alpha_proj>",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.0014697747692316771,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddmmBackward0]",
+    "aten::sum",
+    "[512, 50304]"
+   ],
+   0.0014215421538460427,
+   4.923076923076923
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: EmbeddingBackward0]",
+    "aten::fill_",
+    "[50257, 2048]"
+   ],
+   0.0013338664615383515,
+   0.6153846153846154
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.beta_proj>",
+    "aten::mm",
+    "[4096, 2048]"
+   ],
+   0.0013268203076919397,
+   13.538461538461538
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.k_proj",
+    "aten::abs",
+    "[2048, 2048]"
+   ],
+   0.0012702867692309396,
+   16.0
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.k_proj>",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.0012604720000007118,
+   18.46153846153846
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: NativeDropoutBackward0]<mod:attn.v_proj>",
+    "aten::copy_",
+    "[2048, 2048]"
+   ],
+   0.0012549298461529497,
+   18.46153846153846
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::mul_",
+    "[2048, 4096]"
+   ],
+   0.0012480810000000011,
+   3.3846153846153846
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.v_proj",
+    "aten::abs",
+    "[2048, 2048]"
+   ],
+   0.001245040615384485,
+   16.0
+  ],
+  [
+   [
+    "opt",
+    "(no module)",
+    "aten::mul_",
+    "[4096, 2048]"
+   ],
+   0.001222985846153859,
+   3.3846153846153846
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: AddmmBackward0]",
+    "aten::sum",
+    "[4096, 2048]"
+   ],
+   0.0011935464615376236,
+   14.76923076923077
+  ],
+  [
+   [
+    "mb",
+    "bwd[evaluate_function: ToCopyBackward0]",
+    "aten::copy_",
+    "[1, 512, 2048]"
+   ],
+   0.0011543027692311803,
+   64.0
+  ],
+  [
+   [
+    "mb",
+    "mod:attn.out_proj",
+    "aten::abs",
+    "[2048, 2048]"
+   ],
+   0.0011337993846152587,
+   16.0
+  ]
+ ],
+ "op_cross_check": {
+  "kernel_rows_mb": 61403955.07799998,
+  "op_rows_mb": 32227593.127999693,
+  "kernel_rows_opt": 3984715.234,
+  "op_rows_opt": 4078194.587999994
+ },
+ "by_op": [
+  [
+   "_MegaScanBSHD",
+   3.2784887169230785
+  ],
+  [
+   "aten::mm",
+   3.18986126676923
+  ],
+  [
+   "aten::copy_",
+   2.9347019786153847
+  ],
+  [
+   "aten::bmm",
+   2.435591121230774
+  ],
+  [
+   "aten::addmm",
+   2.3169647070769237
+  ],
+  [
+   "_MegaScanBSHDBackward",
+   1.87385796923077
+  ],
+  [
+   "aten::mul",
+   0.7956914493076948
+  ],
+  [
+   "aten::add_",
+   0.4672425633076889
+  ],
+  [
+   "aten::add",
+   0.3582684139230773
+  ],
+  [
+   "aten::native_dropout",
+   0.29120903323076497
+  ],
+  [
+   "aten::_efficient_attention_backward",
+   0.2504343643076927
+  ],
+  [
+   "_FusedTernarySTE",
+   0.1761602646153833
+  ],
+  [
+   "aten::abs",
+   0.17554406830768995
+  ],
+  [
+   "aten::_efficient_attention_forward",
+   0.15274003261538438
+  ],
+  [
+   "aten::pow",
+   0.12426182769230976
+  ],
+  [
+   "aten::mean",
+   0.11257352430769027
+  ],
+  [
+   "aten::sigmoid",
+   0.1090720332307675
+  ],
+  [
+   "aten::native_dropout_backward",
+   0.10177731876922742
+  ],
+  [
+   "aten::gelu",
+   0.10176224246153727
+  ],
+  [
+   "_FusedL2Norm",
+   0.10130075076922936
+  ],
+  [
+   "_FusedReadNorm",
+   0.09250932061538583
+  ],
+  [
+   "_FusedCausalConv",
+   0.08197868307692331
+  ],
+  [
+   "aten::_log_softmax",
+   0.07133678707692356
+  ],
+  [
+   "aten::gelu_backward",
+   0.06799293907692491
+  ],
+  [
+   "_FusedReadNormBackward",
+   0.05983419938461404
+  ],
+  [
+   "aten::_log_softmax_backward_data",
+   0.05941004799999992
+  ],
+  [
+   "_FusedL2NormBackward",
+   0.05833992184615472
+  ],
+  [
+   "aten::sigmoid_backward",
+   0.05675917292307725
+  ],
+  [
+   "aten::fill_",
+   0.050663895000003366
+  ],
+  [
+   "aten::sum",
+   0.038059155692303705
+  ],
+  [
+   "_FusedCausalConvBackward",
+   0.026719731692308058
+  ],
+  [
+   "aten::silu_backward",
+   0.026490587076922593
+  ],
+  [
+   "aten::silu",
+   0.025009886769231788
+  ],
+  [
+   "aten::cat",
+   0.018875657307693142
+  ],
+  [
+   "aten::div",
+   0.017540537692308247
+  ],
+  [
+   "aten::neg",
+   0.007208017230769101
+  ],
+  [
+   "Command Buffer Full",
+   0.006487756076923192
+  ],
+  [
+   "aten::mul_",
+   0.005894435000000075
+  ],
+  [
+   "aten::gather",
+   0.005879484923076923
+  ],
+  [
+   "aten::native_layer_norm_backward",
+   0.005088215384615227
+  ],
+  [
+   "aten::convolution_backward",
+   0.004281256000000769
+  ],
+  [
+   "aten::native_layer_norm",
+   0.0032044763076925077
+  ],
+  [
+   "aten::_foreach_mul_",
+   0.001967669384615393
+  ],
+  [
+   "aten::clamp",
+   0.001639782076923311
+  ],
+  [
+   "aten::embedding_dense_backward",
+   0.0007228246153853833
+  ],
+  [
+   "aten::addcdiv_",
+   0.000712160000000055
+  ],
+  [
+   "aten::_foreach_norm",
+   0.0007029634615384767
+  ],
+  [
+   "Unrecognized",
+   0.0007029634615384767
+  ],
+  [
+   "aten::addcmul_",
+   0.0005676576923077225
+  ],
+  [
+   "aten::linalg_vector_norm",
+   0.0005042224615385505
+  ],
+  [
+   "aten::sqrt",
+   0.00038895799999991707
+  ],
+  [
+   "aten::nll_loss_backward",
+   0.0003078670769228528
+  ],
+  [
+   "aten::rsqrt",
+   0.00030690584615515793
+  ],
+  [
+   "aten::nll_loss_forward",
+   0.0002715993846167022
+  ],
+  [
+   "aten::arange",
+   6.0275076922386756e-05
+  ],
+  [
+   "aten::cos",
+   5.9566769230197394e-05
+  ],
+  [
+   "aten::sin",
+   5.9272615384579135e-05
+  ],
+  [
+   "aten::reciprocal",
+   2.9779076923365488e-05
+  ]
+ ],
+ "by_module": [
+  [
+   "mod:dn",
+   4.188690622769232
+  ],
+  [
+   "(no module)",
+   1.9577309000000023
+  ],
+  [
+   "bwd[evaluate_function: _MegaScanBSHDBackward]",
+   1.87385796923077
+  ],
+  [
+   "mod:dn.out_proj",
+   1.4202118400000008
+  ],
+  [
+   "mod:dn.ffn.0",
+   1.091846693538456
+  ],
+  [
+   "bwd[evaluate_function: AddmmBackward0]",
+   1.0134099698461523
+  ],
+  [
+   "mod:dn.ffn.3",
+   0.8638445581538472
+  ],
+  [
+   "bwd[evaluate_function: NativeDropoutBackward0]",
+   0.687174732923076
+  ],
+  [
+   "bwd[evaluate_function: BmmBackward0]",
+   0.6048606701538467
+  ],
+  [
+   "mod:dn.gate_proj",
+   0.5000974719999981
+  ],
+  [
+   "mod:dn.alpha_proj",
+   0.45604771446153963
+  ],
+  [
+   "mod:dn.k_proj",
+   0.44054826707692224
+  ],
+  [
+   "mod:dn.v_proj",
+   0.4391096984615393
+  ],
+  [
+   "mod:dn.q_proj",
+   0.4362443778461562
+  ],
+  [
+   "bwd[evaluate_function: MmBackward0]",
+   0.4051416036923086
+  ],
+  [
+   "mod:dn.norm",
+   0.4009408904615397
+  ],
+  [
+   "bwd[evaluate_function: NllLossBackward0]",
+   0.37382034215384796
+  ],
+  [
+   "bwd[evaluate_function: MulBackward0]",
+   0.3701858012307677
+  ],
+  [
+   "bwd[evaluate_function: ScaledDotProductEfficientAttentionBackward0]",
+   0.25343563630769333
+  ],
+  [
+   "mod:attn",
+   0.2383350578461555
+  ],
+  [
+   "bwd[evaluate_function: PowBackward0]",
+   0.20459194707692108
+  ],
+  [
+   "bwd[evaluate_function: ToCopyBackward0]",
+   0.17494261846153744
+  ],
+  [
+   "mod:attn.ffn.0",
+   0.1474539507692299
+  ],
+  [
+   "mod:dn.ffn.2",
+   0.14355887138461582
+  ],
+  [
+   "mod:attn.ffn.3",
+   0.11972343446153852
+  ],
+  [
+   "bwd[evaluate_function: ExpandBackward0]",
+   0.11077308923076895
+  ],
+  [
+   "bwd[evaluate_function: _FusedCausalConvBackward]",
+   0.10361755015384644
+  ],
+  [
+   "mod:dn.ffn.1",
+   0.08842073476922932
+  ],
+  [
+   "mod:decoder",
+   0.0805760683076921
+  ],
+  [
+   "bwd[evaluate_function: AddBackward0]",
+   0.06984418830769251
+  ],
+  [
+   "mod:dn.dropout",
+   0.06905410092307354
+  ],
+  [
+   "bwd[evaluate_function: GeluBackward0]",
+   0.06799293907692491
+  ],
+  [
+   "bwd[evaluate_function: SliceBackward0]",
+   0.06389049292307884
+  ],
+  [
+   "bwd[evaluate_function: _FusedReadNormBackward]",
+   0.06059850523076493
+  ],
+  [
+   "bwd[evaluate_function: LogSoftmaxBackward0]",
+   0.05941004799999992
+  ],
+  [
+   "bwd[evaluate_function: _FusedL2NormBackward]",
+   0.05833992184615472
+  ],
+  [
+   "bwd[evaluate_function: SigmoidBackward0]",
+   0.05675917292307725
+  ],
+  [
+   "mod:attn.q_proj",
+   0.05113303076923104
+  ],
+  [
+   "mod:attn.v_proj",
+   0.05031429292307694
+  ],
+  [
+   "mod:attn.k_proj",
+   0.04988150399999933
+  ],
+  [
+   "mod:dn.ffn.4",
+   0.04796507384615219
+  ],
+  [
+   "mod:attn.out_proj",
+   0.0379587723076918
+  ],
+  [
+   "mod:attn.norm",
+   0.03591341046153898
+  ],
+  [
+   "bwd[evaluate_function: SiluBackward0]",
+   0.026490587076922593
+  ],
+  [
+   "mod:dn.beta_proj",
+   0.02443388307692169
+  ],
+  [
+   "mod:attn.ffn.2",
+   0.019862329846153787
+  ],
+  [
+   "bwd[evaluate_function: ReshapeAliasBackward0]",
+   0.017219145230769537
+  ],
+  [
+   "bwd[evaluate_function: MeanBackward1]",
+   0.0161788258461551
+  ],
+  [
+   "bwd[evaluate_function: TBackward0]",
+   0.015296212923076863
+  ],
+  [
+   "mod:attn.ffn.1",
+   0.01334150769230795
+  ],
+  [
+   "bwd[evaluate_function: _CachedSTEBackward]",
+   0.01096757784615457
+  ],
+  [
+   "mod:attn.dropout",
+   0.006436052307692608
+  ],
+  [
+   "bwd[evaluate_function: EmbeddingBackward0]",
+   0.0064145052307695155
+  ],
+  [
+   "mod:token_embedding",
+   0.005879484923076923
+  ],
+  [
+   "bwd[evaluate_function: NativeLayerNormBackward0]",
+   0.005088215384615227
+  ],
+  [
+   "mod:attn.ffn.4",
+   0.004332604923077018
+  ],
+  [
+   "mod:final_norm",
+   0.0032044763076925077
+  ],
+  [
+   "bwd[evaluate_function: NegBackward0]",
+   0.0021999969230764188
+  ],
+  [
+   "bwd[evaluate_function: RsqrtBackward0]",
+   0.00046061353846496117
+  ],
+  [
+   "bwd[evaluate_function: MeanBackward0]",
+   1.0299076922882636e-05
+  ],
+  [
+   "bwd[evaluate_function: DivBackward0]",
+   7.423384615076849e-06
+  ]
+ ]
+}

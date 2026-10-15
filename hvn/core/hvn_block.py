@@ -45,12 +45,27 @@ class RMSNorm(nn.Module):
     with no-bias architectures. Used by GPT-J, PaLM, LLaMA, etc.
     """
 
+    #: Fused path (2026-10-15): ``F.rms_norm``'s single CUDA kernel instead of
+    #: the six-op eager chain below (pow, mean, add, rsqrt, mul, mul) and its
+    #: ~10-op autograd backward. Measured at the 1B shape [1, 4096, 2048] fp32:
+    #: 1.33 -> 0.39 ms forward, 6.35 -> 1.89 ms forward+backward. Same formula,
+    #: different reduction order, so ulp-level rather than bit-identical (like
+    #: the fused l2norm). A class attribute, set per module by
+    #: ``apply_fast_stack`` under ``--fast``, so it never enters a state_dict.
+    #: fp32 input + fp32 weight on CUDA only: for bf16 inputs the eager chain
+    #: rounds every intermediate to bf16 and the fused kernel does not, which
+    #: would be a real numerics change rather than an ulp one.
+    use_fused = False
+
     def __init__(self, d_model: int, eps: float = 1e-6):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(d_model))
         self.eps = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if (self.use_fused and x.is_cuda and x.dtype == torch.float32
+                and self.weight.dtype == torch.float32):
+            return F.rms_norm(x, (x.shape[-1],), self.weight, self.eps)
         rms = x.pow(2).mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
         return x * rms * self.weight
 

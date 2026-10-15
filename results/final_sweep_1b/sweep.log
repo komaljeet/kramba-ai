@@ -1,0 +1,378 @@
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → results/final_sweep_1b/sweep_ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from results/final_sweep_1b/sweep_ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+[flags] {
+ "deltanet.use_triton_scan=True": 22,
+ "deltanet.use_megakernel_scan=True": 22,
+ "deltanet.use_fused_l2norm=None": 22,
+ "deltanet.use_fused_read_norm=None": 22,
+ "deltanet.use_fused_conv=None": 22,
+ "deltanet.use_fused_scan_io=None": 22,
+ "deltanet.adaptive_chunk=False": 22,
+ "deltanet.train_chunk=32": 22,
+ "TransformerBlock(window=4096)": 2,
+ "TernaryLinear n=166 use_fused=166 use_step_cache=166": 1,
+ "dropout p counts={0.1: 72}": 1
+}
+[build] 1,113,059,793 params, 13 BCD blocks, 10s, ram 6.5G
+[warm 0] token_embedding                    wall  22.53 loss 11.236576
+[warm 1] blocks.0+blocks.1                  wall  21.28 loss 11.062666
+[A  0] blocks.2+blocks.3                  wall  20.24 loss 10.951996
+[A  1] blocks.4+blocks.5                  wall  19.06 loss 10.892102
+[A  2] blocks.6+blocks.7                  wall  17.87 loss 10.865988
+[A  3] blocks.8+blocks.9                  wall  16.68 loss 10.836444
+[A  4] blocks.10+blocks.11                wall  15.51 loss 10.805130
+[A  5] blocks.12+blocks.13                wall  14.37 loss 10.785134
+[A  6] blocks.14+blocks.15                wall  13.24 loss 10.757966
+[A  7] blocks.16+blocks.17                wall  12.07 loss 10.735031
+[A  8] blocks.18+blocks.19                wall  10.88 loss 10.709188
+[A  9] blocks.20+blocks.21                wall   9.68 loss 10.679944
+[A 10] blocks.22+blocks.23+final_norm+decoder wall   8.49 loss 10.660816
+[A 11] token_embedding                    wall  22.06 loss 10.642527
+[A 12] blocks.0+blocks.1                  wall  21.30 loss 10.469474
+[A] cycle-mean wall 15.497 s/step, peak reserved 5060 MiB
+[calls/cycle] {
+ "deltanet._fused_causal_conv": 3600,
+ "deltanet._fused_l2norm": 7200,
+ "deltanet._triton_megakernel_scan_bshd": 3600,
+ "deltanet._fused_read_norm": 3600,
+ "sdpa(is_causal=True)": 336
+}
+[cache] {'hits': 2490, 'misses': 166} {'hits': 22568, 'misses': 1992} scan_io_fallback_copies 0
+C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\profiler\profiler.py:272: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+USDT:2026-10-15 13:18:50 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:19:11 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B  0] blocks.2+blocks.3                  dev  22.13s
+USDT:2026-10-15 13:19:37 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:19:57 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B  1] blocks.4+blocks.5                  dev  21.13s
+USDT:2026-10-15 13:20:22 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:20:40 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B  2] blocks.6+blocks.7                  dev  19.83s
+USDT:2026-10-15 13:21:03 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:21:20 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B  3] blocks.8+blocks.9                  dev  18.59s
+USDT:2026-10-15 13:21:42 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:21:58 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B  4] blocks.10+blocks.11                dev  17.29s
+USDT:2026-10-15 13:22:19 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:22:34 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B  5] blocks.12+blocks.13                dev  16.17s
+USDT:2026-10-15 13:22:53 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:23:07 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B  6] blocks.14+blocks.15                dev  14.89s
+USDT:2026-10-15 13:23:25 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:23:37 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B  7] blocks.16+blocks.17                dev  13.59s
+USDT:2026-10-15 13:23:53 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:24:05 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B  8] blocks.18+blocks.19                dev  12.40s
+USDT:2026-10-15 13:24:19 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:24:30 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B  9] blocks.20+blocks.21                dev  11.07s
+USDT:2026-10-15 13:24:43 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:24:52 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B 10] blocks.22+blocks.23+final_norm+decoder dev   9.77s
+USDT:2026-10-15 13:25:04 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:25:27 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B 11] token_embedding                    dev  24.55s
+USDT:2026-10-15 13:25:55 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:26:16 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[B 12] blocks.0+blocks.1                  dev  23.68s
+
+[attr] unprofiled 15.497 s/step; device 17.315 s/step; ratio 1.12 (annotation ranges excluded: 0.248 s/step)
+[attr] top kernels (s/step, share of device time):
+[attr]    2.217s  12.8%  ampere_bf16_s1688gemm_bf16_128x128_ldg8_relu_f2f_stages_32x1_tn
+[attr]    2.141s  12.4%  ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tt
+[attr]    1.835s  10.6%  Memcpy HtoD (Pinned -> Device)
+[attr]    1.767s  10.2%  ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nn
+[attr]    1.600s   9.2%  _gated_delta_fwd_kernel_s
+[attr]    1.401s   8.1%  _mk_bwd_kernel_s
+[attr]    0.588s   3.4%  ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tn
+[attr]    0.558s   3.2%  _ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_25bfloat16_copy_kernel_cudaERNS_18TensorIteratorBaseEEUl
+[attr]    0.471s   2.7%  _mk_ckpt_kernel_s
+[attr]    0.385s   2.2%  _ZN2at6native27unrolled_elementwise_kernelIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_
+[attr]    0.324s   1.9%  _ZN2at6native18elementwise_kernelILi128ELi2EZNS0_22gpu_kernel_impl_nocastINS0_13BinaryFunctorIfffNS0_15binary_
+[attr]    0.289s   1.7%  _ZN2at6native43_GLOBAL__N__5ad584b7_10_Dropout_cu_0e96ed3824fused_dropout_kernel_vecIN3c108BFloat16EfjLi1ELi8E
+[attr]    0.268s   1.5%  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIfEESt5arrayIPcLy3EEEEviT0_T1_
+[attr]    0.240s   1.4%  _Z52fmha_cutlassB_bf16_aligned_64x64_k32_seqaligned_sm80N22PyTorchMemEffAttention23AttentionBackwardKernelIN7c
+[attr]    0.216s   1.2%  _quantize_kernel
+[attr]    0.186s   1.1%  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13BinaryFunctorIfffNS0_15binary_internal10MulFunctorIfEEE
+[attr]    0.184s   1.1%  _ZN2at6native27unrolled_elementwise_kernelINS0_13BinaryFunctorIfffNS0_15binary_internal10MulFunctorIfEEEESt5ar
+[attr]    0.181s   1.0%  _ZN2at6native27unrolled_elementwise_kernelINS0_15CUDAFunctor_addIfEESt5arrayIPcLy3EELi4E23TrivialOffsetCalcula
+[attr]    0.155s   0.9%  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIN3c108BFloat16EEESt5arrayIPcLy3EEEEviT0
+[attr]    0.153s   0.9%  _Z40fmha_cutlassF_bf16_aligned_64x64_rf_sm80N22PyTorchMemEffAttention15AttentionKernelIN7cutlass10bfloat16_tEN
+[attr]    0.141s   0.8%  _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_15CUDAFunctor_addIN3c108BFloat16
+[attr]    0.129s   0.7%  _ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_50_GLOBAL__N__7dd5f103_12_PowKernel_cu_9ffbb073_441629po
+[attr]    0.122s   0.7%  ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nt
+[attr]    0.117s   0.7%  Memcpy HtoD (Pageable -> Device)
+[attr]    0.109s   0.6%  _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_19sigmoid_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE
+[attr]    0.103s   0.6%  _l2n_fwd_kernel
+[attr]    0.101s   0.6%  _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_18GeluCUDAKernelImplERNS_18TensorIteratorBaseENS0_8Gel
+[attr]    0.100s   0.6%  _ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_43_GLOBAL__N__5ad584b7_10_Dropout_cu_0e96ed3819masked_sc
+[attr]    0.091s   0.5%  _rn_fwd_kernel
+[attr]    0.085s   0.5%  _cc_fwd_kernel
+[attr]    0.081s   0.5%  _ZN2at6native13reduce_kernelILi512ELi1ENS0_8ReduceOpIfNS0_7MeanOpsIffffEEjfLi4ELi4EEEEEvT1_
+[attr]    0.070s   0.4%  _ZN2at6native43_GLOBAL__N__bcfaaeff_10_SoftMax_cu_0af7be2119cunn_SoftMaxForwardILi8EN3c108BFloat16EfS4_NS1_25L
+[attr]    0.068s   0.4%  _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_26GeluBackwardCUDAKernelImplERNS_18TensorIteratorBaseE
+[attr]    0.060s   0.3%  _ZN7cutlass7Kernel2I57cutlass_75_tensorop_bf16_s1688gemm_bf16_128x256_tn_align1EEvNT_6ParamsE
+[attr]    0.060s   0.3%  _rn_bwd_kernel
+[attr]    0.059s   0.3%  _ZN2at6native43_GLOBAL__N__bcfaaeff_10_SoftMax_cu_0af7be2120cunn_SoftMaxBackwardILi8EN3c108BFloat16EfS4_NS1_26
+[attr]    0.059s   0.3%  _l2n_bwd_kernel
+[attr]    0.057s   0.3%  _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_28sigmoid_backward_kernel_cudaERNS_18TensorIteratorBas
+[attr]    0.047s   0.3%  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIfffNS0_15binary_internal10MulFunctorIfEEE
+[attr]    0.046s   0.3%  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIfEESt5arrayIPcLy1EEEEviT0_T1_
+USDT:2026-10-15 13:26:44 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:26:47 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:27:09 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:27:10 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C  0] blocks.2+blocks.3 op pass done; mb kernels 5.49s ops 3.08s
+USDT:2026-10-15 13:27:11 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:27:13 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:27:34 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:27:35 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C  1] blocks.4+blocks.5 op pass done; mb kernels 10.11s ops 5.67s
+USDT:2026-10-15 13:27:36 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:27:38 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:27:58 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:27:59 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C  2] blocks.6+blocks.7 op pass done; mb kernels 14.46s ops 8.10s
+USDT:2026-10-15 13:28:00 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:28:06 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:29:05 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:29:06 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C  3] blocks.8+blocks.9 op pass done; mb kernels 28.39s ops 14.55s
+USDT:2026-10-15 13:29:08 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:29:10 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:29:27 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:29:28 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C  4] blocks.10+blocks.11 op pass done; mb kernels 33.01s ops 16.96s
+USDT:2026-10-15 13:29:29 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:29:31 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:29:47 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:29:48 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C  5] blocks.12+blocks.13 op pass done; mb kernels 36.62s ops 18.91s
+USDT:2026-10-15 13:29:49 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:29:50 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:30:05 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:30:06 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C  6] blocks.14+blocks.15 op pass done; mb kernels 39.98s ops 20.70s
+USDT:2026-10-15 13:30:07 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:30:09 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:30:22 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:30:23 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C  7] blocks.16+blocks.17 op pass done; mb kernels 43.09s ops 22.34s
+USDT:2026-10-15 13:30:24 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:30:25 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:30:37 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:30:38 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C  8] blocks.18+blocks.19 op pass done; mb kernels 45.94s ops 23.80s
+USDT:2026-10-15 13:30:39 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:30:40 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:30:51 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:30:52 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C  9] blocks.20+blocks.21 op pass done; mb kernels 48.55s ops 25.12s
+USDT:2026-10-15 13:30:53 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:30:54 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:31:03 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:31:04 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C 10] blocks.22+blocks.23+final_norm+decoder op pass done; mb kernels 50.91s ops 26.26s
+USDT:2026-10-15 13:31:05 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:31:08 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:31:32 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:31:32 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C 11] token_embedding op pass done; mb kernels 56.29s ops 29.31s
+USDT:2026-10-15 13:31:34 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:31:36 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 13:31:59 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 13:32:00 18720:10020 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[C 12] blocks.0+blocks.1 op pass done; mb kernels 61.40s ops 32.23s
+
+[ops] cross-check mb: kernel rows 61.404s vs op rows 32.228s; opt: 3.985s vs 4.078s
+[ops] top (phase, context, op, shape): s/step calls/step
+[ops]   2.231s   100.9  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn>       _MegaScanBSHD                    [1, 4096, 64, 32]
+[ops]   1.874s   100.9  mb  bwd[evaluate_function: _MegaScanBSHDBackward]                _MegaScanBSHDBackward            [64, 4096, 32]
+[ops]   1.132s   176.0  mb  mod:dn.out_proj                                              aten::mm                         [4096, 2048]
+[ops]   1.048s   176.0  mb  mod:dn                                                       _MegaScanBSHD                    [1, 4096, 64, 32]
+[ops]   0.749s  1045.5  mb  (no module)                                                  aten::copy_                      [2048, 2048]
+[ops]   0.599s   436.9  mb  bwd[evaluate_function: BmmBackward0]                         aten::bmm                        [1, 4096, 2048]
+[ops]   0.501s   176.0  mb  mod:dn.ffn.0                                                 aten::addmm                      [4096]
+[ops]   0.498s   176.0  mb  mod:dn.ffn.3                                                 aten::addmm                      [2048]
+[ops]   0.341s   514.5  mb  bwd[evaluate_function: NativeDropoutBackward0]               aten::copy_                      [2048, 2048]
+[ops]   0.315s   110.8  mb  bwd[evaluate_function: AddmmBackward0]                       aten::mm                         [4096, 2048]
+[ops]   0.311s   114.5  mb  bwd[evaluate_function: AddmmBackward0]                       aten::mm                         [4096, 4096]
+[ops]   0.278s   100.9  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.0> aten::addmm                      [4096]
+[ops]   0.275s   100.9  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.3> aten::addmm                      [2048]
+[ops]   0.252s   526.8  mb  bwd[evaluate_function: MulBackward0]                         aten::mul                        [1, 4096, 2048]
+[ops]   0.250s     9.8  mb  bwd[evaluate_function: ScaledDotProductEfficientAttentionBac aten::_efficient_attention_backward [1, 4096, 64, 32]
+[ops]   0.247s    59.1  mb  bwd[evaluate_function: NllLossBackward0]                     aten::addmm                      [50304]
+[ops]   0.246s    59.1  mb  (no module)                                                  aten::addmm                      [50304]
+[ops]   0.244s   161.2  mb  mod:dn.k_proj                                                aten::bmm                        [1, 4096, 2048]
+[ops]   0.243s    59.1  mb  bwd[evaluate_function: AddmmBackward0]                       aten::mm                         [512, 50304]
+[ops]   0.242s   162.5  mb  mod:dn.alpha_proj                                            aten::bmm                        [1, 4096, 2048]
+[ops]   0.242s   162.5  mb  mod:dn.gate_proj                                             aten::bmm                        [1, 4096, 2048]
+[ops]   0.242s   159.4  mb  mod:dn.q_proj                                                aten::bmm                        [1, 4096, 2048]
+[ops]   0.242s   162.5  mb  mod:dn.v_proj                                                aten::bmm                        [1, 4096, 2048]
+[ops]   0.232s   164.9  mb  (no module)                                                  aten::copy_                      [4096, 2048]
+[ops]   0.228s   164.9  mb  (no module)                                                  aten::copy_                      [2048, 4096]
+[ops]   0.192s   140.3  mb  bwd[evaluate_function: MmBackward0]                          aten::mm                         [4096, 2048]
+[ops]   0.170s   352.0  mb  mod:dn                                                       aten::add                        [1, 4096, 2048]
+[ops]   0.151s   197.8  opt (no module)                                                  aten::mm                         [2048, 2048]
+[ops]   0.144s   343.4  mb  mod:dn.norm                                                  aten::mul                        [1, 4096, 2048]
+[ops]   0.139s   100.9  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.out_pr aten::mm                         [4096, 2048]
+[ops]   0.120s    87.4  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.v_proj aten::bmm                        [1, 4096, 2048]
+[ops]   0.120s    87.4  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.k_proj aten::bmm                        [1, 4096, 2048]
+[ops]   0.119s    87.4  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.alpha_ aten::bmm                        [1, 4096, 2048]
+[ops]   0.119s    87.4  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.gate_p aten::bmm                        [1, 4096, 2048]
+[ops]   0.119s    87.4  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.q_proj aten::bmm                        [1, 4096, 2048]
+[ops]   0.117s    86.2  mb  bwd[evaluate_function: MmBackward0]                          aten::mm                         [2048, 4096]
+[ops]   0.108s   176.0  mb  mod:dn                                                       aten::mul                        [1, 4096, 2048]
+[ops]   0.105s    80.0  mb  bwd[evaluate_function: NativeDropoutBackward0]               aten::copy_                      [4096, 2048]
+[ops]   0.104s   206.8  mb  bwd[evaluate_function: PowBackward0]                         aten::mul                        [1, 4096, 2048]
+[ops]   0.102s    80.0  mb  bwd[evaluate_function: NativeDropoutBackward0]               aten::copy_                      [2048, 4096]
+[ops]   0.098s   338.5  mb  mod:dn.ffn.0                                                 aten::copy_                      [4096, 2048]
+[ops]   0.095s   201.8  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn>       aten::add                        [1, 4096, 2048]
+[ops]   0.095s    16.0  mb  mod:attn                                                     aten::_efficient_attention_forward [1, 4096, 64, 32]
+[ops]   0.093s    67.7  mb  bwd[evaluate_function: MmBackward0]                          aten::mm                         [2048, 2048]
+[ops]   0.092s   176.0  mb  mod:dn.ffn.2                                                 aten::native_dropout             [1, 4096, 4096]
+[ops]   0.088s   342.2  mb  bwd[evaluate_function: ToCopyBackward0]                      aten::copy_                      [1, 4096, 2048]
+[ops]   0.088s   349.5  mb  bwd[evaluate_function: ExpandBackward0]                      aten::add_                       [1, 4096, 2048]
+[ops]   0.074s   171.1  mb  mod:dn.norm                                                  aten::pow                        [1, 4096, 2048]
+[ops]   0.073s   201.8  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.norm>  aten::mul                        [1, 4096, 2048]
+[ops]   0.071s   176.0  mb  mod:dn                                                       aten::sigmoid                    [1, 4096, 2048]
+[ops]   0.068s   221.5  mb  bwd[evaluate_function: AddBackward0]                         aten::copy_                      [1, 4096, 2048]
+[ops]   0.066s    16.0  mb  mod:attn.ffn.3                                               aten::addmm                      [2048]
+[ops]   0.066s   348.3  mb  mod:dn                                                       _FusedL2Norm                     [1, 4096, 64, 32]
+[ops]   0.065s    16.0  mb  mod:attn.ffn.0                                               aten::addmm                      [6144]
+[ops]   0.060s   176.0  mb  mod:dn                                                       _FusedReadNorm                   [64, 4096, 32]
+[ops]   0.060s   100.9  mb  bwd[evaluate_function: _FusedReadNormBackward]               _FusedReadNormBackward           [1, 4096, 2048]
+[ops]   0.059s   100.9  mb  bwd[evaluate_function: GeluBackward0]                        aten::gelu_backward              [1, 4096, 4096]
+[ops]   0.059s   103.4  mb  bwd[evaluate_function: PowBackward0]                         aten::add_                       [1, 4096, 2048]
+[ops]   0.058s   201.8  mb  bwd[evaluate_function: _FusedL2NormBackward]                 _FusedL2NormBackward             [1, 4096, 64, 32]
+[ops]   0.058s     9.8  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:attn>     aten::_efficient_attention_forward [1, 4096, 64, 32]
+[ops]   0.057s   176.0  mb  mod:dn.ffn.1                                                 aten::gelu                       [1, 4096, 4096]
+[ops]   0.055s   100.9  mb  bwd[evaluate_function: SigmoidBackward0]                     aten::sigmoid_backward           [1, 4096, 2048]
+[ops]   0.055s    59.1  mb  bwd[evaluate_function: LogSoftmaxBackward0]                  aten::_log_softmax_backward_data [512, 50304]
+[ops]   0.055s   188.3  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.0> aten::copy_                      [4096, 2048]
+[ops]   0.054s   171.7  mb  mod:dn                                                       _FusedCausalConv                 [1, 4096, 2048]
+[ops]   0.054s   100.9  mb  bwd[evaluate_function: _FusedCausalConvBackward]             aten::add_                       [1, 4096, 2048]
+[ops]   0.054s    59.1  mb  bwd[evaluate_function: ToCopyBackward0]                      aten::copy_                      [512, 50304]
+[ops]   0.053s   221.5  mb  bwd[evaluate_function: NativeDropoutBackward0]               aten::native_dropout_backward    [1, 4096, 2048]
+[ops]   0.052s   100.9  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn.ffn.2> aten::native_dropout             [1, 4096, 4096]
+[ops]   0.052s   176.0  mb  mod:dn.ffn.0                                                 aten::copy_                      [1, 4096, 2048]
+[ops]   0.052s   176.0  mb  mod:dn.out_proj                                              aten::copy_                      [1, 4096, 2048]
+[ops]   0.051s    59.1  mb  (no module)                                                  aten::copy_                      [512, 50304]
+[ops]   0.051s   103.4  mb  bwd[evaluate_function: MulBackward0]                         aten::add_                       [1, 4096, 2048]
+[ops]   0.051s    59.1  mb  bwd[evaluate_function: NllLossBackward0]                     aten::copy_                      [512, 50304]
+[ops]   0.051s   176.0  mb  mod:dn                                                       aten::copy_                      [1, 4096, 2048]
+[ops]   0.049s   100.9  mb  bwd[evaluate_function: NativeDropoutBackward0]<mod:dn>       aten::mul                        [1, 4096, 2048]
+[ops]   0.046s   171.1  mb  mod:dn.norm                                                  aten::mean                       [1, 4096, 2048]
+[ops]   0.044s   176.0  mb  mod:dn.dropout                                               aten::native_dropout             [1, 4096, 2048]
+[ops]   0.042s   100.9  mb  bwd[evaluate_function: NativeDropoutBackward0]               aten::native_dropout_backward    [1, 4096, 4096]
+[ops]   0.042s    14.8  mb  bwd[evaluate_function: AddmmBackward0]                       aten::mm                         [2048, 4096]
+
+[ops] by op name:
+[ops]    3.278s _MegaScanBSHD
+[ops]    3.190s aten::mm
+[ops]    2.935s aten::copy_
+[ops]    2.436s aten::bmm
+[ops]    2.317s aten::addmm
+[ops]    1.874s _MegaScanBSHDBackward
+[ops]    0.796s aten::mul
+[ops]    0.467s aten::add_
+[ops]    0.358s aten::add
+[ops]    0.291s aten::native_dropout
+[ops]    0.250s aten::_efficient_attention_backward
+[ops]    0.176s _FusedTernarySTE
+[ops]    0.176s aten::abs
+[ops]    0.153s aten::_efficient_attention_forward
+[ops]    0.124s aten::pow
+[ops]    0.113s aten::mean
+[ops]    0.109s aten::sigmoid
+[ops]    0.102s aten::native_dropout_backward
+[ops]    0.102s aten::gelu
+[ops]    0.101s _FusedL2Norm
+[ops]    0.093s _FusedReadNorm
+[ops]    0.082s _FusedCausalConv
+[ops]    0.071s aten::_log_softmax
+[ops]    0.068s aten::gelu_backward
+[ops]    0.060s _FusedReadNormBackward
+[ops]    0.059s aten::_log_softmax_backward_data
+[ops]    0.058s _FusedL2NormBackward
+[ops]    0.057s aten::sigmoid_backward
+[ops]    0.051s aten::fill_
+[ops]    0.038s aten::sum
+
+[ops] by module context (fwd+recompute+bwd where known):
+[ops]    4.189s mod:dn
+[ops]    1.958s (no module)
+[ops]    1.874s bwd[evaluate_function: _MegaScanBSHDBackward]
+[ops]    1.420s mod:dn.out_proj
+[ops]    1.092s mod:dn.ffn.0
+[ops]    1.013s bwd[evaluate_function: AddmmBackward0]
+[ops]    0.864s mod:dn.ffn.3
+[ops]    0.687s bwd[evaluate_function: NativeDropoutBackward0]
+[ops]    0.605s bwd[evaluate_function: BmmBackward0]
+[ops]    0.500s mod:dn.gate_proj
+[ops]    0.456s mod:dn.alpha_proj
+[ops]    0.441s mod:dn.k_proj
+[ops]    0.439s mod:dn.v_proj
+[ops]    0.436s mod:dn.q_proj
+[ops]    0.405s bwd[evaluate_function: MmBackward0]
+[ops]    0.401s mod:dn.norm
+[ops]    0.374s bwd[evaluate_function: NllLossBackward0]
+[ops]    0.370s bwd[evaluate_function: MulBackward0]
+[ops]    0.253s bwd[evaluate_function: ScaledDotProductEfficientAttentionBackward0]
+[ops]    0.238s mod:attn
+[ops]    0.205s bwd[evaluate_function: PowBackward0]
+[ops]    0.175s bwd[evaluate_function: ToCopyBackward0]
+[ops]    0.147s mod:attn.ffn.0
+[ops]    0.144s mod:dn.ffn.2
+[ops]    0.120s mod:attn.ffn.3
+[ops]    0.111s bwd[evaluate_function: ExpandBackward0]
+[ops]    0.104s bwd[evaluate_function: _FusedCausalConvBackward]
+[ops]    0.088s mod:dn.ffn.1
+[ops]    0.081s mod:decoder
+[ops]    0.070s bwd[evaluate_function: AddBackward0]
+[ops]    0.069s mod:dn.dropout
+[ops]    0.068s bwd[evaluate_function: GeluBackward0]
+[ops]    0.064s bwd[evaluate_function: SliceBackward0]
+[ops]    0.061s bwd[evaluate_function: _FusedReadNormBackward]
+[ops]    0.059s bwd[evaluate_function: LogSoftmaxBackward0]
+[ops]    0.058s bwd[evaluate_function: _FusedL2NormBackward]
+[ops]    0.057s bwd[evaluate_function: SigmoidBackward0]
+[ops]    0.051s mod:attn.q_proj
+[ops]    0.050s mod:attn.v_proj
+[ops]    0.050s mod:attn.k_proj
+[done]
+EXIT 0

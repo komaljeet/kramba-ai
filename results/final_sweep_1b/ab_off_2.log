@@ -1,0 +1,60 @@
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → results/final_sweep_1b/ab_off_2_ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from results/final_sweep_1b/ab_off_2_ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+[off c0  0] blocks.2+blocks.3                  wall  20.18 loss 10.952302
+[off c0  1] blocks.4+blocks.5                  wall  19.03 loss 10.891678
+[off c0  2] blocks.6+blocks.7                  wall  17.88 loss 10.866640
+[off c0  3] blocks.8+blocks.9                  wall  16.64 loss 10.835769
+[off c0  4] blocks.10+blocks.11                wall  15.49 loss 10.808960
+[off c0  5] blocks.12+blocks.13                wall  14.35 loss 10.782483
+[off c0  6] blocks.14+blocks.15                wall  13.21 loss 10.761393
+[off c0  7] blocks.16+blocks.17                wall  12.04 loss 10.732050
+[off c0  8] blocks.18+blocks.19                wall  10.89 loss 10.707859
+[off c0  9] blocks.20+blocks.21                wall   9.68 loss 10.682141
+[off c0 10] blocks.22+blocks.23+final_norm+decoder wall   8.49 loss 10.661614
+[off c0 11] token_embedding                    wall  22.04 loss 10.644485
+[off c0 12] blocks.0+blocks.1                  wall  21.27 loss 10.461765
+[off c1  0] blocks.2+blocks.3                  wall  20.28 loss 10.417604
+[off c1  1] blocks.4+blocks.5                  wall  19.08 loss 10.379343
+[off c1  2] blocks.6+blocks.7                  wall  17.87 loss 10.341955
+[off c1  3] blocks.8+blocks.9                  wall  16.63 loss 10.312071
+[off c1  4] blocks.10+blocks.11                wall  15.50 loss 10.287731
+[off c1  5] blocks.12+blocks.13                wall  14.36 loss 10.263911
+[off c1  6] blocks.14+blocks.15                wall  13.19 loss 10.237061
+[off c1  7] blocks.16+blocks.17                wall  12.06 loss 10.209149
+[off c1  8] blocks.18+blocks.19                wall  10.87 loss 10.189665
+[off c1  9] blocks.20+blocks.21                wall   9.69 loss 10.165653
+[off c1 10] blocks.22+blocks.23+final_norm+decoder wall   8.50 loss 10.149278
+[off c1 11] token_embedding                    wall  22.04 loss 10.109345
+[off c1 12] blocks.0+blocks.1                  wall  21.28 loss 9.942518
+[off] mean 15.481 s/step, cycles [15.475, 15.488], rms_norm calls 0, peak reserved 5060 MiB
+EXIT 0
