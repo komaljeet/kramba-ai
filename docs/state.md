@@ -5,6 +5,50 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B pretrain: fused block pre-norm RMSNorm + a real MFU figure = 15.067 s/step, -30.9% from the original baseline (2026-10-15)
+
+**One line: a final line-by-line sweep (explicitly asked to find nothing if there was
+nothing, not to force a result) found one more real lever -- the block's pre-norm
+RMSNorm, six eager ops forward collapsed into one Triton kernel. 15.478/15.481 ->
+14.864/14.860 s/step in isolation (-4.0%). Stacked with everything else and
+re-measured for real: 15.706 -> 15.067 s/step (-4.1%), 5060 MiB peak, same as before.
+Against the ORIGINAL pre-this-week main (21.81 s/step): -30.9% overall, a 1.45x
+speedup.**
+
+**Checked and explicitly ruled out, not just assumed, before landing this:** the two
+sliding-window attention layers were read line-by-line (nothing from this week's
+DeltaNet-specific fusion work had touched them). This Windows PyTorch build has no
+flash-attention kernel at all -- it already falls back to the memory-efficient kernel,
+which is the best available here, 0.39s/step (2.5%), nothing to fix. The causal mask
+isn't even built at pretrain (`is_causal=True`, no `doc_ids`). A cuDNN attention
+backend might save ~0.07s/step (0.4%) but that's an estimate from a microbenchmark
+only, not built -- small enough, and off by default in PyTorch for a reason. Every one
+of this week's fused paths was confirmed actually firing together under `--fast` (zero
+eager fallbacks, by counting real kernel calls over a full cycle) -- ruling out the
+"a flag silently didn't apply" failure mode that bit the very re-measurement below.
+
+**Named, not built, explicitly flagged as not free:** removing dropout (p=0.1, 72
+modules, >=0.39s/step/2.5%) would change the training recipe -- left for a real
+decision, not taken as a free lever. Folding the gate-multiply + cast into the
+read-norm kernel is maybe another ~0.27s/step (estimate, not measured).
+
+**The re-measurement itself caught a real measurement bug on the way.**
+`scripts/attribute_1b_real_step.py`'s call to `apply_fast_stack` never passed
+`fused_rmsnorm=True` (that parameter defaults to False, and the script predates this
+lever) -- so the FIRST re-measurement attempt came back at 15.711 s/step, identical to
+before the fusion existed, and would have been reported as "no change" if trusted
+at face value. This is the exact failure mode `apply_fast_stack`'s own docstring warns
+about from a prior incident (`scripts/size_sweep.py`'s 3.4x error) -- it happened
+again, in a script written this very week, within hours of the lever landing. Fixed
+(one line); the real trainer (`train_edge_conversational.py:4359`) already passed the
+flag correctly and was never affected.
+
+**1B days, recomputed on the real number** (1.01B body params, 30 tokens/param,
+2,175 tok/s): **~161 days** accepting BCD's own measured quality cost as-is, or
+**~258 days** to match full-training quality instead (the longer number is the
+"no quality lost" one -- see the earlier entry on this if that direction feels
+backwards). Down from 168/269 yesterday, 580/181 before this week's work began.
+
 ## 1B pretrain: today's three levers stacked, measured together = 15.706 s/step, -7.2% on top of the 16.92 baseline (2026-10-14)
 
 **One line: the within-step ternary cache, the frozen-block scale cache, the fused
