@@ -1,0 +1,213 @@
+{
+ "config": {
+  "repo": "C:\\Users\\komal\\Documents\\Codes\\kramba-wt-sweep",
+  "out": "results/final_sweep_1b/ab_off_2.json",
+  "rmsnorm": "off",
+  "warmup": 2,
+  "cycles": 2
+ },
+ "steps": [
+  {
+   "phase": "warm",
+   "active": "token_embedding",
+   "loss": 11.236576080322266,
+   "loss_hex": "0x1.6792080000000p+3"
+  },
+  {
+   "phase": "warm",
+   "active": "blocks.0+blocks.1",
+   "loss": 11.06252384185791,
+   "loss_hex": "0x1.6200320000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.2+blocks.3",
+   "wall": 20.177362000002177,
+   "loss": 10.952301979064941,
+   "loss_hex": "0x1.5e79420000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.4+blocks.5",
+   "wall": 19.03269530000398,
+   "loss": 10.891677856445312,
+   "loss_hex": "0x1.5c88a00000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.6+blocks.7",
+   "wall": 17.875912999996217,
+   "loss": 10.866640090942383,
+   "loss_hex": "0x1.5bbb840000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.8+blocks.9",
+   "wall": 16.643116000006557,
+   "loss": 10.835768699645996,
+   "loss_hex": "0x1.5abe9e0000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.10+blocks.11",
+   "wall": 15.490428699995391,
+   "loss": 10.8089599609375,
+   "loss_hex": "0x1.59e3000000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.12+blocks.13",
+   "wall": 14.349560500006191,
+   "loss": 10.782483100891113,
+   "loss_hex": "0x1.590a1a0000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.14+blocks.15",
+   "wall": 13.207269400008954,
+   "loss": 10.761392593383789,
+   "loss_hex": "0x1.585d540000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.16+blocks.17",
+   "wall": 12.03938869999547,
+   "loss": 10.732049942016602,
+   "loss_hex": "0x1.576cf40000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.18+blocks.19",
+   "wall": 10.885305899995728,
+   "loss": 10.70785903930664,
+   "loss_hex": "0x1.56a6c80000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.20+blocks.21",
+   "wall": 9.68045310000889,
+   "loss": 10.682141304016113,
+   "loss_hex": "0x1.55d41a0000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.22+blocks.23+final_norm+decoder",
+   "wall": 8.486432799996692,
+   "loss": 10.661614418029785,
+   "loss_hex": "0x1.552bf20000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "token_embedding",
+   "wall": 22.03501750000578,
+   "loss": 10.644484519958496,
+   "loss_hex": "0x1.549f9e0000000p+3"
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.0+blocks.1",
+   "wall": 21.2736287000007,
+   "loss": 10.46176528930664,
+   "loss_hex": "0x1.4ec6c80000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.2+blocks.3",
+   "wall": 20.280976699999883,
+   "loss": 10.417604446411133,
+   "loss_hex": "0x1.4d5d040000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.4+blocks.5",
+   "wall": 19.077051299987943,
+   "loss": 10.379343032836914,
+   "loss_hex": "0x1.4c23940000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.6+blocks.7",
+   "wall": 17.865171500001452,
+   "loss": 10.341955184936523,
+   "loss_hex": "0x1.4af14c0000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.8+blocks.9",
+   "wall": 16.634866899999906,
+   "loss": 10.312070846557617,
+   "loss_hex": "0x1.49fc7c0000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.10+blocks.11",
+   "wall": 15.497225800005253,
+   "loss": 10.287731170654297,
+   "loss_hex": "0x1.4935180000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.12+blocks.13",
+   "wall": 14.361758400002145,
+   "loss": 10.263911247253418,
+   "loss_hex": "0x1.4871f60000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.14+blocks.15",
+   "wall": 13.187887099993532,
+   "loss": 10.237060546875,
+   "loss_hex": "0x1.4796000000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.16+blocks.17",
+   "wall": 12.06331169999612,
+   "loss": 10.209149360656738,
+   "loss_hex": "0x1.46b15a0000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.18+blocks.19",
+   "wall": 10.866685200002394,
+   "loss": 10.189664840698242,
+   "loss_hex": "0x1.4611bc0000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.20+blocks.21",
+   "wall": 9.692609600009746,
+   "loss": 10.165653228759766,
+   "loss_hex": "0x1.454d080000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.22+blocks.23+final_norm+decoder",
+   "wall": 8.496718900001724,
+   "loss": 10.149277687072754,
+   "loss_hex": "0x1.44c6e20000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "token_embedding",
+   "wall": 22.036650399997598,
+   "loss": 10.109345436096191,
+   "loss_hex": "0x1.437fc20000000p+3"
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.0+blocks.1",
+   "wall": 21.278801199994632,
+   "loss": 9.94251823425293,
+   "loss_hex": "0x1.3e291c0000000p+3"
+  }
+ ],
+ "rms_norm_calls_timed": 0,
+ "peak_reserved_mib": 5060.0,
+ "peak_alloc_mib": 3088.9189453125,
+ "mean_s_per_step": 15.481395626923655,
+ "cycle_means": [
+  15.475120892309441,
+  15.487670361537871
+ ]
+}

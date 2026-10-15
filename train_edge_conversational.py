@@ -1997,7 +1997,8 @@ def apply_fast_stack(model, triton_scan: bool = True,
                      megakernel_scan: bool = False, tf32: bool = True,
                      compile_model: bool = True, verbose: bool = True,
                      fused_ternary: bool = False,
-                     ternary_step_cache: bool = False):
+                     ternary_step_cache: bool = False,
+                     fused_rmsnorm: bool = False):
     """Put a built model into the execution mode training actually uses (#136).
 
     **The single implementation of what ``--fast`` means.** ``--fast`` is
@@ -2064,6 +2065,19 @@ def apply_fast_stack(model, triton_scan: bool = True,
         if verbose:
             print(f"\n  Fused ternary quantizer enabled on {n} TernaryLinear "
                   f"layer(s) (#154).")
+
+    if fused_rmsnorm:
+        # 2026-10-15: every block's pre-norm RMSNorm as F.rms_norm's single
+        # CUDA kernel (fp32 inputs only; see RMSNorm.use_fused). The block
+        # pre-norm was the one norm this week's fusions had not touched.
+        from hvn.core.hvn_block import RMSNorm
+        n = 0
+        for mod in model.modules():
+            if isinstance(mod, RMSNorm):
+                mod.use_fused = True
+                n += 1
+        if verbose:
+            print(f"\n  Fused RMSNorm enabled on {n} module(s).")
 
     if ternary_step_cache and not compile_model:
         # 2026-10-14: quantize each TRAINABLE ternary weight once per optimizer
@@ -3665,6 +3679,12 @@ def main():
                              "grad-checkpoint recompute (bit-identical; 0.8%% at 1B, "
                              "+192 MiB allocated). On under --fast; "
                              "--no-ternary-step-cache opts out.")
+    parser.add_argument("--fused-rmsnorm", action=argparse.BooleanOptionalAction,
+                        default=False,
+                        help="Run each block's pre-norm RMSNorm as F.rms_norm's single "
+                             "CUDA kernel instead of the six-op eager chain (fp32 inputs "
+                             "only). ulp-level, not bit-identical. On under --fast; "
+                             "--no-fused-rmsnorm opts out.")
     parser.add_argument("--megakernel-scan", action="store_true",
                         help="Route the DeltaNet scan through the Design B fused "
                              "blockwise-recompute backward (#96) when --triton-scan is on: "
@@ -3998,6 +4018,8 @@ def main():
             args.fused_ternary = True; fast_enabled.append("fused-ternary")
         if not {"--ternary-step-cache", "--no-ternary-step-cache"} & explicit:
             args.ternary_step_cache = True; fast_enabled.append("ternary-step-cache")
+        if not {"--fused-rmsnorm", "--no-fused-rmsnorm"} & explicit:
+            args.fused_rmsnorm = True; fast_enabled.append("fused-rmsnorm")
         if "--num-workers" not in explicit and args.num_workers == 0:
             args.num_workers = 4; fast_enabled.append("num-workers=4")
         print(f"[--fast] Enabled recommended training stack: {', '.join(fast_enabled)}")
@@ -4334,6 +4356,7 @@ def main():
         compile_model=args.compile,
         fused_ternary=args.fused_ternary,
         ternary_step_cache=args.ternary_step_cache,
+        fused_rmsnorm=args.fused_rmsnorm,
     )
 
     # Adaptive-exact chunk (#95): pick the largest numerically-exact chunk per
