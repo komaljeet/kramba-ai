@@ -3062,6 +3062,16 @@ def train(
     # cosine scheduler take over. During warmup we override the LR manually;
     # after warmup we call scheduler.step() every optimizer step so the cosine
     # decay actually happens.
+    #
+    # #173: on resume, warmup is done only if the run had actually got past it.
+    # This used to be forced True for every resume (a leftover from when a
+    # resume RESTARTED the cosine, 6ffc9b0). Since #112/#165 the schedule is
+    # continued, so a mid-warmup resume must finish the warmup: forcing it True
+    # started the cosine early, anchored on the half-warmed LR, and the run
+    # trained at a fraction of the peak LR for the rest of the schedule. The
+    # restored cosine last_epoch is still 0 mid-warmup (it is only stepped once
+    # warmup ends), so finishing the warmup here hands over at the same point
+    # an uninterrupted run does.
     warmup_done = resume_step >= warmup_steps
     def get_lr_scale(step):
         if step < warmup_steps:
@@ -3071,14 +3081,9 @@ def train(
     # --- Resume from checkpoint ---
     global_step = resume_step
     if global_step > 0:
-        print(f"  Resuming from step {global_step}")
-        # Warmup is skipped on resume: the model is already trained, and (since
-        # Issue #112) the optimizer's momentum is restored too, so there is no
-        # cold-start to ease into. The cosine schedule is CONTINUED, not reset —
-        # see the scheduler construction above.
-        warmup_done = True
-    else:
-        warmup_done = False
+        print(f"  Resuming from step {global_step}"
+              + ("" if warmup_done else
+                 f" (mid-warmup: finishing {warmup_steps - global_step} warmup steps)"))
 
     # --- CSV logging ---
     log_file = config["log_file"]
