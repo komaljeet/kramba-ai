@@ -14,7 +14,7 @@ See the repo's `docs/state.md` for the full writeup.
 run hard-killed and resumed mid-training three times, plus a real 1.1B fresh-build and resume
 — and four more real bugs it had were found and fixed along the way (details in
 `docs/state.md`). Separately, the step time below is now stale: four more real speed levers
-landed this week on top of the ones already in this post, and **375 days is now ~168-269 days**
+landed this week on top of the ones already in this post, and **375 days is now ~161-258 days**
 depending on how you count BCD's own quality cost (explained where it first comes up below).
 The "nothing left, 20-25% at most" line further down in this post turned out to be wrong, too
 — it's corrected in place rather than deleted, so the mistake stays visible.
@@ -22,7 +22,7 @@ The "nothing left, 20-25% at most" line further down in this post turned out to 
 I looked everywhere to be able to **pre-train** an LLM on my low-end GPU and could not find one. Everywhere I looked, the same conclusion was reached: "You need an A100", "You can only train a 20M toy model on your hardware". So being 'broke', I did the only thing I could do — subscribe to Claude and try to find a way... after much prompting and testing, I finally stitched together the stack that allowed me to **pre-train** a 1B LLM on my laptop. After much testing, we are at **100.6% of the card's *measured* GEMM peak** (I don't know how 100.6% is even possible, I'm not a scientist, just a broke guy).
 
 Though I can **pre-train** a 1B LLM on 6 GB VRAM, it still takes about **168 days** (accepting
-block-coordinate descent's own quality cost as measured) or **~269 days** (if you want the
+block-coordinate descent's own quality cost as measured) or **~258 days** (if you want the
 output to match full-training quality instead) to finish **pretraining** it properly — down
 from 375 days measured in August, after real speed and quality fixes landed this week. More
 details below:
@@ -35,8 +35,8 @@ details below:
 |--------|-------|
 | **Model size** | 1.11B parameters (pretraining, not inference) |
 | **Peak VRAM** | 4.51 GB (1.5 GB to spare) |
-| **Throughput** | 1,579 tokens/sec at 4,096 context (August measurement; **2,086 tok/s measured 2026-10-14** after this week's speed levers) |
-| **Pretraining time (Chinchilla-optimal)** | ~375 days for 36B tokens (August); **~168-269 days now**, see the update note above |
+| **Throughput** | 1,579 tokens/sec at 4,096 context (August measurement; **2,175 tok/s measured 2026-10-14** after this week's speed levers) |
+| **Pretraining time (Chinchilla-optimal)** | ~375 days for 36B tokens (August); **~161-258 days now**, see the update note above |
 
 ---
 
@@ -124,7 +124,7 @@ The stack scales with VRAM. On a **6 GB card** we measured ~1.58B ceiling. Here'
 
 | GPU VRAM | Max Model (Recurrent Hybrid) | Max Model (Plain Transformer) | Pretrain Time (Chinchilla) |
 |----------|------------------------------|-------------------------------|----------------------------|
-| **6 GB** (RTX 4050 laptop) | **~1.58B** | **~1.58B** | ~168-269 days @ 1.1B (was ~375, Aug measurement) |
+| **6 GB** (RTX 4050 laptop) | **~1.58B** | **~1.58B** | ~161-258 days @ 1.1B (was ~375, Aug measurement) |
 | **8 GB** (RTX 3070/4060 laptop) | **~2.2B** | **~2.2B** | ~160 days @ 1.5B |
 | **12 GB** (RTX 3060/4070) | **~3.5B** | **~3.5B** | ~75 days @ 2.5B |
 | **16 GB** (RTX 4080) | **~4.8B** | **~4.8B** | ~40 days @ 3.5B |
@@ -197,9 +197,9 @@ The largest consumer is **not the model** — it's the cross-entropy over the vo
 
 ## The Hard Reality: Fitting ≠ Training
 
-A 1B model ran at ~1,100 tokens/sec here in August; **2,086 tok/s measured 2026-10-14** after
+A 1B model ran at ~1,100 tokens/sec here in August; **2,175 tok/s measured 2026-10-14** after
 this week's fixes. Pretraining one properly still needs roughly **30 billion+ tokens** —
-**~168-269 days** now, down from 375, depending on how you count block-coordinate descent's
+**~161-258 days** now, down from 375, depending on how you count block-coordinate descent's
 own quality cost. The ceiling this stack raises is what you can *hold*; the wall it does not
 touch is arithmetic — just a smaller wall than it was in August.
 
@@ -244,7 +244,7 @@ Why this architecture needs more data:
 **How this moves with model size is unresolved.** Fitting the standard scaling form to all measured points gives a degenerate answer — it implies a 1B model needs less data than it has parameters, contradicting every raw curve. Three model sizes are not enough to separate the terms.
 
 > **Practical rule:** Budget for **30 tokens/body-param minimum** with this stack. A 1.11B model
-> (~1.01B body params) needs ~30B tokens — **~168-269 days at 2,086 tok/s** (was 375 days at
+> (~1.01B body params) needs ~30B tokens — **~161-258 days at 2,175 tok/s** (was 375 days at
 > 1,579 tok/s in August), depending on how you count block-coordinate descent's own quality
 > cost. At 20 tokens/param you'd stop earlier and leave quality on the table.
 

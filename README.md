@@ -24,8 +24,8 @@ active block wasn't block 0, BCD's bf16 parking silently freezing bias/norm para
 whole run, ternary conversion doubling host RAM and crashing 1B builds outright, and an
 error-swallowing bug that made argument mistakes look like crashes) — all merged, all
 tested together, no bad interaction found. Separately, four more real step-time levers
-landed this week, cutting the measured 1B step from 21.81 to **15.706 s/step** (-28%, a
-1.39× speedup), stacked and re-measured together, not just added up on paper. **The
+landed this week, cutting the measured 1B step from 21.81 to **15.067 s/step** (-30.9%, a
+1.45× speedup), stacked and re-measured together, not just added up on paper. **The
 "reality check" section below is now corrected for these numbers — see
 [`docs/state.md`](docs/state.md) for the full measured trail.**
 
@@ -77,7 +77,7 @@ Triton scan and megakernel, and the fixes that make them work together.
 | chunked cross-entropy saves **1436 MB at 48M** | measured 2026-08-17 |
 | **not cheaper to train** — a transformer is 1.41× faster per step | measured; the win is at inference only |
 | the 1B step runs at **close to hardware limits** — matmuls hit 100.6% of the card's own measured GEMM ceiling | measured 2026-08-31 |
-| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 — **stale**: current measured step is 15.706 s/step (~168-269 days depending on BCD quality framing, see the reality check below), from four more real speed levers landed 2026-10-12/14 |
+| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 — **stale**: current measured step is 15.067 s/step (~161-258 days depending on BCD quality framing, see the reality check below), from four more real speed levers landed 2026-10-12/14 |
 | **1.11B fits and runs in 4.51 GB with 5-technique stack** (BCD + offload + ternary + grad checkpoint + chunked loss) | VRAM measured 2026-09-19, 1350 steps — **but see the correction above: this run used an offload path with a weight-corruption bug (fixed 2026-10-10), so the loss curve from this run needs re-verifying, the VRAM figure does not** |
 | **tied embeddings + offload + BCD + chunked_loss fit without OOM** (previously OOM, fixed by pinning + chunked loss) | measured 2026-09-26, 79% VRAM (4.85 GB of 6 GB) at 1.11B fp32 — "composes" here means *fits*; whether it trains *correctly* at this combination and scale was never checked before 2026-10-10, and is only confirmed at small scale since |
 
@@ -106,8 +106,8 @@ parameters — so cost grows with the **square** of model size.
 The memory engineering got a 6B model to run forward and backward on this card at
 ~1 GB peak. **That is not the same as being able to train it.** 6B is still out of reach here.
 1B, with `--block-coordinate --offload`, is real but slow: at the current measured
-**15.706 s/step** (2,086 tok/s), hitting this project's 30-tokens-per-body-param convention
-takes **~168 days** accepting BCD's own ~1.6× quality cost as measured, or **~269 days**
+**15.067 s/step** (2,175 tok/s), hitting this project's 30-tokens-per-body-param convention
+takes **~161 days** accepting BCD's own ~1.6× quality cost as measured, or **~258 days**
 if you want BCD's output to actually match full-training quality instead (that's the
 multiplier's actual direction — the shorter number is the one with the quality cost baked
 in, not the other way around). This was **375 days at a smaller, un-fixed config as of
