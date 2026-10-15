@@ -826,6 +826,7 @@ class BlockCoordinateScheduler:
         offload_prefetch: bool = True,
         partition: str = "layer",
         partition_budget: int | None = None,
+        initial_active_idx: int | None = None,
     ):
         """
         offload_inactive_weights : bool
@@ -883,6 +884,16 @@ class BlockCoordinateScheduler:
             serial (pre-#115) transfers, e.g. for A/B measurement or if
             something about a given environment makes the extra CUDA
             stream undesirable.
+        initial_active_idx : int | None
+            Issue #169: block to activate FIRST, instead of `order[0]`. A
+            resume passes the checkpoint's saved `active_idx` here. The first
+            activation parks every other block, at `offload_park_dtype`; if the
+            saved active block were parked there (as a non-first block) and
+            only re-activated later by `load_state_dict`, its trained fp32
+            matrices would come back as bf16-rounded values -- `_activate`
+            casts the dtype back, it does not reload the weights. Only the
+            first activation target changes; `load_state_dict` still sets the
+            cycle position.
         """
         if steps_per_block < 1:
             raise ValueError("steps_per_block must be >= 1")
@@ -1015,6 +1026,13 @@ class BlockCoordinateScheduler:
         self._cycle_pos = 0
         self._step_in_block = 0
         self._active_idx = self.order[0]
+        if initial_active_idx is not None:
+            if not 0 <= initial_active_idx < n:
+                raise ValueError(
+                    f"initial_active_idx={initial_active_idx} out of range for "
+                    f"{n} blocks (partition={partition!r}); was the checkpoint "
+                    f"saved with a different --bcd-partition?")
+            self._active_idx = initial_active_idx
         self._activate(self._active_idx)
 
         if self.offload_inactive_weights and self.device.type == "cuda":
@@ -1158,6 +1176,17 @@ class BlockCoordinateScheduler:
                 # resumes on this block. A no-op cast if it was never
                 # downcast (offload_park_dtype=None, the default).
                 p.data = p.data.to(device=self.device, dtype=self.buffer_pool.native_dtype_for(p))
+            # #169: pinned (shared/tied) params are never evicted, so they must
+            # be put on the device here whichever block activates first. Before
+            # initial_active_idx this happened only by accident: block 0 (the
+            # embedding, which owns the tied table) was always activated first,
+            # and a resume starting on any other block from a CPU-resident model
+            # left the table on the CPU (index_select device mismatch).
+            for _, params in self.blocks:
+                for p in params:
+                    if id(p) in self._pinned:
+                        p.data = p.data.to(device=self.device,
+                                           dtype=self.buffer_pool.native_dtype_for(p))
             # Explicitly evict every OTHER block right now too. Without
             # this, a block only ever gets evicted the next time forward()
             # actually runs and touches it -- fine in steady state, but the

@@ -2884,6 +2884,13 @@ def train(
             offload_prefetch=offload,
             offload_cache_blocks=config.get("offload_cache_blocks", 1),
             partition=resolve_bcd_partition(config.get("bcd_partition"), offload),
+            # #169: on resume, activate the SAVED block first. Otherwise the
+            # constructor's first _activate parks it in bf16 (block 0 active)
+            # and the later load_state_dict only casts it back to fp32 -- the
+            # trained matrices stay rounded (repro: 6/6 matrices of the resumed
+            # block equal bf16(saved) exactly, max|d| 4.9e-4).
+            initial_active_idx=(resume_state.get("bcd_state_dict") or {}).get("active_idx")
+            if resume_state else None,
         )
         print(f"  Block-coordinate-descent: {bcd_scheduler.num_blocks} blocks "
               f"({bcd_scheduler.partition} partition), "

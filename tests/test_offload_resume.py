@@ -118,3 +118,79 @@ def test_offload_resume_load_stays_on_cpu(tmp_path):
     # non-offload resume still lands on the device
     loaded2, _, _ = load_checkpoint_for_resume(path, DEV, offload=False)
     assert all(p.device.type == "cuda" for p in loaded2.parameters())
+
+
+# --- Issue #169: the resumed active block must keep its exact fp32 weights ---
+#
+# Resume order in train(): load_checkpoint_for_resume (exact fp32 weights) ->
+# BlockCoordinateScheduler(...) -> _restore_optimizer_and_bcd. Nothing reloads
+# weights after the scheduler is built. If the constructor's first _activate
+# picks block 0, it parks the saved active block in bf16, and load_state_dict's
+# _activate only casts it back to fp32: the trained matrices stay rounded.
+
+def _ckpt_mid_block_past_zero(tmp_path):
+    from train_edge_conversational import _save_edge_checkpoint
+    m, opt, sched = _build()
+    for _ in range(STEPS_PER_BLOCK * 2 + 1):          # 1 step into block 2
+        _step(m, opt, sched)
+    act = sched._active_idx
+    names = {id(p): n for n, p in m.named_parameters()}
+    act_names = [names[id(p)] for p in sched.blocks[act][1]]
+    ref = {n: p.detach().to("cpu", copy=True) for n, p in m.named_parameters()}
+    path = str(tmp_path / "edge_conversational_step7.pt")
+    _save_edge_checkpoint(m, path, global_step=7)
+    st = {"optimizer_state_dict": opt.state_dict(),
+          "bcd_state_dict": sched.state_dict()}
+    return path, st, act_names, ref
+
+
+def _resume(path, st, pass_initial):
+    from train_edge_conversational import load_checkpoint_for_resume
+    m, _, _ = load_checkpoint_for_resume(path, DEV, offload=True)
+    opt, _ = build_optimizer(m, "muon", lr=3e-4, weight_decay=0.0, muon_lr=0.02)
+    sched = BlockCoordinateScheduler(
+        m, opt, steps_per_block=STEPS_PER_BLOCK, offload_inactive_weights=True,
+        device=DEV, offload_park_dtype=torch.bfloat16, offload_prefetch=True,
+        partition="layer",
+        initial_active_idx=st["bcd_state_dict"]["active_idx"] if pass_initial else None)
+    _restore_optimizer_and_bcd(opt, sched, st)
+    return m, opt, sched
+
+
+def test_old_resume_order_rounds_active_block(tmp_path):
+    """Guard against a vacuous test below: without initial_active_idx the
+    active block's matrices DO come back bf16-rounded. If this stops failing
+    to match, the fixture no longer reaches the bug (e.g. block 0 active, or
+    weights already bf16-representable) and the real test proves nothing."""
+    path, st, act_names, ref = _ckpt_mid_block_past_zero(tmp_path)
+    assert st["bcd_state_dict"]["active_idx"] != 0
+    m, _, _ = _resume(path, st, pass_initial=False)
+    got = dict(m.named_parameters())
+    mats = [n for n in act_names if ref[n].dim() >= 2]
+    assert mats
+    assert all(not torch.equal(got[n].detach().cpu(), ref[n]) for n in mats)
+    assert all(torch.equal(got[n].detach().cpu(), ref[n].bfloat16().float())
+               for n in mats)
+
+
+def test_resume_keeps_active_block_exact(tmp_path):
+    path, st, act_names, ref = _ckpt_mid_block_past_zero(tmp_path)
+    m, opt, sched = _resume(path, st, pass_initial=True)
+    assert sched._active_idx == st["bcd_state_dict"]["active_idx"]
+    got = dict(m.named_parameters())
+    for n in act_names:
+        assert got[n].dtype == torch.float32 and got[n].device.type == "cuda", n
+        assert torch.equal(got[n].detach().cpu(), ref[n]), n
+    # inactive blocks were already bf16-parked when saved: also unchanged
+    for n in ref:
+        assert torch.equal(got[n].detach().cpu().float(), ref[n].float()), n
+    for _ in range(2 * STEPS_PER_BLOCK):              # still trains, crosses a switch
+        _step(m, opt, sched)
+
+
+def test_trainer_passes_saved_active_block_to_scheduler():
+    """The fix lives at the call site in train(); pin it there."""
+    import inspect
+    import train_edge_conversational as t
+    src = inspect.getsource(t.train)
+    assert 'initial_active_idx=(resume_state.get("bcd_state_dict")' in src
