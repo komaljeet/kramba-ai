@@ -1,0 +1,75 @@
+[scan] eager reference fwd, op-level count: 8224 FLOPs/token/head = 8.031 d^2  (roofline formula: 8 d^2 = 8192)
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → results/mfu_1b/count_ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from results/mfu_1b/count_ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+[build] 1,113,059,793 params, 13 BCD blocks, 9s, ram 5.3G
+[warm 0] token_embedding                    wall  22.77 loss 11.236576
+[A] cycle-mean wall 0.000 s/step over 0 steps
+[F  0] blocks.0+blocks.1                  aten  241.15 TF (bwd=86.12 fwd=75.11 opt=4.81 recompute=75.11) peak alloc 3.02G; scan calls bwd|bwd=176 fwd|fwd=176 fwd|recompute=176
+[F  1] blocks.2+blocks.3                  aten  230.12 TF (bwd=80.61 fwd=75.11 opt=4.81 recompute=69.60) peak alloc 2.95G; scan calls bwd|bwd=160 fwd|fwd=176 fwd|recompute=160
+[F  2] blocks.4+blocks.5                  aten  219.10 TF (bwd=75.09 fwd=75.11 opt=4.81 recompute=64.08) peak alloc 2.89G; scan calls bwd|bwd=144 fwd|fwd=176 fwd|recompute=144
+[F  3] blocks.6+blocks.7                  aten  206.79 TF (bwd=68.47 fwd=75.11 opt=4.64 recompute=58.57) peak alloc 2.86G; scan calls bwd|bwd=128 fwd|fwd=176 fwd|recompute=128
+[F  4] blocks.8+blocks.9                  aten  193.21 TF (bwd=61.32 fwd=75.11 opt=4.81 recompute=51.96) peak alloc 2.77G; scan calls bwd|bwd=120 fwd|fwd=176 fwd|recompute=120
+[F  5] blocks.10+blocks.11                aten  182.18 TF (bwd=55.81 fwd=75.11 opt=4.81 recompute=46.45) peak alloc 2.70G; scan calls bwd|bwd=104 fwd|fwd=176 fwd|recompute=104
+[F  6] blocks.12+blocks.13                aten  171.15 TF (bwd=50.29 fwd=75.11 opt=4.81 recompute=40.93) peak alloc 2.64G; scan calls bwd|bwd=88 fwd|fwd=176 fwd|recompute=88
+[F  7] blocks.14+blocks.15                aten  160.12 TF (bwd=44.78 fwd=75.11 opt=4.81 recompute=35.42) peak alloc 2.58G; scan calls bwd|bwd=72 fwd|fwd=176 fwd|recompute=72
+[F  8] blocks.16+blocks.17                aten  149.09 TF (bwd=39.26 fwd=75.11 opt=4.81 recompute=29.90) peak alloc 2.52G; scan calls bwd|bwd=56 fwd|fwd=176 fwd|recompute=56
+[F  9] blocks.18+blocks.19                aten  136.78 TF (bwd=32.64 fwd=75.11 opt=4.64 recompute=24.39) peak alloc 2.48G; scan calls bwd|bwd=40 fwd|fwd=176 fwd|recompute=40
+[F 10] blocks.20+blocks.21                aten  123.20 TF (bwd=25.49 fwd=75.11 opt=4.81 recompute=17.78) peak alloc 2.39G; scan calls bwd|bwd=32 fwd|fwd=176 fwd|recompute=32
+[F 11] blocks.22+blocks.23+final_norm+decoder aten  112.17 TF (bwd=19.98 fwd=75.11 opt=4.81 recompute=12.27) peak alloc 2.35G; scan calls bwd|bwd=16 fwd|fwd=176 fwd|recompute=16
+[F 12] token_embedding                    aten  235.36 TF (bwd=85.15 fwd=75.10 recompute=75.10) peak alloc 2.97G; scan calls bwd|bwd=176 fwd|fwd=176 fwd|recompute=176
+
+[sum] per step, averaged over one full BCD cycle:
+[sum]  aten_exec_per_step                         181.568 TFLOP
+[sum]  aten_model_per_step                        135.296 TFLOP
+[sum]  sdpa_counted_full_square_per_step            6.935 TFLOP
+[sum]  scan_exec_per_step                           1.570 TFLOP
+[sum]  scan_model_per_step                          0.947 TFLOP
+[sum]  exec_total_per_step_causal_halved          179.671 TFLOP
+[sum]  model_total_per_step_causal_halved         133.451 TFLOP
+[sum]  aten buckets: fwd=75.110 recompute=46.273 bwd=55.771 opt=4.414
+[sum] top counted ops:
+[sum]   bwd        mm                                                   35.421 TF/step
+[sum]   fwd        addmm                                                34.239 TF/step
+[sum]   fwd        bmm                                                  28.085 TF/step
+[sum]   recompute  addmm                                                22.652 TF/step
+[sum]   recompute  bmm                                                  15.106 TF/step
+[sum]   bwd        bmm                                                  15.106 TF/step
+[sum]   fwd        mm                                                   10.587 TF/step
+[sum]   recompute  mm                                                    7.161 TF/step
+[sum]   opt        mm                                                    4.414 TF/step
+[sum]   bwd        _scaled_dot_product_efficient_attention_backward      3.383 TF/step
+[sum]   fwd        _scaled_dot_product_efficient_attention               2.199 TF/step
+[sum]   bwd        convolution_backward                                  1.861 TF/step
+[sum]   recompute  _scaled_dot_product_efficient_attention               1.353 TF/step
+[sum] unregistered ops that look matmul-like: {}
+[done]

@@ -1,0 +1,9 @@
+[peak] NVIDIA GeForce RTX 4050 Laptop GPU torch 2.12.1+cu126
+[peak] roofline measure_peak_flops(): 23.55 TFLOP/s
+[peak] sq4096                        25.46 TFLOP/s
+[peak] proj 4096x2048x2048           25.18 TFLOP/s
+[peak] proj 4096x2048x8192           25.59 TFLOP/s
+[peak] dec chunk 512x2048x50257      19.61 TFLOP/s
+[peak] 8192x8192x8192                25.33 TFLOP/s
+[peak] sustained 4096^3 over 23 windows (~12 s): first 25.31 last 25.05 min 25.05 max 25.41 TFLOP/s
+[peak] best 25.59 TFLOP/s
