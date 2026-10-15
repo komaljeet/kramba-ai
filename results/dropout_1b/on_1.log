@@ -1,0 +1,93 @@
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.1
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → results/dropout_1b/on_1_ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from results/dropout_1b/on_1_ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+[build] dropout module p counts {0.1: 72}
+[p=0.1 c0  0] blocks.2+blocks.3                  wall  19.19 loss 10.954174 gn 2.105
+[p=0.1 c0  1] blocks.4+blocks.5                  wall  18.10 loss 10.898830 gn 1.316
+[p=0.1 c0  2] blocks.6+blocks.7                  wall  17.02 loss 10.868632 gn 0.935
+[p=0.1 c0  3] blocks.8+blocks.9                  wall  15.87 loss 10.837094 gn 0.816
+[p=0.1 c0  4] blocks.10+blocks.11                wall  14.80 loss 10.810615 gn 0.658
+[p=0.1 c0  5] blocks.12+blocks.13                wall  13.71 loss 10.786216 gn 0.545
+[p=0.1 c0  6] blocks.14+blocks.15                wall  12.64 loss 10.759622 gn 0.469
+[p=0.1 c0  7] blocks.16+blocks.17                wall  11.54 loss 10.735457 gn 0.414
+[p=0.1 c0  8] blocks.18+blocks.19                wall  10.44 loss 10.704677 gn 0.344
+[p=0.1 c0  9] blocks.20+blocks.21                wall   9.29 loss 10.684342 gn 0.341
+[p=0.1 c0 10] blocks.22+blocks.23+final_norm+decoder wall   8.18 loss 10.660976 gn 0.308
+[p=0.1 c0 11] token_embedding                    wall  21.01 loss 10.640440 gn 1.564
+[p=0.1 c0 12] blocks.0+blocks.1                  wall  20.23 loss 10.466112 gn 4.889
+[p=0.1 c1  0] blocks.2+blocks.3                  wall  19.21 loss 10.416843 gn 2.044
+[p=0.1 c1  1] blocks.4+blocks.5                  wall  18.12 loss 10.376772 gn 1.285
+[p=0.1 c1  2] blocks.6+blocks.7                  wall  17.03 loss 10.342325 gn 0.912
+[p=0.1 c1  3] blocks.8+blocks.9                  wall  15.87 loss 10.316005 gn 0.796
+[p=0.1 c1  4] blocks.10+blocks.11                wall  14.80 loss 10.284611 gn 0.643
+[p=0.1 c1  5] blocks.12+blocks.13                wall  13.72 loss 10.264193 gn 0.536
+[p=0.1 c1  6] blocks.14+blocks.15                wall  12.63 loss 10.243063 gn 0.460
+[p=0.1 c1  7] blocks.16+blocks.17                wall  11.55 loss 10.219334 gn 0.406
+[p=0.1 c1  8] blocks.18+blocks.19                wall  10.44 loss 10.186435 gn 0.336
+[p=0.1 c1  9] blocks.20+blocks.21                wall   9.31 loss 10.168817 gn 0.337
+[p=0.1 c1 10] blocks.22+blocks.23+final_norm+decoder wall   8.19 loss 10.146029 gn 0.307
+[p=0.1 c1 11] token_embedding                    wall  21.02 loss 10.109544 gn 1.518
+[p=0.1 c1 12] blocks.0+blocks.1                  wall  20.24 loss 9.941256 gn 4.723
+[p=0.1] mean 14.775 s/step, cycles [14.77, 14.78], active dropout calls 23616, peak reserved 5062 MiB
+C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\profiler\profiler.py:272: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+USDT:2026-10-15 15:41:50 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:42:10 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 15:42:34 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:42:53 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 15:43:16 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:43:34 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 15:43:55 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:44:11 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 15:44:32 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:44:47 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 15:45:07 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:45:21 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 15:45:39 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:45:53 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 15:46:09 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:46:21 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 15:46:37 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:46:48 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 15:47:01 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:47:11 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 15:47:24 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:47:33 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 15:47:45 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:48:06 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-15 15:48:43 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-15 15:49:04 16656:20988 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[p=0.1] profiled cycle: device 16.689 s/step, dropout kernels 0.390 s/step (2 kernel names), annotation excluded 0.248
+[p=0.1]     0.290s  _ZN2at6native43_GLOBAL__N__5ad584b7_10_Dropout_cu_0e96ed3824fused_dropout_kernel_vecIN3c108BFloat16EfjLi1ELi8E
+[p=0.1]     0.100s  _ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_43_GLOBAL__N__5ad584b7_10_Dropout_cu_0e96ed3819masked_sc
+EXIT 0

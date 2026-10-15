@@ -57,6 +57,8 @@ ap.add_argument("--no-profile", action="store_true", help="cycle A only (timing)
 ap.add_argument("--cycles-a", type=int, default=1, help="unprofiled cycles")
 ap.add_argument("--step-cache", action="store_true",
                 help="enable the within-step TernaryLinear quantized-weight cache")
+ap.add_argument("--dropout", type=float, default=0.1,
+                help="block dropout p (trainer --dropout); 0.1 = EdgeHVN default")
 args = ap.parse_args()
 
 sys.path.insert(0, args.repo)
@@ -141,7 +143,8 @@ model, _ = tec.build_model_and_config(
     settings, None, dev, checkpoint_dir=os.path.splitext(args.out)[0] + "_ckpt",
     arch="hvn-hybrid", apply_ternary=True, attn_layers=[6, 18], attn_window=4096,
     grad_checkpoint=True, tie_embeddings=True, chunked_loss=CHUNK, optimizer="muon",
-    precision="bf16", lr=3e-4, vocab_size=VOCAB, offload_weights=True)
+    precision="bf16", lr=3e-4, vocab_size=VOCAB, offload_weights=True,
+    dropout=args.dropout)
 model = tec.apply_fast_stack(model, triton_scan=True, megakernel_scan=True, tf32=True,
                              compile_model=False, verbose=False, fused_ternary=True,
                              fused_rmsnorm=True)

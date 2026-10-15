@@ -1,0 +1,217 @@
+{
+ "config": {
+  "repo": "C:\\Users\\komal\\Documents\\Codes\\kramba-wt-nodrop",
+  "out": "results/dropout_1b/on_2.json",
+  "dropout": 0.1,
+  "warmup": 2,
+  "cycles": 2,
+  "profile": false
+ },
+ "dropout_module_p_counts": {
+  "0.1": 72
+ },
+ "steps": [
+  {
+   "phase": "warm",
+   "active": "token_embedding",
+   "loss": 11.236492156982422,
+   "grad_norm": 1.6137505769729614
+  },
+  {
+   "phase": "warm",
+   "active": "blocks.0+blocks.1",
+   "loss": 11.062374114990234,
+   "grad_norm": 5.033235549926758
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.2+blocks.3",
+   "wall": 19.230729100003373,
+   "loss": 10.952632904052734,
+   "grad_norm": 2.1051623821258545
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.4+blocks.5",
+   "wall": 18.13294350000797,
+   "loss": 10.895378112792969,
+   "grad_norm": 1.3175368309020996
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.6+blocks.7",
+   "wall": 17.03481080000347,
+   "loss": 10.86742877960205,
+   "grad_norm": 0.9335964322090149
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.8+blocks.9",
+   "wall": 15.882653299995582,
+   "loss": 10.835654258728027,
+   "grad_norm": 0.8175955414772034
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.10+blocks.11",
+   "wall": 14.79523689999769,
+   "loss": 10.808944702148438,
+   "grad_norm": 0.6563759446144104
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.12+blocks.13",
+   "wall": 13.715397799998755,
+   "loss": 10.786951065063477,
+   "grad_norm": 0.546506404876709
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.14+blocks.15",
+   "wall": 12.703398600002402,
+   "loss": 10.76012897491455,
+   "grad_norm": 0.46983325481414795
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.16+blocks.17",
+   "wall": 11.550156199999037,
+   "loss": 10.735189437866211,
+   "grad_norm": 0.4136287271976471
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.18+blocks.19",
+   "wall": 10.438025399998878,
+   "loss": 10.707237243652344,
+   "grad_norm": 0.3425653278827667
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.20+blocks.21",
+   "wall": 9.304442499997094,
+   "loss": 10.687561988830566,
+   "grad_norm": 0.34084552526474
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.22+blocks.23+final_norm+decoder",
+   "wall": 8.186428700006218,
+   "loss": 10.657443046569824,
+   "grad_norm": 0.30963772535324097
+  },
+  {
+   "phase": "cycle0",
+   "active": "token_embedding",
+   "wall": 21.018810399997164,
+   "loss": 10.644646644592285,
+   "grad_norm": 1.5689045190811157
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.0+blocks.1",
+   "wall": 20.235501999995904,
+   "loss": 10.471553802490234,
+   "grad_norm": 4.878462314605713
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.2+blocks.3",
+   "wall": 19.213974800004507,
+   "loss": 10.41901683807373,
+   "grad_norm": 2.058925151824951
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.4+blocks.5",
+   "wall": 18.134785100002773,
+   "loss": 10.379715919494629,
+   "grad_norm": 1.2851632833480835
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.6+blocks.7",
+   "wall": 17.033097200008342,
+   "loss": 10.342401504516602,
+   "grad_norm": 0.9084746837615967
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.8+blocks.9",
+   "wall": 15.880219500002568,
+   "loss": 10.31751823425293,
+   "grad_norm": 0.8009245991706848
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.10+blocks.11",
+   "wall": 14.795337000003201,
+   "loss": 10.282873153686523,
+   "grad_norm": 0.6437878012657166
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.12+blocks.13",
+   "wall": 13.715338399997563,
+   "loss": 10.26203441619873,
+   "grad_norm": 0.5349684357643127
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.14+blocks.15",
+   "wall": 12.629198800001177,
+   "loss": 10.23963451385498,
+   "grad_norm": 0.4602092504501343
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.16+blocks.17",
+   "wall": 11.548632399993949,
+   "loss": 10.211169242858887,
+   "grad_norm": 0.4058401882648468
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.18+blocks.19",
+   "wall": 10.447057000012137,
+   "loss": 10.1887788772583,
+   "grad_norm": 0.33826950192451477
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.20+blocks.21",
+   "wall": 9.289501699997345,
+   "loss": 10.164944648742676,
+   "grad_norm": 0.3359062373638153
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.22+blocks.23+final_norm+decoder",
+   "wall": 8.19283909999649,
+   "loss": 10.145970344543457,
+   "grad_norm": 0.30418968200683594
+  },
+  {
+   "phase": "cycle1",
+   "active": "token_embedding",
+   "wall": 21.030557800011593,
+   "loss": 10.1126070022583,
+   "grad_norm": 1.5083601474761963
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.0+blocks.1",
+   "wall": 20.238312000001315,
+   "loss": 9.947562217712402,
+   "grad_norm": 4.723852157592773
+  }
+ ],
+ "active_dropout_calls_timed": 23616,
+ "peak_reserved_mib": 5062.0,
+ "peak_alloc_mib": 3088.91943359375,
+ "mean_s_per_step": 14.78374561538602,
+ "cycle_means": [
+  14.786810400000272,
+  14.780680830771766
+ ]
+}
