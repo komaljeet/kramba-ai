@@ -233,11 +233,56 @@ def _save_resume_state(checkpoint_dir: str, global_step: int, optimizer,
         "sched_state_dict": (lr_scheduler.state_dict()
                              if lr_scheduler is not None else None),
         "data_state": data_state,
+        # #174: dropout (EdgeHVN default p=0.1, 12 modules at 4 layers) draws
+        # from the torch RNG. Unsaved, a resumed process restarted the CUDA
+        # Philox offset at 0 instead of where the run was (3840 at step 20 of
+        # the repro), so every post-resume step used different dropout masks
+        # on identical batches and weights: loss off by 1.6e-2 at the first
+        # resumed step. Captured here, at the step boundary, so the restore
+        # lands exactly where the next step would have started.
+        "rng_state": _capture_rng_state(),
     }
     path = os.path.join(checkpoint_dir, RESUME_STATE_FILENAME)
     tmp = path + ".tmp"
     torch.save(state, tmp)
     os.replace(tmp, path)
+
+
+def _capture_rng_state() -> dict:
+    """torch CPU + every CUDA device's RNG state (#174)."""
+    return {
+        "cpu": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+    }
+
+
+def _restore_rng_state(resume_state: dict | None) -> bool:
+    """Put the torch RNG back where the saved run left it (#174).
+
+    Called by train() immediately before its first step, after the loader
+    iterator is built (iter() itself draws a worker base seed from the CPU
+    RNG, which the uninterrupted run had already done long before). Returns
+    False, with a printed reason, for a pre-#174 resume state: the run still
+    continues, but its dropout masks will differ from an uninterrupted run.
+    """
+    rs = (resume_state or {}).get("rng_state")
+    if resume_state is None:
+        return False
+    if rs is None:
+        print("  [resume] no saved RNG state (pre-#174 checkpoint) -- dropout "
+              "masks will differ from an uninterrupted run")
+        return False
+    torch.set_rng_state(rs["cpu"])
+    cuda = rs.get("cuda")
+    if cuda is not None and torch.cuda.is_available():
+        if len(cuda) == torch.cuda.device_count():
+            torch.cuda.set_rng_state_all(cuda)
+        else:
+            print(f"  [resume] WARNING saved RNG covers {len(cuda)} CUDA device(s), "
+                  f"this process sees {torch.cuda.device_count()} -- CUDA RNG not restored")
+            return False
+    print("  [resume] RNG state restored (CPU + CUDA)")
+    return True
 
 
 def _restore_optimizer_and_bcd(optimizer, bcd_scheduler, resume_state: dict) -> None:
@@ -3165,6 +3210,8 @@ def train(
     if resumable:
         sampler.set_position(epoch, epoch_start)
     data_iter = iter(dataloader)
+    # #174: last, so nothing between here and the first forward consumes RNG.
+    _restore_rng_state(resume_state)
     micro_step = 0  # micro-batches within a grad-accum window
 
     while True:
