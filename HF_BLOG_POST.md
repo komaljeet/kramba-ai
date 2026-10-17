@@ -125,10 +125,16 @@ The stack scales with VRAM. On a **6 GB card** we measured ~1.58B ceiling. Here'
 | GPU VRAM | Max Model (Recurrent Hybrid) | Max Model (Plain Transformer) | Pretrain Time (Chinchilla) |
 |----------|------------------------------|-------------------------------|----------------------------|
 | **6 GB** (RTX 4050 laptop) | **~1.58B** | **~1.58B** | ~154-246 days @ 1.1B (was ~375, Aug measurement) |
-| **8 GB** (RTX 3070/4060 laptop) | **~2.2B** | **~2.2B** | ~160 days @ 1.5B |
-| **12 GB** (RTX 3060/4070) | **~3.5B** | **~3.5B** | ~75 days @ 2.5B |
-| **16 GB** (RTX 4080) | **~4.8B** | **~4.8B** | ~40 days @ 3.5B |
-| **24 GB** (RTX 3090/4090) | **~7.5B** | **~7.5B** | ~18 days @ 5B |
+| **8 GB** (RTX 3070/4060 laptop) | **~2.2B** | **~2.2B** | ~66-105 days @ 1.5B |
+| **12 GB** (RTX 3060/4070) | **~3.5B** | **~3.5B** | ~31-49 days @ 2.5B |
+| **16 GB** (RTX 4080) | **~4.8B** | **~4.8B** | ~16-26 days @ 3.5B |
+| **24 GB** (RTX 3090/4090) | **~7.5B** | **~7.5B** | ~7-12 days @ 5B |
+
+*(Pretrain-time column rescaled 2026-10-17 by the same ~0.41-0.66× factor the 6 GB row's own
+measurement moved by this week -- not independently re-extrapolated, since nothing on these
+other cards has actually been measured. This stacks a speed-lever update on top of an already
+rough linear extrapolation, so treat these four rows as even more approximate than the warning
+above already says.)*
 
 **Key insight:** The 6.5× multiplier (standard script → this stack) applies **at every VRAM tier** because the savings are proportional:
 
