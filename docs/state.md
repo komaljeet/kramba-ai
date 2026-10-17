@@ -5,6 +5,47 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Dropout: tested, not assumed -- turn it off, real quality win not just speed (2026-10-16/17)
+
+**One line: the real 1B run has to repeat its cached data ~4.6x to hit its token budget
+(30.3B tokens needed, 6.64B unique FineWeb-Edu cached) -- exactly the regime where
+dropout's regularization is supposed to earn its keep. Tested it properly instead of
+assuming: a scaled-down A/B (384x8, matching all three of the real run's ratios --
+tokens/param, repeat count, unique-tokens/param) through 4.67 full passes, 2 seeds,
+held-out loss scored at every pass boundary. Dropout OFF won on unseen-data loss at
+every single checkpoint, in both seeds, by a margin 2-3x the measured seed-to-seed
+noise -- and the margin grew with more passes, not shrank. `--dropout 0` is the
+recommendation for the real 1B launch.**
+
+**Why this needed a real test, not a guess:** dropout off also saves ~4.9% step time,
+which made "just turn it off" tempting on speed alone -- but speed and quality are
+separate questions, and this project has been burned before by treating one as a proxy
+for the other (#132's retracted train-loss verdict, #122's luck-dominated recall gate).
+The test specifically targeted the regime that matters (data repeats a known amount)
+rather than a short single-pass sanity check, which would have been too early to show
+anything either way (both arms look like noise before about pass 2).
+
+**Real combined 1B measurement** (RMSNorm fusion + dropout off together, not just
+estimated): **14.385 s/step**, 5060 MiB peak -- confirms the ~14.35 estimate. Updated
+1B days: **~154** (accepting BCD's own quality cost) / **~246** (matching full BCD
+quality), down from 161/258.
+
+**270M, re-measured on the same merged code:** 3,640 tok/s with dropout (default),
+**3,775 tok/s without** -- **~20.1 days** vs **~19.3 days**. 270M's own token budget
+(6.31B) is UNDER the 6.64B unique tokens cached, so it would not need to repeat data at
+all even once -- the regime where dropout's whole justification disappears. `--dropout
+0` is a safer call for 270M than for the 1B run, not a riskier one.
+
+**Caveats, stated plainly, not hidden:** tested to 4.67 passes only (still widening at
+that point -- untested beyond it), small-scale model, code data not FineWeb-Edu text, 2
+seeds. Track the real run's own held-out loss live once it starts, as a safety check,
+rather than trusting this result blind at a scale and duration it was never measured at.
+
+`--dropout` flag (default 0.1, nothing changes unless set), `--max-train-windows`
+cap, and `scripts/eval_repeat_gap.py` (seen/unseen/pinned-tail scoring per checkpoint)
+merged, MR !212. tests/test_dropout_flag.py, tests/test_max_train_windows.py: 11
+passed.
+
 ## 1B pretrain: fused block pre-norm RMSNorm + a real MFU figure = 15.067 s/step, -30.9% from the original baseline (2026-10-15)
 
 **One line: a final line-by-line sweep (explicitly asked to find nothing if there was
