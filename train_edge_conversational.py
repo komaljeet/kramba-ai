@@ -197,7 +197,13 @@ def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
         "dropout": getattr(model, 'dropout_p', 0.1),
         "global_step": global_step,
     }
-    torch.save(ckpt, save_path)
+    # Atomic (temp + os.replace). Written straight to the final name, a save
+    # killed mid-write left a truncated *_stepN.pt that find_latest_checkpoint
+    # picks as the newest, so every restart died in torch.load until someone
+    # deleted it by hand. "*.pt.tmp" does not match the "*.pt" scan.
+    tmp = save_path + ".tmp"
+    torch.save(ckpt, tmp)
+    os.replace(tmp, save_path)
 
 
 # Rolling resume-state file (Issue #112). Deliberately NOT part of the model
@@ -206,6 +212,10 @@ def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
 # over a multi-week run. One file per checkpoint_dir, overwritten each save, holding
 # only what is needed to continue the *optimization* rather than reproduce history.
 RESUME_STATE_FILENAME = "resume_state.pt"
+# The previous rolling save, kept so the newest *complete* model checkpoint
+# always has a matching resume state, whichever write a crash interrupts. See
+# _save_checkpoint_pair for the ordering argument.
+RESUME_STATE_PREV_FILENAME = "resume_state.prev.pt"
 
 
 def _save_resume_state(checkpoint_dir: str, global_step: int, optimizer,
@@ -249,7 +259,37 @@ def _save_resume_state(checkpoint_dir: str, global_step: int, optimizer,
     path = os.path.join(checkpoint_dir, RESUME_STATE_FILENAME)
     tmp = path + ".tmp"
     torch.save(state, tmp)
+    # Only once the new state is complete on disk: demote the current one to
+    # .prev (not delete it), then promote the new one. Both are renames.
+    if os.path.exists(path):
+        os.replace(path, os.path.join(checkpoint_dir, RESUME_STATE_PREV_FILENAME))
     os.replace(tmp, path)
+
+
+def _save_checkpoint_pair(model, ckpt_path: str, checkpoint_dir: str,
+                          global_step: int, optimizer, bcd_scheduler=None,
+                          lr_scheduler=None, data_state: dict | None = None) -> None:
+    """Write resume state THEN model checkpoint, so a kill anywhere is recoverable.
+
+    Resume picks the newest complete ``*_stepN.pt`` and wants a resume state at
+    exactly step N. With the old order (model first), a kill during the
+    resume-state write -- what happened to the 270M pretrain at step 2000 --
+    left step N's weights with no step-N optimizer/data/LR state, so a restart
+    silently began with fresh momentum, a fresh data position and a restarted
+    LR schedule. Order + .prev fallback cover every interruption point:
+
+      kill writing resume.tmp -> newest model N-k, resume.pt = N-k          OK
+      kill between renames    -> newest model N-k, resume.prev.pt = N-k     OK
+      kill writing model.tmp  -> newest model N-k, resume.prev.pt = N-k     OK
+      both done               -> newest model N,   resume.pt = N            OK
+
+    Neither torch.save holds more than one tensor's CPU copy at a time (it
+    streams storage by storage): measured +0.20 GB peak working set each at
+    1024x20 / Muon, so splitting or switching formats would not lower it.
+    """
+    _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler,
+                       lr_scheduler=lr_scheduler, data_state=data_state)
+    _save_edge_checkpoint(model, ckpt_path, global_step=global_step)
 
 
 def _capture_rng_state() -> dict:
@@ -412,22 +452,35 @@ def _load_resume_state(checkpoint_dir: str, expected_step: int) -> dict | None:
     last rolling save — and must degrade to a fresh optimizer rather than silently
     pair one step's weights with another step's momentum.
     """
-    path = os.path.join(checkpoint_dir, RESUME_STATE_FILENAME)
-    if not os.path.exists(path):
+    # The current rolling file first, then the previous one: a save interrupted
+    # after the resume state but before the model checkpoint (see
+    # _save_checkpoint_pair) leaves the matching state in .prev.
+    candidates = [RESUME_STATE_FILENAME, RESUME_STATE_PREV_FILENAME]
+    found = []
+    for name in candidates:
+        path = os.path.join(checkpoint_dir, name)
+        if not os.path.exists(path):
+            continue
+        try:
+            state = torch.load(path, map_location="cpu", weights_only=False)
+        except Exception as e:
+            print(f"  [resume] {name} unreadable ({e}) — skipping it")
+            continue
+        saved_step = state.get("global_step", -1)
+        if saved_step == expected_step:
+            if name != RESUME_STATE_FILENAME:
+                print(f"  [resume] using {name} (step {saved_step}): the last save was "
+                      f"interrupted before its model checkpoint completed")
+            return state
+        found.append(f"{name} at step {saved_step}")
+        del state
+    if not found:
         print(f"  [resume] no {RESUME_STATE_FILENAME} — optimizer/BCD state starts fresh")
         return None
-    try:
-        state = torch.load(path, map_location="cpu", weights_only=False)
-    except Exception as e:
-        print(f"  [resume] {RESUME_STATE_FILENAME} unreadable ({e}) — optimizer starts fresh")
-        return None
-    saved_step = state.get("global_step", -1)
-    if saved_step != expected_step:
-        print(f"  [resume] {RESUME_STATE_FILENAME} is at step {saved_step} but the checkpoint "
-              f"is at {expected_step} — ignoring it, optimizer starts fresh (pairing "
-              f"mismatched weights and momentum would be worse than restarting)")
-        return None
-    return state
+    print(f"  [resume] {', '.join(found)} but the checkpoint "
+          f"is at {expected_step} — ignoring it, optimizer starts fresh (pairing "
+          f"mismatched weights and momentum would be worse than restarting)")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -2930,7 +2983,7 @@ def load_hybrid_trunk_into_model(
 
 @torch.no_grad()
 def evaluate(model, val_loader, device, max_batches: int = 100,
-             precision: str = "bf16"):
+             precision: str = "bf16", chunked_loss: int = 0):
     """Held-out validation: mean loss overall + per-source.
 
     Returns (overall_loss, [slim, oasst, wiki] losses) or None if no val set.
@@ -2941,6 +2994,19 @@ def evaluate(model, val_loader, device, max_batches: int = 100,
     precision : str
         Mixed-precision mode for eval (Issue #80): "fp32" (no autocast),
         "bf16", or "fp16". Should match training precision.
+    chunked_loss : int
+        Positions per slice for the loss, as in training's ``--chunked-loss``
+        (0 = full logits). Pass the training value. The full-logit path builds
+        a [B, S, vocab] tensor plus its fp32 cross-entropy intermediates; at
+        1024x20, seq 4096, vocab 50257 that grew the CUDA caching allocator's
+        reserve from 5.17 to 6.70 GB on the 6 GB card. Under WDDM the overflow
+        is silently backed by host RAM and the allocator keeps it reserved, so
+        the first validation permanently added +1.28 GB working set / +1.63 GB
+        commit to the training process -- at step 2000, the same step as the
+        first checkpoint save (val_every defaults to save_every). That is what
+        pushed the 270M pretrain over the RAM edge "at the save". Chunked:
+        +0.00 GB, and faster. Per-token losses are identical either way
+        (tests/test_chunked_loss.py).
     """
     if val_loader is None:
         return None
@@ -2967,10 +3033,16 @@ def evaluate(model, val_loader, device, max_batches: int = 100,
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
-            logits = model(x)
-            per_sample = crit(
-                logits.reshape(-1, logits.size(-1)), y.reshape(-1)
-            ).reshape(x.shape[0], -1).mean(dim=1)
+            if chunked_loss:
+                from hvn.edge.chunked_loss import chunked_cross_entropy
+                hidden = model(x, return_hidden=True)
+                tok_loss = chunked_cross_entropy(
+                    hidden, y, getattr(model, "_orig_mod", model).decoder,
+                    chunk=chunked_loss, use_checkpoint=False)
+            else:
+                logits = model(x)
+                tok_loss = crit(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
+            per_sample = tok_loss.reshape(x.shape[0], -1).mean(dim=1)
         B = x.shape[0]
         tot_loss_t += per_sample.detach().sum()
         tot_n_t += B
@@ -3486,7 +3558,8 @@ def train(
             # Held-out validation eval (A/B primary metric)
             if val_writer is not None and global_step % val_every == 0:
                 v_overall, v_src = evaluate(model, val_loader, device,
-                                             precision=precision)
+                                             precision=precision,
+                                             chunked_loss=chunked_loss_size)
                 v_ppl = math.exp(min(v_overall, 20))
                 print(f"    ↳ VAL step {global_step}: loss {v_overall:.4f} | ppl {v_ppl:.2f} | "
                       f"Slim {v_src[0]:.4f}  OA {v_src[1]:.4f}  Wiki {v_src[2]:.4f}", flush=True)
@@ -3500,9 +3573,9 @@ def train(
             # Checkpoint every save_every_steps
             if global_step % config["save_every_steps"] == 0:
                 ckpt_path = os.path.join(checkpoint_dir, f"edge_conversational_step{global_step}.pt")
-                _save_edge_checkpoint(model, ckpt_path, global_step=global_step)
-                _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler,
-                       lr_scheduler=scheduler, data_state=_data_state())
+                _save_checkpoint_pair(model, ckpt_path, checkpoint_dir, global_step,
+                                      optimizer, bcd_scheduler, lr_scheduler=scheduler,
+                                      data_state=_data_state())
                 print(f"  ✓ Checkpoint saved: {ckpt_path}")
                 _prune_checkpoints(checkpoint_dir,
                                    keep_last=config.get("keep_checkpoints", 5),
@@ -3548,9 +3621,9 @@ def train(
 
     # --- Final checkpoint ---
     final_ckpt_path = os.path.join(checkpoint_dir, "edge_conversational.pt")
-    _save_edge_checkpoint(model, final_ckpt_path, global_step=global_step)
-    _save_resume_state(checkpoint_dir, global_step, optimizer, bcd_scheduler,
-                       lr_scheduler=scheduler, data_state=_data_state())
+    _save_checkpoint_pair(model, final_ckpt_path, checkpoint_dir, global_step,
+                          optimizer, bcd_scheduler, lr_scheduler=scheduler,
+                          data_state=_data_state())
 
     if dyn_lr is not None:
         dyn_lr.close()
