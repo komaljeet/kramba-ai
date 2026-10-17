@@ -4,6 +4,52 @@
 > what fits in 6 GB, key training flags, `--full` meta-flag, precision, generation, tips.
 > VRAM-envelope issues #69/#70 live here; the closed-issue ledger is [features.md](features.md).
 
+## The exact machine every number in this repo was measured on (2026-10-17)
+
+Every s/step, tok/s, VRAM and day-count figure in this project's docs and blog posts --
+unless explicitly marked as an extrapolation -- was measured on this one laptop, not a
+representative or average "6 GB card":
+
+| | |
+|---|---|
+| GPU | NVIDIA GeForce RTX 4050 Laptop GPU |
+| VRAM | 6141 MiB (~6 GB), compute capability 8.9 (Ada Lovelace) |
+| SMs | 20 |
+| Power limit | 120 W (laptop, power-limited vs. the desktop RTX 4050) |
+| Max SM clock | 3105 MHz |
+| Measured peak bf16 GEMM | 25.6 TFLOP/s (measured fresh 2026-10-15, not a spec-sheet number) |
+| Driver | 610.74 |
+| CPU | AMD Ryzen 7 7840HS w/ Radeon 780M Graphics |
+| System RAM | 15.29 GB |
+| OS | Windows 11 Home Single Language, build 10.0.26200 |
+| PyTorch | 2.12.1+cu126 (CUDA 12.6) |
+
+This matters because this is a laptop GPU, power- and thermal-limited below its desktop
+namesake, on Windows (WDDM, not Linux) with only 15.29 GB of system RAM -- a notably
+tighter RAM budget than VRAM budget, which is why this project's offload/BCD work spent
+so much of its time on host RAM, not just VRAM. None of the numbers in this repo should
+be assumed to transfer to a desktop RTX 4050, a different driver/OS, or more system RAM
+without re-measuring -- this project has been wrong more than once this week about
+numbers transferring across scale, let alone across hardware.
+
+## Before / after — same hardware, one week of real fixes (2026-08 -> 2026-10)
+
+| | August 2026 | October 2026 (now) |
+|---|---|---|
+| 1B step time | 21.81 s/step | **14.385 s/step** (-34%) |
+| Throughput | 1,579 tok/s | **2,278 tok/s** |
+| **BCD's own quality cost** | **~4x worse perplexity** than full training (one block trains at a time, naive partition) | **~1.6x worse perplexity** (balanced block partitioning, issue #164) |
+| 1B pretrain time | ~375 days | **~154-246 days**, depending on how the BCD quality cost above is counted |
+| Offload correctness | silent weight-corruption bug, present undetected for 76 days (2026-07-26 to 2026-10-10) | found, fixed, and validated end-to-end with real hard-kill-and-resume tests |
+
+The BCD quality row matters as much as the speed numbers, and is easy to miss in a wall of
+step-time figures: the **~4x -> ~1.6x is a real cut in how much worse the memory-saving
+training mode is** compared to training the full model at once -- not a speed change. One
+block slot sized for the vocabulary table was wasting memory for every other block;
+grouping layers into balanced-size blocks reclaimed it, letting more layers train "live"
+at once for the same VRAM budget. Full trail: `docs/state.md`'s BCD-balanced-partition and
+offload-bugs entries.
+
 ## HVN vs Transformer — Fundamental Differences
 
 | Aspect | Transformer (MHA) | HVN |

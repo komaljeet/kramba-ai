@@ -100,6 +100,32 @@
   </a>
 </header>
 
+<h2>The exact machine every number here was measured on</h2>
+<table>
+<tr><td>GPU</td><td>NVIDIA GeForce RTX 4050 Laptop GPU &mdash; 6141 MiB VRAM, 20 SMs, compute cap 8.9 (Ada Lovelace), power-limited to 120 W</td></tr>
+<tr><td>Measured peak bf16 GEMM</td><td>25.6 TFLOP/s (measured, not a spec-sheet number)</td></tr>
+<tr><td>CPU</td><td>AMD Ryzen 7 7840HS</td></tr>
+<tr><td>System RAM</td><td>15.29 GB</td></tr>
+<tr><td>OS</td><td>Windows 11 Home, build 10.0.26200 (WDDM, not Linux)</td></tr>
+<tr><td>PyTorch</td><td>2.12.1+cu126</td></tr>
+</table>
+<p>Power-limited laptop GPU, Windows, tight system RAM relative to VRAM &mdash; don't assume
+these numbers transfer to a desktop RTX 4050, a different OS, or more system RAM without
+re-measuring.</p>
+
+<h2>Before / after &mdash; same hardware, one week of real fixes (2026-08 &rarr; 2026-10)</h2>
+<table>
+<tr><th></th><th>August 2026</th><th>October 2026 (now)</th></tr>
+<tr><td>1B step time</td><td>21.81 s/step</td><td><strong>14.385 s/step</strong> (-34%)</td></tr>
+<tr><td>Throughput</td><td>1,579 tok/s</td><td><strong>2,278 tok/s</strong></td></tr>
+<tr><td><strong>BCD's own quality cost</strong></td><td><strong>~4&times; worse perplexity</strong> than full training (one block trains at a time, naive partition)</td><td><strong>~1.6&times; worse perplexity</strong> (balanced block partitioning, issue #164)</td></tr>
+<tr><td>1B pretrain time</td><td>~375 days</td><td><strong>~154-246 days</strong>, depending on how the BCD quality cost above is counted</td></tr>
+<tr><td>Offload correctness</td><td>silent weight-corruption bug, undetected for 76 days</td><td>found, fixed, validated end-to-end</td></tr>
+</table>
+<p>The BCD row is a real cut in how much worse the memory-saving training mode is compared
+to training the full model at once &mdash; not a speed change. Full trail in the repo's
+<code>docs/state.md</code>.</p>
+
 <h2>The headline number</h2>
 <p class="sub">RTX 4050 laptop, 6 GB &mdash; measured 2026-09-19</p>
 

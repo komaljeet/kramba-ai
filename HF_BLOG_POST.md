@@ -2,6 +2,38 @@
 
 [DOI 10.5281/zenodo.22725431](https://zenodo.org/records/22725431)
 
+## The exact machine every number below was measured on
+
+| | |
+|---|---|
+| GPU | NVIDIA GeForce RTX 4050 Laptop GPU — 6141 MiB VRAM, 20 SMs, compute cap 8.9 (Ada Lovelace), power-limited to 120 W |
+| Measured peak bf16 GEMM | 25.6 TFLOP/s (measured, not a spec-sheet number) |
+| CPU | AMD Ryzen 7 7840HS |
+| System RAM | 15.29 GB |
+| OS | Windows 11 Home, build 10.0.26200 (WDDM, not Linux) |
+| PyTorch | 2.12.1+cu126 |
+
+This is a power-limited *laptop* GPU on Windows with notably tight system RAM relative to
+its VRAM. Don't assume these numbers transfer to a desktop RTX 4050, a different OS, or
+more system RAM without re-measuring.
+
+## Before / after — same hardware, one week of real fixes (2026-08 → 2026-10)
+
+| | August 2026 | October 2026 (now) |
+|---|---|---|
+| 1B step time | 21.81 s/step | **14.385 s/step** (-34%) |
+| Throughput | 1,579 tok/s | **2,278 tok/s** |
+| **BCD's own quality cost** | **~4× worse perplexity** than full training (one block trains at a time, balance was naive) | **~1.6× worse perplexity** (balanced block partitioning, issue #164) |
+| 1B pretrain time | ~375 days | **~154-246 days**, depending on how the BCD quality cost above is counted |
+| Offload correctness | silent weight-corruption bug, present undetected for 76 days (2026-07-26 to 2026-10-10) | found, fixed, and validated end-to-end with real hard-kill-and-resume tests |
+
+The BCD quality row is easy to miss but matters as much as the speed numbers: the
+**~4× → ~1.6× figure is a real cut in how much worse the memory-saving training mode is**
+compared to training the full model at once, not a speed change at all. It came from
+changing how BCD splits the model into trainable blocks — one big slot sized for the
+vocabulary table wasted memory for every other block; grouping layers into balanced-size
+blocks reclaimed it, which let more layers train "live" at once for the same VRAM budget.
+
 **Correction (2026-10-11):** the CPU weight-offload path used in the runs below had a bug,
 present from 2026-07-26 to 2026-10-10, that could swap weights between same-shaped matrices
 during training — fixed in commit `2f94d7a`, and independently confirmed on the original
@@ -21,7 +53,7 @@ The "nothing left, 20-25% at most" line further down in this post turned out to 
 
 I looked everywhere to be able to **pre-train** an LLM on my low-end GPU and could not find one. Everywhere I looked, the same conclusion was reached: "You need an A100", "You can only train a 20M toy model on your hardware". So being 'broke', I did the only thing I could do — subscribe to Claude and try to find a way... after much prompting and testing, I finally stitched together the stack that allowed me to **pre-train** a 1B LLM on my laptop. After much testing, we are at **100.6% of the card's *measured* GEMM peak** (I don't know how 100.6% is even possible, I'm not a scientist, just a broke guy).
 
-Though I can **pre-train** a 1B LLM on 6 GB VRAM, it still takes about **168 days** (accepting
+Though I can **pre-train** a 1B LLM on 6 GB VRAM, it still takes about **154 days** (accepting
 block-coordinate descent's own quality cost as measured) or **~246 days** (if you want the
 output to match full-training quality instead) to finish **pretraining** it properly — down
 from 375 days measured in August, after real speed and quality fixes landed this week. More
