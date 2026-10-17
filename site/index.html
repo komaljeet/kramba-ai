@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trainable 1.11B model on a 6 GB VRAM card</title>
-<meta name="description" content="Trainable 1.11B model on a 6 GB VRAM card — measured envelopes for training language models on consumer GPUs: 1.11B parameters in 4.51 GB. Open source, Apache-2.0.">
+<meta name="description" content="Trainable 1.11B model on a 6 GB VRAM card — measured envelopes for training language models on consumer GPUs: 1.11B parameters in 5.31 GB. Open source, Apache-2.0.">
 <style>
   :root{
     --bg:#fbfaf8; --panel:#ffffff; --ink:#16150f; --muted:#5d5a4e;
@@ -103,7 +103,7 @@
 <tr><td>GPU</td><td>NVIDIA GeForce RTX 4050 Laptop GPU &mdash; 6141 MiB VRAM, 20 SMs, compute cap 8.9 (Ada Lovelace), power-limited to 120&nbsp;W</td></tr>
 <tr><td>Measured peak bf16 GEMM</td><td>25.6 TFLOP/s (measured, not a spec-sheet number)</td></tr>
 <tr><td>CPU</td><td>AMD Ryzen 7 7840HS</td></tr>
-<tr><td>System RAM</td><td>15.29 GB</td></tr>
+<tr><td>System RAM</td><td>15.29 GB usable (2x8GB DDR5-5600, dual channel)</td></tr>
 <tr><td>OS</td><td>Windows 11 Home, build 10.0.26200 (WDDM, not Linux)</td></tr>
 <tr><td>PyTorch</td><td>2.12.1+cu126</td></tr>
 </table>
@@ -119,6 +119,7 @@ re-measuring.</p>
 <tr><td><strong>BCD's own quality cost</strong></td><td><strong>~4&times; worse perplexity</strong> than full training</td><td><strong>~1.6&times; worse perplexity</strong> (balanced block partitioning, issue #164)</td></tr>
 <tr><td>1B pretrain time</td><td>~375 days</td><td><strong>~154-246 days</strong></td></tr>
 <tr><td>Offload correctness</td><td>silent weight-corruption bug, undetected 76 days</td><td>found, fixed, validated end-to-end</td></tr>
+<tr><td>Peak VRAM at 1.11B</td><td>4.51 GB</td><td><strong>5.31 GB</strong> (82.4% of the card) &mdash; up, not down</td></tr>
 </table>
 <p>The BCD row is a real cut in how much worse the memory-saving training mode is compared
 to training the full model at once &mdash; not a speed change.</p>
@@ -128,7 +129,7 @@ to training the full model at once &mdash; not a speed change.</p>
 
 <div class="cards">
   <div class="card"><div class="k">1.11B</div><div class="l">parameters, training &mdash; not inference</div></div>
-  <div class="card"><div class="k">4.51 GB</div><div class="l">peak VRAM, 1.5&nbsp;GB to spare</div></div>
+  <div class="card"><div class="k">5.31 GB</div><div class="l">peak VRAM, 82.4% of card (was 4.51 GB, Aug)</div></div>
   <div class="card"><div class="k">1,579</div><div class="l">tokens/sec at 4,096 context</div></div>
 </div>
 
