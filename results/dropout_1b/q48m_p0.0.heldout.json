@@ -1,0 +1,30 @@
+{
+  "heldout_tokens": 400000,
+  "seq_len": 1024,
+  "rows": [
+    {
+      "heldout_nll": 4.407733930373642,
+      "heldout_ppl": 82.08324432373047,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 250,
+      "checkpoint": "C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/q48m_p0.0\\edge_conversational_step250.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 8192000,
+      "tokens_per_body_param": 0.25892138572121254
+    },
+    {
+      "heldout_nll": 3.9120201970023984,
+      "heldout_ppl": 49.99985885620117,
+      "tokens_scored": 398970,
+      "windows": 390,
+      "step": 500,
+      "checkpoint": "C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/q48m_p0.0\\edge_conversational_step500.pt",
+      "params": 48024483,
+      "body": 31638947,
+      "tokens_seen": 16384000,
+      "tokens_per_body_param": 0.5178427714424251
+    }
+  ]
+}

@@ -1,0 +1,276 @@
+........................................................................ [  9%]
+........................................................................ [ 18%]
+........................................................................ [ 27%]
+........................................................................ [ 36%]
+........................................................................ [ 45%]
+..............................................s.......s......F...FF..... [ 54%]
+..F...............F....F................EE.................E..EEE....... [ 63%]
+........................................................................ [ 72%]
+........................................................................ [ 82%]
+........................................................................ [ 91%]
+......................................................................   [100%]
+=================================== ERRORS ====================================
+________________ ERROR at setup of test_end_to_end_save_reload ________________
+file C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue51.py, line 86
+  def test_end_to_end_save_reload(device):
+E       fixture 'device' not found
+>       available fixtures: anyio_backend, anyio_backend_name, anyio_backend_options, capfd, capfdbinary, caplog, capsys, capsysbinary, capteesys, doctest_namespace, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, monkeypatch, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, subtests, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue51.py:86
+__________________ ERROR at setup of test_heldout_bpc_finite __________________
+file C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue51.py, line 114
+  def test_heldout_bpc_finite(device):
+E       fixture 'device' not found
+>       available fixtures: anyio_backend, anyio_backend_name, anyio_backend_options, capfd, capfdbinary, caplog, capsys, capsysbinary, capteesys, doctest_namespace, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, monkeypatch, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, subtests, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue51.py:114
+__________________ ERROR at setup of test_checkpoint_layout ___________________
+file C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue65.py, line 155
+  def test_checkpoint_layout(ckpt):
+E       fixture 'ckpt' not found
+>       available fixtures: anyio_backend, anyio_backend_name, anyio_backend_options, capfd, capfdbinary, caplog, capsys, capsysbinary, capteesys, doctest_namespace, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, monkeypatch, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, subtests, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue65.py:155
+_____________________ ERROR at setup of test_param_parity _____________________
+file C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue67.py, line 139
+  def test_param_parity(ckpt_path):
+E       fixture 'ckpt_path' not found
+>       available fixtures: anyio_backend, anyio_backend_name, anyio_backend_options, capfd, capfdbinary, caplog, capsys, capsysbinary, capteesys, doctest_namespace, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, monkeypatch, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, subtests, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue67.py:139
+__________________ ERROR at setup of test_serving_roundtrip ___________________
+file C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue67.py, line 151
+  def test_serving_roundtrip(ckpt_path):
+E       fixture 'ckpt_path' not found
+>       available fixtures: anyio_backend, anyio_backend_name, anyio_backend_options, capfd, capfdbinary, caplog, capsys, capsysbinary, capteesys, doctest_namespace, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, monkeypatch, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, subtests, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue67.py:151
+_________________ ERROR at setup of test_layout_and_atomicity _________________
+file C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue67.py, line 171
+  def test_layout_and_atomicity(ckpt, ckpt_path):
+E       fixture 'ckpt' not found
+>       available fixtures: anyio_backend, anyio_backend_name, anyio_backend_options, capfd, capfdbinary, caplog, capsys, capsysbinary, capteesys, doctest_namespace, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, monkeypatch, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, subtests, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue67.py:171
+================================== FAILURES ===================================
+______________________ test_forward_matches_incremental _______________________
+
+    def test_forward_matches_incremental():
+        """Training forward and incremental forward_step share the same recurrence."""
+        dev = _device()
+        torch.manual_seed(0)
+        m = HamiltonianVortexNetwork(vocab_size=97, d_model=128, num_layers=2,
+                                     n_heads=4, use_deltanet=True, dropout=0.0).to(dev).eval()
+        seq = torch.randint(0, 97, (1, 48), device=dev)
+        with torch.no_grad():
+            full = m(seq)
+            st = m.init_generation_state(1, device=dev, dtype=torch.float32)
+            step = []
+            for t in range(seq.shape[1]):
+                lo, st = m.forward_step(seq[:, t:t+1], st, position_idx=t)
+                step.append(lo)
+            step = torch.cat(step, dim=1)
+        max_diff = (full - step).abs().max().item()
+>       assert max_diff < 1e-4, f"forward vs forward_step diverge: {max_diff}"
+E       AssertionError: forward vs forward_step diverge: 0.001036226749420166
+E       assert 0.001036226749420166 < 0.0001
+
+tests\test_issue34.py:57: AssertionError
+_________________ test_prefill_matches_sequential_recurrence __________________
+
+    def test_prefill_matches_sequential_recurrence():
+        """prefill_states reproduces the exact sequential (per-token) prefill.
+    
+        The pre-#36 code seeded generation by absorbing the prompt token-by-token
+        through ``forward_step`` (the redundant full ``forward()`` was discarded).
+        prefill_states must yield the *same* last logits and recurrent state so
+        generation output is unchanged — exactly on the HVN path (same recurrence)
+        and to float tolerance on DeltaNet (chunked scan is algebraically exact).
+        """
+        dev = _device()
+        for use_deltanet in (False, True):
+            m = _model(use_deltanet, dev)
+            prompt_ids = list(torch.randint(0, 97, (37,)).tolist())  # >1 chunk
+            prompt = torch.tensor([prompt_ids], dtype=torch.long, device=dev)
+            ref_logits, ref_states = _seq_prefill_state(m, prompt_ids, dev)
+            with torch.no_grad():
+                pf_logits, pf_states = m.prefill_states(prompt)
+            ldiff = (pf_logits[0, -1] - ref_logits).abs().max().item()
+            # Compare each block's recurrent state tensor(s).
+            sdiff = 0.0
+            for rs, ps in zip(ref_states, pf_states):
+                if isinstance(rs, dict):
+                    for key in rs:
+                        sdiff = max(sdiff, (rs[key] - ps[key]).abs().max().item())
+                else:
+                    sdiff = max(sdiff, (rs - ps).abs().max().item())
+            tag = "deltanet" if use_deltanet else "hvn"
+>           assert ldiff < 1e-4, f"[{tag}] prefill logits diverge: {ldiff}"
+E           AssertionError: [deltanet] prefill logits diverge: 0.00023746490478515625
+E           assert 0.00023746490478515625 < 0.0001
+
+tests\test_issue36.py:101: AssertionError
+___________________ test_prefill_state_continues_correctly ____________________
+
+    def test_prefill_state_continues_correctly():
+        """State captured by prefill continues generation identically to the exact
+        sequential recurrence over the same continuation tokens (both block types)."""
+        dev = _device()
+        for use_deltanet in (False, True):
+            m = _model(use_deltanet, dev)
+            prompt_len, cont_len = 33, 12
+            full_ids = list(torch.randint(0, 97, (prompt_len + cont_len,)).tolist())
+            prompt_ids = full_ids[:prompt_len]
+            # Ground truth: one continuous sequential scan over the whole sequence.
+            _, ref_st = _seq_prefill_state(m, prompt_ids, dev)
+            max_diff = 0.0
+            with torch.no_grad():
+                _, pf_st = m.prefill_states(
+                    torch.tensor([prompt_ids], dtype=torch.long, device=dev)
+                )
+                for j in range(cont_len):
+                    tok = torch.tensor([[full_ids[prompt_len + j]]], dtype=torch.long, device=dev)
+                    ref_lo, ref_st = m.forward_step_batched(tok, ref_st, position_idx=prompt_len + j)
+                    pf_lo, pf_st = m.forward_step_batched(tok, pf_st, position_idx=prompt_len + j)
+                    max_diff = max(max_diff, (ref_lo - pf_lo).abs().max().item())
+            tag = "deltanet" if use_deltanet else "hvn"
+>           assert max_diff < 1e-4, f"[{tag}] continued state diverges: {max_diff}"
+E           AssertionError: [deltanet] continued state diverges: 0.000195235013961792
+E           assert 0.000195235013961792 < 0.0001
+
+tests\test_issue36.py:128: AssertionError
+______________________ test_forward_matches_incremental _______________________
+
+    def test_forward_matches_incremental():
+        """Freezing projections doesn't change the recurrence: forward == forward_step."""
+        dev = _device()
+        torch.manual_seed(0)
+        m = _build(True, dev)
+        seq = torch.randint(0, 97, (1, 48), device=dev)
+        with torch.no_grad():
+            full = m(seq)
+            st = m.init_generation_state(1, device=dev, dtype=torch.float32)
+            step = []
+            for t in range(seq.shape[1]):
+                lo, st = m.forward_step(seq[:, t:t+1], st, position_idx=t)
+                step.append(lo)
+            step = torch.cat(step, dim=1)
+        max_diff = (full - step).abs().max().item()
+>       assert max_diff < 1e-4, f"forward vs forward_step diverge: {max_diff}"
+E       AssertionError: forward vs forward_step diverge: 0.0003992021083831787
+E       assert 0.0003992021083831787 < 0.0001
+
+tests\test_issue40.py:145: AssertionError
+__________ test_served_torch_concurrent_matches_single_stream_logits __________
+
+    def test_served_torch_concurrent_matches_single_stream_logits():
+        """Per-step torch served logits match per-stream logits to float tolerance."""
+        dev = _device()
+        m = _build(dev, n_heads=4)
+        B, T = 4, 6
+        toks = torch.randint(0, 128, (B, T), device=dev)
+        sb = m.init_generation_state_batched(B, device=dev, dtype=torch.float32)
+        ss = [m.init_generation_state_batched(1, device=dev, dtype=torch.float32) for _ in range(B)]
+        max_diff = 0.0
+        for t in range(T):
+            lg_srv, sb = m.forward_step_served(toks[:, t:t + 1], sb, position_idx=t, use_fused=False)
+            for b in range(B):
+                lg_b, ss[b] = m.forward_step_batched(toks[b:b + 1, t:t + 1], ss[b], position_idx=t)
+                max_diff = max(max_diff, (lg_srv[b] - lg_b[0]).abs().max().item())
+>       assert max_diff < 1e-4, f"served(torch) concurrent logits diverge: {max_diff}"
+E       AssertionError: served(torch) concurrent logits diverge: 0.0013688206672668457
+E       assert 0.0013688206672668457 < 0.0001
+
+tests\test_issue43.py:99: AssertionError
+__________________ test_forward_batched_equals_single_stream __________________
+
+    def test_forward_batched_equals_single_stream():
+        """model.forward on a batch == concatenating per-sequence forwards."""
+        dev = _device()
+        seqs = torch.randint(0, 64, (4, 16), device=dev)
+        for n_heads in (1, 2, 4, 8):
+            torch.manual_seed(0)
+            m = HamiltonianVortexNetwork(
+                vocab_size=64, d_model=64, num_layers=2, n_heads=n_heads, dropout=0.0,
+            ).to(dev).eval()
+            diff = _max_batched_vs_alone(m, seqs)
+>           assert diff < TOL, f"forward batched != single-stream (n_heads={n_heads}, diff={diff:.2e})"
+E           AssertionError: forward batched != single-stream (n_heads=1, diff=1.06e-03)
+E           assert 0.0010617375373840332 < 0.0001
+
+tests\test_issue46.py:54: AssertionError
+============================== warnings summary ===============================
+tests/test_dynamic_lr.py::test_cosine_schedule_is_not_compounded_by_the_multiplier
+  C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_dynamic_lr.py:282: UserWarning: Detected call of `lr_scheduler.step()` before `optimizer.step()`. In PyTorch 1.1.0 and later, you should call them in the opposite order: `optimizer.step()` before `lr_scheduler.step()`.  Failure to do this will result in PyTorch skipping the first value of the learning rate schedule. See more details at https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rate
+    cos.step()
+
+tests/test_issue163_1b_launchable.py::test_offload_forward_is_finite_and_trains
+  C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_issue163_1b_launchable.py:167: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+  Consider using tensor.detach() first. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\torch\csrc\autograd\generated\python_variable_methods.cpp:839.)
+    losses.append(float(loss))
+
+tests/test_issue65.py::test_ddp_parity
+  C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\_pytest\python.py:171: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_issue65.py::test_ddp_parity returned <class 'dict'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+tests/test_issue83_stacking.py: 14 warnings
+  C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\jit\_script.py:359: DeprecationWarning: `torch.jit.script_method` is not supported in Python 3.14+ and may break. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+tests/test_issue83_stacking.py: 32 warnings
+  C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\triton\compiler\code_generator.py:629: DeprecationWarning: AnnAssign.__init__ missing 1 required positional argument: 'simple'. This will become an error in Python 3.15.
+    init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
+
+tests/test_megakernel_no_sync.py::test_sync_detector_is_live
+  C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\cuda\__init__.py:1289: UserWarning: Synchronization debug mode is a prototype feature and does not yet detect all synchronizing operations (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\torch\csrc\cuda\Module.cpp:1003.)
+    torch._C._cuda_set_sync_debug_mode(debug_mode)
+
+tests/test_resume_state.py::test_cosine_schedule_continues_rather_than_restarting
+  C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_resume_state.py:152: UserWarning: Detected call of `lr_scheduler.step()` before `optimizer.step()`. In PyTorch 1.1.0 and later, you should call them in the opposite order: `optimizer.step()` before `lr_scheduler.step()`.  Failure to do this will result in PyTorch skipping the first value of the learning rate schedule. See more details at https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rate
+    sch_ref.step()
+
+tests/test_resume_state.py::test_two_chained_resumes_reproduce_the_uninterrupted_lr_exactly
+tests/test_resume_state.py::test_the_error_compounds_so_one_resume_is_not_enough_to_test
+tests/test_resume_state.py::test_reproduces_the_lr_actually_logged_by_the_broken_48m_run
+  C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_resume_state.py:219: UserWarning: Detected call of `lr_scheduler.step()` before `optimizer.step()`. In PyTorch 1.1.0 and later, you should call them in the opposite order: `optimizer.step()` before `lr_scheduler.step()`.  Failure to do this will result in PyTorch skipping the first value of the learning rate schedule. See more details at https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rate
+    sched.step()
+
+tests/test_resume_state.py::test_two_chained_resumes_reproduce_the_uninterrupted_lr_exactly
+tests/test_resume_state.py::test_the_error_compounds_so_one_resume_is_not_enough_to_test
+tests/test_resume_state.py::test_reproduces_the_lr_actually_logged_by_the_broken_48m_run
+  C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_resume_state.py:242: UserWarning: Detected call of `lr_scheduler.step()` before `optimizer.step()`. In PyTorch 1.1.0 and later, you should call them in the opposite order: `optimizer.step()` before `lr_scheduler.step()`.  Failure to do this will result in PyTorch skipping the first value of the learning rate schedule. See more details at https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rate
+    sched.step()
+
+tests/test_resume_state.py::test_the_error_compounds_so_one_resume_is_not_enough_to_test
+tests/test_resume_state.py::test_reproduces_the_lr_actually_logged_by_the_broken_48m_run
+  C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_resume_state.py:255: UserWarning: Detected call of `lr_scheduler.step()` before `optimizer.step()`. In PyTorch 1.1.0 and later, you should call them in the opposite order: `optimizer.step()` before `lr_scheduler.step()`.  Failure to do this will result in PyTorch skipping the first value of the learning rate schedule. See more details at https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rate
+    sched.step()
+
+tests/test_resume_state.py::test_scheduler_state_is_actually_persisted
+  C:\Users\komal\Documents\Codes\kramba-wt-nodrop\tests\test_resume_state.py:309: UserWarning: Detected call of `lr_scheduler.step()` before `optimizer.step()`. In PyTorch 1.1.0 and later, you should call them in the opposite order: `optimizer.step()` before `lr_scheduler.step()`.  Failure to do this will result in PyTorch skipping the first value of the learning rate schedule. See more details at https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rate
+    sched.step()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_issue34.py::test_forward_matches_incremental - AssertionErr...
+FAILED tests/test_issue36.py::test_prefill_matches_sequential_recurrence - As...
+FAILED tests/test_issue36.py::test_prefill_state_continues_correctly - Assert...
+FAILED tests/test_issue40.py::test_forward_matches_incremental - AssertionErr...
+FAILED tests/test_issue43.py::test_served_torch_concurrent_matches_single_stream_logits
+FAILED tests/test_issue46.py::test_forward_batched_equals_single_stream - Ass...
+ERROR tests/test_issue51.py::test_end_to_end_save_reload
+ERROR tests/test_issue51.py::test_heldout_bpc_finite
+ERROR tests/test_issue65.py::test_checkpoint_layout
+ERROR tests/test_issue67.py::test_param_parity
+ERROR tests/test_issue67.py::test_serving_roundtrip
+ERROR tests/test_issue67.py::test_layout_and_atomicity
+6 failed, 776 passed, 2 skipped, 60 warnings, 6 errors in 382.05s (0:06:22)
+EXIT 1

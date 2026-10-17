@@ -1,0 +1,649 @@
+[--fast] Enabled recommended training stack: precision=bf16, tf32, triton-scan, megakernel-scan, fused-ternary, ternary-step-cache, fused-rmsnorm, num-workers=4
+TF32 matmul enabled (Issue #81): fp32 matmuls use TF32 on Ampere+ tensor cores.
+Seeded all RNGs with 5678 (reproducible init + shuffling).
+Deterministic algorithms ON (bit-reproducible run-to-run).
+======================================================================
+STEP 1 — HARDWARE SCAN
+======================================================================
+
+--- nvidia-smi ---
+Fri Oct 16 15:47:00 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 610.74                 KMD Version: 610.74        CUDA UMD Version: 13.3     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                  Driver-Model | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 4050 ...  WDDM  |   00000000:01:00.0 Off |                  N/A |
+| N/A   45C    P5              4W /   80W |     111MiB /   6141MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A            6616    C+G   ...Free Download Manager\fdm.exe      N/A      |
+|    0   N/A  N/A            8016    C+G   ...8bbwe\PhoneExperienceHost.exe      N/A      |
+|    0   N/A  N/A           10320    C+G   ...2txyewy\CrossDeviceResume.exe      N/A      |
+|    0   N/A  N/A           12680    C+G   ..._cw5n1h2txyewy\SearchHost.exe      N/A      |
+|    0   N/A  N/A           12704    C+G   ...y\StartMenuExperienceHost.exe      N/A      |
+|    0   N/A  N/A           14748    C+G   ....0.4258.62\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           16592    C+G   ...ms\Microsoft VS Code\Code.exe      N/A      |
++-----------------------------------------------------------------------------------------+
+
+--- System RAM ---
+  Total RAM: 15.29 GB
+  Free RAM:  8.26 GB
+
+--- Torch Device Checks ---
+  GPU:              NVIDIA GeForce RTX 4050 Laptop GPU
+  VRAM total:       6.00 GB
+  VRAM free:        4.96 GB
+  bf16 supported:   True
+  Torch version:    2.12.1+cu126
+
+--- Chosen Settings (with reasoning) ---
+  d_model:       512  (reference dimension from README)
+  num_layers:    12  (depth for language understanding)
+  n_heads:       8  (standard head count for d=512)
+  batch_size:    4  (fits in VRAM with ternary compression)
+  seq_len:       512  (good context for conversational training)
+  grad_accum:    8  (effective batch = 32)
+  precision:     bf16  (RTX 4050 supports bf16)
+  Est. peak VRAM: ~3.3 GB (safe within 5.0 GB free)
+  Effective batch size: 32
+
+✓ Step 1 complete.
+
+  Loading GPT-2 tokenizer...
+  Tokenizer: data_cache/tokenizer_32k_fim | vocab_size = 32003 (base 32000 + 3 added) | eos_token_id = 0
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.0, 'OpenAssistant': 0.0, 'WikiText-103': 0.0, 'FineWeb-Edu': 1.0}
+Sequence length: 4096
+Batch size: 1
+
+  Loading datasets from data_cache...
+    Using caller's tokenizer: TokenizersBackend (vocab 32000)
+  Tokenized caches suffixed '.v32000' (custom tokenizer; GPT-2 caches untouched)
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    Code-only corpus: data_cache/code_corpus/stack_code.txt (11.20 GB)
+    FIM: rate=0.9 spm_rate=0.5 seed=0
+    Tokenized cache hit: data_cache\tokenized\code.v32000.bin (3,856,762,729 tokens)
+    --max-train-windows: pool capped to 19,200 windows (78,643,200 unique tokens), last 1% of the corpus excluded
+
+    Code dataset: 19,200 train windows (0 held-out), seq_len=4096, 3,856,762,729 tokens (3.86B)
+  Tokens: 3856762729
+  Samples: 19200
+
+  DataLoader ready: batch_size=1
+✓ Step 2 complete.
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           384
+  num_layers:        8
+  n_heads:           12
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.0
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 24,177,611
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 54 nn.Linear layers with TernaryLinear (STE)
+  Excluded 13 gate/decoder layers
+
+  Weight storage (dense fp32):  92.23 MB
+  Weight storage (ternary):     52.67 MB
+  Compression ratio:            1.75x
+
+✓ Step 3 complete.
+  warmup override:   500 steps (--warmup-steps; the banner above shows the default)
+
+======================================================================
+STEP 4 — PRE-TRAINING AUDIT
+======================================================================
+
+  [Check 1] DataLoader token shapes...
+    batch_src (source IDs): tensor([0])
+    batch_x shape: torch.Size([1, 4096]) (expected (1, 4096))
+    batch_y shape: torch.Size([1, 4096]) (expected (1, 4096))
+    batch_x dtype: torch.int64 (expected torch.long)
+    batch_x range: [0, 32002]
+    ✓ Shapes correct
+
+  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...
+    Input shape:  torch.Size([1, 4096])
+    Output shape: torch.Size([1, 4096, 32003]) (expected [1, 4096, 32003])
+    ✓ Forward pass correct
+    ✓ Backward pass correct (loss = 10.4549)
+    ✓ Ternary weight gradients present (STE working)
+
+  [Check 3] Checkpoint save/load cycle...
+    ✓ Save: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\audit_test_checkpoint.pt
+    ✓ Load: keys = ['model_state_dict', 'vocab_size', 'd_model', 'num_layers', 'n_heads', 'n_threads', 'chunk_size', 'use_deltanet', 'deltanet_conv_kernel', 'block_type', 'block_plan', 'attn_window', 'ternary', 'weightless', 'weightless_seed', 'is_edge', 'shared_weights', 'tie_embeddings', 'eos_token_id', 'grad_checkpoint', 'dropout', 'global_step']
+    ✓ n_heads in checkpoint: 12
+    ✓ State dict loads into rebuilt model
+    ✓ Cleaned up test checkpoint
+
+  ✓ All audit checks passed!
+✓ Step 4 complete.
+
+  Fused Triton scan enabled on 6 DeltaNet block(s) (#83).
+
+  Design B blockwise-recompute backward enabled on 6 DeltaNet block(s) (#96) -- ~1.05x faster step under --fast.
+
+  Fused ternary quantizer enabled on 54 TernaryLinear layer(s) (#154).
+
+  Fused RMSNorm enabled on 8 module(s).
+
+  Within-step ternary weight cache enabled on 54 TernaryLinear layer(s).
+
+======================================================================
+STEP 5 — START TRAINING
+======================================================================
+
+  Model parameter count:     24,177,611
+  Ternary compression ratio: 1.75x
+  Dense fp32 weight size:     92.23 MB
+  Ternary weight size:        52.67 MB
+  Optimizer: Muon (muon_lr=0.02 on 66 matrices / 11,824,128 params; AdamW aux lr=0.0003 / 12,353,483 params)
+  Mixed-precision: BF16 (Issue #80)
+
+  Training for up to 11200 steps (effective batch = 8)
+  Logging every 50 steps | Checkpoint every 800 steps
+----------------------------------------------------------------------
+  [vram] peak 12% of card — under the 85% spill threshold
+  Step     50 (epoch 0)  |  Loss: 9.6677  |  PPL: 15798.18  |  LR: 0.001960  |  0.5 steps/s (16362 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 10.2047 (n=400)
+  ⏱ Estimated 2.00s/step | ~1602s per checkpoint interval
+  Step    100 (epoch 0)  |  Loss: 8.4414  |  PPL: 4635.19  |  LR: 0.003960  |  0.5 steps/s (16417 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 9.1282 (n=400)
+  Step    150 (epoch 0)  |  Loss: 6.8410  |  PPL: 935.43  |  LR: 0.005960  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 7.7633 (n=400)
+  Step    200 (epoch 0)  |  Loss: 6.0849  |  PPL: 439.19  |  LR: 0.007960  |  0.5 steps/s (16423 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 6.6090 (n=400)
+  Step    250 (epoch 0)  |  Loss: 5.1483  |  PPL: 172.14  |  LR: 0.009960  |  0.5 steps/s (16441 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 5.8889 (n=400)
+  Step    300 (epoch 0)  |  Loss: 5.3309  |  PPL: 206.63  |  LR: 0.011960  |  0.5 steps/s (16426 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 5.5470 (n=400)
+  Step    350 (epoch 0)  |  Loss: 5.4319  |  PPL: 228.58  |  LR: 0.013960  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 5.2683 (n=400)
+  Step    400 (epoch 0)  |  Loss: 4.8415  |  PPL: 126.66  |  LR: 0.015960  |  0.5 steps/s (16420 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 5.0363 (n=400)
+  Step    450 (epoch 0)  |  Loss: 4.9041  |  PPL: 134.84  |  LR: 0.017960  |  0.5 steps/s (16441 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 4.8628 (n=400)
+  Step    500 (epoch 0)  |  Loss: 4.3734  |  PPL: 79.31  |  LR: 0.019960  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 4.7113 (n=400)
+  Step    550 (epoch 0)  |  Loss: 4.5702  |  PPL: 96.56  |  LR: 0.019959  |  0.5 steps/s (16417 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 4.6177 (n=400)
+  Step    600 (epoch 0)  |  Loss: 4.2632  |  PPL: 71.04  |  LR: 0.019956  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 4.3886 (n=400)
+  Step    650 (epoch 0)  |  Loss: 3.7246  |  PPL: 41.46  |  LR: 0.019951  |  0.5 steps/s (16429 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 4.2301 (n=400)
+  Step    700 (epoch 0)  |  Loss: 3.8584  |  PPL: 47.39  |  LR: 0.019944  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 4.0409 (n=400)
+  Step    750 (epoch 0)  |  Loss: 4.0132  |  PPL: 55.32  |  LR: 0.019935  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 3.8522 (n=400)
+  Step    800 (epoch 0)  |  Loss: 3.5382  |  PPL: 34.40  |  LR: 0.019924  |  0.5 steps/s (16395 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 3.6529 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step800.pt
+  Step    850 (epoch 0)  |  Loss: 3.2360  |  PPL: 25.43  |  LR: 0.019912  |  0.5 steps/s (16385 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 3.4507 (n=400)
+  Step    900 (epoch 0)  |  Loss: 3.2994  |  PPL: 27.10  |  LR: 0.019897  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 3.3416 (n=400)
+  Step    950 (epoch 0)  |  Loss: 2.9842  |  PPL: 19.77  |  LR: 0.019880  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 3.2283 (n=400)
+  Step   1000 (epoch 0)  |  Loss: 3.0153  |  PPL: 20.40  |  LR: 0.019862  |  0.5 steps/s (16423 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 3.1265 (n=400)
+  Step   1050 (epoch 0)  |  Loss: 2.9552  |  PPL: 19.21  |  LR: 0.019841  |  0.5 steps/s (16441 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 3.0086 (n=400)
+  Step   1100 (epoch 0)  |  Loss: 3.0399  |  PPL: 20.90  |  LR: 0.019819  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.9458 (n=400)
+  Step   1150 (epoch 0)  |  Loss: 3.2200  |  PPL: 25.03  |  LR: 0.019794  |  0.5 steps/s (16432 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.8969 (n=400)
+  Step   1200 (epoch 0)  |  Loss: 2.8291  |  PPL: 16.93  |  LR: 0.019768  |  0.5 steps/s (16432 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.8054 (n=400)
+  Step   1250 (epoch 0)  |  Loss: 2.8632  |  PPL: 17.52  |  LR: 0.019739  |  0.5 steps/s (16444 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.8316 (n=400)
+  Step   1300 (epoch 0)  |  Loss: 2.6337  |  PPL: 13.92  |  LR: 0.019709  |  0.5 steps/s (16430 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.7401 (n=400)
+  Step   1350 (epoch 0)  |  Loss: 2.4434  |  PPL: 11.51  |  LR: 0.019677  |  0.5 steps/s (16435 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.7044 (n=400)
+  Step   1400 (epoch 0)  |  Loss: 2.5325  |  PPL: 12.58  |  LR: 0.019643  |  0.5 steps/s (16429 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.6191 (n=400)
+  Step   1450 (epoch 0)  |  Loss: 2.2019  |  PPL: 9.04  |  LR: 0.019607  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.5771 (n=400)
+  Step   1500 (epoch 0)  |  Loss: 2.3481  |  PPL: 10.47  |  LR: 0.019569  |  0.5 steps/s (16452 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.5484 (n=400)
+  Step   1550 (epoch 0)  |  Loss: 2.7810  |  PPL: 16.14  |  LR: 0.019529  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.5513 (n=400)
+  Step   1600 (epoch 0)  |  Loss: 2.5500  |  PPL: 12.81  |  LR: 0.019488  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.5102 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step1600.pt
+  Step   1650 (epoch 0)  |  Loss: 2.1549  |  PPL: 8.63  |  LR: 0.019444  |  0.5 steps/s (16386 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.5388 (n=400)
+  Step   1700 (epoch 0)  |  Loss: 2.5136  |  PPL: 12.35  |  LR: 0.019399  |  0.5 steps/s (16446 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.4791 (n=400)
+  Step   1750 (epoch 0)  |  Loss: 2.5731  |  PPL: 13.11  |  LR: 0.019352  |  0.5 steps/s (16410 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.4493 (n=400)
+  Step   1800 (epoch 0)  |  Loss: 2.7291  |  PPL: 15.32  |  LR: 0.019303  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.4127 (n=400)
+  Step   1850 (epoch 0)  |  Loss: 2.1624  |  PPL: 8.69  |  LR: 0.019252  |  0.5 steps/s (16425 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.4143 (n=400)
+  Step   1900 (epoch 0)  |  Loss: 2.6367  |  PPL: 13.97  |  LR: 0.019199  |  0.5 steps/s (16445 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.3895 (n=400)
+  Step   1950 (epoch 0)  |  Loss: 2.6671  |  PPL: 14.40  |  LR: 0.019145  |  0.5 steps/s (16426 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.3562 (n=400)
+  Step   2000 (epoch 0)  |  Loss: 2.3783  |  PPL: 10.79  |  LR: 0.019088  |  0.5 steps/s (16429 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.3938 (n=400)
+  Step   2050 (epoch 0)  |  Loss: 2.7198  |  PPL: 15.18  |  LR: 0.019030  |  0.5 steps/s (16432 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.3756 (n=400)
+  Step   2100 (epoch 0)  |  Loss: 2.7030  |  PPL: 14.92  |  LR: 0.018970  |  0.5 steps/s (16446 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.3727 (n=400)
+  Step   2150 (epoch 0)  |  Loss: 2.2898  |  PPL: 9.87  |  LR: 0.018909  |  0.5 steps/s (16437 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.3240 (n=400)
+  Step   2200 (epoch 0)  |  Loss: 1.9501  |  PPL: 7.03  |  LR: 0.018845  |  0.5 steps/s (16429 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.2811 (n=400)
+  Step   2250 (epoch 0)  |  Loss: 2.2013  |  PPL: 9.04  |  LR: 0.018780  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.3355 (n=400)
+  Step   2300 (epoch 0)  |  Loss: 2.1952  |  PPL: 8.98  |  LR: 0.018713  |  0.5 steps/s (16441 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.2728 (n=400)
+  Step   2350 (epoch 0)  |  Loss: 2.2620  |  PPL: 9.60  |  LR: 0.018645  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.2507 (n=400)
+  Step   2400 (epoch 0)  |  Loss: 2.3348  |  PPL: 10.33  |  LR: 0.018574  |  0.5 steps/s (16426 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.2650 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step2400.pt
+  Step   2450 (epoch 1)  |  Loss: 2.1293  |  PPL: 8.41  |  LR: 0.018502  |  0.5 steps/s (16377 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.2139 (n=400)
+  Step   2500 (epoch 1)  |  Loss: 2.2373  |  PPL: 9.37  |  LR: 0.018429  |  0.5 steps/s (16437 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.2474 (n=400)
+  Step   2550 (epoch 1)  |  Loss: 1.9328  |  PPL: 6.91  |  LR: 0.018353  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.2221 (n=400)
+  Step   2600 (epoch 1)  |  Loss: 2.2090  |  PPL: 9.11  |  LR: 0.018277  |  0.5 steps/s (16428 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.2073 (n=400)
+  Step   2650 (epoch 1)  |  Loss: 2.1832  |  PPL: 8.88  |  LR: 0.018198  |  0.5 steps/s (16423 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1910 (n=400)
+  Step   2700 (epoch 1)  |  Loss: 2.0955  |  PPL: 8.13  |  LR: 0.018118  |  0.5 steps/s (16440 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.2372 (n=400)
+  Step   2750 (epoch 1)  |  Loss: 1.8952  |  PPL: 6.65  |  LR: 0.018036  |  0.5 steps/s (16419 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1411 (n=400)
+  Step   2800 (epoch 1)  |  Loss: 2.3301  |  PPL: 10.28  |  LR: 0.017952  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1934 (n=400)
+  Step   2850 (epoch 1)  |  Loss: 2.2265  |  PPL: 9.27  |  LR: 0.017867  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1584 (n=400)
+  Step   2900 (epoch 1)  |  Loss: 2.3411  |  PPL: 10.39  |  LR: 0.017781  |  0.5 steps/s (16447 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0899 (n=400)
+  Step   2950 (epoch 1)  |  Loss: 2.4054  |  PPL: 11.08  |  LR: 0.017693  |  0.5 steps/s (16430 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1644 (n=400)
+  Step   3000 (epoch 1)  |  Loss: 2.1533  |  PPL: 8.61  |  LR: 0.017603  |  0.5 steps/s (16436 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1856 (n=400)
+  Step   3050 (epoch 1)  |  Loss: 1.8170  |  PPL: 6.15  |  LR: 0.017512  |  0.5 steps/s (16431 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1983 (n=400)
+  Step   3100 (epoch 1)  |  Loss: 2.2889  |  PPL: 9.86  |  LR: 0.017420  |  0.5 steps/s (16441 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1629 (n=400)
+  Step   3150 (epoch 1)  |  Loss: 2.1802  |  PPL: 8.85  |  LR: 0.017326  |  0.5 steps/s (16423 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1750 (n=400)
+  Step   3200 (epoch 1)  |  Loss: 2.1450  |  PPL: 8.54  |  LR: 0.017230  |  0.5 steps/s (16426 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1345 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step3200.pt
+  Step   3250 (epoch 1)  |  Loss: 1.9885  |  PPL: 7.30  |  LR: 0.017133  |  0.5 steps/s (16381 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1420 (n=400)
+  Step   3300 (epoch 1)  |  Loss: 2.2219  |  PPL: 9.23  |  LR: 0.017035  |  0.5 steps/s (16444 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0767 (n=400)
+  Step   3350 (epoch 1)  |  Loss: 1.8322  |  PPL: 6.25  |  LR: 0.016935  |  0.5 steps/s (16426 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1227 (n=400)
+  Step   3400 (epoch 1)  |  Loss: 2.1595  |  PPL: 8.67  |  LR: 0.016834  |  0.5 steps/s (16423 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0765 (n=400)
+  Step   3450 (epoch 1)  |  Loss: 2.3182  |  PPL: 10.16  |  LR: 0.016732  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1473 (n=400)
+  Step   3500 (epoch 1)  |  Loss: 1.9490  |  PPL: 7.02  |  LR: 0.016628  |  0.5 steps/s (16443 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1287 (n=400)
+  Step   3550 (epoch 1)  |  Loss: 1.7465  |  PPL: 5.73  |  LR: 0.016523  |  0.5 steps/s (16414 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0830 (n=400)
+  Step   3600 (epoch 1)  |  Loss: 2.2661  |  PPL: 9.64  |  LR: 0.016417  |  0.5 steps/s (16428 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1319 (n=400)
+  Step   3650 (epoch 1)  |  Loss: 2.1359  |  PPL: 8.47  |  LR: 0.016309  |  0.5 steps/s (16428 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0641 (n=400)
+  Step   3700 (epoch 1)  |  Loss: 2.2075  |  PPL: 9.09  |  LR: 0.016200  |  0.5 steps/s (16435 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0357 (n=400)
+  Step   3750 (epoch 1)  |  Loss: 2.1232  |  PPL: 8.36  |  LR: 0.016090  |  0.5 steps/s (16419 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0613 (n=400)
+  Step   3800 (epoch 1)  |  Loss: 2.1160  |  PPL: 8.30  |  LR: 0.015979  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0520 (n=400)
+  Step   3850 (epoch 1)  |  Loss: 2.0392  |  PPL: 7.68  |  LR: 0.015866  |  0.5 steps/s (16415 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0837 (n=400)
+  Step   3900 (epoch 1)  |  Loss: 1.7833  |  PPL: 5.95  |  LR: 0.015753  |  0.5 steps/s (16431 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0131 (n=400)
+  Step   3950 (epoch 1)  |  Loss: 2.2312  |  PPL: 9.31  |  LR: 0.015638  |  0.5 steps/s (16414 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0996 (n=400)
+  Step   4000 (epoch 1)  |  Loss: 1.8272  |  PPL: 6.22  |  LR: 0.015522  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0164 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step4000.pt
+  Step   4050 (epoch 1)  |  Loss: 2.3987  |  PPL: 11.01  |  LR: 0.015405  |  0.5 steps/s (16376 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1141 (n=400)
+  Step   4100 (epoch 1)  |  Loss: 2.1355  |  PPL: 8.46  |  LR: 0.015287  |  0.5 steps/s (16432 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0340 (n=400)
+  Step   4150 (epoch 1)  |  Loss: 1.6552  |  PPL: 5.23  |  LR: 0.015168  |  0.5 steps/s (16413 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0396 (n=400)
+  Step   4200 (epoch 1)  |  Loss: 1.8928  |  PPL: 6.64  |  LR: 0.015048  |  0.5 steps/s (16416 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0669 (n=400)
+  Step   4250 (epoch 1)  |  Loss: 2.1879  |  PPL: 8.92  |  LR: 0.014927  |  0.5 steps/s (16420 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0869 (n=400)
+  Step   4300 (epoch 1)  |  Loss: 2.1652  |  PPL: 8.72  |  LR: 0.014805  |  0.5 steps/s (16439 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0640 (n=400)
+  Step   4350 (epoch 1)  |  Loss: 2.4031  |  PPL: 11.06  |  LR: 0.014682  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.1066 (n=400)
+  Step   4400 (epoch 1)  |  Loss: 2.0866  |  PPL: 8.06  |  LR: 0.014558  |  0.5 steps/s (16417 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0335 (n=400)
+  Step   4450 (epoch 1)  |  Loss: 1.6621  |  PPL: 5.27  |  LR: 0.014433  |  0.5 steps/s (16425 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0105 (n=400)
+  Step   4500 (epoch 1)  |  Loss: 1.9077  |  PPL: 6.74  |  LR: 0.014308  |  0.5 steps/s (16437 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0048 (n=400)
+  Step   4550 (epoch 1)  |  Loss: 2.0364  |  PPL: 7.66  |  LR: 0.014181  |  0.5 steps/s (16428 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0335 (n=400)
+  Step   4600 (epoch 1)  |  Loss: 2.2173  |  PPL: 9.18  |  LR: 0.014054  |  0.5 steps/s (16420 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 2.0100 (n=400)
+  Step   4650 (epoch 1)  |  Loss: 1.8727  |  PPL: 6.51  |  LR: 0.013926  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9981 (n=400)
+  Step   4700 (epoch 1)  |  Loss: 1.9268  |  PPL: 6.87  |  LR: 0.013797  |  0.5 steps/s (16434 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9960 (n=400)
+  Step   4750 (epoch 1)  |  Loss: 2.0892  |  PPL: 8.08  |  LR: 0.013667  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9662 (n=400)
+  Step   4800 (epoch 1)  |  Loss: 1.6261  |  PPL: 5.08  |  LR: 0.013536  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9767 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step4800.pt
+  Step   4850 (epoch 2)  |  Loss: 1.7530  |  PPL: 5.77  |  LR: 0.013405  |  0.5 steps/s (16373 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9347 (n=400)
+  Step   4900 (epoch 2)  |  Loss: 1.8820  |  PPL: 6.57  |  LR: 0.013274  |  0.5 steps/s (16441 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9270 (n=400)
+  Step   4950 (epoch 2)  |  Loss: 2.0705  |  PPL: 7.93  |  LR: 0.013141  |  0.5 steps/s (16418 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9513 (n=400)
+  Step   5000 (epoch 2)  |  Loss: 1.8105  |  PPL: 6.11  |  LR: 0.013008  |  0.5 steps/s (16423 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8994 (n=400)
+  Step   5050 (epoch 2)  |  Loss: 2.1025  |  PPL: 8.19  |  LR: 0.012874  |  0.5 steps/s (16418 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9583 (n=400)
+  Step   5100 (epoch 2)  |  Loss: 2.0030  |  PPL: 7.41  |  LR: 0.012740  |  0.5 steps/s (16437 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9611 (n=400)
+  Step   5150 (epoch 2)  |  Loss: 2.2504  |  PPL: 9.49  |  LR: 0.012605  |  0.5 steps/s (16423 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8954 (n=400)
+  Step   5200 (epoch 2)  |  Loss: 2.0181  |  PPL: 7.52  |  LR: 0.012470  |  0.5 steps/s (16415 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9464 (n=400)
+  Step   5250 (epoch 2)  |  Loss: 1.9041  |  PPL: 6.71  |  LR: 0.012334  |  0.5 steps/s (16420 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9455 (n=400)
+  Step   5300 (epoch 2)  |  Loss: 1.8966  |  PPL: 6.66  |  LR: 0.012198  |  0.5 steps/s (16439 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9155 (n=400)
+  Step   5350 (epoch 2)  |  Loss: 2.1479  |  PPL: 8.57  |  LR: 0.012061  |  0.5 steps/s (16408 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9215 (n=400)
+  Step   5400 (epoch 2)  |  Loss: 1.9082  |  PPL: 6.74  |  LR: 0.011924  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9234 (n=400)
+  Step   5450 (epoch 2)  |  Loss: 1.6597  |  PPL: 5.26  |  LR: 0.011787  |  0.5 steps/s (16426 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8977 (n=400)
+  Step   5500 (epoch 2)  |  Loss: 1.8898  |  PPL: 6.62  |  LR: 0.011649  |  0.5 steps/s (16438 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9286 (n=400)
+  Step   5550 (epoch 2)  |  Loss: 2.0528  |  PPL: 7.79  |  LR: 0.011511  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9529 (n=400)
+  Step   5600 (epoch 2)  |  Loss: 1.7096  |  PPL: 5.53  |  LR: 0.011372  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8886 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step5600.pt
+  Step   5650 (epoch 2)  |  Loss: 2.0498  |  PPL: 7.77  |  LR: 0.011234  |  0.5 steps/s (16374 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9628 (n=400)
+  Step   5700 (epoch 2)  |  Loss: 2.0428  |  PPL: 7.71  |  LR: 0.011095  |  0.5 steps/s (16438 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9309 (n=400)
+  Step   5750 (epoch 2)  |  Loss: 2.0023  |  PPL: 7.41  |  LR: 0.010955  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9515 (n=400)
+  Step   5800 (epoch 2)  |  Loss: 1.7918  |  PPL: 6.00  |  LR: 0.010816  |  0.5 steps/s (16416 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9023 (n=400)
+  Step   5850 (epoch 2)  |  Loss: 2.0630  |  PPL: 7.87  |  LR: 0.010676  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9801 (n=400)
+  Step   5900 (epoch 2)  |  Loss: 1.6997  |  PPL: 5.47  |  LR: 0.010537  |  0.5 steps/s (16435 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9333 (n=400)
+  Step   5950 (epoch 2)  |  Loss: 1.7255  |  PPL: 5.62  |  LR: 0.010397  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8973 (n=400)
+  Step   6000 (epoch 2)  |  Loss: 1.9191  |  PPL: 6.81  |  LR: 0.010257  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9235 (n=400)
+  Step   6050 (epoch 2)  |  Loss: 1.8561  |  PPL: 6.40  |  LR: 0.010117  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9527 (n=400)
+  Step   6100 (epoch 2)  |  Loss: 1.8531  |  PPL: 6.38  |  LR: 0.009977  |  0.5 steps/s (16433 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9238 (n=400)
+  Step   6150 (epoch 2)  |  Loss: 1.7369  |  PPL: 5.68  |  LR: 0.009837  |  0.5 steps/s (16419 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8908 (n=400)
+  Step   6200 (epoch 2)  |  Loss: 1.7992  |  PPL: 6.04  |  LR: 0.009697  |  0.5 steps/s (16420 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9325 (n=400)
+  Step   6250 (epoch 2)  |  Loss: 1.8390  |  PPL: 6.29  |  LR: 0.009557  |  0.5 steps/s (16423 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8944 (n=400)
+  Step   6300 (epoch 2)  |  Loss: 1.5937  |  PPL: 4.92  |  LR: 0.009418  |  0.5 steps/s (16440 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9240 (n=400)
+  Step   6350 (epoch 2)  |  Loss: 1.9663  |  PPL: 7.14  |  LR: 0.009278  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8981 (n=400)
+  Step   6400 (epoch 2)  |  Loss: 1.9381  |  PPL: 6.95  |  LR: 0.009138  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9428 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step6400.pt
+  Step   6450 (epoch 2)  |  Loss: 2.2539  |  PPL: 9.52  |  LR: 0.008999  |  0.5 steps/s (16383 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9231 (n=400)
+  Step   6500 (epoch 2)  |  Loss: 1.7664  |  PPL: 5.85  |  LR: 0.008860  |  0.5 steps/s (16436 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8811 (n=400)
+  Step   6550 (epoch 2)  |  Loss: 1.7917  |  PPL: 6.00  |  LR: 0.008721  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9048 (n=400)
+  Step   6600 (epoch 2)  |  Loss: 1.8284  |  PPL: 6.22  |  LR: 0.008582  |  0.5 steps/s (16432 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8718 (n=400)
+  Step   6650 (epoch 2)  |  Loss: 1.7573  |  PPL: 5.80  |  LR: 0.008444  |  0.5 steps/s (16425 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9044 (n=400)
+  Step   6700 (epoch 2)  |  Loss: 2.0329  |  PPL: 7.64  |  LR: 0.008306  |  0.5 steps/s (16438 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8805 (n=400)
+  Step   6750 (epoch 2)  |  Loss: 1.8098  |  PPL: 6.11  |  LR: 0.008168  |  0.5 steps/s (16420 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9050 (n=400)
+  Step   6800 (epoch 2)  |  Loss: 1.7031  |  PPL: 5.49  |  LR: 0.008030  |  0.5 steps/s (16418 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8837 (n=400)
+  Step   6850 (epoch 2)  |  Loss: 1.9889  |  PPL: 7.31  |  LR: 0.007893  |  0.5 steps/s (16423 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8722 (n=400)
+  Step   6900 (epoch 2)  |  Loss: 1.8499  |  PPL: 6.36  |  LR: 0.007757  |  0.5 steps/s (16442 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9194 (n=400)
+  Step   6950 (epoch 2)  |  Loss: 1.8214  |  PPL: 6.18  |  LR: 0.007620  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8816 (n=400)
+  Step   7000 (epoch 2)  |  Loss: 1.6870  |  PPL: 5.40  |  LR: 0.007485  |  0.5 steps/s (16380 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8563 (n=400)
+  Step   7050 (epoch 2)  |  Loss: 1.8563  |  PPL: 6.40  |  LR: 0.007349  |  0.5 steps/s (16321 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8726 (n=400)
+  Step   7100 (epoch 2)  |  Loss: 1.5530  |  PPL: 4.73  |  LR: 0.007214  |  0.5 steps/s (16433 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.9162 (n=400)
+  Step   7150 (epoch 2)  |  Loss: 1.9889  |  PPL: 7.31  |  LR: 0.007080  |  0.5 steps/s (16426 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8613 (n=400)
+  Step   7200 (epoch 2)  |  Loss: 1.9876  |  PPL: 7.30  |  LR: 0.006947  |  0.5 steps/s (16405 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8490 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step7200.pt
+  Step   7250 (epoch 3)  |  Loss: 1.9315  |  PPL: 6.90  |  LR: 0.006814  |  0.5 steps/s (16374 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7929 (n=400)
+  Step   7300 (epoch 3)  |  Loss: 2.1310  |  PPL: 8.42  |  LR: 0.006681  |  0.5 steps/s (16439 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8030 (n=400)
+  Step   7350 (epoch 3)  |  Loss: 1.9952  |  PPL: 7.35  |  LR: 0.006549  |  0.5 steps/s (16423 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8194 (n=400)
+  Step   7400 (epoch 3)  |  Loss: 1.9139  |  PPL: 6.78  |  LR: 0.006418  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8091 (n=400)
+  Step   7450 (epoch 3)  |  Loss: 1.7698  |  PPL: 5.87  |  LR: 0.006288  |  0.5 steps/s (16420 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8094 (n=400)
+  Step   7500 (epoch 3)  |  Loss: 1.8768  |  PPL: 6.53  |  LR: 0.006158  |  0.5 steps/s (16441 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8565 (n=400)
+  Step   7550 (epoch 3)  |  Loss: 1.7848  |  PPL: 5.96  |  LR: 0.006029  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7656 (n=400)
+  Step   7600 (epoch 3)  |  Loss: 1.8813  |  PPL: 6.56  |  LR: 0.005901  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8020 (n=400)
+  Step   7650 (epoch 3)  |  Loss: 2.0382  |  PPL: 7.68  |  LR: 0.005774  |  0.5 steps/s (16426 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8315 (n=400)
+  Step   7700 (epoch 3)  |  Loss: 2.0685  |  PPL: 7.91  |  LR: 0.005647  |  0.5 steps/s (16440 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8383 (n=400)
+  Step   7750 (epoch 3)  |  Loss: 1.6385  |  PPL: 5.15  |  LR: 0.005522  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8113 (n=400)
+  Step   7800 (epoch 3)  |  Loss: 1.5332  |  PPL: 4.63  |  LR: 0.005397  |  0.5 steps/s (16431 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8254 (n=400)
+  Step   7850 (epoch 3)  |  Loss: 1.8668  |  PPL: 6.47  |  LR: 0.005273  |  0.5 steps/s (16431 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8096 (n=400)
+  Step   7900 (epoch 3)  |  Loss: 2.1422  |  PPL: 8.52  |  LR: 0.005150  |  0.5 steps/s (16443 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8108 (n=400)
+  Step   7950 (epoch 3)  |  Loss: 1.6532  |  PPL: 5.22  |  LR: 0.005028  |  0.5 steps/s (16419 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7934 (n=400)
+  Step   8000 (epoch 3)  |  Loss: 1.8358  |  PPL: 6.27  |  LR: 0.004907  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8460 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step8000.pt
+  Step   8050 (epoch 3)  |  Loss: 1.2165  |  PPL: 3.38  |  LR: 0.004787  |  0.5 steps/s (16383 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7655 (n=400)
+  Step   8100 (epoch 3)  |  Loss: 1.9145  |  PPL: 6.78  |  LR: 0.004668  |  0.5 steps/s (16439 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8277 (n=400)
+  Step   8150 (epoch 3)  |  Loss: 1.6404  |  PPL: 5.16  |  LR: 0.004550  |  0.5 steps/s (16431 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7970 (n=400)
+  Step   8200 (epoch 3)  |  Loss: 1.4926  |  PPL: 4.45  |  LR: 0.004433  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8072 (n=400)
+  Step   8250 (epoch 3)  |  Loss: 1.8748  |  PPL: 6.52  |  LR: 0.004317  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8157 (n=400)
+  Step   8300 (epoch 3)  |  Loss: 1.9744  |  PPL: 7.20  |  LR: 0.004203  |  0.5 steps/s (16444 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8292 (n=400)
+  Step   8350 (epoch 3)  |  Loss: 1.8980  |  PPL: 6.67  |  LR: 0.004089  |  0.5 steps/s (16425 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8360 (n=400)
+  Step   8400 (epoch 3)  |  Loss: 1.9735  |  PPL: 7.20  |  LR: 0.003977  |  0.5 steps/s (16425 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8040 (n=400)
+  Step   8450 (epoch 3)  |  Loss: 1.9515  |  PPL: 7.04  |  LR: 0.003865  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7740 (n=400)
+  Step   8500 (epoch 3)  |  Loss: 1.9172  |  PPL: 6.80  |  LR: 0.003755  |  0.5 steps/s (16447 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7588 (n=400)
+  Step   8550 (epoch 3)  |  Loss: 1.9980  |  PPL: 7.37  |  LR: 0.003647  |  0.5 steps/s (16428 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8426 (n=400)
+  Step   8600 (epoch 3)  |  Loss: 1.6889  |  PPL: 5.41  |  LR: 0.003539  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7898 (n=400)
+  Step   8650 (epoch 3)  |  Loss: 2.0391  |  PPL: 7.68  |  LR: 0.003433  |  0.5 steps/s (16423 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8139 (n=400)
+  Step   8700 (epoch 3)  |  Loss: 1.9830  |  PPL: 7.26  |  LR: 0.003328  |  0.5 steps/s (16435 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8045 (n=400)
+  Step   8750 (epoch 3)  |  Loss: 1.7546  |  PPL: 5.78  |  LR: 0.003224  |  0.5 steps/s (16429 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8089 (n=400)
+  Step   8800 (epoch 3)  |  Loss: 1.9595  |  PPL: 7.10  |  LR: 0.003122  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8266 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step8800.pt
+  Step   8850 (epoch 3)  |  Loss: 1.8423  |  PPL: 6.31  |  LR: 0.003021  |  0.5 steps/s (16381 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7489 (n=400)
+  Step   8900 (epoch 3)  |  Loss: 1.7635  |  PPL: 5.83  |  LR: 0.002921  |  0.5 steps/s (16441 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7909 (n=400)
+  Step   8950 (epoch 3)  |  Loss: 1.6926  |  PPL: 5.43  |  LR: 0.002823  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7452 (n=400)
+  Step   9000 (epoch 3)  |  Loss: 1.6412  |  PPL: 5.16  |  LR: 0.002726  |  0.5 steps/s (16407 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7962 (n=400)
+  Step   9050 (epoch 3)  |  Loss: 1.8442  |  PPL: 6.32  |  LR: 0.002631  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7996 (n=400)
+  Step   9100 (epoch 3)  |  Loss: 1.8832  |  PPL: 6.57  |  LR: 0.002537  |  0.5 steps/s (16439 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8189 (n=400)
+  Step   9150 (epoch 3)  |  Loss: 1.6598  |  PPL: 5.26  |  LR: 0.002444  |  0.5 steps/s (16419 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7374 (n=400)
+  Step   9200 (epoch 3)  |  Loss: 1.6224  |  PPL: 5.07  |  LR: 0.002353  |  0.5 steps/s (16417 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7932 (n=400)
+  Step   9250 (epoch 3)  |  Loss: 1.8212  |  PPL: 6.18  |  LR: 0.002264  |  0.5 steps/s (16412 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7552 (n=400)
+  Step   9300 (epoch 3)  |  Loss: 1.8244  |  PPL: 6.20  |  LR: 0.002176  |  0.5 steps/s (16432 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7749 (n=400)
+  Step   9350 (epoch 3)  |  Loss: 1.7707  |  PPL: 5.88  |  LR: 0.002089  |  0.5 steps/s (16422 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7817 (n=400)
+  Step   9400 (epoch 3)  |  Loss: 1.8813  |  PPL: 6.56  |  LR: 0.002004  |  0.5 steps/s (16418 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7673 (n=400)
+  Step   9450 (epoch 3)  |  Loss: 1.9024  |  PPL: 6.70  |  LR: 0.001921  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7594 (n=400)
+  Step   9500 (epoch 3)  |  Loss: 1.7923  |  PPL: 6.00  |  LR: 0.001839  |  0.5 steps/s (16440 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.8058 (n=400)
+  Step   9550 (epoch 3)  |  Loss: 1.7361  |  PPL: 5.68  |  LR: 0.001759  |  0.5 steps/s (16417 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7613 (n=400)
+  Step   9600 (epoch 3)  |  Loss: 1.9585  |  PPL: 7.09  |  LR: 0.001680  |  0.5 steps/s (16413 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7544 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step9600.pt
+  Step   9650 (epoch 4)  |  Loss: 1.7888  |  PPL: 5.98  |  LR: 0.001603  |  0.5 steps/s (16372 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7133 (n=400)
+  Step   9700 (epoch 4)  |  Loss: 1.5639  |  PPL: 4.78  |  LR: 0.001528  |  0.5 steps/s (16431 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7364 (n=400)
+  Step   9750 (epoch 4)  |  Loss: 1.6938  |  PPL: 5.44  |  LR: 0.001455  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7565 (n=400)
+  Step   9800 (epoch 4)  |  Loss: 1.8081  |  PPL: 6.10  |  LR: 0.001383  |  0.5 steps/s (16428 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7468 (n=400)
+  Step   9850 (epoch 4)  |  Loss: 1.6554  |  PPL: 5.24  |  LR: 0.001312  |  0.5 steps/s (16425 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7374 (n=400)
+  Step   9900 (epoch 4)  |  Loss: 2.0354  |  PPL: 7.66  |  LR: 0.001244  |  0.5 steps/s (16442 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7563 (n=400)
+  Step   9950 (epoch 4)  |  Loss: 1.8390  |  PPL: 6.29  |  LR: 0.001177  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7342 (n=400)
+  Step  10000 (epoch 4)  |  Loss: 1.6649  |  PPL: 5.29  |  LR: 0.001112  |  0.5 steps/s (16432 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7632 (n=400)
+  Step  10050 (epoch 4)  |  Loss: 1.7071  |  PPL: 5.51  |  LR: 0.001049  |  0.5 steps/s (16434 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7835 (n=400)
+  Step  10100 (epoch 4)  |  Loss: 1.8451  |  PPL: 6.33  |  LR: 0.000987  |  0.5 steps/s (16445 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7251 (n=400)
+  Step  10150 (epoch 4)  |  Loss: 1.3086  |  PPL: 3.70  |  LR: 0.000927  |  0.5 steps/s (16373 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.6829 (n=400)
+  Step  10200 (epoch 4)  |  Loss: 2.0952  |  PPL: 8.13  |  LR: 0.000869  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7000 (n=400)
+  Step  10250 (epoch 4)  |  Loss: 1.8323  |  PPL: 6.25  |  LR: 0.000813  |  0.5 steps/s (16432 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7608 (n=400)
+  Step  10300 (epoch 4)  |  Loss: 1.7815  |  PPL: 5.94  |  LR: 0.000759  |  0.5 steps/s (16446 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7308 (n=400)
+  Step  10350 (epoch 4)  |  Loss: 1.6951  |  PPL: 5.45  |  LR: 0.000706  |  0.5 steps/s (16430 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7277 (n=400)
+  Step  10400 (epoch 4)  |  Loss: 2.0128  |  PPL: 7.48  |  LR: 0.000655  |  0.5 steps/s (16423 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7037 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step10400.pt
+  Step  10450 (epoch 4)  |  Loss: 1.7818  |  PPL: 5.94  |  LR: 0.000606  |  0.5 steps/s (16379 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7353 (n=400)
+  Step  10500 (epoch 4)  |  Loss: 1.5976  |  PPL: 4.94  |  LR: 0.000559  |  0.5 steps/s (16444 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.6823 (n=400)
+  Step  10550 (epoch 4)  |  Loss: 1.5295  |  PPL: 4.62  |  LR: 0.000514  |  0.5 steps/s (16424 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7196 (n=400)
+  Step  10600 (epoch 4)  |  Loss: 1.6058  |  PPL: 4.98  |  LR: 0.000470  |  0.5 steps/s (16420 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7096 (n=400)
+  Step  10650 (epoch 4)  |  Loss: 1.7174  |  PPL: 5.57  |  LR: 0.000429  |  0.5 steps/s (16427 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.6958 (n=400)
+  Step  10700 (epoch 4)  |  Loss: 1.8096  |  PPL: 6.11  |  LR: 0.000389  |  0.5 steps/s (16446 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7000 (n=400)
+  Step  10750 (epoch 4)  |  Loss: 1.7295  |  PPL: 5.64  |  LR: 0.000352  |  0.5 steps/s (16420 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7217 (n=400)
+  Step  10800 (epoch 4)  |  Loss: 1.4777  |  PPL: 4.38  |  LR: 0.000316  |  0.5 steps/s (16408 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.6873 (n=400)
+  Step  10850 (epoch 4)  |  Loss: 1.9341  |  PPL: 6.92  |  LR: 0.000282  |  0.5 steps/s (16416 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.6613 (n=400)
+  Step  10900 (epoch 4)  |  Loss: 1.7988  |  PPL: 6.04  |  LR: 0.000250  |  0.5 steps/s (16439 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.6420 (n=400)
+  Step  10950 (epoch 4)  |  Loss: 1.8498  |  PPL: 6.36  |  LR: 0.000219  |  0.5 steps/s (16418 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7007 (n=400)
+  Step  11000 (epoch 4)  |  Loss: 1.5858  |  PPL: 4.88  |  LR: 0.000191  |  0.5 steps/s (16419 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7012 (n=400)
+  Step  11050 (epoch 4)  |  Loss: 1.5432  |  PPL: 4.68  |  LR: 0.000165  |  0.5 steps/s (16415 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7001 (n=400)
+  Step  11100 (epoch 4)  |  Loss: 1.5837  |  PPL: 4.87  |  LR: 0.000141  |  0.5 steps/s (16434 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.6601 (n=400)
+  Step  11150 (epoch 4)  |  Loss: 1.7554  |  PPL: 5.79  |  LR: 0.000118  |  0.5 steps/s (16421 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.7313 (n=400)
+  Step  11200 (epoch 4)  |  Loss: 1.5205  |  PPL: 4.57  |  LR: 0.000098  |  0.5 steps/s (16415 tok/s)  |  VRAM: 0.68/0.86 GB
+    Per-source: Code: 1.6785 (n=400)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational_step11200.pt
+
+======================================================================
+TRAINING COMPLETE
+======================================================================
+  Total steps:     11200
+  Total time:       22347.2s (372.5 min)
+  Avg time/step:    1.995s
+  Final checkpoint: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\edge_conversational.pt
+  Training log:     C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/rep384_p0.0_s5678\training_log.csv
+✓ Step 5 complete.
+EXIT 0

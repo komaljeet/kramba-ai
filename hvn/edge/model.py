@@ -103,6 +103,9 @@ class EdgeHVN(nn.Module):
         self.d_model = d_model
         self.num_layers = num_layers
         self.shared_weights = shared_weights
+        # Recorded so a checkpoint can rebuild the same training recipe on
+        # resume (a no-dropout run must not silently resume at p=0.1).
+        self.dropout_p = float(dropout)
         self.use_deltanet = use_deltanet
         # Issue #100: exact activation checkpointing (mirrors the core
         # HamiltonianVortexNetwork's #49 implementation, which EdgeHVN never

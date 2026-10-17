@@ -1,0 +1,15 @@
+step    800 passes 0.33  seen 3.5132  unseen 3.5190  gap +0.0058  tail 3.5293
+step   1600 passes 0.67  seen 2.5043  unseen 2.5007  gap -0.0035  tail 2.6316
+step   2400 passes 1.00  seen 2.2471  unseen 2.2507  gap +0.0036  tail 2.3735
+step   3200 passes 1.33  seen 2.1245  unseen 2.1377  gap +0.0132  tail 2.2570
+step   4000 passes 1.67  seen 2.0490  unseen 2.0568  gap +0.0078  tail 2.1818
+step   4800 passes 2.00  seen 1.9912  unseen 1.9974  gap +0.0062  tail 2.1126
+step   5600 passes 2.33  seen 1.9367  unseen 1.9551  gap +0.0183  tail 2.0635
+step   6400 passes 2.67  seen 1.8912  unseen 1.9074  gap +0.0162  tail 2.0222
+step   7200 passes 3.00  seen 1.8472  unseen 1.8692  gap +0.0220  tail 1.9908
+step   8000 passes 3.33  seen 1.8218  unseen 1.8432  gap +0.0214  tail 1.9568
+step   8800 passes 3.67  seen 1.7919  unseen 1.8165  gap +0.0246  tail 1.9302
+step   9600 passes 4.00  seen 1.7535  unseen 1.7900  gap +0.0366  tail 1.9025
+step  10400 passes 4.33  seen 1.7325  unseen 1.7692  gap +0.0367  tail 1.8840
+step  11200 passes 4.67  seen 1.7042  unseen 1.7457  gap +0.0414  tail 1.8604
+EXIT 0

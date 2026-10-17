@@ -1,0 +1,62 @@
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.1
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → results/dropout_1b/on_2_ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from results/dropout_1b/on_2_ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+[build] dropout module p counts {0.1: 72}
+[p=0.1 c0  0] blocks.2+blocks.3                  wall  19.23 loss 10.952633 gn 2.105
+[p=0.1 c0  1] blocks.4+blocks.5                  wall  18.13 loss 10.895378 gn 1.318
+[p=0.1 c0  2] blocks.6+blocks.7                  wall  17.03 loss 10.867429 gn 0.934
+[p=0.1 c0  3] blocks.8+blocks.9                  wall  15.88 loss 10.835654 gn 0.818
+[p=0.1 c0  4] blocks.10+blocks.11                wall  14.80 loss 10.808945 gn 0.656
+[p=0.1 c0  5] blocks.12+blocks.13                wall  13.72 loss 10.786951 gn 0.547
+[p=0.1 c0  6] blocks.14+blocks.15                wall  12.70 loss 10.760129 gn 0.470
+[p=0.1 c0  7] blocks.16+blocks.17                wall  11.55 loss 10.735189 gn 0.414
+[p=0.1 c0  8] blocks.18+blocks.19                wall  10.44 loss 10.707237 gn 0.343
+[p=0.1 c0  9] blocks.20+blocks.21                wall   9.30 loss 10.687562 gn 0.341
+[p=0.1 c0 10] blocks.22+blocks.23+final_norm+decoder wall   8.19 loss 10.657443 gn 0.310
+[p=0.1 c0 11] token_embedding                    wall  21.02 loss 10.644647 gn 1.569
+[p=0.1 c0 12] blocks.0+blocks.1                  wall  20.24 loss 10.471554 gn 4.878
+[p=0.1 c1  0] blocks.2+blocks.3                  wall  19.21 loss 10.419017 gn 2.059
+[p=0.1 c1  1] blocks.4+blocks.5                  wall  18.13 loss 10.379716 gn 1.285
+[p=0.1 c1  2] blocks.6+blocks.7                  wall  17.03 loss 10.342402 gn 0.908
+[p=0.1 c1  3] blocks.8+blocks.9                  wall  15.88 loss 10.317518 gn 0.801
+[p=0.1 c1  4] blocks.10+blocks.11                wall  14.80 loss 10.282873 gn 0.644
+[p=0.1 c1  5] blocks.12+blocks.13                wall  13.72 loss 10.262034 gn 0.535
+[p=0.1 c1  6] blocks.14+blocks.15                wall  12.63 loss 10.239635 gn 0.460
+[p=0.1 c1  7] blocks.16+blocks.17                wall  11.55 loss 10.211169 gn 0.406
+[p=0.1 c1  8] blocks.18+blocks.19                wall  10.45 loss 10.188779 gn 0.338
+[p=0.1 c1  9] blocks.20+blocks.21                wall   9.29 loss 10.164945 gn 0.336
+[p=0.1 c1 10] blocks.22+blocks.23+final_norm+decoder wall   8.19 loss 10.145970 gn 0.304
+[p=0.1 c1 11] token_embedding                    wall  21.03 loss 10.112607 gn 1.508
+[p=0.1 c1 12] blocks.0+blocks.1                  wall  20.24 loss 9.947562 gn 4.724
+[p=0.1] mean 14.784 s/step, cycles [14.787, 14.781], active dropout calls 23616, peak reserved 5062 MiB
+EXIT 0

@@ -191,6 +191,10 @@ def _save_edge_checkpoint(model: EdgeHVN, save_path: str, global_step: int = 0):
         "vocab_size": getattr(model, 'vocab_size', GPT2_VOCAB_SIZE),
         "eos_token_id": getattr(model, 'eos_token_id', 50256),
         "grad_checkpoint": getattr(model, 'grad_checkpoint', False),
+        # Training recipe, not architecture (dropout has no parameters), but a
+        # resume must keep it: absent on older checkpoints -> 0.1, the default
+        # they were all trained with.
+        "dropout": getattr(model, 'dropout_p', 0.1),
         "global_step": global_step,
     }
     torch.save(ckpt, save_path)
@@ -1188,6 +1192,41 @@ class _WindowDataset(Dataset):
         return x, y, src_id
 
 
+#: Fraction of the corpus tail a capped pool never draws from. Covers the
+#: last-20 MB slice eval/heldout_loss.py scores (~0.2% of the 11.2 GB corpus).
+CAP_TAIL_FRACTION = 0.01
+
+
+def cap_code_windows(starts_perm: np.ndarray, n: int, total_len: int) -> np.ndarray:
+    """First ``n`` windows of the fixed permutation that start before the tail.
+
+    Deterministic in its inputs, so an evaluator can rebuild the exact pool."""
+    cut = total_len - int(total_len * CAP_TAIL_FRACTION)
+    keep = starts_perm[starts_perm < cut]
+    if n > len(keep):
+        raise ValueError(f"--max-train-windows {n:,} > {len(keep):,} available")
+    return keep[:n]
+
+
+def unseen_code_windows(starts_perm: np.ndarray, n_pool: int, total_len: int,
+                        seq_len: int, k: int) -> np.ndarray:
+    """``k`` windows from the same distribution as the capped pool that the pool
+    never contains, nor touches: a window directly before or after a pool window
+    is skipped, since it shares that window's file and context."""
+    cut = total_len - int(total_len * CAP_TAIL_FRACTION)
+    keep = starts_perm[starts_perm < cut]
+    pool = set(int(x) for x in keep[:n_pool])
+    out = []
+    for s in keep[n_pool:]:
+        s = int(s)
+        if s in pool or (s - seq_len) in pool or (s + seq_len) in pool:
+            continue
+        out.append(s)
+        if len(out) == k:
+            break
+    return np.asarray(out, dtype=np.int64)
+
+
 class MixedLocalDataset(Dataset):
     """Map-style dataset mixing three local text files at a fixed ratio.
 
@@ -1225,6 +1264,7 @@ class MixedLocalDataset(Dataset):
         val_fraction: float = 0.0,
         code_corpus: str | None = None,
         fim: dict | None = None,
+        max_train_windows: int | None = None,
     ):
         """Build the mixed dataset from on-disk memory-mapped token files.
 
@@ -1327,7 +1367,7 @@ class MixedLocalDataset(Dataset):
             self.sources = [np.memmap(code_bin, dtype=np.uint16, mode="r")]
             self.total_tokens = int(len(self.sources[0]))
             self.mix = (1.0,)
-            self._build_code_index(seq_len, val_fraction)
+            self._build_code_index(seq_len, val_fraction, max_train_windows)
             return
 
         # 1. SlimPajama-627B (50%) — language foundation
@@ -1582,7 +1622,8 @@ class MixedLocalDataset(Dataset):
             f"{names[s]}={counts[s]:,} ({100 * counts[s] / tot:.1f}%)"
             for s in range(len(self.sources))))
 
-    def _build_code_index(self, seq_len: int, val_fraction: float) -> None:
+    def _build_code_index(self, seq_len: int, val_fraction: float,
+                          max_train_windows: int | None = None) -> None:
         """Window index for the single-source code corpus (#136).
 
         The held-out split is the CONTIGUOUS TAIL of the corpus, not a random
@@ -1620,6 +1661,14 @@ class MixedLocalDataset(Dataset):
 
         perm = np.random.RandomState(42).permutation(len(train_starts))
         self.starts = train_starts[perm]
+        if max_train_windows is not None:
+            # Data-limited regime on purpose (multi-epoch dropout A/B): a fixed
+            # random pool, so the run cycles it the intended number of times.
+            self.starts = cap_code_windows(self.starts, max_train_windows,
+                                           len(arr))
+            print(f"    --max-train-windows: pool capped to {len(self.starts):,} "
+                  f"windows ({len(self.starts) * seq_len:,} unique tokens), "
+                  f"last {CAP_TAIL_FRACTION:.0%} of the corpus excluded")
         self.src_ids = np.zeros(len(self.starts), dtype=np.uint8)
 
         if len(val_starts):
@@ -1801,6 +1850,7 @@ def build_dataset_pipeline(
     code_corpus: str | None = None,
     fim: dict | None = None,
     shuffle_seed: int | None = None,
+    max_train_windows: int | None = None,
 ) -> tuple[DataLoader, "DataLoader | None", dict]:
     """Build the mixed-source train (and held-out val) DataLoaders + stats.
 
@@ -1860,6 +1910,7 @@ def build_dataset_pipeline(
             val_fraction=val_fraction,
             code_corpus=code_corpus,
             fim=fim,
+            max_train_windows=max_train_windows,
         )
         stats["source"] = "code_only" if code_corpus else "mixed_local"
         stats["total_tokens"] = dataset.total_tokens
@@ -2189,6 +2240,7 @@ def build_model_and_config(
     vocab_size: int = GPT2_VOCAB_SIZE,
     eos_token_id: int | None = None,
     offload_weights: bool = False,
+    dropout: float = 0.1,
 ) -> tuple[EdgeHVN, dict]:
     """Build the EdgeHVN model with DeltaNet (or transformer baseline) + config.
 
@@ -2242,6 +2294,7 @@ def build_model_and_config(
         "optimizer": optimizer,
         "lr": lr,
         "weight_decay": 0.01,
+        "dropout": dropout,
         "warmup_steps": 500,
         "cosine_schedule": True,
         "lr_schedule": lr_schedule,
@@ -2261,6 +2314,7 @@ def build_model_and_config(
     print(f"  num_layers:        {config['num_layers']}")
     print(f"  n_heads:           {config['n_heads']}")
     print(f"  optimizer:         {config['optimizer']} (lr={config['lr']}, wd={config['weight_decay']})")
+    print(f"  dropout:           {config['dropout']}")
     print(f"  schedule:          cosine LR, warmup {config['warmup_steps']} steps")
     print(f"  checkpoint_every:  {config['save_every_steps']} steps → {checkpoint_dir}/")
     print(f"  log_every:         {config['log_every_steps']} steps (console + CSV)")
@@ -2308,6 +2362,7 @@ def build_model_and_config(
         grad_checkpoint=grad_checkpoint,
         tie_embeddings=tie_embeddings,
         shared_weights=shared_weights,
+        dropout=dropout,
         # #139 gave EdgeHVN an eos_token_id and main() has passed one ever since,
         # but this function never accepted the argument -- so every call through
         # main() raised TypeError at model construction. It went unnoticed
@@ -2600,6 +2655,7 @@ def pre_training_audit(
                 # missing AND unexpected -- the audit failing on its own rebuild
                 # rather than on the model.
                 shared_weights=ckpt.get("shared_weights", False),
+                dropout=ckpt.get("dropout", 0.1),
             )
             # Apply ternary to rebuilt model (same layers as original) — only if the
             # checkpoint was ternary (fp32 A/B runs skip it).
@@ -2723,6 +2779,9 @@ def _check_resume_matches_request(requested, ckpt: dict, path: str, args) -> Non
          getattr(requested, "vocab_size", None)),
         ("tie_embeddings", bool(ckpt.get("tie_embeddings", False)),
          bool(_want("tie_embeddings", False))),
+        # Checkpoints written before --dropout existed have no field (None ->
+        # skipped); they were all trained at the 0.1 default.
+        ("dropout", ckpt.get("dropout"), _want("dropout")),
     ]
     for name, have, want in checks:
         if want is not None and have is not None and have != want:
@@ -2786,6 +2845,7 @@ def load_checkpoint_for_resume(
         tie_embeddings=ckpt.get("tie_embeddings", False),
         eos_token_id=ckpt.get("eos_token_id", 50256),
         grad_checkpoint=ckpt.get("grad_checkpoint", False),
+        dropout=ckpt.get("dropout", 0.1),
         # #155: a shared checkpoint rebuilt as dense (or the reverse) loads
         # with a shape mismatch at best and trains a different architecture at
         # worst, so it is read back from the checkpoint like every other
@@ -3568,6 +3628,11 @@ def main():
                              "four-source mix entirely -- a code model trains on "
                              "code alone -- so SlimPajama/OASST/WikiText are "
                              "never downloaded or tokenized for such a run.")
+    parser.add_argument("--max-train-windows", type=int, default=None,
+                        help="Code corpus only: cap the train pool to this many "
+                             "fixed random seq_len windows (excluding the "
+                             "corpus tail), so a run deliberately repeats its "
+                             "data. Default None = every window.")
     parser.add_argument("--fim", action="store_true", default=False,
                         help="Fill-in-the-Middle (Bavarian et al. 2022). A "
                              "TRAINING-DATA transform, so it must be chosen "
@@ -3904,6 +3969,14 @@ def main():
                              "2026-08-02), so it only wins if the saved "
                              "parameters are spent on a WIDER model -- compare "
                              "at equal params, never at equal width.")
+    parser.add_argument("--dropout", type=float, default=0.1,
+                        help="Dropout probability on every block's sub-layer and "
+                             "FFN outputs (EdgeHVN default 0.1; 72 modules at the "
+                             "2048x24 1B shape). 0 removes the RNG + mask work "
+                             "(the 2026-10-15 speed sweep's last lever) but is a "
+                             "RECIPE change: its regularisation value in the "
+                             "multi-epoch regime is unmeasured. Saved in the "
+                             "checkpoint; resume refuses a mismatch.")
     parser.add_argument("--tie-embeddings", action=argparse.BooleanOptionalAction,
                         default=True,
                         help="Tie token_embedding and the decoder output projection "
@@ -4188,6 +4261,7 @@ def main():
         slimpajama_token_bytes=args.slimpajama_token_bytes,
         max_repeat=args.max_repeat,
         code_corpus=args.code_corpus,
+        max_train_windows=args.max_train_windows,
         fim=(_check_fim_tokenizer(tokenizer) or
              {"rate": args.fim_rate, "spm_rate": args.fim_spm_rate,
               "seed": args.fim_seed, "separator": args.fim_separator}
@@ -4218,6 +4292,7 @@ def main():
         precision=args.precision,
         lr=args.lr,
         offload_weights=args.offload,
+        dropout=args.dropout,
     )
 
     # --- Issue #162/#163: refuse to start on a corpus that cannot serve the model ---

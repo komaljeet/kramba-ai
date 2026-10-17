@@ -1,0 +1,8 @@
+held-out: 400,000 tokens from the last 20 MB, seq_len 1024
+
+    step   held-out NLL       ppl
+     250         4.4077    82.083
+     500         3.9120    50.000
+
+wrote C:/Users/komal/Documents/Codes/kramba-wt-nodrop/results/dropout_1b/q48m_p0.0.heldout.json
+EXIT 0

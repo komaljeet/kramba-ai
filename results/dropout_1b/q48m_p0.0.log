@@ -1,0 +1,1180 @@
+TF32 matmul enabled (Issue #81): fp32 matmuls use TF32 on Ampere+ tensor cores.
+Seeded all RNGs with 1234 (reproducible init + shuffling).
+Deterministic algorithms ON (bit-reproducible run-to-run).
+======================================================================
+STEP 1 — HARDWARE SCAN
+======================================================================
+
+--- nvidia-smi ---
+Thu Oct 15 16:36:26 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 610.74                 KMD Version: 610.74        CUDA UMD Version: 13.3     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                  Driver-Model | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 4050 ...  WDDM  |   00000000:01:00.0 Off |                  N/A |
+| N/A   45C    P5              5W /   80W |      77MiB /   6141MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A            6616    C+G   ...Free Download Manager\fdm.exe      N/A      |
+|    0   N/A  N/A           10320    C+G   ...2txyewy\CrossDeviceResume.exe      N/A      |
+|    0   N/A  N/A           12680    C+G   ..._cw5n1h2txyewy\SearchHost.exe      N/A      |
+|    0   N/A  N/A           12704    C+G   ...y\StartMenuExperienceHost.exe      N/A      |
+|    0   N/A  N/A           14748    C+G   ....0.4258.62\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           16592    C+G   ...ms\Microsoft VS Code\Code.exe      N/A      |
++-----------------------------------------------------------------------------------------+
+
+--- System RAM ---
+  Total RAM: 15.29 GB
+  Free RAM:  9.11 GB
+
+--- Torch Device Checks ---
+  GPU:              NVIDIA GeForce RTX 4050 Laptop GPU
+  VRAM total:       6.00 GB
+  VRAM free:        4.96 GB
+  bf16 supported:   True
+  Torch version:    2.12.1+cu126
+
+--- Chosen Settings (with reasoning) ---
+  d_model:       512  (reference dimension from README)
+  num_layers:    12  (depth for language understanding)
+  n_heads:       8  (standard head count for d=512)
+  batch_size:    4  (fits in VRAM with ternary compression)
+  seq_len:       512  (good context for conversational training)
+  grad_accum:    8  (effective batch = 32)
+  precision:     bf16  (RTX 4050 supports bf16)
+  Est. peak VRAM: ~3.3 GB (safe within 5.0 GB free)
+  Effective batch size: 32
+
+✓ Step 1 complete.
+
+  Loading GPT-2 tokenizer...
+  Tokenizer: data_cache/tokenizer_32k_fim | vocab_size = 32003 (base 32000 + 3 added) | eos_token_id = 0
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.0, 'OpenAssistant': 0.0, 'WikiText-103': 0.0, 'FineWeb-Edu': 1.0}
+Sequence length: 4096
+Batch size: 1
+
+  Loading datasets from data_cache...
+    Using caller's tokenizer: TokenizersBackend (vocab 32000)
+  Tokenized caches suffixed '.v32000' (custom tokenizer; GPT-2 caches untouched)
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    Code-only corpus: data_cache/code_corpus/stack_code.txt (11.20 GB)
+    FIM: rate=0.9 spm_rate=0.5 seed=0
+    Tokenized cache hit: data_cache\tokenized\code.v32000.bin (3,856,762,729 tokens)
+
+    Code dataset: 941,592 train windows (0 held-out), seq_len=4096, 3,856,762,729 tokens (3.86B)
+  Tokens: 3856762729
+  Samples: 941592
+
+  DataLoader ready: batch_size=1
+✓ Step 2 complete.
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           512
+  num_layers:        12
+  n_heads:           16
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.0
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/q48m_p0.0/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/q48m_p0.0/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 48,024,483
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 82 nn.Linear layers with TernaryLinear (STE)
+  Excluded 21 gate/decoder layers
+
+  Weight storage (dense fp32):  183.20 MB
+  Weight storage (ternary):     78.65 MB
+  Compression ratio:            2.33x
+
+✓ Step 3 complete.
+  warmup override:   80 steps (--warmup-steps; the banner above shows the default)
+
+======================================================================
+STEP 4 — PRE-TRAINING AUDIT
+======================================================================
+
+  [Check 1] DataLoader token shapes...
+    batch_src (source IDs): tensor([0])
+    batch_x shape: torch.Size([1, 4096]) (expected (1, 4096))
+    batch_y shape: torch.Size([1, 4096]) (expected (1, 4096))
+    batch_x dtype: torch.int64 (expected torch.long)
+    batch_x range: [6, 32002]
+    ✓ Shapes correct
+
+  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...
+    Input shape:  torch.Size([1, 4096])
+    Output shape: torch.Size([1, 4096, 32003]) (expected [1, 4096, 32003])
+    ✓ Forward pass correct
+    ✓ Backward pass correct (loss = 10.5119)
+    ✓ Ternary weight gradients present (STE working)
+
+  [Check 3] Checkpoint save/load cycle...
+    ✓ Save: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/q48m_p0.0\audit_test_checkpoint.pt
+    ✓ Load: keys = ['model_state_dict', 'vocab_size', 'd_model', 'num_layers', 'n_heads', 'n_threads', 'chunk_size', 'use_deltanet', 'deltanet_conv_kernel', 'block_type', 'block_plan', 'attn_window', 'ternary', 'weightless', 'weightless_seed', 'is_edge', 'shared_weights', 'tie_embeddings', 'eos_token_id', 'grad_checkpoint', 'dropout', 'global_step']
+    ✓ n_heads in checkpoint: 16
+    ✓ State dict loads into rebuilt model
+    ✓ Cleaned up test checkpoint
+
+  ✓ All audit checks passed!
+✓ Step 4 complete.
+
+  Fused Triton scan enabled on 10 DeltaNet block(s) (#83).
+
+  Design B blockwise-recompute backward enabled on 10 DeltaNet block(s) (#96) -- ~1.05x faster step under --fast.
+
+======================================================================
+STEP 5 — START TRAINING
+======================================================================
+
+  Model parameter count:     48,024,483
+  Ternary compression ratio: 2.33x
+  Dense fp32 weight size:     183.20 MB
+  Ternary weight size:        78.65 MB
+  Optimizer: Muon (muon_lr=0.02 on 102 matrices / 31,539,200 params; AdamW aux lr=0.0003 / 16,485,283 params)
+  Mixed-precision: BF16 (Issue #80)
+
+  Training for up to 500 steps (effective batch = 8)
+  Logging every 1 steps | Checkpoint every 250 steps
+----------------------------------------------------------------------
+  Step      1 (epoch 0)  |  Loss: 10.4965  |  PPL: 36189.04  |  LR: 0.000000  |  0.3 steps/s (8834 tok/s)  |  VRAM: 0.87/1.04 GB
+    Per-source: Code: 10.4965 (n=8)
+  ⏱ Estimated 3.71s/step | ~927s per checkpoint interval
+  [vram] peak 18% of card — under the 85% spill threshold
+  Step      2 (epoch 0)  |  Loss: 10.4956  |  PPL: 36155.78  |  LR: 0.000250  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 10.4956 (n=8)
+  Step      3 (epoch 0)  |  Loss: 10.5019  |  PPL: 36385.25  |  LR: 0.000500  |  0.3 steps/s (9765 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 10.5019 (n=8)
+  Step      4 (epoch 0)  |  Loss: 10.4701  |  PPL: 35246.70  |  LR: 0.000750  |  0.3 steps/s (9500 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 10.4701 (n=8)
+  Step      5 (epoch 0)  |  Loss: 10.4630  |  PPL: 34995.56  |  LR: 0.001000  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 10.4630 (n=8)
+  Step      6 (epoch 0)  |  Loss: 10.4377  |  PPL: 34122.55  |  LR: 0.001250  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 10.4377 (n=8)
+  Step      7 (epoch 0)  |  Loss: 10.4171  |  PPL: 33426.26  |  LR: 0.001500  |  0.3 steps/s (9792 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 10.4171 (n=8)
+  Step      8 (epoch 0)  |  Loss: 10.4075  |  PPL: 33106.60  |  LR: 0.001750  |  0.3 steps/s (9748 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 10.4075 (n=8)
+  Step      9 (epoch 0)  |  Loss: 10.3323  |  PPL: 30707.93  |  LR: 0.002000  |  0.3 steps/s (9788 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 10.3323 (n=8)
+  Step     10 (epoch 0)  |  Loss: 10.2318  |  PPL: 27772.93  |  LR: 0.002250  |  0.3 steps/s (9796 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 10.2318 (n=8)
+  Step     11 (epoch 0)  |  Loss: 10.2371  |  PPL: 27920.14  |  LR: 0.002500  |  0.3 steps/s (9795 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 10.2371 (n=8)
+  Step     12 (epoch 0)  |  Loss: 10.2123  |  PPL: 27237.19  |  LR: 0.002750  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 10.2123 (n=8)
+  Step     13 (epoch 0)  |  Loss: 10.0768  |  PPL: 23783.60  |  LR: 0.003000  |  0.3 steps/s (9792 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 10.0768 (n=8)
+  Step     14 (epoch 0)  |  Loss: 9.9669  |  PPL: 21308.51  |  LR: 0.003250  |  0.3 steps/s (9808 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.9669 (n=8)
+  Step     15 (epoch 0)  |  Loss: 9.9823  |  PPL: 21639.57  |  LR: 0.003500  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.9823 (n=8)
+  Step     16 (epoch 0)  |  Loss: 9.9134  |  PPL: 20198.84  |  LR: 0.003750  |  0.3 steps/s (9803 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.9134 (n=8)
+  Step     17 (epoch 0)  |  Loss: 9.8476  |  PPL: 18913.79  |  LR: 0.004000  |  0.3 steps/s (9755 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.8476 (n=8)
+  Step     18 (epoch 0)  |  Loss: 9.7939  |  PPL: 17924.54  |  LR: 0.004250  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.7939 (n=8)
+  Step     19 (epoch 0)  |  Loss: 9.6165  |  PPL: 15009.98  |  LR: 0.004500  |  0.3 steps/s (9788 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.6165 (n=8)
+  Step     20 (epoch 0)  |  Loss: 9.7094  |  PPL: 16472.17  |  LR: 0.004750  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.7094 (n=8)
+  Step     21 (epoch 0)  |  Loss: 9.6521  |  PPL: 15554.34  |  LR: 0.005000  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.6521 (n=8)
+  Step     22 (epoch 0)  |  Loss: 9.5009  |  PPL: 13371.35  |  LR: 0.005250  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.5009 (n=8)
+  Step     23 (epoch 0)  |  Loss: 9.1401  |  PPL: 9321.84  |  LR: 0.005500  |  0.3 steps/s (9797 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.1401 (n=8)
+  Step     24 (epoch 0)  |  Loss: 9.3309  |  PPL: 11281.39  |  LR: 0.005750  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.3309 (n=8)
+  Step     25 (epoch 0)  |  Loss: 9.1509  |  PPL: 9422.65  |  LR: 0.006000  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.1509 (n=8)
+  Step     26 (epoch 0)  |  Loss: 9.2107  |  PPL: 10003.55  |  LR: 0.006250  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.2107 (n=8)
+  Step     27 (epoch 0)  |  Loss: 9.1168  |  PPL: 9106.77  |  LR: 0.006500  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.1168 (n=8)
+  Step     28 (epoch 0)  |  Loss: 9.1874  |  PPL: 9773.05  |  LR: 0.006750  |  0.3 steps/s (9783 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.1874 (n=8)
+  Step     29 (epoch 0)  |  Loss: 9.3534  |  PPL: 11538.48  |  LR: 0.007000  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 9.3534 (n=8)
+  Step     30 (epoch 0)  |  Loss: 8.8863  |  PPL: 7231.94  |  LR: 0.007250  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.8863 (n=8)
+  Step     31 (epoch 0)  |  Loss: 8.7913  |  PPL: 6576.71  |  LR: 0.007500  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.7913 (n=8)
+  Step     32 (epoch 0)  |  Loss: 8.8757  |  PPL: 7155.67  |  LR: 0.007750  |  0.3 steps/s (9794 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.8757 (n=8)
+  Step     33 (epoch 0)  |  Loss: 8.6891  |  PPL: 5937.96  |  LR: 0.008000  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.6891 (n=8)
+  Step     34 (epoch 0)  |  Loss: 8.5224  |  PPL: 5026.31  |  LR: 0.008250  |  0.3 steps/s (9772 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.5224 (n=8)
+  Step     35 (epoch 0)  |  Loss: 8.4789  |  PPL: 4812.36  |  LR: 0.008500  |  0.3 steps/s (9798 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.4789 (n=8)
+  Step     36 (epoch 0)  |  Loss: 8.5330  |  PPL: 5079.71  |  LR: 0.008750  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.5330 (n=8)
+  Step     37 (epoch 0)  |  Loss: 8.3488  |  PPL: 4225.05  |  LR: 0.009000  |  0.3 steps/s (9775 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.3488 (n=8)
+  Step     38 (epoch 0)  |  Loss: 8.1887  |  PPL: 3600.10  |  LR: 0.009250  |  0.3 steps/s (9765 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.1887 (n=8)
+  Step     39 (epoch 0)  |  Loss: 8.4590  |  PPL: 4717.27  |  LR: 0.009500  |  0.3 steps/s (9765 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.4590 (n=8)
+  Step     40 (epoch 0)  |  Loss: 8.0693  |  PPL: 3195.00  |  LR: 0.009750  |  0.3 steps/s (9772 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.0693 (n=8)
+  Step     41 (epoch 0)  |  Loss: 8.2729  |  PPL: 3916.21  |  LR: 0.010000  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.2729 (n=8)
+  Step     42 (epoch 0)  |  Loss: 8.2136  |  PPL: 3690.84  |  LR: 0.010250  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 8.2136 (n=8)
+  Step     43 (epoch 0)  |  Loss: 7.9245  |  PPL: 2764.17  |  LR: 0.010500  |  0.3 steps/s (9518 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 7.9245 (n=8)
+  Step     44 (epoch 0)  |  Loss: 7.8901  |  PPL: 2670.64  |  LR: 0.010750  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 7.8901 (n=8)
+  Step     45 (epoch 0)  |  Loss: 7.8356  |  PPL: 2529.13  |  LR: 0.011000  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 7.8356 (n=8)
+  Step     46 (epoch 0)  |  Loss: 7.4657  |  PPL: 1747.10  |  LR: 0.011250  |  0.3 steps/s (9774 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 7.4657 (n=8)
+  Step     47 (epoch 0)  |  Loss: 7.3682  |  PPL: 1584.83  |  LR: 0.011500  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 7.3682 (n=8)
+  Step     48 (epoch 0)  |  Loss: 7.5158  |  PPL: 1836.92  |  LR: 0.011750  |  0.3 steps/s (9772 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 7.5158 (n=8)
+  Step     49 (epoch 0)  |  Loss: 7.4257  |  PPL: 1678.62  |  LR: 0.012000  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 7.4257 (n=8)
+  Step     50 (epoch 0)  |  Loss: 7.2912  |  PPL: 1467.30  |  LR: 0.012250  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 7.2912 (n=8)
+  Step     51 (epoch 0)  |  Loss: 7.1527  |  PPL: 1277.54  |  LR: 0.012500  |  0.3 steps/s (9767 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 7.1527 (n=8)
+  Step     52 (epoch 0)  |  Loss: 7.0967  |  PPL: 1208.03  |  LR: 0.012750  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 7.0967 (n=8)
+  Step     53 (epoch 0)  |  Loss: 6.8399  |  PPL: 934.43  |  LR: 0.013000  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.8399 (n=8)
+  Step     54 (epoch 0)  |  Loss: 7.1616  |  PPL: 1288.98  |  LR: 0.013250  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 7.1616 (n=8)
+  Step     55 (epoch 0)  |  Loss: 6.9970  |  PPL: 1093.40  |  LR: 0.013500  |  0.3 steps/s (9772 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.9970 (n=8)
+  Step     56 (epoch 0)  |  Loss: 6.9618  |  PPL: 1055.58  |  LR: 0.013750  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.9618 (n=8)
+  Step     57 (epoch 0)  |  Loss: 6.9348  |  PPL: 1027.43  |  LR: 0.014000  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.9348 (n=8)
+  Step     58 (epoch 0)  |  Loss: 6.7930  |  PPL: 891.60  |  LR: 0.014250  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.7930 (n=8)
+  Step     59 (epoch 0)  |  Loss: 6.6722  |  PPL: 790.17  |  LR: 0.014500  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.6722 (n=8)
+  Step     60 (epoch 0)  |  Loss: 6.3454  |  PPL: 569.86  |  LR: 0.014750  |  0.3 steps/s (9774 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.3454 (n=8)
+  Step     61 (epoch 0)  |  Loss: 6.7058  |  PPL: 817.15  |  LR: 0.015000  |  0.3 steps/s (9747 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.7058 (n=8)
+  Step     62 (epoch 0)  |  Loss: 6.8042  |  PPL: 901.64  |  LR: 0.015250  |  0.3 steps/s (9784 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.8042 (n=8)
+  Step     63 (epoch 0)  |  Loss: 6.3860  |  PPL: 593.47  |  LR: 0.015500  |  0.3 steps/s (9478 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.3860 (n=8)
+  Step     64 (epoch 0)  |  Loss: 6.4277  |  PPL: 618.74  |  LR: 0.015750  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.4277 (n=8)
+  Step     65 (epoch 0)  |  Loss: 6.5841  |  PPL: 723.50  |  LR: 0.016000  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.5841 (n=8)
+  Step     66 (epoch 0)  |  Loss: 6.4561  |  PPL: 636.60  |  LR: 0.016250  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.4561 (n=8)
+  Step     67 (epoch 0)  |  Loss: 6.2604  |  PPL: 523.42  |  LR: 0.016500  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.2604 (n=8)
+  Step     68 (epoch 0)  |  Loss: 6.1886  |  PPL: 487.17  |  LR: 0.016750  |  0.3 steps/s (9788 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.1886 (n=8)
+  Step     69 (epoch 0)  |  Loss: 6.3952  |  PPL: 598.94  |  LR: 0.017000  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.3952 (n=8)
+  Step     70 (epoch 0)  |  Loss: 6.1221  |  PPL: 455.81  |  LR: 0.017250  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.1221 (n=8)
+  Step     71 (epoch 0)  |  Loss: 6.2346  |  PPL: 510.07  |  LR: 0.017500  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.2346 (n=8)
+  Step     72 (epoch 0)  |  Loss: 6.5846  |  PPL: 723.85  |  LR: 0.017750  |  0.3 steps/s (9797 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.5846 (n=8)
+  Step     73 (epoch 0)  |  Loss: 6.2067  |  PPL: 496.06  |  LR: 0.018000  |  0.3 steps/s (9775 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.2067 (n=8)
+  Step     74 (epoch 0)  |  Loss: 5.8313  |  PPL: 340.81  |  LR: 0.018250  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.8313 (n=8)
+  Step     75 (epoch 0)  |  Loss: 6.5178  |  PPL: 677.06  |  LR: 0.018500  |  0.3 steps/s (9784 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.5178 (n=8)
+  Step     76 (epoch 0)  |  Loss: 6.2618  |  PPL: 524.15  |  LR: 0.018750  |  0.3 steps/s (9772 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.2618 (n=8)
+  Step     77 (epoch 0)  |  Loss: 5.9426  |  PPL: 380.91  |  LR: 0.019000  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.9426 (n=8)
+  Step     78 (epoch 0)  |  Loss: 6.4673  |  PPL: 643.74  |  LR: 0.019250  |  0.3 steps/s (9785 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.4673 (n=8)
+  Step     79 (epoch 0)  |  Loss: 6.3217  |  PPL: 556.51  |  LR: 0.019500  |  0.3 steps/s (9744 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.3217 (n=8)
+  Step     80 (epoch 0)  |  Loss: 6.1406  |  PPL: 464.32  |  LR: 0.019750  |  0.3 steps/s (9771 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.1406 (n=8)
+  Step     81 (epoch 0)  |  Loss: 5.7588  |  PPL: 316.98  |  LR: 0.019749  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.7588 (n=8)
+  Step     82 (epoch 0)  |  Loss: 6.1671  |  PPL: 476.80  |  LR: 0.019748  |  0.3 steps/s (9761 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.1671 (n=8)
+  Step     83 (epoch 0)  |  Loss: 6.1122  |  PPL: 451.33  |  LR: 0.019747  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.1122 (n=8)
+  Step     84 (epoch 0)  |  Loss: 6.1461  |  PPL: 466.89  |  LR: 0.019745  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.1461 (n=8)
+  Step     85 (epoch 0)  |  Loss: 6.0566  |  PPL: 426.93  |  LR: 0.019743  |  0.3 steps/s (9755 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.0566 (n=8)
+  Step     86 (epoch 0)  |  Loss: 5.8512  |  PPL: 347.66  |  LR: 0.019740  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.8512 (n=8)
+  Step     87 (epoch 0)  |  Loss: 6.1302  |  PPL: 459.52  |  LR: 0.019738  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.1302 (n=8)
+  Step     88 (epoch 0)  |  Loss: 5.9566  |  PPL: 386.30  |  LR: 0.019734  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.9566 (n=8)
+  Step     89 (epoch 0)  |  Loss: 6.1804  |  PPL: 483.20  |  LR: 0.019731  |  0.3 steps/s (9774 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.1804 (n=8)
+  Step     90 (epoch 0)  |  Loss: 6.1716  |  PPL: 478.97  |  LR: 0.019726  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.1716 (n=8)
+  Step     91 (epoch 0)  |  Loss: 5.8241  |  PPL: 338.37  |  LR: 0.019722  |  0.3 steps/s (9763 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.8241 (n=8)
+  Step     92 (epoch 0)  |  Loss: 5.7342  |  PPL: 309.27  |  LR: 0.019717  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.7342 (n=8)
+  Step     93 (epoch 0)  |  Loss: 5.8175  |  PPL: 336.14  |  LR: 0.019712  |  0.3 steps/s (9788 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.8175 (n=8)
+  Step     94 (epoch 0)  |  Loss: 6.0109  |  PPL: 407.84  |  LR: 0.019706  |  0.3 steps/s (9775 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.0109 (n=8)
+  Step     95 (epoch 0)  |  Loss: 5.9202  |  PPL: 372.50  |  LR: 0.019700  |  0.3 steps/s (9783 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.9202 (n=8)
+  Step     96 (epoch 0)  |  Loss: 5.7482  |  PPL: 313.63  |  LR: 0.019694  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.7482 (n=8)
+  Step     97 (epoch 0)  |  Loss: 5.7195  |  PPL: 304.74  |  LR: 0.019687  |  0.3 steps/s (9762 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.7195 (n=8)
+  Step     98 (epoch 0)  |  Loss: 6.1741  |  PPL: 480.13  |  LR: 0.019680  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.1741 (n=8)
+  Step     99 (epoch 0)  |  Loss: 5.6740  |  PPL: 291.19  |  LR: 0.019672  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.6740 (n=8)
+  Step    100 (epoch 0)  |  Loss: 5.4648  |  PPL: 236.23  |  LR: 0.019664  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.4648 (n=8)
+  Step    101 (epoch 0)  |  Loss: 5.8056  |  PPL: 332.14  |  LR: 0.019656  |  0.3 steps/s (9517 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.8056 (n=8)
+  Step    102 (epoch 0)  |  Loss: 5.8501  |  PPL: 347.27  |  LR: 0.019647  |  0.3 steps/s (9784 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.8501 (n=8)
+  Step    103 (epoch 0)  |  Loss: 6.0826  |  PPL: 438.17  |  LR: 0.019638  |  0.3 steps/s (9753 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 6.0826 (n=8)
+  Step    104 (epoch 0)  |  Loss: 5.6969  |  PPL: 297.96  |  LR: 0.019628  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.6969 (n=8)
+  Step    105 (epoch 0)  |  Loss: 5.8561  |  PPL: 349.34  |  LR: 0.019619  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.8561 (n=8)
+  Step    106 (epoch 0)  |  Loss: 5.7358  |  PPL: 309.77  |  LR: 0.019608  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.7358 (n=8)
+  Step    107 (epoch 0)  |  Loss: 5.5266  |  PPL: 251.29  |  LR: 0.019598  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.5266 (n=8)
+  Step    108 (epoch 0)  |  Loss: 5.8240  |  PPL: 338.32  |  LR: 0.019587  |  0.3 steps/s (9798 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.8240 (n=8)
+  Step    109 (epoch 0)  |  Loss: 5.6606  |  PPL: 287.31  |  LR: 0.019575  |  0.3 steps/s (9772 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.6606 (n=8)
+  Step    110 (epoch 0)  |  Loss: 5.9160  |  PPL: 370.93  |  LR: 0.019563  |  0.3 steps/s (9771 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.9160 (n=8)
+  Step    111 (epoch 0)  |  Loss: 5.4735  |  PPL: 238.28  |  LR: 0.019551  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.4735 (n=8)
+  Step    112 (epoch 0)  |  Loss: 5.3648  |  PPL: 213.75  |  LR: 0.019538  |  0.3 steps/s (9761 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.3648 (n=8)
+  Step    113 (epoch 0)  |  Loss: 5.7744  |  PPL: 321.94  |  LR: 0.019526  |  0.3 steps/s (9771 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.7744 (n=8)
+  Step    114 (epoch 0)  |  Loss: 5.6147  |  PPL: 274.43  |  LR: 0.019512  |  0.3 steps/s (9771 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.6147 (n=8)
+  Step    115 (epoch 0)  |  Loss: 5.6012  |  PPL: 270.76  |  LR: 0.019498  |  0.3 steps/s (9750 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.6012 (n=8)
+  Step    116 (epoch 0)  |  Loss: 5.6305  |  PPL: 278.80  |  LR: 0.019484  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.6305 (n=8)
+  Step    117 (epoch 0)  |  Loss: 5.7235  |  PPL: 305.98  |  LR: 0.019470  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.7235 (n=8)
+  Step    118 (epoch 0)  |  Loss: 5.5956  |  PPL: 269.24  |  LR: 0.019455  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.5956 (n=8)
+  Step    119 (epoch 0)  |  Loss: 5.5623  |  PPL: 260.42  |  LR: 0.019440  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.5623 (n=8)
+  Step    120 (epoch 0)  |  Loss: 5.2666  |  PPL: 193.76  |  LR: 0.019424  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2666 (n=8)
+  Step    121 (epoch 0)  |  Loss: 5.4963  |  PPL: 243.78  |  LR: 0.019408  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.4963 (n=8)
+  Step    122 (epoch 0)  |  Loss: 5.1654  |  PPL: 175.11  |  LR: 0.019392  |  0.3 steps/s (9482 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.1654 (n=8)
+  Step    123 (epoch 0)  |  Loss: 5.2959  |  PPL: 199.52  |  LR: 0.019375  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2959 (n=8)
+  Step    124 (epoch 0)  |  Loss: 5.4932  |  PPL: 243.03  |  LR: 0.019358  |  0.3 steps/s (9756 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.4932 (n=8)
+  Step    125 (epoch 0)  |  Loss: 5.4723  |  PPL: 238.01  |  LR: 0.019340  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.4723 (n=8)
+  Step    126 (epoch 0)  |  Loss: 5.2665  |  PPL: 193.73  |  LR: 0.019323  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2665 (n=8)
+  Step    127 (epoch 0)  |  Loss: 5.2875  |  PPL: 197.85  |  LR: 0.019304  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2875 (n=8)
+  Step    128 (epoch 0)  |  Loss: 5.5895  |  PPL: 267.61  |  LR: 0.019286  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.5895 (n=8)
+  Step    129 (epoch 0)  |  Loss: 5.4438  |  PPL: 231.31  |  LR: 0.019267  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.4438 (n=8)
+  Step    130 (epoch 0)  |  Loss: 5.3436  |  PPL: 209.26  |  LR: 0.019247  |  0.3 steps/s (9760 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.3436 (n=8)
+  Step    131 (epoch 0)  |  Loss: 5.4932  |  PPL: 243.03  |  LR: 0.019228  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.4932 (n=8)
+  Step    132 (epoch 0)  |  Loss: 5.2720  |  PPL: 194.80  |  LR: 0.019207  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2720 (n=8)
+  Step    133 (epoch 0)  |  Loss: 5.3116  |  PPL: 202.67  |  LR: 0.019187  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.3116 (n=8)
+  Step    134 (epoch 0)  |  Loss: 5.7990  |  PPL: 329.96  |  LR: 0.019166  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.7990 (n=8)
+  Step    135 (epoch 0)  |  Loss: 5.3548  |  PPL: 211.62  |  LR: 0.019145  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.3548 (n=8)
+  Step    136 (epoch 0)  |  Loss: 5.5405  |  PPL: 254.79  |  LR: 0.019123  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.5405 (n=8)
+  Step    137 (epoch 0)  |  Loss: 5.2521  |  PPL: 190.96  |  LR: 0.019101  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2521 (n=8)
+  Step    138 (epoch 0)  |  Loss: 5.3904  |  PPL: 219.29  |  LR: 0.019079  |  0.3 steps/s (9788 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.3904 (n=8)
+  Step    139 (epoch 0)  |  Loss: 5.0909  |  PPL: 162.53  |  LR: 0.019057  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0909 (n=8)
+  Step    140 (epoch 0)  |  Loss: 5.2980  |  PPL: 199.93  |  LR: 0.019034  |  0.3 steps/s (9753 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2980 (n=8)
+  Step    141 (epoch 0)  |  Loss: 5.1929  |  PPL: 179.98  |  LR: 0.019010  |  0.3 steps/s (9794 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.1929 (n=8)
+  Step    142 (epoch 0)  |  Loss: 5.3888  |  PPL: 218.93  |  LR: 0.018986  |  0.3 steps/s (9759 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.3888 (n=8)
+  Step    143 (epoch 0)  |  Loss: 5.0993  |  PPL: 163.91  |  LR: 0.018962  |  0.3 steps/s (9767 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0993 (n=8)
+  Step    144 (epoch 0)  |  Loss: 5.2224  |  PPL: 185.38  |  LR: 0.018938  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2224 (n=8)
+  Step    145 (epoch 0)  |  Loss: 5.1812  |  PPL: 177.90  |  LR: 0.018913  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.1812 (n=8)
+  Step    146 (epoch 0)  |  Loss: 5.2412  |  PPL: 188.89  |  LR: 0.018888  |  0.3 steps/s (9753 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2412 (n=8)
+  Step    147 (epoch 0)  |  Loss: 4.8127  |  PPL: 123.07  |  LR: 0.018862  |  0.3 steps/s (9793 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8127 (n=8)
+  Step    148 (epoch 0)  |  Loss: 5.2313  |  PPL: 187.04  |  LR: 0.018836  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2313 (n=8)
+  Step    149 (epoch 0)  |  Loss: 5.2005  |  PPL: 181.36  |  LR: 0.018810  |  0.3 steps/s (9771 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2005 (n=8)
+  Step    150 (epoch 0)  |  Loss: 5.2754  |  PPL: 195.46  |  LR: 0.018784  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2754 (n=8)
+  Step    151 (epoch 0)  |  Loss: 4.9711  |  PPL: 144.19  |  LR: 0.018757  |  0.3 steps/s (9748 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9711 (n=8)
+  Step    152 (epoch 0)  |  Loss: 5.6585  |  PPL: 286.73  |  LR: 0.018729  |  0.3 steps/s (9762 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.6585 (n=8)
+  Step    153 (epoch 0)  |  Loss: 5.0356  |  PPL: 153.79  |  LR: 0.018702  |  0.3 steps/s (9599 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0356 (n=8)
+  Step    154 (epoch 0)  |  Loss: 4.8422  |  PPL: 126.75  |  LR: 0.018674  |  0.3 steps/s (9653 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8422 (n=8)
+  Step    155 (epoch 0)  |  Loss: 5.1248  |  PPL: 168.14  |  LR: 0.018645  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.1248 (n=8)
+  Step    156 (epoch 0)  |  Loss: 5.5326  |  PPL: 252.81  |  LR: 0.018617  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.5326 (n=8)
+  Step    157 (epoch 0)  |  Loss: 4.8222  |  PPL: 124.23  |  LR: 0.018588  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8222 (n=8)
+  Step    158 (epoch 0)  |  Loss: 5.7311  |  PPL: 308.31  |  LR: 0.018558  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.7311 (n=8)
+  Step    159 (epoch 0)  |  Loss: 5.0803  |  PPL: 160.82  |  LR: 0.018529  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0803 (n=8)
+  Step    160 (epoch 0)  |  Loss: 5.3298  |  PPL: 206.40  |  LR: 0.018498  |  0.3 steps/s (9559 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.3298 (n=8)
+  Step    161 (epoch 0)  |  Loss: 4.9929  |  PPL: 147.37  |  LR: 0.018468  |  0.3 steps/s (9793 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9929 (n=8)
+  Step    162 (epoch 0)  |  Loss: 5.4054  |  PPL: 222.61  |  LR: 0.018437  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.4054 (n=8)
+  Step    163 (epoch 0)  |  Loss: 4.8590  |  PPL: 128.90  |  LR: 0.018406  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8590 (n=8)
+  Step    164 (epoch 0)  |  Loss: 5.3643  |  PPL: 213.64  |  LR: 0.018375  |  0.3 steps/s (9794 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.3643 (n=8)
+  Step    165 (epoch 0)  |  Loss: 4.8261  |  PPL: 124.72  |  LR: 0.018343  |  0.3 steps/s (9785 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8261 (n=8)
+  Step    166 (epoch 0)  |  Loss: 5.0535  |  PPL: 156.58  |  LR: 0.018311  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0535 (n=8)
+  Step    167 (epoch 0)  |  Loss: 5.3004  |  PPL: 200.42  |  LR: 0.018279  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.3004 (n=8)
+  Step    168 (epoch 0)  |  Loss: 4.3575  |  PPL: 78.06  |  LR: 0.018246  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3575 (n=8)
+  Step    169 (epoch 0)  |  Loss: 4.9058  |  PPL: 135.07  |  LR: 0.018213  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9058 (n=8)
+  Step    170 (epoch 0)  |  Loss: 4.9181  |  PPL: 136.74  |  LR: 0.018179  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9181 (n=8)
+  Step    171 (epoch 0)  |  Loss: 5.1076  |  PPL: 165.27  |  LR: 0.018146  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.1076 (n=8)
+  Step    172 (epoch 0)  |  Loss: 5.3309  |  PPL: 206.62  |  LR: 0.018112  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.3309 (n=8)
+  Step    173 (epoch 0)  |  Loss: 5.1162  |  PPL: 166.70  |  LR: 0.018077  |  0.3 steps/s (9774 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.1162 (n=8)
+  Step    174 (epoch 0)  |  Loss: 5.2467  |  PPL: 189.93  |  LR: 0.018042  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2467 (n=8)
+  Step    175 (epoch 0)  |  Loss: 4.9896  |  PPL: 146.88  |  LR: 0.018007  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9896 (n=8)
+  Step    176 (epoch 0)  |  Loss: 4.9161  |  PPL: 136.47  |  LR: 0.017972  |  0.3 steps/s (9774 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9161 (n=8)
+  Step    177 (epoch 0)  |  Loss: 4.8803  |  PPL: 131.67  |  LR: 0.017936  |  0.3 steps/s (9767 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8803 (n=8)
+  Step    178 (epoch 0)  |  Loss: 4.6035  |  PPL: 99.83  |  LR: 0.017900  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6035 (n=8)
+  Step    179 (epoch 0)  |  Loss: 5.2189  |  PPL: 184.73  |  LR: 0.017864  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2189 (n=8)
+  Step    180 (epoch 0)  |  Loss: 4.9083  |  PPL: 135.41  |  LR: 0.017827  |  0.3 steps/s (9503 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9083 (n=8)
+  Step    181 (epoch 0)  |  Loss: 4.6666  |  PPL: 106.33  |  LR: 0.017790  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6666 (n=8)
+  Step    182 (epoch 0)  |  Loss: 4.7509  |  PPL: 115.69  |  LR: 0.017753  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7509 (n=8)
+  Step    183 (epoch 0)  |  Loss: 4.6174  |  PPL: 101.23  |  LR: 0.017716  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6174 (n=8)
+  Step    184 (epoch 0)  |  Loss: 5.2247  |  PPL: 185.81  |  LR: 0.017678  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2247 (n=8)
+  Step    185 (epoch 0)  |  Loss: 4.7806  |  PPL: 119.18  |  LR: 0.017640  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7806 (n=8)
+  Step    186 (epoch 0)  |  Loss: 4.6680  |  PPL: 106.49  |  LR: 0.017601  |  0.3 steps/s (9796 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6680 (n=8)
+  Step    187 (epoch 0)  |  Loss: 4.6117  |  PPL: 100.66  |  LR: 0.017562  |  0.3 steps/s (9762 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6117 (n=8)
+  Step    188 (epoch 0)  |  Loss: 5.2053  |  PPL: 182.24  |  LR: 0.017523  |  0.3 steps/s (9793 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.2053 (n=8)
+  Step    189 (epoch 0)  |  Loss: 4.7787  |  PPL: 118.95  |  LR: 0.017484  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7787 (n=8)
+  Step    190 (epoch 0)  |  Loss: 4.9287  |  PPL: 138.21  |  LR: 0.017444  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9287 (n=8)
+  Step    191 (epoch 0)  |  Loss: 5.1753  |  PPL: 176.85  |  LR: 0.017404  |  0.3 steps/s (9770 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.1753 (n=8)
+  Step    192 (epoch 0)  |  Loss: 4.9883  |  PPL: 146.68  |  LR: 0.017364  |  0.3 steps/s (9784 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9883 (n=8)
+  Step    193 (epoch 0)  |  Loss: 4.8232  |  PPL: 124.37  |  LR: 0.017323  |  0.3 steps/s (9798 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8232 (n=8)
+  Step    194 (epoch 0)  |  Loss: 5.1749  |  PPL: 176.78  |  LR: 0.017282  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.1749 (n=8)
+  Step    195 (epoch 0)  |  Loss: 4.8452  |  PPL: 127.13  |  LR: 0.017241  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8452 (n=8)
+  Step    196 (epoch 0)  |  Loss: 5.0737  |  PPL: 159.77  |  LR: 0.017200  |  0.3 steps/s (9767 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0737 (n=8)
+  Step    197 (epoch 0)  |  Loss: 4.8735  |  PPL: 130.77  |  LR: 0.017158  |  0.3 steps/s (9765 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8735 (n=8)
+  Step    198 (epoch 0)  |  Loss: 5.0272  |  PPL: 152.51  |  LR: 0.017116  |  0.3 steps/s (9785 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0272 (n=8)
+  Step    199 (epoch 0)  |  Loss: 4.7850  |  PPL: 119.71  |  LR: 0.017074  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7850 (n=8)
+  Step    200 (epoch 0)  |  Loss: 4.9159  |  PPL: 136.45  |  LR: 0.017031  |  0.3 steps/s (9771 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9159 (n=8)
+  Step    201 (epoch 0)  |  Loss: 4.8041  |  PPL: 122.00  |  LR: 0.016988  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8041 (n=8)
+  Step    202 (epoch 0)  |  Loss: 4.9465  |  PPL: 140.68  |  LR: 0.016945  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9465 (n=8)
+  Step    203 (epoch 0)  |  Loss: 5.0034  |  PPL: 148.91  |  LR: 0.016901  |  0.3 steps/s (9771 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0034 (n=8)
+  Step    204 (epoch 0)  |  Loss: 4.8182  |  PPL: 123.75  |  LR: 0.016858  |  0.3 steps/s (9791 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8182 (n=8)
+  Step    205 (epoch 0)  |  Loss: 4.6362  |  PPL: 103.16  |  LR: 0.016814  |  0.3 steps/s (9771 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6362 (n=8)
+  Step    206 (epoch 0)  |  Loss: 4.9323  |  PPL: 138.70  |  LR: 0.016769  |  0.3 steps/s (9761 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9323 (n=8)
+  Step    207 (epoch 0)  |  Loss: 4.6647  |  PPL: 106.14  |  LR: 0.016725  |  0.3 steps/s (9783 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6647 (n=8)
+  Step    208 (epoch 0)  |  Loss: 4.9227  |  PPL: 137.37  |  LR: 0.016680  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9227 (n=8)
+  Step    209 (epoch 0)  |  Loss: 4.7297  |  PPL: 113.26  |  LR: 0.016635  |  0.3 steps/s (9760 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7297 (n=8)
+  Step    210 (epoch 0)  |  Loss: 4.8240  |  PPL: 124.46  |  LR: 0.016590  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8240 (n=8)
+  Step    211 (epoch 0)  |  Loss: 5.0060  |  PPL: 149.31  |  LR: 0.016544  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0060 (n=8)
+  Step    212 (epoch 0)  |  Loss: 4.5686  |  PPL: 96.41  |  LR: 0.016498  |  0.3 steps/s (9762 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5686 (n=8)
+  Step    213 (epoch 0)  |  Loss: 4.9419  |  PPL: 140.04  |  LR: 0.016452  |  0.3 steps/s (9772 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9419 (n=8)
+  Step    214 (epoch 0)  |  Loss: 5.1288  |  PPL: 168.82  |  LR: 0.016405  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.1288 (n=8)
+  Step    215 (epoch 0)  |  Loss: 4.6360  |  PPL: 103.13  |  LR: 0.016359  |  0.3 steps/s (9747 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6360 (n=8)
+  Step    216 (epoch 0)  |  Loss: 4.8213  |  PPL: 124.13  |  LR: 0.016312  |  0.3 steps/s (9766 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8213 (n=8)
+  Step    217 (epoch 0)  |  Loss: 4.8566  |  PPL: 128.59  |  LR: 0.016265  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8566 (n=8)
+  Step    218 (epoch 0)  |  Loss: 4.7603  |  PPL: 116.78  |  LR: 0.016217  |  0.3 steps/s (9535 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7603 (n=8)
+  Step    219 (epoch 0)  |  Loss: 4.4978  |  PPL: 89.82  |  LR: 0.016170  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4978 (n=8)
+  Step    220 (epoch 0)  |  Loss: 4.9203  |  PPL: 137.05  |  LR: 0.016122  |  0.3 steps/s (9774 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9203 (n=8)
+  Step    221 (epoch 0)  |  Loss: 4.8550  |  PPL: 128.39  |  LR: 0.016073  |  0.3 steps/s (9771 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8550 (n=8)
+  Step    222 (epoch 0)  |  Loss: 4.5505  |  PPL: 94.68  |  LR: 0.016025  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5505 (n=8)
+  Step    223 (epoch 0)  |  Loss: 4.6441  |  PPL: 103.97  |  LR: 0.015976  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6441 (n=8)
+  Step    224 (epoch 0)  |  Loss: 4.4250  |  PPL: 83.52  |  LR: 0.015927  |  0.3 steps/s (9770 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4250 (n=8)
+  Step    225 (epoch 0)  |  Loss: 4.8877  |  PPL: 132.64  |  LR: 0.015878  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8877 (n=8)
+  Step    226 (epoch 0)  |  Loss: 4.3817  |  PPL: 79.97  |  LR: 0.015829  |  0.3 steps/s (9760 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3817 (n=8)
+  Step    227 (epoch 0)  |  Loss: 5.0412  |  PPL: 154.65  |  LR: 0.015779  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0412 (n=8)
+  Step    228 (epoch 0)  |  Loss: 4.5056  |  PPL: 90.53  |  LR: 0.015729  |  0.3 steps/s (9770 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5056 (n=8)
+  Step    229 (epoch 0)  |  Loss: 4.6954  |  PPL: 109.44  |  LR: 0.015679  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6954 (n=8)
+  Step    230 (epoch 0)  |  Loss: 4.9282  |  PPL: 138.13  |  LR: 0.015629  |  0.3 steps/s (9774 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9282 (n=8)
+  Step    231 (epoch 0)  |  Loss: 5.0187  |  PPL: 151.21  |  LR: 0.015579  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0187 (n=8)
+  Step    232 (epoch 0)  |  Loss: 4.8721  |  PPL: 130.59  |  LR: 0.015528  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8721 (n=8)
+  Step    233 (epoch 0)  |  Loss: 4.5669  |  PPL: 96.25  |  LR: 0.015477  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5669 (n=8)
+  Step    234 (epoch 0)  |  Loss: 4.3681  |  PPL: 78.89  |  LR: 0.015426  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3681 (n=8)
+  Step    235 (epoch 0)  |  Loss: 4.6947  |  PPL: 109.37  |  LR: 0.015374  |  0.3 steps/s (9788 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6947 (n=8)
+  Step    236 (epoch 0)  |  Loss: 4.5633  |  PPL: 95.90  |  LR: 0.015323  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5633 (n=8)
+  Step    237 (epoch 0)  |  Loss: 4.5670  |  PPL: 96.26  |  LR: 0.015271  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5670 (n=8)
+  Step    238 (epoch 0)  |  Loss: 4.7163  |  PPL: 111.75  |  LR: 0.015219  |  0.3 steps/s (9775 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7163 (n=8)
+  Step    239 (epoch 0)  |  Loss: 4.8801  |  PPL: 131.65  |  LR: 0.015166  |  0.3 steps/s (9507 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8801 (n=8)
+  Step    240 (epoch 0)  |  Loss: 4.9797  |  PPL: 145.43  |  LR: 0.015114  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9797 (n=8)
+  Step    241 (epoch 0)  |  Loss: 4.6493  |  PPL: 104.51  |  LR: 0.015061  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6493 (n=8)
+  Step    242 (epoch 0)  |  Loss: 4.5487  |  PPL: 94.51  |  LR: 0.015008  |  0.3 steps/s (9756 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5487 (n=8)
+  Step    243 (epoch 0)  |  Loss: 4.9030  |  PPL: 134.69  |  LR: 0.014955  |  0.3 steps/s (9774 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9030 (n=8)
+  Step    244 (epoch 0)  |  Loss: 5.0011  |  PPL: 148.57  |  LR: 0.014902  |  0.3 steps/s (9766 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0011 (n=8)
+  Step    245 (epoch 0)  |  Loss: 4.5614  |  PPL: 95.71  |  LR: 0.014848  |  0.3 steps/s (9763 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5614 (n=8)
+  Step    246 (epoch 0)  |  Loss: 4.7178  |  PPL: 111.92  |  LR: 0.014795  |  0.3 steps/s (9794 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7178 (n=8)
+  Step    247 (epoch 0)  |  Loss: 4.8384  |  PPL: 126.27  |  LR: 0.014741  |  0.3 steps/s (9770 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8384 (n=8)
+  Step    248 (epoch 0)  |  Loss: 4.6654  |  PPL: 106.20  |  LR: 0.014687  |  0.3 steps/s (9764 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6654 (n=8)
+  Step    249 (epoch 0)  |  Loss: 4.4905  |  PPL: 89.17  |  LR: 0.014632  |  0.3 steps/s (9771 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4905 (n=8)
+  Step    250 (epoch 0)  |  Loss: 4.6574  |  PPL: 105.36  |  LR: 0.014578  |  0.3 steps/s (9784 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6574 (n=8)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/q48m_p0.0\edge_conversational_step250.pt
+  Step    251 (epoch 0)  |  Loss: 4.6534  |  PPL: 104.94  |  LR: 0.014523  |  0.3 steps/s (8583 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6534 (n=8)
+  Step    252 (epoch 0)  |  Loss: 5.0906  |  PPL: 162.48  |  LR: 0.014468  |  0.3 steps/s (9765 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0906 (n=8)
+  Step    253 (epoch 0)  |  Loss: 4.8991  |  PPL: 134.17  |  LR: 0.014413  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8991 (n=8)
+  Step    254 (epoch 0)  |  Loss: 4.6810  |  PPL: 107.88  |  LR: 0.014358  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6810 (n=8)
+  Step    255 (epoch 0)  |  Loss: 4.5348  |  PPL: 93.21  |  LR: 0.014303  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5348 (n=8)
+  Step    256 (epoch 0)  |  Loss: 4.6148  |  PPL: 100.97  |  LR: 0.014247  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6148 (n=8)
+  Step    257 (epoch 0)  |  Loss: 4.9486  |  PPL: 140.98  |  LR: 0.014192  |  0.3 steps/s (9750 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9486 (n=8)
+  Step    258 (epoch 0)  |  Loss: 4.7547  |  PPL: 116.13  |  LR: 0.014136  |  0.3 steps/s (9762 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7547 (n=8)
+  Step    259 (epoch 0)  |  Loss: 4.6746  |  PPL: 107.19  |  LR: 0.014080  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6746 (n=8)
+  Step    260 (epoch 0)  |  Loss: 4.7387  |  PPL: 114.29  |  LR: 0.014023  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7387 (n=8)
+  Step    261 (epoch 0)  |  Loss: 4.2851  |  PPL: 72.61  |  LR: 0.013967  |  0.3 steps/s (9762 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2851 (n=8)
+  Step    262 (epoch 0)  |  Loss: 4.5721  |  PPL: 96.74  |  LR: 0.013910  |  0.3 steps/s (9783 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5721 (n=8)
+  Step    263 (epoch 0)  |  Loss: 4.7250  |  PPL: 112.73  |  LR: 0.013854  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7250 (n=8)
+  Step    264 (epoch 0)  |  Loss: 4.4702  |  PPL: 87.37  |  LR: 0.013797  |  0.3 steps/s (9510 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4702 (n=8)
+  Step    265 (epoch 0)  |  Loss: 4.6162  |  PPL: 101.11  |  LR: 0.013740  |  0.3 steps/s (9772 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6162 (n=8)
+  Step    266 (epoch 0)  |  Loss: 4.6019  |  PPL: 99.67  |  LR: 0.013683  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6019 (n=8)
+  Step    267 (epoch 0)  |  Loss: 4.5798  |  PPL: 97.49  |  LR: 0.013625  |  0.3 steps/s (9784 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5798 (n=8)
+  Step    268 (epoch 0)  |  Loss: 4.9411  |  PPL: 139.93  |  LR: 0.013568  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9411 (n=8)
+  Step    269 (epoch 0)  |  Loss: 4.3878  |  PPL: 80.47  |  LR: 0.013510  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3878 (n=8)
+  Step    270 (epoch 0)  |  Loss: 4.8436  |  PPL: 126.93  |  LR: 0.013452  |  0.3 steps/s (9783 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8436 (n=8)
+  Step    271 (epoch 0)  |  Loss: 4.2523  |  PPL: 70.27  |  LR: 0.013395  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2523 (n=8)
+  Step    272 (epoch 0)  |  Loss: 4.3608  |  PPL: 78.32  |  LR: 0.013337  |  0.3 steps/s (9783 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3608 (n=8)
+  Step    273 (epoch 0)  |  Loss: 4.5339  |  PPL: 93.13  |  LR: 0.013278  |  0.3 steps/s (9796 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5339 (n=8)
+  Step    274 (epoch 0)  |  Loss: 4.9450  |  PPL: 140.47  |  LR: 0.013220  |  0.3 steps/s (9800 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9450 (n=8)
+  Step    275 (epoch 0)  |  Loss: 4.6337  |  PPL: 102.89  |  LR: 0.013162  |  0.3 steps/s (9766 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6337 (n=8)
+  Step    276 (epoch 0)  |  Loss: 4.8059  |  PPL: 122.23  |  LR: 0.013103  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8059 (n=8)
+  Step    277 (epoch 0)  |  Loss: 4.5965  |  PPL: 99.13  |  LR: 0.013044  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5965 (n=8)
+  Step    278 (epoch 0)  |  Loss: 4.5965  |  PPL: 99.14  |  LR: 0.012985  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5965 (n=8)
+  Step    279 (epoch 0)  |  Loss: 4.6065  |  PPL: 100.13  |  LR: 0.012927  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6065 (n=8)
+  Step    280 (epoch 0)  |  Loss: 5.0657  |  PPL: 158.49  |  LR: 0.012867  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 5.0657 (n=8)
+  Step    281 (epoch 0)  |  Loss: 4.6304  |  PPL: 102.55  |  LR: 0.012808  |  0.3 steps/s (9752 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6304 (n=8)
+  Step    282 (epoch 0)  |  Loss: 4.7002  |  PPL: 109.97  |  LR: 0.012749  |  0.3 steps/s (9746 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7002 (n=8)
+  Step    283 (epoch 0)  |  Loss: 4.5121  |  PPL: 91.11  |  LR: 0.012690  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5121 (n=8)
+  Step    284 (epoch 0)  |  Loss: 4.3505  |  PPL: 77.52  |  LR: 0.012630  |  0.3 steps/s (9772 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3505 (n=8)
+  Step    285 (epoch 0)  |  Loss: 4.6212  |  PPL: 101.62  |  LR: 0.012570  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6212 (n=8)
+  Step    286 (epoch 0)  |  Loss: 4.6056  |  PPL: 100.05  |  LR: 0.012511  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6056 (n=8)
+  Step    287 (epoch 0)  |  Loss: 4.5633  |  PPL: 95.90  |  LR: 0.012451  |  0.3 steps/s (9755 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5633 (n=8)
+  Step    288 (epoch 0)  |  Loss: 4.3714  |  PPL: 79.15  |  LR: 0.012391  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3714 (n=8)
+  Step    289 (epoch 0)  |  Loss: 4.6240  |  PPL: 101.90  |  LR: 0.012331  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6240 (n=8)
+  Step    290 (epoch 0)  |  Loss: 4.3708  |  PPL: 79.11  |  LR: 0.012271  |  0.3 steps/s (9785 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3708 (n=8)
+  Step    291 (epoch 0)  |  Loss: 4.5448  |  PPL: 94.14  |  LR: 0.012210  |  0.3 steps/s (9775 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5448 (n=8)
+  Step    292 (epoch 0)  |  Loss: 4.4948  |  PPL: 89.55  |  LR: 0.012150  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4948 (n=8)
+  Step    293 (epoch 0)  |  Loss: 4.5019  |  PPL: 90.19  |  LR: 0.012090  |  0.3 steps/s (9766 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5019 (n=8)
+  Step    294 (epoch 0)  |  Loss: 4.5804  |  PPL: 97.55  |  LR: 0.012029  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5804 (n=8)
+  Step    295 (epoch 0)  |  Loss: 4.5415  |  PPL: 93.84  |  LR: 0.011969  |  0.3 steps/s (9766 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5415 (n=8)
+  Step    296 (epoch 0)  |  Loss: 4.6499  |  PPL: 104.57  |  LR: 0.011908  |  0.3 steps/s (9770 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6499 (n=8)
+  Step    297 (epoch 0)  |  Loss: 4.6568  |  PPL: 105.30  |  LR: 0.011847  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6568 (n=8)
+  Step    298 (epoch 0)  |  Loss: 4.6813  |  PPL: 107.91  |  LR: 0.011786  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6813 (n=8)
+  Step    299 (epoch 0)  |  Loss: 4.7461  |  PPL: 115.13  |  LR: 0.011725  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7461 (n=8)
+  Step    300 (epoch 0)  |  Loss: 4.5458  |  PPL: 94.23  |  LR: 0.011664  |  0.3 steps/s (9754 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5458 (n=8)
+  Step    301 (epoch 0)  |  Loss: 4.3769  |  PPL: 79.59  |  LR: 0.011603  |  0.3 steps/s (9783 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3769 (n=8)
+  Step    302 (epoch 0)  |  Loss: 4.3419  |  PPL: 76.86  |  LR: 0.011542  |  0.3 steps/s (9785 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3419 (n=8)
+  Step    303 (epoch 0)  |  Loss: 4.5840  |  PPL: 97.90  |  LR: 0.011481  |  0.3 steps/s (9532 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5840 (n=8)
+  Step    304 (epoch 0)  |  Loss: 4.2129  |  PPL: 67.55  |  LR: 0.011420  |  0.3 steps/s (9788 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2129 (n=8)
+  Step    305 (epoch 0)  |  Loss: 4.9511  |  PPL: 141.33  |  LR: 0.011358  |  0.3 steps/s (9785 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.9511 (n=8)
+  Step    306 (epoch 0)  |  Loss: 4.5269  |  PPL: 92.47  |  LR: 0.011297  |  0.3 steps/s (9758 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5269 (n=8)
+  Step    307 (epoch 0)  |  Loss: 4.2714  |  PPL: 71.62  |  LR: 0.011236  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2714 (n=8)
+  Step    308 (epoch 0)  |  Loss: 4.2139  |  PPL: 67.62  |  LR: 0.011174  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2139 (n=8)
+  Step    309 (epoch 0)  |  Loss: 4.7882  |  PPL: 120.08  |  LR: 0.011113  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7882 (n=8)
+  Step    310 (epoch 0)  |  Loss: 4.6046  |  PPL: 99.94  |  LR: 0.011051  |  0.3 steps/s (9783 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6046 (n=8)
+  Step    311 (epoch 0)  |  Loss: 4.6538  |  PPL: 104.98  |  LR: 0.010989  |  0.3 steps/s (9798 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6538 (n=8)
+  Step    312 (epoch 0)  |  Loss: 3.9923  |  PPL: 54.18  |  LR: 0.010928  |  0.3 steps/s (9770 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9923 (n=8)
+  Step    313 (epoch 0)  |  Loss: 4.7557  |  PPL: 116.25  |  LR: 0.010866  |  0.3 steps/s (9784 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7557 (n=8)
+  Step    314 (epoch 0)  |  Loss: 4.4321  |  PPL: 84.10  |  LR: 0.010804  |  0.3 steps/s (9775 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4321 (n=8)
+  Step    315 (epoch 0)  |  Loss: 4.6503  |  PPL: 104.61  |  LR: 0.010743  |  0.3 steps/s (9761 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6503 (n=8)
+  Step    316 (epoch 0)  |  Loss: 4.3671  |  PPL: 78.81  |  LR: 0.010681  |  0.3 steps/s (9764 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3671 (n=8)
+  Step    317 (epoch 0)  |  Loss: 4.3455  |  PPL: 77.13  |  LR: 0.010619  |  0.3 steps/s (9785 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3455 (n=8)
+  Step    318 (epoch 0)  |  Loss: 4.8862  |  PPL: 132.45  |  LR: 0.010557  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8862 (n=8)
+  Step    319 (epoch 0)  |  Loss: 4.8953  |  PPL: 133.66  |  LR: 0.010495  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.8953 (n=8)
+  Step    320 (epoch 0)  |  Loss: 4.3214  |  PPL: 75.29  |  LR: 0.010433  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3214 (n=8)
+  Step    321 (epoch 0)  |  Loss: 4.5475  |  PPL: 94.40  |  LR: 0.010371  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5475 (n=8)
+  Step    322 (epoch 0)  |  Loss: 4.1333  |  PPL: 62.38  |  LR: 0.010309  |  0.3 steps/s (9761 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1333 (n=8)
+  Step    323 (epoch 0)  |  Loss: 4.5026  |  PPL: 90.25  |  LR: 0.010247  |  0.3 steps/s (9521 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5026 (n=8)
+  Step    324 (epoch 0)  |  Loss: 4.5868  |  PPL: 98.18  |  LR: 0.010185  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5868 (n=8)
+  Step    325 (epoch 0)  |  Loss: 4.5405  |  PPL: 93.73  |  LR: 0.010123  |  0.3 steps/s (9785 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5405 (n=8)
+  Step    326 (epoch 0)  |  Loss: 4.4821  |  PPL: 88.42  |  LR: 0.010061  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4821 (n=8)
+  Step    327 (epoch 0)  |  Loss: 4.5394  |  PPL: 93.63  |  LR: 0.009999  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5394 (n=8)
+  Step    328 (epoch 0)  |  Loss: 4.4109  |  PPL: 82.34  |  LR: 0.009937  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4109 (n=8)
+  Step    329 (epoch 0)  |  Loss: 4.4082  |  PPL: 82.12  |  LR: 0.009875  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4082 (n=8)
+  Step    330 (epoch 0)  |  Loss: 4.4193  |  PPL: 83.04  |  LR: 0.009813  |  0.3 steps/s (9767 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4193 (n=8)
+  Step    331 (epoch 0)  |  Loss: 4.7166  |  PPL: 111.79  |  LR: 0.009751  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7166 (n=8)
+  Step    332 (epoch 0)  |  Loss: 4.6066  |  PPL: 100.14  |  LR: 0.009689  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6066 (n=8)
+  Step    333 (epoch 0)  |  Loss: 4.6032  |  PPL: 99.80  |  LR: 0.009627  |  0.3 steps/s (9771 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6032 (n=8)
+  Step    334 (epoch 0)  |  Loss: 4.3662  |  PPL: 78.74  |  LR: 0.009565  |  0.3 steps/s (9792 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3662 (n=8)
+  Step    335 (epoch 0)  |  Loss: 4.5862  |  PPL: 98.12  |  LR: 0.009503  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5862 (n=8)
+  Step    336 (epoch 0)  |  Loss: 4.4811  |  PPL: 88.33  |  LR: 0.009441  |  0.3 steps/s (9758 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4811 (n=8)
+  Step    337 (epoch 0)  |  Loss: 4.4313  |  PPL: 84.04  |  LR: 0.009379  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4313 (n=8)
+  Step    338 (epoch 0)  |  Loss: 4.2817  |  PPL: 72.37  |  LR: 0.009317  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2817 (n=8)
+  Step    339 (epoch 0)  |  Loss: 4.1942  |  PPL: 66.30  |  LR: 0.009255  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1942 (n=8)
+  Step    340 (epoch 0)  |  Loss: 4.4685  |  PPL: 87.23  |  LR: 0.009193  |  0.3 steps/s (9796 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4685 (n=8)
+  Step    341 (epoch 0)  |  Loss: 4.2753  |  PPL: 71.90  |  LR: 0.009131  |  0.3 steps/s (9792 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2753 (n=8)
+  Step    342 (epoch 0)  |  Loss: 4.4778  |  PPL: 88.04  |  LR: 0.009069  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4778 (n=8)
+  Step    343 (epoch 0)  |  Loss: 4.1518  |  PPL: 63.55  |  LR: 0.009007  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1518 (n=8)
+  Step    344 (epoch 0)  |  Loss: 4.3033  |  PPL: 73.94  |  LR: 0.008946  |  0.3 steps/s (9798 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3033 (n=8)
+  Step    345 (epoch 0)  |  Loss: 4.6005  |  PPL: 99.54  |  LR: 0.008884  |  0.3 steps/s (9793 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6005 (n=8)
+  Step    346 (epoch 0)  |  Loss: 4.5550  |  PPL: 95.11  |  LR: 0.008822  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5550 (n=8)
+  Step    347 (epoch 0)  |  Loss: 4.3242  |  PPL: 75.51  |  LR: 0.008761  |  0.3 steps/s (9774 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3242 (n=8)
+  Step    348 (epoch 0)  |  Loss: 3.9201  |  PPL: 50.41  |  LR: 0.008699  |  0.3 steps/s (9785 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9201 (n=8)
+  Step    349 (epoch 0)  |  Loss: 4.4375  |  PPL: 84.56  |  LR: 0.008637  |  0.3 steps/s (9767 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4375 (n=8)
+  Step    350 (epoch 0)  |  Loss: 4.4357  |  PPL: 84.41  |  LR: 0.008576  |  0.3 steps/s (9766 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4357 (n=8)
+  Step    351 (epoch 0)  |  Loss: 4.4014  |  PPL: 81.56  |  LR: 0.008514  |  0.3 steps/s (9797 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4014 (n=8)
+  Step    352 (epoch 0)  |  Loss: 4.2069  |  PPL: 67.14  |  LR: 0.008453  |  0.3 steps/s (9796 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2069 (n=8)
+  Step    353 (epoch 0)  |  Loss: 4.3289  |  PPL: 75.86  |  LR: 0.008392  |  0.3 steps/s (9792 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3289 (n=8)
+  Step    354 (epoch 0)  |  Loss: 4.6870  |  PPL: 108.53  |  LR: 0.008330  |  0.3 steps/s (9791 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6870 (n=8)
+  Step    355 (epoch 0)  |  Loss: 4.3515  |  PPL: 77.59  |  LR: 0.008269  |  0.3 steps/s (9760 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3515 (n=8)
+  Step    356 (epoch 0)  |  Loss: 4.4299  |  PPL: 83.93  |  LR: 0.008208  |  0.3 steps/s (9788 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4299 (n=8)
+  Step    357 (epoch 0)  |  Loss: 3.8821  |  PPL: 48.53  |  LR: 0.008147  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.8821 (n=8)
+  Step    358 (epoch 0)  |  Loss: 3.9197  |  PPL: 50.38  |  LR: 0.008086  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9197 (n=8)
+  Step    359 (epoch 0)  |  Loss: 4.7296  |  PPL: 113.25  |  LR: 0.008025  |  0.3 steps/s (9791 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7296 (n=8)
+  Step    360 (epoch 0)  |  Loss: 4.5565  |  PPL: 95.25  |  LR: 0.007964  |  0.3 steps/s (9763 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5565 (n=8)
+  Step    361 (epoch 0)  |  Loss: 4.2293  |  PPL: 68.67  |  LR: 0.007903  |  0.3 steps/s (9535 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2293 (n=8)
+  Step    362 (epoch 0)  |  Loss: 4.4176  |  PPL: 82.90  |  LR: 0.007842  |  0.3 steps/s (9795 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4176 (n=8)
+  Step    363 (epoch 0)  |  Loss: 4.2723  |  PPL: 71.69  |  LR: 0.007781  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2723 (n=8)
+  Step    364 (epoch 0)  |  Loss: 4.1398  |  PPL: 62.79  |  LR: 0.007721  |  0.3 steps/s (9792 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1398 (n=8)
+  Step    365 (epoch 0)  |  Loss: 4.3812  |  PPL: 79.93  |  LR: 0.007660  |  0.3 steps/s (9770 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3812 (n=8)
+  Step    366 (epoch 0)  |  Loss: 4.6244  |  PPL: 101.94  |  LR: 0.007600  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6244 (n=8)
+  Step    367 (epoch 0)  |  Loss: 4.1785  |  PPL: 65.27  |  LR: 0.007540  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1785 (n=8)
+  Step    368 (epoch 0)  |  Loss: 4.1779  |  PPL: 65.23  |  LR: 0.007479  |  0.3 steps/s (9772 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1779 (n=8)
+  Step    369 (epoch 0)  |  Loss: 3.9454  |  PPL: 51.69  |  LR: 0.007419  |  0.3 steps/s (9797 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9454 (n=8)
+  Step    370 (epoch 0)  |  Loss: 4.5352  |  PPL: 93.24  |  LR: 0.007359  |  0.3 steps/s (9775 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5352 (n=8)
+  Step    371 (epoch 0)  |  Loss: 4.1969  |  PPL: 66.48  |  LR: 0.007299  |  0.3 steps/s (9794 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1969 (n=8)
+  Step    372 (epoch 0)  |  Loss: 4.0752  |  PPL: 58.86  |  LR: 0.007239  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0752 (n=8)
+  Step    373 (epoch 0)  |  Loss: 4.3458  |  PPL: 77.15  |  LR: 0.007180  |  0.3 steps/s (9758 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3458 (n=8)
+  Step    374 (epoch 0)  |  Loss: 4.3152  |  PPL: 74.83  |  LR: 0.007120  |  0.3 steps/s (9763 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3152 (n=8)
+  Step    375 (epoch 0)  |  Loss: 4.5303  |  PPL: 92.78  |  LR: 0.007060  |  0.3 steps/s (9784 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5303 (n=8)
+  Step    376 (epoch 0)  |  Loss: 4.2951  |  PPL: 73.34  |  LR: 0.007001  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2951 (n=8)
+  Step    377 (epoch 0)  |  Loss: 4.7635  |  PPL: 117.16  |  LR: 0.006942  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.7635 (n=8)
+  Step    378 (epoch 0)  |  Loss: 4.0459  |  PPL: 57.16  |  LR: 0.006883  |  0.3 steps/s (9792 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0459 (n=8)
+  Step    379 (epoch 0)  |  Loss: 4.4795  |  PPL: 88.19  |  LR: 0.006823  |  0.3 steps/s (9764 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4795 (n=8)
+  Step    380 (epoch 0)  |  Loss: 4.5007  |  PPL: 90.08  |  LR: 0.006765  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5007 (n=8)
+  Step    381 (epoch 0)  |  Loss: 4.4437  |  PPL: 85.09  |  LR: 0.006706  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4437 (n=8)
+  Step    382 (epoch 0)  |  Loss: 4.4951  |  PPL: 89.58  |  LR: 0.006647  |  0.3 steps/s (9513 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4951 (n=8)
+  Step    383 (epoch 0)  |  Loss: 4.2516  |  PPL: 70.22  |  LR: 0.006588  |  0.3 steps/s (9758 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2516 (n=8)
+  Step    384 (epoch 0)  |  Loss: 4.2943  |  PPL: 73.28  |  LR: 0.006530  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2943 (n=8)
+  Step    385 (epoch 0)  |  Loss: 4.0176  |  PPL: 55.57  |  LR: 0.006472  |  0.3 steps/s (9751 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0176 (n=8)
+  Step    386 (epoch 0)  |  Loss: 4.3925  |  PPL: 80.85  |  LR: 0.006413  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3925 (n=8)
+  Step    387 (epoch 0)  |  Loss: 4.5532  |  PPL: 94.93  |  LR: 0.006355  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5532 (n=8)
+  Step    388 (epoch 0)  |  Loss: 4.2812  |  PPL: 72.33  |  LR: 0.006298  |  0.3 steps/s (9761 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2812 (n=8)
+  Step    389 (epoch 0)  |  Loss: 4.4475  |  PPL: 85.41  |  LR: 0.006240  |  0.3 steps/s (9793 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4475 (n=8)
+  Step    390 (epoch 0)  |  Loss: 4.0168  |  PPL: 55.53  |  LR: 0.006182  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0168 (n=8)
+  Step    391 (epoch 0)  |  Loss: 4.1937  |  PPL: 66.27  |  LR: 0.006125  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1937 (n=8)
+  Step    392 (epoch 0)  |  Loss: 4.2331  |  PPL: 68.93  |  LR: 0.006067  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2331 (n=8)
+  Step    393 (epoch 0)  |  Loss: 4.2320  |  PPL: 68.86  |  LR: 0.006010  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2320 (n=8)
+  Step    394 (epoch 0)  |  Loss: 4.1218  |  PPL: 61.67  |  LR: 0.005953  |  0.3 steps/s (9784 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1218 (n=8)
+  Step    395 (epoch 0)  |  Loss: 4.0707  |  PPL: 58.60  |  LR: 0.005896  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0707 (n=8)
+  Step    396 (epoch 0)  |  Loss: 4.6087  |  PPL: 100.35  |  LR: 0.005840  |  0.3 steps/s (9791 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6087 (n=8)
+  Step    397 (epoch 0)  |  Loss: 4.2389  |  PPL: 69.33  |  LR: 0.005783  |  0.3 steps/s (9774 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2389 (n=8)
+  Step    398 (epoch 0)  |  Loss: 4.5649  |  PPL: 96.05  |  LR: 0.005727  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5649 (n=8)
+  Step    399 (epoch 0)  |  Loss: 3.9028  |  PPL: 49.54  |  LR: 0.005670  |  0.3 steps/s (9772 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9028 (n=8)
+  Step    400 (epoch 0)  |  Loss: 4.1173  |  PPL: 61.39  |  LR: 0.005614  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1173 (n=8)
+  Step    401 (epoch 0)  |  Loss: 4.0639  |  PPL: 58.20  |  LR: 0.005558  |  0.3 steps/s (9762 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0639 (n=8)
+  Step    402 (epoch 0)  |  Loss: 4.4835  |  PPL: 88.54  |  LR: 0.005503  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4835 (n=8)
+  Step    403 (epoch 0)  |  Loss: 4.3729  |  PPL: 79.27  |  LR: 0.005447  |  0.3 steps/s (9757 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3729 (n=8)
+  Step    404 (epoch 0)  |  Loss: 4.2499  |  PPL: 70.10  |  LR: 0.005392  |  0.3 steps/s (9763 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2499 (n=8)
+  Step    405 (epoch 0)  |  Loss: 4.4704  |  PPL: 87.40  |  LR: 0.005337  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4704 (n=8)
+  Step    406 (epoch 0)  |  Loss: 4.2827  |  PPL: 72.43  |  LR: 0.005282  |  0.3 steps/s (9763 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2827 (n=8)
+  Step    407 (epoch 0)  |  Loss: 4.4323  |  PPL: 84.12  |  LR: 0.005227  |  0.3 steps/s (9774 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4323 (n=8)
+  Step    408 (epoch 0)  |  Loss: 3.7019  |  PPL: 40.53  |  LR: 0.005172  |  0.3 steps/s (9793 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.7019 (n=8)
+  Step    409 (epoch 0)  |  Loss: 3.9216  |  PPL: 50.48  |  LR: 0.005118  |  0.3 steps/s (9785 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9216 (n=8)
+  Step    410 (epoch 0)  |  Loss: 4.3724  |  PPL: 79.24  |  LR: 0.005063  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3724 (n=8)
+  Step    411 (epoch 0)  |  Loss: 3.8271  |  PPL: 45.93  |  LR: 0.005009  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.8271 (n=8)
+  Step    412 (epoch 0)  |  Loss: 4.2995  |  PPL: 73.66  |  LR: 0.004955  |  0.3 steps/s (9792 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2995 (n=8)
+  Step    413 (epoch 0)  |  Loss: 4.1283  |  PPL: 62.07  |  LR: 0.004902  |  0.3 steps/s (9755 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1283 (n=8)
+  Step    414 (epoch 0)  |  Loss: 4.4203  |  PPL: 83.12  |  LR: 0.004848  |  0.3 steps/s (9789 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4203 (n=8)
+  Step    415 (epoch 0)  |  Loss: 4.1779  |  PPL: 65.23  |  LR: 0.004795  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1779 (n=8)
+  Step    416 (epoch 0)  |  Loss: 4.4043  |  PPL: 81.80  |  LR: 0.004742  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4043 (n=8)
+  Step    417 (epoch 0)  |  Loss: 4.6568  |  PPL: 105.30  |  LR: 0.004689  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6568 (n=8)
+  Step    418 (epoch 0)  |  Loss: 4.1305  |  PPL: 62.21  |  LR: 0.004636  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1305 (n=8)
+  Step    419 (epoch 0)  |  Loss: 4.0699  |  PPL: 58.55  |  LR: 0.004584  |  0.3 steps/s (9754 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0699 (n=8)
+  Step    420 (epoch 0)  |  Loss: 4.3863  |  PPL: 80.35  |  LR: 0.004531  |  0.3 steps/s (9529 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3863 (n=8)
+  Step    421 (epoch 0)  |  Loss: 4.2592  |  PPL: 70.75  |  LR: 0.004479  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2592 (n=8)
+  Step    422 (epoch 0)  |  Loss: 4.3231  |  PPL: 75.43  |  LR: 0.004427  |  0.3 steps/s (9771 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3231 (n=8)
+  Step    423 (epoch 0)  |  Loss: 3.9297  |  PPL: 50.89  |  LR: 0.004376  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9297 (n=8)
+  Step    424 (epoch 0)  |  Loss: 4.2243  |  PPL: 68.33  |  LR: 0.004324  |  0.3 steps/s (9764 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2243 (n=8)
+  Step    425 (epoch 0)  |  Loss: 4.6780  |  PPL: 107.56  |  LR: 0.004273  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6780 (n=8)
+  Step    426 (epoch 0)  |  Loss: 4.0218  |  PPL: 55.80  |  LR: 0.004222  |  0.3 steps/s (9775 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0218 (n=8)
+  Step    427 (epoch 0)  |  Loss: 4.2413  |  PPL: 69.50  |  LR: 0.004171  |  0.3 steps/s (9784 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2413 (n=8)
+  Step    428 (epoch 0)  |  Loss: 4.2539  |  PPL: 70.38  |  LR: 0.004121  |  0.3 steps/s (9751 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2539 (n=8)
+  Step    429 (epoch 0)  |  Loss: 3.8928  |  PPL: 49.05  |  LR: 0.004071  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.8928 (n=8)
+  Step    430 (epoch 0)  |  Loss: 4.6086  |  PPL: 100.34  |  LR: 0.004021  |  0.3 steps/s (9762 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6086 (n=8)
+  Step    431 (epoch 0)  |  Loss: 4.1330  |  PPL: 62.36  |  LR: 0.003971  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1330 (n=8)
+  Step    432 (epoch 0)  |  Loss: 3.8349  |  PPL: 46.29  |  LR: 0.003921  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.8349 (n=8)
+  Step    433 (epoch 0)  |  Loss: 4.1658  |  PPL: 64.44  |  LR: 0.003872  |  0.3 steps/s (9796 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1658 (n=8)
+  Step    434 (epoch 0)  |  Loss: 4.4128  |  PPL: 82.50  |  LR: 0.003823  |  0.3 steps/s (9783 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4128 (n=8)
+  Step    435 (epoch 0)  |  Loss: 4.2216  |  PPL: 68.14  |  LR: 0.003774  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2216 (n=8)
+  Step    436 (epoch 0)  |  Loss: 4.1360  |  PPL: 62.55  |  LR: 0.003725  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1360 (n=8)
+  Step    437 (epoch 0)  |  Loss: 4.0648  |  PPL: 58.25  |  LR: 0.003677  |  0.3 steps/s (9770 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0648 (n=8)
+  Step    438 (epoch 0)  |  Loss: 4.4161  |  PPL: 82.78  |  LR: 0.003628  |  0.3 steps/s (9783 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4161 (n=8)
+  Step    439 (epoch 0)  |  Loss: 4.6289  |  PPL: 102.40  |  LR: 0.003580  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6289 (n=8)
+  Step    440 (epoch 0)  |  Loss: 3.9643  |  PPL: 52.68  |  LR: 0.003533  |  0.3 steps/s (9514 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9643 (n=8)
+  Step    441 (epoch 0)  |  Loss: 4.2677  |  PPL: 71.36  |  LR: 0.003485  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2677 (n=8)
+  Step    442 (epoch 0)  |  Loss: 4.4352  |  PPL: 84.37  |  LR: 0.003438  |  0.3 steps/s (9745 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4352 (n=8)
+  Step    443 (epoch 0)  |  Loss: 4.3515  |  PPL: 77.59  |  LR: 0.003391  |  0.3 steps/s (9776 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3515 (n=8)
+  Step    444 (epoch 0)  |  Loss: 3.9681  |  PPL: 52.88  |  LR: 0.003345  |  0.3 steps/s (9784 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9681 (n=8)
+  Step    445 (epoch 0)  |  Loss: 3.9295  |  PPL: 50.88  |  LR: 0.003298  |  0.3 steps/s (9762 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9295 (n=8)
+  Step    446 (epoch 0)  |  Loss: 3.7739  |  PPL: 43.55  |  LR: 0.003252  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.7739 (n=8)
+  Step    447 (epoch 0)  |  Loss: 4.2860  |  PPL: 72.67  |  LR: 0.003206  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2860 (n=8)
+  Step    448 (epoch 0)  |  Loss: 4.2442  |  PPL: 69.70  |  LR: 0.003160  |  0.3 steps/s (9749 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2442 (n=8)
+  Step    449 (epoch 0)  |  Loss: 4.0173  |  PPL: 55.55  |  LR: 0.003115  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0173 (n=8)
+  Step    450 (epoch 0)  |  Loss: 4.1783  |  PPL: 65.25  |  LR: 0.003070  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1783 (n=8)
+  Step    451 (epoch 0)  |  Loss: 4.4498  |  PPL: 85.61  |  LR: 0.003025  |  0.3 steps/s (9759 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4498 (n=8)
+  Step    452 (epoch 0)  |  Loss: 4.2478  |  PPL: 69.95  |  LR: 0.002981  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2478 (n=8)
+  Step    453 (epoch 0)  |  Loss: 4.1214  |  PPL: 61.65  |  LR: 0.002936  |  0.3 steps/s (9773 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1214 (n=8)
+  Step    454 (epoch 0)  |  Loss: 3.8443  |  PPL: 46.73  |  LR: 0.002892  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.8443 (n=8)
+  Step    455 (epoch 0)  |  Loss: 4.1399  |  PPL: 62.80  |  LR: 0.002849  |  0.3 steps/s (9762 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1399 (n=8)
+  Step    456 (epoch 0)  |  Loss: 4.3604  |  PPL: 78.29  |  LR: 0.002805  |  0.3 steps/s (9780 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3604 (n=8)
+  Step    457 (epoch 0)  |  Loss: 4.0534  |  PPL: 57.59  |  LR: 0.002762  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0534 (n=8)
+  Step    458 (epoch 0)  |  Loss: 4.1503  |  PPL: 63.46  |  LR: 0.002719  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1503 (n=8)
+  Step    459 (epoch 0)  |  Loss: 4.3166  |  PPL: 74.93  |  LR: 0.002676  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3166 (n=8)
+  Step    460 (epoch 0)  |  Loss: 4.5364  |  PPL: 93.35  |  LR: 0.002634  |  0.3 steps/s (9759 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5364 (n=8)
+  Step    461 (epoch 0)  |  Loss: 4.3303  |  PPL: 75.97  |  LR: 0.002592  |  0.3 steps/s (9777 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3303 (n=8)
+  Step    462 (epoch 0)  |  Loss: 4.0334  |  PPL: 56.45  |  LR: 0.002550  |  0.3 steps/s (9788 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0334 (n=8)
+  Step    463 (epoch 0)  |  Loss: 4.2224  |  PPL: 68.20  |  LR: 0.002509  |  0.3 steps/s (9791 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2224 (n=8)
+  Step    464 (epoch 0)  |  Loss: 4.1496  |  PPL: 63.41  |  LR: 0.002468  |  0.3 steps/s (9764 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1496 (n=8)
+  Step    465 (epoch 0)  |  Loss: 4.2233  |  PPL: 68.26  |  LR: 0.002427  |  0.3 steps/s (9772 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2233 (n=8)
+  Step    466 (epoch 0)  |  Loss: 4.5176  |  PPL: 91.62  |  LR: 0.002386  |  0.3 steps/s (9784 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5176 (n=8)
+  Step    467 (epoch 0)  |  Loss: 4.1458  |  PPL: 63.17  |  LR: 0.002346  |  0.3 steps/s (9767 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1458 (n=8)
+  Step    468 (epoch 0)  |  Loss: 4.2188  |  PPL: 67.95  |  LR: 0.002306  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2188 (n=8)
+  Step    469 (epoch 0)  |  Loss: 4.3144  |  PPL: 74.77  |  LR: 0.002266  |  0.3 steps/s (9769 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3144 (n=8)
+  Step    470 (epoch 0)  |  Loss: 4.3319  |  PPL: 76.09  |  LR: 0.002227  |  0.3 steps/s (9763 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3319 (n=8)
+  Step    471 (epoch 0)  |  Loss: 4.2512  |  PPL: 70.19  |  LR: 0.002188  |  0.3 steps/s (9752 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2512 (n=8)
+  Step    472 (epoch 0)  |  Loss: 4.3780  |  PPL: 79.68  |  LR: 0.002149  |  0.3 steps/s (9775 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3780 (n=8)
+  Step    473 (epoch 0)  |  Loss: 3.9126  |  PPL: 50.03  |  LR: 0.002110  |  0.3 steps/s (9764 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9126 (n=8)
+  Step    474 (epoch 0)  |  Loss: 4.0375  |  PPL: 56.69  |  LR: 0.002072  |  0.3 steps/s (9786 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0375 (n=8)
+  Step    475 (epoch 0)  |  Loss: 4.0482  |  PPL: 57.29  |  LR: 0.002034  |  0.3 steps/s (9778 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0482 (n=8)
+  Step    476 (epoch 0)  |  Loss: 4.2180  |  PPL: 67.90  |  LR: 0.001997  |  0.3 steps/s (9756 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2180 (n=8)
+  Step    477 (epoch 0)  |  Loss: 4.2372  |  PPL: 69.22  |  LR: 0.001960  |  0.3 steps/s (9783 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2372 (n=8)
+  Step    478 (epoch 0)  |  Loss: 4.6950  |  PPL: 109.40  |  LR: 0.001923  |  0.3 steps/s (9530 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.6950 (n=8)
+  Step    479 (epoch 0)  |  Loss: 4.2280  |  PPL: 68.58  |  LR: 0.001886  |  0.3 steps/s (9779 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2280 (n=8)
+  Step    480 (epoch 0)  |  Loss: 4.0431  |  PPL: 57.00  |  LR: 0.001850  |  0.3 steps/s (9767 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0431 (n=8)
+  Step    481 (epoch 0)  |  Loss: 4.1402  |  PPL: 62.82  |  LR: 0.001814  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1402 (n=8)
+  Step    482 (epoch 0)  |  Loss: 4.2113  |  PPL: 67.45  |  LR: 0.001778  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2113 (n=8)
+  Step    483 (epoch 0)  |  Loss: 4.4829  |  PPL: 88.49  |  LR: 0.001743  |  0.3 steps/s (9782 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4829 (n=8)
+  Step    484 (epoch 0)  |  Loss: 4.2247  |  PPL: 68.35  |  LR: 0.001708  |  0.3 steps/s (9770 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.2247 (n=8)
+  Step    485 (epoch 0)  |  Loss: 3.7510  |  PPL: 42.56  |  LR: 0.001673  |  0.3 steps/s (9763 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.7510 (n=8)
+  Step    486 (epoch 0)  |  Loss: 3.7356  |  PPL: 41.91  |  LR: 0.001638  |  0.3 steps/s (9785 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.7356 (n=8)
+  Step    487 (epoch 0)  |  Loss: 4.5166  |  PPL: 91.52  |  LR: 0.001604  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5166 (n=8)
+  Step    488 (epoch 0)  |  Loss: 4.1971  |  PPL: 66.50  |  LR: 0.001571  |  0.3 steps/s (9765 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1971 (n=8)
+  Step    489 (epoch 0)  |  Loss: 4.4081  |  PPL: 82.11  |  LR: 0.001537  |  0.3 steps/s (9794 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.4081 (n=8)
+  Step    490 (epoch 0)  |  Loss: 4.5830  |  PPL: 97.81  |  LR: 0.001504  |  0.3 steps/s (9766 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.5830 (n=8)
+  Step    491 (epoch 0)  |  Loss: 4.0374  |  PPL: 56.68  |  LR: 0.001471  |  0.3 steps/s (9774 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.0374 (n=8)
+  Step    492 (epoch 0)  |  Loss: 4.3360  |  PPL: 76.40  |  LR: 0.001439  |  0.3 steps/s (9787 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3360 (n=8)
+  Step    493 (epoch 0)  |  Loss: 4.1087  |  PPL: 60.87  |  LR: 0.001407  |  0.3 steps/s (9790 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1087 (n=8)
+  Step    494 (epoch 0)  |  Loss: 4.3425  |  PPL: 76.90  |  LR: 0.001375  |  0.3 steps/s (9763 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.3425 (n=8)
+  Step    495 (epoch 0)  |  Loss: 3.8637  |  PPL: 47.64  |  LR: 0.001344  |  0.3 steps/s (9781 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.8637 (n=8)
+  Step    496 (epoch 0)  |  Loss: 3.9484  |  PPL: 51.85  |  LR: 0.001313  |  0.3 steps/s (9766 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9484 (n=8)
+  Step    497 (epoch 0)  |  Loss: 4.1036  |  PPL: 60.56  |  LR: 0.001282  |  0.3 steps/s (9764 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1036 (n=8)
+  Step    498 (epoch 0)  |  Loss: 3.9838  |  PPL: 53.72  |  LR: 0.001252  |  0.3 steps/s (9756 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 3.9838 (n=8)
+  Step    499 (epoch 0)  |  Loss: 4.1404  |  PPL: 62.83  |  LR: 0.001221  |  0.3 steps/s (9444 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1404 (n=8)
+  Step    500 (epoch 0)  |  Loss: 4.1317  |  PPL: 62.28  |  LR: 0.001192  |  0.3 steps/s (9768 tok/s)  |  VRAM: 1.00/1.23 GB
+    Per-source: Code: 4.1317 (n=8)
+  ✓ Checkpoint saved: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/q48m_p0.0\edge_conversational_step500.pt
+
+======================================================================
+TRAINING COMPLETE
+======================================================================
+  Total steps:     500
+  Total time:       1679.3s (28.0 min)
+  Avg time/step:    3.359s
+  Final checkpoint: C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/q48m_p0.0\edge_conversational.pt
+  Training log:     C:/Users/komal/Documents/Codes/kramba-wt-nodrop/checkpoints/q48m_p0.0\training_log.csv
+✓ Step 5 complete.
+EXIT 0

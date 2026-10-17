@@ -1,0 +1,217 @@
+{
+ "config": {
+  "repo": "C:\\Users\\komal\\Documents\\Codes\\kramba-wt-nodrop",
+  "out": "results/dropout_1b/off_2.json",
+  "dropout": 0.0,
+  "warmup": 2,
+  "cycles": 2,
+  "profile": false
+ },
+ "dropout_module_p_counts": {
+  "0.0": 72
+ },
+ "steps": [
+  {
+   "phase": "warm",
+   "active": "token_embedding",
+   "loss": 11.22266674041748,
+   "grad_norm": 1.7385938167572021
+  },
+  {
+   "phase": "warm",
+   "active": "blocks.0+blocks.1",
+   "loss": 8.939725875854492,
+   "grad_norm": 7.024102687835693
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.2+blocks.3",
+   "wall": 18.16243320000649,
+   "loss": 9.711312294006348,
+   "grad_norm": 2.4584455490112305
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.4+blocks.5",
+   "wall": 17.152375000005122,
+   "loss": 8.471096992492676,
+   "grad_norm": 2.0310184955596924
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.6+blocks.7",
+   "wall": 16.1318697000097,
+   "loss": 7.560258865356445,
+   "grad_norm": 1.9303357601165771
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.8+blocks.9",
+   "wall": 15.067653999998583,
+   "loss": 6.922606945037842,
+   "grad_norm": 1.2397009134292603
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.10+blocks.11",
+   "wall": 14.071663299997454,
+   "loss": 6.296781539916992,
+   "grad_norm": 1.007957100868225
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.12+blocks.13",
+   "wall": 13.097299699991709,
+   "loss": 5.755950927734375,
+   "grad_norm": 0.857425332069397
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.14+blocks.15",
+   "wall": 12.058273299990105,
+   "loss": 5.279052734375,
+   "grad_norm": 0.760848879814148
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.16+blocks.17",
+   "wall": 11.043554400006542,
+   "loss": 4.8538618087768555,
+   "grad_norm": 0.6970806121826172
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.18+blocks.19",
+   "wall": 10.016419799998403,
+   "loss": 4.470381259918213,
+   "grad_norm": 0.717153012752533
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.20+blocks.21",
+   "wall": 8.95594249998976,
+   "loss": 4.186269760131836,
+   "grad_norm": 0.5948686599731445
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.22+blocks.23+final_norm+decoder",
+   "wall": 7.935939599992707,
+   "loss": 3.8521618843078613,
+   "grad_norm": 0.5811513066291809
+  },
+  {
+   "phase": "cycle0",
+   "active": "token_embedding",
+   "wall": 19.925992300006328,
+   "loss": 3.5441505908966064,
+   "grad_norm": 1.685170292854309
+  },
+  {
+   "phase": "cycle0",
+   "active": "blocks.0+blocks.1",
+   "wall": 19.142344799998682,
+   "loss": 2.991257667541504,
+   "grad_norm": 13.82287883758545
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.2+blocks.3",
+   "wall": 18.196971100012888,
+   "loss": 7.74808406829834,
+   "grad_norm": 3.385441780090332
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.4+blocks.5",
+   "wall": 17.189286799999536,
+   "loss": 6.586792945861816,
+   "grad_norm": 2.519197463989258
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.6+blocks.7",
+   "wall": 16.167310000004363,
+   "loss": 5.682178497314453,
+   "grad_norm": 2.450063705444336
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.8+blocks.9",
+   "wall": 15.092424100002972,
+   "loss": 5.034081935882568,
+   "grad_norm": 1.2494741678237915
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.10+blocks.11",
+   "wall": 14.088902100003907,
+   "loss": 4.400334358215332,
+   "grad_norm": 0.9547063112258911
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.12+blocks.13",
+   "wall": 13.070091000001412,
+   "loss": 3.8616952896118164,
+   "grad_norm": 0.7472026348114014
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.14+blocks.15",
+   "wall": 12.053580499996315,
+   "loss": 3.3914363384246826,
+   "grad_norm": 0.6268607378005981
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.16+blocks.17",
+   "wall": 11.046738499993808,
+   "loss": 2.978870153427124,
+   "grad_norm": 0.5487828254699707
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.18+blocks.19",
+   "wall": 10.015620200007106,
+   "loss": 2.6159615516662598,
+   "grad_norm": 0.5067116618156433
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.20+blocks.21",
+   "wall": 8.98493459999736,
+   "loss": 2.3554563522338867,
+   "grad_norm": 0.4443570077419281
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.22+blocks.23+final_norm+decoder",
+   "wall": 7.933060199997271,
+   "loss": 2.0605263710021973,
+   "grad_norm": 0.44002875685691833
+  },
+  {
+   "phase": "cycle1",
+   "active": "token_embedding",
+   "wall": 19.938914099999238,
+   "loss": 1.7994462251663208,
+   "grad_norm": 1.4589122533798218
+  },
+  {
+   "phase": "cycle1",
+   "active": "blocks.0+blocks.1",
+   "wall": 19.14487829999416,
+   "loss": 1.2794017791748047,
+   "grad_norm": 7.100888252258301
+  }
+ ],
+ "active_dropout_calls_timed": 0,
+ "peak_reserved_mib": 5062.0,
+ "peak_alloc_mib": 3088.91943359375,
+ "mean_s_per_step": 14.06478742692315,
+ "cycle_means": [
+  14.0585970461532,
+  14.070977807693103
+ ]
+}
