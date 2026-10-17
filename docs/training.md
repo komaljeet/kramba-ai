@@ -4,6 +4,34 @@
 > what fits in 6 GB, key training flags, `--full` meta-flag, precision, generation, tips.
 > VRAM-envelope issues #69/#70 live here; the closed-issue ledger is [features.md](features.md).
 
+## The exact machine every number in this repo was measured on (2026-10-17)
+
+Every s/step, tok/s, VRAM and day-count figure in this project's docs and blog posts --
+unless explicitly marked as an extrapolation -- was measured on this one laptop, not a
+representative or average "6 GB card":
+
+| | |
+|---|---|
+| GPU | NVIDIA GeForce RTX 4050 Laptop GPU |
+| VRAM | 6141 MiB (~6 GB), compute capability 8.9 (Ada Lovelace) |
+| SMs | 20 |
+| Power limit | 120 W (laptop, power-limited vs. the desktop RTX 4050) |
+| Max SM clock | 3105 MHz |
+| Measured peak bf16 GEMM | 25.6 TFLOP/s (measured fresh 2026-10-15, not a spec-sheet number) |
+| Driver | 610.74 |
+| CPU | AMD Ryzen 7 7840HS w/ Radeon 780M Graphics |
+| System RAM | 15.29 GB |
+| OS | Windows 11 Home Single Language, build 10.0.26200 |
+| PyTorch | 2.12.1+cu126 (CUDA 12.6) |
+
+This matters because this is a laptop GPU, power- and thermal-limited below its desktop
+namesake, on Windows (WDDM, not Linux) with only 15.29 GB of system RAM -- a notably
+tighter RAM budget than VRAM budget, which is why this project's offload/BCD work spent
+so much of its time on host RAM, not just VRAM. None of the numbers in this repo should
+be assumed to transfer to a desktop RTX 4050, a different driver/OS, or more system RAM
+without re-measuring -- this project has been wrong more than once this week about
+numbers transferring across scale, let alone across hardware.
+
 ## HVN vs Transformer — Fundamental Differences
 
 | Aspect | Transformer (MHA) | HVN |

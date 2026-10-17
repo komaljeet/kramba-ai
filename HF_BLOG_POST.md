@@ -21,11 +21,31 @@ The "nothing left, 20-25% at most" line further down in this post turned out to 
 
 I looked everywhere to be able to **pre-train** an LLM on my low-end GPU and could not find one. Everywhere I looked, the same conclusion was reached: "You need an A100", "You can only train a 20M toy model on your hardware". So being 'broke', I did the only thing I could do — subscribe to Claude and try to find a way... after much prompting and testing, I finally stitched together the stack that allowed me to **pre-train** a 1B LLM on my laptop. After much testing, we are at **100.6% of the card's *measured* GEMM peak** (I don't know how 100.6% is even possible, I'm not a scientist, just a broke guy).
 
-Though I can **pre-train** a 1B LLM on 6 GB VRAM, it still takes about **168 days** (accepting
+Though I can **pre-train** a 1B LLM on 6 GB VRAM, it still takes about **154 days** (accepting
 block-coordinate descent's own quality cost as measured) or **~246 days** (if you want the
 output to match full-training quality instead) to finish **pretraining** it properly — down
 from 375 days measured in August, after real speed and quality fixes landed this week. More
 details below:
+
+---
+
+## The exact machine these numbers were measured on
+
+Every number in this post — unless marked as an extrapolation — comes from one specific
+laptop, not an average "6 GB card":
+
+| | |
+|---|---|
+| GPU | NVIDIA GeForce RTX 4050 Laptop GPU — 6141 MiB VRAM, 20 SMs, compute cap 8.9 (Ada Lovelace), power-limited to 120 W |
+| Measured peak bf16 GEMM | 25.6 TFLOP/s (measured, not a spec-sheet number) |
+| CPU | AMD Ryzen 7 7840HS |
+| System RAM | 15.29 GB |
+| OS | Windows 11 Home, build 10.0.26200 (WDDM, not Linux) |
+| PyTorch | 2.12.1+cu126 |
+
+This is a power-limited *laptop* GPU on Windows with notably tight system RAM relative to
+its VRAM — don't assume these numbers transfer to a desktop RTX 4050, a different OS, or
+more system RAM without re-measuring.
 
 ---
 
