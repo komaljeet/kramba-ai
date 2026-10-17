@@ -4,7 +4,8 @@
 
 A training and evaluation stack for linear-attention language models that runs on a single
 consumer graphics card. The headline result, measured rather than estimated: **a 1.11-billion
-parameter model trains in 4.51 GB**, and ~1.6B is the ceiling on the card.
+parameter model trains in 5.31 GB** (82.4% of the card, measured 2026-10-17 — up from 4.51 GB
+in September, see the before/after table below for why), and ~1.6B is the ceiling on the card.
 
 That's the whole project. The rest of this page is about what that does and doesn't mean.
 
@@ -15,7 +16,7 @@ That's the whole project. The rest of this page is about what that does and does
 | GPU | NVIDIA GeForce RTX 4050 Laptop GPU — 6141 MiB VRAM, 20 SMs, compute cap 8.9 (Ada Lovelace), power-limited to 120 W |
 | Measured peak bf16 GEMM | 25.6 TFLOP/s (measured, not a spec-sheet number) |
 | CPU | AMD Ryzen 7 7840HS |
-| System RAM | 15.29 GB |
+| System RAM | 15.29 GB usable (2x8GB DDR5-5600, dual channel) |
 | OS | Windows 11 Home, build 10.0.26200 (WDDM, not Linux) |
 | PyTorch | 2.12.1+cu126 |
 
@@ -32,6 +33,7 @@ re-measuring.
 | **BCD's own quality cost** | **~4× worse perplexity** than full training (one block trains at a time, naive partition) | **~1.6× worse perplexity** (balanced block partitioning, issue #164) |
 | 1B pretrain time | ~375 days | **~154-246 days**, depending on how the BCD quality cost above is counted |
 | Offload correctness | silent weight-corruption bug, undetected for 76 days | found, fixed, validated end-to-end |
+| Peak VRAM at 1.11B | 4.51 GB | **5.31 GB** (82.4% of the card) — up, not down; this week's fused kernels/caches add some transient buffers even while speeding things up |
 
 The BCD row is a real cut in how much worse the memory-saving training mode is compared to
 training the full model at once — not a speed change. See [`docs/state.md`](docs/state.md)
@@ -99,7 +101,7 @@ Triton scan and megakernel, and the fixes that make them work together.
 
 | claim | status |
 |---|---|
-| 1.11B-parameter model **trains in 4.51 GB**, 1,579 tok/s | measured 2026-09-19 |
+| 1.11B-parameter model **trains in 4.51 GB**, 1,579 tok/s | measured 2026-09-19 — **stale**: current measured peak is 5.31 GB reserved (82.4% of the card) at 2,278 tok/s (2026-10-17); VRAM went up, not down, as this week's fused kernels/caches added some transient buffers even while speeding things up |
 | **~1.6B is the size ceiling** (2.45B spills to system RAM) | measured 2026-08-17 |
 | the stack is **not architecture-specific** — a plain 1.07B transformer also trains in 4.04 GB | measured 2026-08-17 |
 | flat ms/token from 256 → 4096 tokens of context | measured, [benchmarks_speed.md](docs/benchmarks_speed.md) |

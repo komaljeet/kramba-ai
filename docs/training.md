@@ -20,7 +20,7 @@ representative or average "6 GB card":
 | Measured peak bf16 GEMM | 25.6 TFLOP/s (measured fresh 2026-10-15, not a spec-sheet number) |
 | Driver | 610.74 |
 | CPU | AMD Ryzen 7 7840HS w/ Radeon 780M Graphics |
-| System RAM | 15.29 GB |
+| System RAM | 15.29 GB usable (2x8GB DDR5-5600, dual channel) |
 | OS | Windows 11 Home Single Language, build 10.0.26200 |
 | PyTorch | 2.12.1+cu126 (CUDA 12.6) |
 
@@ -41,6 +41,7 @@ numbers transferring across scale, let alone across hardware.
 | **BCD's own quality cost** | **~4x worse perplexity** than full training (one block trains at a time, naive partition) | **~1.6x worse perplexity** (balanced block partitioning, issue #164) |
 | 1B pretrain time | ~375 days | **~154-246 days**, depending on how the BCD quality cost above is counted |
 | Offload correctness | silent weight-corruption bug, present undetected for 76 days (2026-07-26 to 2026-10-10) | found, fixed, and validated end-to-end with real hard-kill-and-resume tests |
+| Peak VRAM at 1.11B | 4.51 GB | **5.31 GB** (82.4% of the card) -- up, not down; fused kernels/caches add some transient buffers even while speeding things up |
 
 The BCD quality row matters as much as the speed numbers, and is easy to miss in a wall of
 step-time figures: the **~4x -> ~1.6x is a real cut in how much worse the memory-saving

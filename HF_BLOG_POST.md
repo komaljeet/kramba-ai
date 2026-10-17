@@ -2,14 +2,14 @@
 
 [DOI 10.5281/zenodo.22725431](https://zenodo.org/records/22725431)
 
-## The exact machine every number below was measured on
+## Laptop Specs
 
 | | |
 |---|---|
 | GPU | NVIDIA GeForce RTX 4050 Laptop GPU — 6141 MiB VRAM, 20 SMs, compute cap 8.9 (Ada Lovelace), power-limited to 120 W |
 | Measured peak bf16 GEMM | 25.6 TFLOP/s (measured, not a spec-sheet number) |
 | CPU | AMD Ryzen 7 7840HS |
-| System RAM | 15.29 GB |
+| System RAM | 15.29 GB usable (2x8GB DDR5-5600, dual channel) |
 | OS | Windows 11 Home, build 10.0.26200 (WDDM, not Linux) |
 | PyTorch | 2.12.1+cu126 |
 
@@ -26,6 +26,7 @@ more system RAM without re-measuring.
 | **BCD's own quality cost** | **~4× worse perplexity** than full training (one block trains at a time, balance was naive) | **~1.6× worse perplexity** (balanced block partitioning, issue #164) |
 | 1B pretrain time | ~375 days | **~154-246 days**, depending on how the BCD quality cost above is counted |
 | Offload correctness | silent weight-corruption bug, present undetected for 76 days (2026-07-26 to 2026-10-10) | found, fixed, and validated end-to-end with real hard-kill-and-resume tests |
+| Peak VRAM at 1.11B | 4.51 GB | **5.31 GB** (82.4% of the card) — up, not down; fused kernels/caches add some transient buffers even while speeding things up |
 
 The BCD quality row is easy to miss but matters as much as the speed numbers: the
 **~4× → ~1.6× figure is a real cut in how much worse the memory-saving training mode is**
@@ -66,7 +67,7 @@ details below:
 | Metric | Value |
 |--------|-------|
 | **Model size** | 1.11B parameters (pretraining, not inference) |
-| **Peak VRAM** | 4.51 GB (1.5 GB to spare) |
+| **Peak VRAM** | 4.51 GB, 1.5 GB to spare (August); **5.31 GB measured 2026-10-17**, 82.4% of the card — up, not down, from this week's fused kernels/caches |
 | **Throughput** | 1,579 tokens/sec at 4,096 context (August measurement; **2,278 tok/s measured 2026-10-14** after this week's speed levers) |
 | **Pretraining time (Chinchilla-optimal)** | ~375 days for 36B tokens (August); **~154-246 days now**, see the update note above |
 
