@@ -32,6 +32,24 @@ be assumed to transfer to a desktop RTX 4050, a different driver/OS, or more sys
 without re-measuring -- this project has been wrong more than once this week about
 numbers transferring across scale, let alone across hardware.
 
+## Before / after — same hardware, one week of real fixes (2026-08 -> 2026-10)
+
+| | August 2026 | October 2026 (now) |
+|---|---|---|
+| 1B step time | 21.81 s/step | **14.385 s/step** (-34%) |
+| Throughput | 1,579 tok/s | **2,278 tok/s** |
+| **BCD's own quality cost** | **~4x worse perplexity** than full training (one block trains at a time, naive partition) | **~1.6x worse perplexity** (balanced block partitioning, issue #164) |
+| 1B pretrain time | ~375 days | **~154-246 days**, depending on how the BCD quality cost above is counted |
+| Offload correctness | silent weight-corruption bug, present undetected for 76 days (2026-07-26 to 2026-10-10) | found, fixed, and validated end-to-end with real hard-kill-and-resume tests |
+
+The BCD quality row matters as much as the speed numbers, and is easy to miss in a wall of
+step-time figures: the **~4x -> ~1.6x is a real cut in how much worse the memory-saving
+training mode is** compared to training the full model at once -- not a speed change. One
+block slot sized for the vocabulary table was wasting memory for every other block;
+grouping layers into balanced-size blocks reclaimed it, letting more layers train "live"
+at once for the same VRAM budget. Full trail: `docs/state.md`'s BCD-balanced-partition and
+offload-bugs entries.
+
 ## HVN vs Transformer — Fundamental Differences
 
 | Aspect | Transformer (MHA) | HVN |

@@ -8,6 +8,35 @@ parameter model trains in 4.51 GB**, and ~1.6B is the ceiling on the card.
 
 That's the whole project. The rest of this page is about what that does and doesn't mean.
 
+## The exact machine every number here was measured on
+
+| | |
+|---|---|
+| GPU | NVIDIA GeForce RTX 4050 Laptop GPU — 6141 MiB VRAM, 20 SMs, compute cap 8.9 (Ada Lovelace), power-limited to 120 W |
+| Measured peak bf16 GEMM | 25.6 TFLOP/s (measured, not a spec-sheet number) |
+| CPU | AMD Ryzen 7 7840HS |
+| System RAM | 15.29 GB |
+| OS | Windows 11 Home, build 10.0.26200 (WDDM, not Linux) |
+| PyTorch | 2.12.1+cu126 |
+
+Power-limited laptop GPU, Windows, tight system RAM relative to VRAM — don't assume these
+numbers transfer to a desktop RTX 4050, a different OS, or more system RAM without
+re-measuring.
+
+## Before / after — same hardware, one week of real fixes (2026-08 → 2026-10)
+
+| | August 2026 | October 2026 (now) |
+|---|---|---|
+| 1B step time | 21.81 s/step | **14.385 s/step** (-34%) |
+| Throughput | 1,579 tok/s | **2,278 tok/s** |
+| **BCD's own quality cost** | **~4× worse perplexity** than full training (one block trains at a time, naive partition) | **~1.6× worse perplexity** (balanced block partitioning, issue #164) |
+| 1B pretrain time | ~375 days | **~154-246 days**, depending on how the BCD quality cost above is counted |
+| Offload correctness | silent weight-corruption bug, undetected for 76 days | found, fixed, validated end-to-end |
+
+The BCD row is a real cut in how much worse the memory-saving training mode is compared to
+training the full model at once — not a speed change. See [`docs/state.md`](docs/state.md)
+for the full trail.
+
 **Correction (2026-10-11):** the CPU weight-offload path used by the 1.11B run below had a bug
 from 2026-07-26 to 2026-10-10 that could swap weights between same-shaped matrices during
 training (fixed in commit `2f94d7a`, confirmed present as far back as the offload code itself,
