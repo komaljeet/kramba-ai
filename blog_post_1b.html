@@ -125,7 +125,7 @@
   end-to-end (a real run hard-killed and resumed mid-training three times, plus a real 1.1B
   fresh-build and resume), with four more real bugs found and fixed along the way. Separately,
   four more real speed levers landed this week on top of the ones in this post &mdash; the
-  "~300 days, nothing left" figures further down are now stale (current: ~161-258 days, see
+  "~300 days, nothing left" figures further down are now stale (current: ~154-246 days, see
   <code>docs/state.md</code> for the full trail). The "every optimisation left is 20-25%" line
   below also turned out to be wrong &mdash; corrected in place, not deleted.
 </p>
@@ -297,7 +297,7 @@
     <tr><td>48M</td><td class="num win">yes</td><td class="num">~1 day</td></tr>
     <tr><td>108M</td><td class="num win">yes</td><td class="num">~5 days</td></tr>
     <tr><td>157M</td><td class="num win">yes</td><td class="num">~10 days</td></tr>
-    <tr><td>1.11B</td><td class="num win">yes &mdash; 4.51 GB</td><td class="num loss">~161-258 days<br><span style="font-size:0.8em;opacity:0.7;">(was ~300, Aug measurement)</span></td></tr>
+    <tr><td>1.11B</td><td class="num win">yes &mdash; 4.51 GB</td><td class="num loss">~154-246 days<br><span style="font-size:0.8em;opacity:0.7;">(was ~300, Aug measurement)</span></td></tr>
   </tbody>
 </table>
 </div>
@@ -305,10 +305,12 @@
 <p>
   <strong>It was not bad code, but it also wasn't finished.</strong> This project said in August
   "every optimisation left, added up optimistically, is 20-25%" &mdash; then found four more
-  real levers in October anyway, cutting the measured step from 21.81 to <strong>15.067 s/step</strong>
-  (2,175 tok/s, up from 1,579), a 30.9% cut against the August baseline. The 1.11B run now needs
-  <strong>~161 days</strong> accepting block-coordinate descent's own measured quality cost, or
-  <strong>~258 days</strong> if the output needs to match full-training quality instead &mdash;
+  real levers in October anyway, plus turned dropout off after a real multi-epoch test found
+  it costs quality in this project's repeated-data regime, not helps it. Cutting the measured
+  step from 21.81 to <strong>14.385 s/step</strong> (2,278 tok/s, up from 1,579), a 34.0% cut
+  against the August baseline. The 1.11B run now needs
+  <strong>~154 days</strong> accepting block-coordinate descent's own measured quality cost, or
+  <strong>~246 days</strong> if the output needs to match full-training quality instead &mdash;
   down from ~300-375. The lesson this project keeps re-learning: don't trust "nothing left"
   without a fresh number behind it.
 </p>

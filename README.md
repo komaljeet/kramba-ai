@@ -24,10 +24,12 @@ active block wasn't block 0, BCD's bf16 parking silently freezing bias/norm para
 whole run, ternary conversion doubling host RAM and crashing 1B builds outright, and an
 error-swallowing bug that made argument mistakes look like crashes) — all merged, all
 tested together, no bad interaction found. Separately, four more real step-time levers
-landed this week, cutting the measured 1B step from 21.81 to **15.067 s/step** (-30.9%, a
-1.45× speedup), stacked and re-measured together, not just added up on paper. **The
-"reality check" section below is now corrected for these numbers — see
-[`docs/state.md`](docs/state.md) for the full measured trail.**
+landed this week, plus dropout turned off after a real multi-epoch quality test (not just
+assumed) found it actually costs quality in this project's repeated-data regime, not helps
+it — cutting the measured 1B step from 21.81 to **14.385 s/step** (-34.0%, a 1.52× speedup),
+stacked and re-measured together, not just added up on paper. **The "reality check" section
+below is now corrected for these numbers — see [`docs/state.md`](docs/state.md) for the full
+measured trail.**
 
 Full documentation is in [`docs/`](docs/index.md). If you're picking this up cold, start with
 [`docs/handoff.md`](docs/handoff.md).
@@ -77,7 +79,7 @@ Triton scan and megakernel, and the fixes that make them work together.
 | chunked cross-entropy saves **1436 MB at 48M** | measured 2026-08-17 |
 | **not cheaper to train** — a transformer is 1.41× faster per step | measured; the win is at inference only |
 | the 1B step runs at **close to hardware limits** — matmuls hit 100.6% of the card's own measured GEMM ceiling | measured 2026-08-31 |
-| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 — **stale**: current measured step is 15.067 s/step (~161-258 days depending on BCD quality framing, see the reality check below), from four more real speed levers landed 2026-10-12/14 |
+| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 — **stale**: current measured step is 14.385 s/step (~154-246 days depending on BCD quality framing, see the reality check below), from four more real speed levers landed 2026-10-12/14 |
 | **1.11B fits and runs in 4.51 GB with 5-technique stack** (BCD + offload + ternary + grad checkpoint + chunked loss) | VRAM measured 2026-09-19, 1350 steps — **but see the correction above: this run used an offload path with a weight-corruption bug (fixed 2026-10-10), so the loss curve from this run needs re-verifying, the VRAM figure does not** |
 | **tied embeddings + offload + BCD + chunked_loss fit without OOM** (previously OOM, fixed by pinning + chunked loss) | measured 2026-09-26, 79% VRAM (4.85 GB of 6 GB) at 1.11B fp32 — "composes" here means *fits*; whether it trains *correctly* at this combination and scale was never checked before 2026-10-10, and is only confirmed at small scale since |
 
@@ -106,8 +108,8 @@ parameters — so cost grows with the **square** of model size.
 The memory engineering got a 6B model to run forward and backward on this card at
 ~1 GB peak. **That is not the same as being able to train it.** 6B is still out of reach here.
 1B, with `--block-coordinate --offload`, is real but slow: at the current measured
-**15.067 s/step** (2,175 tok/s), hitting this project's 30-tokens-per-body-param convention
-takes **~161 days** accepting BCD's own ~1.6× quality cost as measured, or **~258 days**
+**14.385 s/step** (2,278 tok/s), hitting this project's 30-tokens-per-body-param convention
+takes **~154 days** accepting BCD's own ~1.6× quality cost as measured, or **~246 days**
 if you want BCD's output to actually match full-training quality instead (that's the
 multiplier's actual direction — the shorter number is the one with the quality cost baked
 in, not the other way around). This was **375 days at a smaller, un-fixed config as of
@@ -116,10 +118,13 @@ partitioning, cutting BCD's quality cost from ~4× to ~1.6×) landed since, meas
 not assumed additive. See [`docs/state.md`](docs/state.md) for the full trail.
 
 Everything smaller than 1B fits and trains *without* BCD/offload at all, measured directly
-on current code: **270M in ~23 days, 300M in ~32 days** (both plain, no memory tricks). A
-synthetic benchmark without the real loss-head optimization will make all three look like
-they spill past VRAM — that's a measurement bug, not a real result; it's what a real-trainer
-run with the actual chunked loss path shows.
+on current code: **270M in ~19.3 days with dropout off (~20.1 with), 300M in ~32 days**
+(both plain, no memory tricks). 270M's own token budget is under the amount of unique data
+cached, so it never has to repeat data — exactly the case where dropout has nothing to
+regularize against, which is why turning it off there is safe. A synthetic benchmark
+without the real loss-head optimization will make all three look like they spill past
+VRAM — that's a measurement bug, not a real result; it's what a real-trainer run with the
+actual chunked loss path shows.
 
 **This is not a wall anymore, but it is still a real cost.** The roofline work (2026-08-31)
 that put matmuls at 100.6% of the card's own GEMM ceiling and the scan capped at 1.16× by

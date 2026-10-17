@@ -127,8 +127,8 @@
   <strong>Update (2026-10-14):</strong> that offload+BCD path has since been validated
   end-to-end (a real run hard-killed and resumed mid-training three times, plus a real 1.1B
   fresh-build and resume), with four more real bugs found and fixed along the way. Separately,
-  four more real speed levers landed this week &mdash; throughput is now <strong>2,175 tok/s</strong>
-  (up from 1,579) and pretrain time is <strong>~161-258 days</strong> (down from ~375), depending
+  four more real speed levers landed this week &mdash; throughput is now <strong>2,278 tok/s</strong>
+  (up from 1,579) and pretrain time is <strong>~154-246 days</strong> (down from ~375), depending
   on how you count block-coordinate descent's own quality cost. See <code>docs/state.md</code>
   for the full trail.
 </p>
@@ -235,9 +235,9 @@
 <blockquote>
   <p>
     Fitting is still not finishing. A 1B model ran at about 1,100 tokens/sec here in August;
-    <strong>2,175 tok/s measured 2026-10-14</strong> after real speed fixes. Training one
+    <strong>2,278 tok/s measured 2026-10-14</strong> after real speed fixes. Training one
     properly still needs roughly 30 billion+ tokens &mdash; now
-    <strong>~161-258 days</strong>, down from 375, depending on how you count
+    <strong>~154-246 days</strong>, down from 375, depending on how you count
     block-coordinate descent's own quality cost. The ceiling this stack raises is what you
     can <em>hold</em>; the wall it does not touch is arithmetic &mdash; just a smaller wall
     than it was in August.
@@ -301,7 +301,7 @@
     <tr><td>48M</td><td class="num win">yes</td><td class="num">~1 day</td></tr>
     <tr><td>108M</td><td class="num win">yes</td><td class="num">~5 days</td></tr>
     <tr><td>157M</td><td class="num win">yes</td><td class="num">~10 days</td></tr>
-    <tr><td>1B</td><td class="num win">yes &mdash; 4.05 GB</td><td class="num loss">~161-258 days<br><span style="font-size:0.8em;opacity:0.7;">(was ~375, Aug)</span></td></tr>
+    <tr><td>1B</td><td class="num win">yes &mdash; 4.05 GB</td><td class="num loss">~154-246 days<br><span style="font-size:0.8em;opacity:0.7;">(was ~375, Aug)</span></td></tr>
   </tbody>
 </table>
 </div>
@@ -339,9 +339,11 @@ row-shares above are stale &mdash; matmul's own share actually <em>grew</em>, fr
 </p>
 
 <p>
-  Measured together: <strong>15.067 s/step</strong>, 2,175 tok/s, down from 21.81 s/step in
-  August &mdash; a 30.9% cut overall. The 1B run now needs <strong>~161-258 days</strong>
-  instead of ~375-300, depending on how block-coordinate descent's quality cost is counted.
+  Measured together (including dropout turned off, after a real multi-epoch test found it
+  costs quality here rather than helping): <strong>14.385 s/step</strong>, 2,278 tok/s, down
+  from 21.81 s/step in August &mdash; a 34.0% cut overall. The 1B run now needs
+  <strong>~154-246 days</strong> instead of ~375-300, depending on how block-coordinate
+  descent's quality cost is counted.
   The lesson that kept recurring this week: don't trust an "exhausted" claim without a fresh
   number behind it.
 </p>
@@ -378,7 +380,7 @@ row-shares above are stale &mdash; matmul's own share actually <em>grew</em>, fr
   <thead><tr><th>Goal</th><th class="num">Size needed</th><th class="num">Training time</th></tr></thead>
   <tbody>
     <tr><td>Emitting correctly formatted tool calls</td><td class="num">~100&ndash;270M</td><td class="num win">days</td></tr>
-    <tr><td>Holding a coherent conversation</td><td class="num">~270M</td><td class="num win">~24 days</td></tr>
+    <tr><td>Holding a coherent conversation</td><td class="num">~270M</td><td class="num win">~19-20 days</td></tr>
     <tr><td>Writing code well enough to trust</td><td class="num loss">far more</td><td class="num loss">out of reach</td></tr>
   </tbody>
 </table>
