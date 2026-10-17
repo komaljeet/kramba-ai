@@ -276,6 +276,8 @@ class TernaryLinear(nn.Module):
     use_fused = False
     #: Within-step quantized-weight cache (see ``enable_ternary_step_cache``).
     use_step_cache = False
+    #: Training path dequantizes to the autocast dtype (see ``_compute_dtype``).
+    use_autocast_dtype = True
     _scache = None
     _fscale = None
 
@@ -386,12 +388,31 @@ class TernaryLinear(nn.Module):
             FROZEN_SCALE_STATS["hits"] += 1
         return c[1]
 
+    def _compute_dtype(self, x: torch.Tensor) -> torch.dtype:
+        """The dtype F.linear will actually multiply in.
+
+        Under CUDA autocast that is the autocast dtype, whatever ``x`` is. The
+        weight used to be dequantized in ``x.dtype`` -- fp32 for every layer fed
+        by an fp32 norm (FFN w1/w3, out_proj) -- and autocast then cast it to
+        bf16 on every call: for a BCD-frozen bf16-parked weight that was
+        bf16 -> fp32 -> bf16, two full passes over the weight per call, 16
+        calls per step. Dequantizing straight to bf16 gives the same values
+        (the fp32 detour is an exact round trip, or the same single RNE
+        rounding for an fp32 weight) and the same gradients (one cast back to
+        the weight dtype either way). ``use_autocast_dtype = False`` restores
+        the old dtype choice.
+        """
+        if (self.use_autocast_dtype and x.is_cuda and self.weight.is_cuda
+                and x.dtype.is_floating_point and torch.is_autocast_enabled("cuda")):
+            return torch.get_autocast_dtype("cuda")
+        return x.dtype
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.training or torch.is_grad_enabled():
             # Training / grad-enabled path is unchanged and uncached: the STE
             # needs the live shadow weight inside the autograd graph, and the
             # weight moves every optimizer step.
-            return F.linear(x, self._dequantized(x.dtype), self.bias)
+            return F.linear(x, self._dequantized(self._compute_dtype(x)), self.bias)
 
         # Inference: the weight is frozen for the duration, so re-deriving it
         # per call is pure waste. Issue #131 measured this at ~2x of EdgeHVN's

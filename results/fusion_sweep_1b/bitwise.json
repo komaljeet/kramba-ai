@@ -1,0 +1,213 @@
+{
+ "config": {
+  "repo": "C:\\Users\\komal\\Documents\\Codes\\kramba-wt-270fuse",
+  "out": "results/fusion_sweep_1b/bitwise.json",
+  "ga": 2,
+  "steps": 13
+ },
+ "steps": [
+  {
+   "active": "token_embedding",
+   "loss_off": "0x1.672d400000000p+3",
+   "loss_on": "0x1.672d400000000p+3",
+   "loss_equal": true,
+   "n_grads": 1,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 4,
+    "replayed": 4,
+    "mismatched": 0
+   }
+  },
+  {
+   "active": "blocks.0+blocks.1",
+   "loss_off": "0x1.0ffff00000000p+3",
+   "loss_on": "0x1.0ffff00000000p+3",
+   "loss_equal": true,
+   "n_grads": 36,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 4,
+    "replayed": 4,
+    "mismatched": 0
+   }
+  },
+  {
+   "active": "blocks.2+blocks.3",
+   "loss_off": "0x1.1d84980000000p+3",
+   "loss_on": "0x1.1d84980000000p+3",
+   "loss_equal": true,
+   "n_grads": 36,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 4,
+    "replayed": 4,
+    "mismatched": 0
+   }
+  },
+  {
+   "active": "blocks.4+blocks.5",
+   "loss_off": "0x1.a7dde80000000p+2",
+   "loss_on": "0x1.a7dde80000000p+2",
+   "loss_equal": true,
+   "n_grads": 36,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 4,
+    "replayed": 4,
+    "mismatched": 0
+   }
+  },
+  {
+   "active": "blocks.6+blocks.7",
+   "loss_off": "0x1.3ccb300000000p+2",
+   "loss_on": "0x1.3ccb300000000p+2",
+   "loss_equal": true,
+   "n_grads": 27,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 4,
+    "replayed": 4,
+    "mismatched": 0
+   }
+  },
+  {
+   "active": "blocks.8+blocks.9",
+   "loss_off": "0x1.e9bea80000000p+1",
+   "loss_on": "0x1.e9bea80000000p+1",
+   "loss_equal": true,
+   "n_grads": 36,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 2,
+    "replayed": 2,
+    "mismatched": 0
+   }
+  },
+  {
+   "active": "blocks.10+blocks.11",
+   "loss_off": "0x1.620ff80000000p+1",
+   "loss_on": "0x1.620ff80000000p+1",
+   "loss_equal": true,
+   "n_grads": 36,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 2,
+    "replayed": 2,
+    "mismatched": 0
+   }
+  },
+  {
+   "active": "blocks.12+blocks.13",
+   "loss_off": "0x1.e9de640000000p+0",
+   "loss_on": "0x1.e9de640000000p+0",
+   "loss_equal": true,
+   "n_grads": 36,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 2,
+    "replayed": 2,
+    "mismatched": 0
+   }
+  },
+  {
+   "active": "blocks.14+blocks.15",
+   "loss_off": "0x1.404f640000000p+0",
+   "loss_on": "0x1.404f640000000p+0",
+   "loss_equal": true,
+   "n_grads": 36,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 2,
+    "replayed": 2,
+    "mismatched": 0
+   }
+  },
+  {
+   "active": "blocks.16+blocks.17",
+   "loss_off": "0x1.8ba4480000000p-1",
+   "loss_on": "0x1.8ba4480000000p-1",
+   "loss_equal": true,
+   "n_grads": 36,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 2,
+    "replayed": 2,
+    "mismatched": 0
+   }
+  },
+  {
+   "active": "blocks.18+blocks.19",
+   "loss_off": "0x1.d12d400000000p-2",
+   "loss_on": "0x1.d12d400000000p-2",
+   "loss_equal": true,
+   "n_grads": 27,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 2,
+    "replayed": 2,
+    "mismatched": 0
+   }
+  },
+  {
+   "active": "blocks.20+blocks.21",
+   "loss_off": "0x1.2a66f80000000p-2",
+   "loss_on": "0x1.2a66f80000000p-2",
+   "loss_equal": true,
+   "n_grads": 36,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 0,
+    "replayed": 0,
+    "mismatched": 0
+   }
+  },
+  {
+   "active": "blocks.22+blocks.23+final_norm+decoder",
+   "loss_off": "0x1.52f0600000000p-3",
+   "loss_on": "0x1.52f0600000000p-3",
+   "loss_equal": true,
+   "n_grads": 39,
+   "grad_mismatch": [],
+   "fast_path_fired_off_arm": false,
+   "fast_path_fired_on_arm": true,
+   "attention_replay": {
+    "recorded": 0,
+    "replayed": 0,
+    "mismatched": 0
+   }
+  }
+ ],
+ "falsifier": {
+  "active": "token_embedding",
+  "loss_differs": true,
+  "grads_differing": 1,
+  "of": 1,
+  "attention_inputs_mismatched": 4
+ },
+ "all_ok": true
+}

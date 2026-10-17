@@ -86,9 +86,23 @@ except Exception:  # pragma: no cover
 try:
     from .fused_read_norm import fused_read_norm as _fused_read_norm
     from .fused_read_norm import fused_read_norm_available as _fused_read_norm_available
+    from .fused_read_norm import fused_read_norm_gate as _fused_read_norm_gate
+    from .fused_read_norm import fused_read_norm_gate_available as _fused_read_norm_gate_available
 except Exception:  # pragma: no cover
     _fused_read_norm = None
     _fused_read_norm_available = None
+    _fused_read_norm_gate = None
+    _fused_read_norm_gate_available = None
+try:
+    from .fused_gates import fused_sigmoid_f32 as _fused_sigmoid_f32
+    from .fused_gates import fused_sigmoid_f32_available as _fused_sigmoid_f32_available
+    from .fused_gates import fused_residual_add3 as _fused_residual_add3
+    from .fused_gates import fused_residual_add3_available as _fused_residual_add3_available
+except Exception:  # pragma: no cover
+    _fused_sigmoid_f32 = None
+    _fused_sigmoid_f32_available = None
+    _fused_residual_add3 = None
+    _fused_residual_add3_available = None
 try:
     from .fused_causal_conv import fused_causal_conv as _fused_causal_conv
     from .fused_causal_conv import fused_causal_conv_dtype as _fused_causal_conv_dtype
@@ -224,6 +238,16 @@ class DeltaNetBlock(nn.Module):
         # Same lever, same default rule: the read RMSNorm as one Triton kernel
         # (hvn/core/fused_read_norm.py).
         self.use_fused_read_norm = None
+        # 2026-10-17, same default rule, each bit-identical forward and
+        # backward (tests/test_fused_gates.py):
+        #   use_fused_read_gate: read norm + ``* gate`` + bf16 cast in one
+        #     pass (hvn/core/fused_read_norm.py, fused_read_norm_gate);
+        #   use_fused_sigmoid: ``sigmoid(proj(x).float())`` for alpha/beta as
+        #     one kernel (hvn/core/fused_gates.py);
+        #   use_fused_residual: ``x + deflected + ffn_out`` as one kernel.
+        self.use_fused_read_gate = None
+        self.use_fused_sigmoid = None
+        self.use_fused_residual = None
         # Same default rule: the short causal conv read straight from [B, S, D]
         # (hvn/core/fused_causal_conv.py) instead of transpose + pad + cast
         # copies. Bit-identical to the eager conv, forward and backward.
@@ -401,10 +425,10 @@ class DeltaNetBlock(nn.Module):
         # chunked scan — a bf16-quantized α near 1.0 (init ≈0.95) compounds error
         # over the chunk and helps seed the large-width divergence.  Sigmoid in
         # fp32 keeps them accurate; kept fp32 to match the fp32 scan.
-        beta = torch.sigmoid(self.beta_proj(xc).float()).view(B, S, H, 1)
+        beta = self._sigmoid_f32(self.beta_proj(xc)).view(B, S, H, 1)
 
         if self.use_decay_gate:
-            alpha = torch.sigmoid(self.alpha_proj(xc).float()).view(B, S, H, d)
+            alpha = self._sigmoid_f32(self.alpha_proj(xc)).view(B, S, H, d)
         else:
             alpha = None
 
@@ -413,6 +437,19 @@ class DeltaNetBlock(nn.Module):
             gate = F.silu(self.gate_proj(xc))  # [B, S, D]
 
         return q, k, v, alpha, beta, gate
+
+    def _fast_flag(self, name: str) -> bool:
+        """None (default) follows use_triton_scan, the training fast path.
+        getattr: modules unpickled from before the flag existed read None."""
+        v = getattr(self, name, None)
+        return bool(self.use_triton_scan if v is None else v)
+
+    def _sigmoid_f32(self, h: torch.Tensor) -> torch.Tensor:
+        """``torch.sigmoid(h.float())``, as one kernel when enabled (bit-identical)."""
+        if (self._fast_flag("use_fused_sigmoid") and _fused_sigmoid_f32 is not None
+                and _fused_sigmoid_f32_available(h)):
+            return _fused_sigmoid_f32(h)
+        return torch.sigmoid(h.float())
 
     def _l2(self, x: torch.Tensor) -> torch.Tensor:
         """`_l2norm`, through the fused Triton kernel when enabled (lever 3)."""
@@ -793,7 +830,15 @@ class DeltaNetBlock(nn.Module):
         use_frn = getattr(self, "use_fused_read_norm", None)
         if use_frn is None:
             use_frn = self.use_triton_scan
-        if (use_frn and _fused_read_norm is not None
+        if (use_frn and self._fast_flag("use_fused_read_gate")
+                and _fused_read_norm_gate is not None
+                and _fused_read_norm_gate_available(oN, self.read_norm_weight, gate)):
+            # Read norm + output gate + autocast's bf16 cast in one pass: the
+            # branch below, then ``o * gate``, then out_proj's input cast.
+            o = _fused_read_norm_gate(oN, self.read_norm_weight, gate, B, H,
+                                      self.read_norm_eps)
+            gate = None
+        elif (use_frn and _fused_read_norm is not None
                 and _fused_read_norm_available(oN, self.read_norm_weight)):
             # Speed lever 3: same normalizer, one kernel, written straight to
             # [B, S, D] (no permute copy). See hvn/core/fused_read_norm.py.
@@ -808,7 +853,12 @@ class DeltaNetBlock(nn.Module):
 
         deflected = self.out_proj(o)
         ffn_out = self.ffn(x_norm)
-        out = x + self.dropout(deflected) + ffn_out
+        deflected = self.dropout(deflected)   # after ffn: same RNG order as before
+        if (self._fast_flag("use_fused_residual") and _fused_residual_add3 is not None
+                and _fused_residual_add3_available(x, deflected, ffn_out)):
+            out = _fused_residual_add3(x, deflected, ffn_out)
+        else:
+            out = x + deflected + ffn_out
 
         if return_state:
             state = {"S": S_final}

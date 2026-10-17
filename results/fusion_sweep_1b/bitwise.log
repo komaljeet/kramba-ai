@@ -1,0 +1,50 @@
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        2 (effective batch = 2)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.0
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → results/fusion_sweep_1b/bitwise_ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from results/fusion_sweep_1b/bitwise_ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\autograd\graph.py:882: UserWarning: Memory Efficient attention defaults to a non-deterministic algorithm. To explicitly enable determinism call torch.use_deterministic_algorithms(True, warn_only=False). (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\aten\src\ATen\native\transformers\cuda\attention_backward.cu:902.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+[ 0] token_embedding                        loss 11.224274/11.224274 equal=True grads 1/1 equal fired off=False on=True attn {'recorded': 4, 'replayed': 4, 'mismatched': 0} -> OK
+[falsifier] eager L2 norm arm: loss differs=True, 1/1 grads differ (must be > 0)
+[ 1] blocks.0+blocks.1                      loss 8.499992/8.499992 equal=True grads 36/36 equal fired off=False on=True attn {'recorded': 4, 'replayed': 4, 'mismatched': 0} -> OK
+[ 2] blocks.2+blocks.3                      loss 8.922436/8.922436 equal=True grads 36/36 equal fired off=False on=True attn {'recorded': 4, 'replayed': 4, 'mismatched': 0} -> OK
+[ 3] blocks.4+blocks.5                      loss 6.622919/6.622919 equal=True grads 36/36 equal fired off=False on=True attn {'recorded': 4, 'replayed': 4, 'mismatched': 0} -> OK
+[ 4] blocks.6+blocks.7                      loss 4.949902/4.949902 equal=True grads 27/27 equal fired off=False on=True attn {'recorded': 4, 'replayed': 4, 'mismatched': 0} -> OK
+[ 5] blocks.8+blocks.9                      loss 3.826131/3.826131 equal=True grads 36/36 equal fired off=False on=True attn {'recorded': 2, 'replayed': 2, 'mismatched': 0} -> OK
+[ 6] blocks.10+blocks.11                    loss 2.766112/2.766112 equal=True grads 36/36 equal fired off=False on=True attn {'recorded': 2, 'replayed': 2, 'mismatched': 0} -> OK
+[ 7] blocks.12+blocks.13                    loss 1.913550/1.913550 equal=True grads 36/36 equal fired off=False on=True attn {'recorded': 2, 'replayed': 2, 'mismatched': 0} -> OK
+[ 8] blocks.14+blocks.15                    loss 1.251211/1.251211 equal=True grads 36/36 equal fired off=False on=True attn {'recorded': 2, 'replayed': 2, 'mismatched': 0} -> OK
+[ 9] blocks.16+blocks.17                    loss 0.772738/0.772738 equal=True grads 36/36 equal fired off=False on=True attn {'recorded': 2, 'replayed': 2, 'mismatched': 0} -> OK
+[10] blocks.18+blocks.19                    loss 0.454274/0.454274 equal=True grads 27/27 equal fired off=False on=True attn {'recorded': 2, 'replayed': 2, 'mismatched': 0} -> OK
+[11] blocks.20+blocks.21                    loss 0.291408/0.291408 equal=True grads 36/36 equal fired off=False on=True attn {'recorded': 0, 'replayed': 0, 'mismatched': 0} -> OK
+[12] blocks.22+blocks.23+final_norm+decoder loss 0.165498/0.165498 equal=True grads 39/39 equal fired off=False on=True attn {'recorded': 0, 'replayed': 0, 'mismatched': 0} -> OK
+[result] PASS
