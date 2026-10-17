@@ -5,6 +5,64 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B pretrain: four bit-identical fusions = 14.096 -> 13.294 s/step, -5.7% (2026-10-17)
+
+**One line: a code-reading sweep (no GPU) named six candidates with sizes scaled from
+byte counts. Re-checked each on the real 1B step (2048x24 hvn-hybrid, BCD + offload,
+--fast, --dropout 0) before building. Four were real and are built; two were not.
+Measured together over two full BCD cycles: 14.096 -> 13.294 s/step. Peak VRAM
+5062 -> 4996 MiB reserved. Peak host RAM unchanged (5.03 -> 5.02 GiB working set,
+10.90 -> 10.78 GiB commit).**
+
+Each lever's real worth, measured by turning just that one off (all-on = 13.294):
+
+| lever | off -> s/step | worth | sweep's guess |
+|---|---:|---:|---:|
+| read norm + output gate + bf16 cast in one kernel | 13.669 | -0.375 s (2.8%) | 1-2% |
+| ternary weights dequantized straight to bf16 | 13.477 | -0.183 s (1.4%) | 0.4% |
+| alpha/beta `.float()` + sigmoid in one kernel | 13.438 | -0.144 s (1.1%) | 0.9% |
+| residual `x + deflected + ffn_out` in one kernel | 13.388 | -0.094 s (0.7%) | 0.6% |
+
+The four add to 0.796 s vs 0.802 measured together. The ternary one was 3.5x the
+guess because at 1B the BCD-frozen weights are parked in bf16, so every call on an
+fp32 input (FFN w1/w3, out_proj) went bf16 -> fp32 -> bf16 -- two full passes over the
+weight, 16 times a step. The guess only counted the trainable block.
+
+**Not built:**
+- Loss-head shared cast: the tied table is trainable on 1 of 13 BCD steps only
+  (`token_embedding` owns it, #151). Ceiling ~8 recasts x 8 micro-batches x 3.6 ms on
+  that step = ~0.018 s/step (0.13%). Not worth a change whose fp32 grad-sum ordering is
+  easy to get silently wrong.
+- RoPE table fusion: no sin/cos kernel is in the top 80 kernels (each < 0.35 ms/step).
+  Nothing to win.
+
+**Correctness, all exact (torch.equal), never allclose:**
+- `tests/test_fused_gates.py` (25): sigmoid forward over all 65,536 bf16 and fp16
+  inputs; backward, residual, gate fold at the real shape; ternary bf16 dequant for
+  trainable fp32 and frozen bf16 weights, fused and eager quantizer, step cache on/off;
+  a whole ternary DeltaNet block over 4 optimizer steps; near-miss variants (approx
+  exp, wrong add order, bf16 product) shown to FAIL the same checks.
+- `scripts/check_fusion_bitwise_1b.py` on the real 1B model, one full BCD cycle, same
+  state, levers off vs on: loss and every trainable grad equal on 13/13 steps. A
+  falsifier arm (eager L2 norm, ~1 ulp off) is caught.
+
+**Two traps hit on the way, worth knowing:**
+- The gate kernel first came out ~1 ulp off. Triton picks its register layout from the
+  widest memory access; the bf16 gate/output gave rows a different add order inside
+  `tl.sum`, so `r` moved on 42,697 of 262,144 rows. A `max_contiguous(j, 4)` hint gives
+  back the fp32 kernel's layout. Comment at the kernel.
+- The first real-model check showed grads differing below attention layer 18 even
+  though losses matched. Not the levers: the memory-efficient SDPA backward is
+  nondeterministic at this shape (three identical calls, three different results, even
+  with deterministic algorithms on). Any A/B of grads through the attention layers
+  needs to control for that. The check now records attention's backward in the off arm
+  and replays it in the on arm only if q, k, v and grad_out are bit-identical.
+
+On by default: the three DeltaNet flags follow `use_triton_scan` (so `--fast`), the
+ternary dtype is a class default (bit-identical on every path). Bench:
+`scripts/bench_1b_fusion_sweep.py --disable NAME`; logs in `results/fusion_sweep_1b/`.
+Not re-measured at 270M.
+
 ## Dropout: tested, not assumed -- turn it off, real quality win not just speed (2026-10-16/17)
 
 **One line: the real 1B run has to repeat its cached data ~4.6x to hit its token budget

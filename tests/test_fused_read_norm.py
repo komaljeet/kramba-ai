@@ -102,6 +102,10 @@ def test_deltanet_block_uses_fused_read_norm_and_matches():
                         use_megakernel_scan=True).cuda()
     with torch.no_grad():
         blk.read_norm_weight.uniform_(0.5, 1.5)
+    # Under autocast the gate-folded kernel (2026-10-17) replaces this one; pin
+    # it off so this test keeps covering the plain fused read norm. The fold
+    # has its own bit-identity tests in tests/test_fused_gates.py.
+    blk.use_fused_read_gate = False
     x = torch.randn(2, 128, 256, device="cuda")
 
     def run(fused, autocast=True):

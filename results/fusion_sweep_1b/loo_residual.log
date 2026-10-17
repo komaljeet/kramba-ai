@@ -1,0 +1,65 @@
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.0
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → results/fusion_sweep_1b/loo_residual_ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from results/fusion_sweep_1b/loo_residual_ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+[cfg] disabled: ['residual']
+[residual warm 0] token_embedding                    loss 11.222667
+[residual warm 1] blocks.0+blocks.1                  loss 8.939655
+[residual c0  0] blocks.2+blocks.3                  wall  17.29 loss 9.710922 gn 2.459
+[residual c0  1] blocks.4+blocks.5                  wall  16.34 loss 8.472437 gn 2.014
+[residual c0  2] blocks.6+blocks.7                  wall  15.35 loss 7.552711 gn 1.926
+[residual c0  3] blocks.8+blocks.9                  wall  14.34 loss 6.909069 gn 1.197
+[residual c0  4] blocks.10+blocks.11                wall  13.40 loss 6.287195 gn 1.009
+[residual c0  5] blocks.12+blocks.13                wall  12.43 loss 5.747156 gn 0.862
+[residual c0  6] blocks.14+blocks.15                wall  11.48 loss 5.269180 gn 0.767
+[residual c0  7] blocks.16+blocks.17                wall  10.53 loss 4.844971 gn 0.698
+[residual c0  8] blocks.18+blocks.19                wall   9.57 loss 4.461305 gn 0.707
+[residual c0  9] blocks.20+blocks.21                wall   8.53 loss 4.178294 gn 0.595
+[residual c0 10] blocks.22+blocks.23+final_norm+decoder wall   7.57 loss 3.844021 gn 0.580
+[residual c0 11] token_embedding                    wall  18.95 loss 3.537913 gn 1.688
+[residual c0 12] blocks.0+blocks.1                  wall  18.19 loss 2.992873 gn 13.242
+[residual c1  0] blocks.2+blocks.3                  wall  17.41 loss 7.773798 gn 3.530
+[residual c1  1] blocks.4+blocks.5                  wall  16.35 loss 6.611302 gn 2.585
+[residual c1  2] blocks.6+blocks.7                  wall  15.36 loss 5.691403 gn 2.459
+[residual c1  3] blocks.8+blocks.9                  wall  14.34 loss 5.038396 gn 1.318
+[residual c1  4] blocks.10+blocks.11                wall  13.39 loss 4.413580 gn 0.972
+[residual c1  5] blocks.12+blocks.13                wall  12.44 loss 3.876357 gn 0.769
+[residual c1  6] blocks.14+blocks.15                wall  11.49 loss 3.405747 gn 0.630
+[residual c1  7] blocks.16+blocks.17                wall  10.52 loss 2.990537 gn 0.545
+[residual c1  8] blocks.18+blocks.19                wall   9.56 loss 2.627765 gn 0.506
+[residual c1  9] blocks.20+blocks.21                wall   8.55 loss 2.364316 gn 0.444
+[residual c1 10] blocks.22+blocks.23+final_norm+decoder wall   7.55 loss 2.067855 gn 0.442
+[residual c1 11] token_embedding                    wall  18.96 loss 1.807251 gn 1.460
+[residual c1 12] blocks.0+blocks.1                  wall  18.19 loss 1.280667 gn 7.049
+[residual] fast-path forward calls (whole run): {'sigmoid': 15808, 'add3': 0, 'read_gate': 7904}
+[residual] mean 13.388 s/step, cycles [13.382, 13.393], peak reserved 5012 MiB alloc 3041 MiB, peak WS 5.02 GiB peak commit 10.78 GiB
+[done]

@@ -1,0 +1,152 @@
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.0
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → results/fusion_sweep_1b/base_prof_ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from results/fusion_sweep_1b/base_prof_ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+[all-on warm 0] token_embedding                    loss 11.222667
+[all-on warm 1] blocks.0+blocks.1                  loss 8.939860
+[all-on c0  0] blocks.2+blocks.3                  wall  18.20 loss 9.713356 gn 2.444
+[all-on c0  1] blocks.4+blocks.5                  wall  17.19 loss 8.470158 gn 2.025
+[all-on c0  2] blocks.6+blocks.7                  wall  16.17 loss 7.553305 gn 1.885
+[all-on c0  3] blocks.8+blocks.9                  wall  15.12 loss 6.919072 gn 1.209
+[all-on c0  4] blocks.10+blocks.11                wall  14.09 loss 6.289168 gn 0.980
+[all-on c0  5] blocks.12+blocks.13                wall  13.10 loss 5.751174 gn 0.853
+[all-on c0  6] blocks.14+blocks.15                wall  12.08 loss 5.274109 gn 0.760
+[all-on c0  7] blocks.16+blocks.17                wall  11.08 loss 4.850667 gn 0.701
+[all-on c0  8] blocks.18+blocks.19                wall  10.03 loss 4.465445 gn 0.714
+[all-on c0  9] blocks.20+blocks.21                wall   8.99 loss 4.180373 gn 0.592
+[all-on c0 10] blocks.22+blocks.23+final_norm+decoder wall   7.94 loss 3.847964 gn 0.581
+[all-on c0 11] token_embedding                    wall  19.96 loss 3.540675 gn 1.679
+[all-on c0 12] blocks.0+blocks.1                  wall  19.18 loss 2.988781 gn 12.550
+[all-on c1  0] blocks.2+blocks.3                  wall  18.26 loss 7.716655 gn 3.409
+[all-on c1  1] blocks.4+blocks.5                  wall  17.25 loss 6.564357 gn 2.559
+[all-on c1  2] blocks.6+blocks.7                  wall  16.22 loss 5.653354 gn 2.463
+[all-on c1  3] blocks.8+blocks.9                  wall  15.13 loss 5.002288 gn 1.245
+[all-on c1  4] blocks.10+blocks.11                wall  14.13 loss 4.377384 gn 0.955
+[all-on c1  5] blocks.12+blocks.13                wall  13.11 loss 3.844613 gn 0.760
+[all-on c1  6] blocks.14+blocks.15                wall  12.10 loss 3.375911 gn 0.621
+[all-on c1  7] blocks.16+blocks.17                wall  11.09 loss 2.962868 gn 0.548
+[all-on c1  8] blocks.18+blocks.19                wall  10.08 loss 2.601171 gn 0.504
+[all-on c1  9] blocks.20+blocks.21                wall   9.04 loss 2.339837 gn 0.440
+[all-on c1 10] blocks.22+blocks.23+final_norm+decoder wall   7.96 loss 2.044897 gn 0.440
+[all-on c1 11] token_embedding                    wall  19.98 loss 1.784397 gn 1.456
+[all-on c1 12] blocks.0+blocks.1                  wall  19.19 loss 1.263141 gn 6.870
+[all-on] mean 14.103 s/step, cycles [14.087, 14.119], peak reserved 5062 MiB alloc 3089 MiB, peak WS 0.00 GiB peak commit 0.00 GiB
+C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\profiler\profiler.py:272: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+USDT:2026-10-17 18:52:00 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:52:19 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-17 18:52:43 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:53:01 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-17 18:53:23 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:53:40 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-17 18:54:02 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:54:17 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-17 18:54:38 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:54:52 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-17 18:55:11 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:55:25 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-17 18:55:43 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:55:55 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-17 18:56:12 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:56:23 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-17 18:56:38 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:56:49 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-17 18:57:03 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:57:12 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-17 18:57:25 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:57:33 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-17 18:57:45 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:58:06 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+USDT:2026-10-17 18:58:31 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-10-17 18:58:51 13872:1648 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[all-on] profiled cycle: device 16.156 s/step
+[all-on]     2.146s     1534x  ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tt
+[all-on]     1.975s     4597x  Memcpy HtoD (Pinned -> Device)
+[all-on]     1.913s      613x  ampere_bf16_s1688gemm_bf16_128x128_ldg8_relu_f2f_stages_32x1_tn
+[all-on]     1.767s     1081x  ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nn
+[all-on]     1.613s      277x  _gated_delta_fwd_kernel_s
+[all-on]     1.401s      101x  _mk_bwd_kernel_s
+[all-on]     0.593s      453x  ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tn
+[all-on]     0.569s     3853x  _ZN2at6native29vectorized_elementwise_kernelILi4EZNS0_25bfloat16_copy_kernel_cudaERNS_18TensorIteratorBaseEEUlfE_St5arra
+[all-on]     0.471s      101x  _mk_ckpt_kernel_s
+[all-on]     0.391s     2033x  _ZN2at6native27unrolled_elementwise_kernelIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlv
+[all-on]     0.240s       10x  _Z52fmha_cutlassB_bf16_aligned_64x64_k32_seqaligned_sm80N22PyTorchMemEffAttention23AttentionBackwardKernelIN7cutlass4arc
+[all-on]     0.225s     1902x  _quantize_kernel
+[all-on]     0.213s      592x  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIfEESt5arrayIPcLy3EEEEviT0_T1_
+[all-on]     0.190s      378x  _ZN2at6native27unrolled_elementwise_kernelINS0_13BinaryFunctorIfffNS0_15binary_internal10MulFunctorIfEEEESt5arrayIPcLy3E
+[all-on]     0.171s      384x  _ZN2at6native27unrolled_elementwise_kernelINS0_15CUDAFunctor_addIfEESt5arrayIPcLy3EELi4E23TrivialOffsetCalculatorILi2EjE
+[all-on]     0.155s      661x  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIN3c108BFloat16EEESt5arrayIPcLy3EEEEviT0_T1_
+[all-on]     0.152s       26x  _Z40fmha_cutlassF_bf16_aligned_64x64_rf_sm80N22PyTorchMemEffAttention15AttentionKernelIN7cutlass10bfloat16_tENS1_4arch4S
+[all-on]     0.146s      931x  _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_15CUDAFunctor_addIN3c108BFloat16EEEEEvRNS_
+[all-on]     0.128s      303x  _ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f28vectorized_layer_norm_kernelIffLb1EEEviT0_PKT_S6_S
+[all-on]     0.122s       57x  ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nt
+[all-on]     0.111s      554x  _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_19sigmoid_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0_clEvENKU
+[all-on]     0.109s      177x  Memcpy HtoD (Pageable -> Device)
+[all-on]     0.102s      303x  _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_18GeluCUDAKernelImplERNS_18TensorIteratorBaseENS0_8GeluTypeEENKU
+[all-on]     0.102s      554x  _l2n_fwd_kernel
+[all-on]     0.095s      277x  _rn_fwd_kernel
+[all-on]     0.086s      277x  _cc_fwd_kernel
+[all-on]     0.070s      128x  _ZN2at6native43_GLOBAL__N__bcfaaeff_10_SoftMax_cu_0af7be2119cunn_SoftMaxForwardILi8EN3c108BFloat16EfS4_NS1_25LogSoftMaxF
+[all-on]     0.063s      111x  _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_26GeluBackwardCUDAKernelImplERNS_18TensorIteratorBaseENS0_8GeluT
+[all-on]     0.062s      103x  _ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f39layer_norm_grad_input_kernel_vectorizedIffLb1EEEvP
+[all-on]     0.060s       10x  _ZN7cutlass7Kernel2I57cutlass_75_tensorop_bf16_s1688gemm_bf16_128x256_tn_align1EEvNT_6ParamsE
+[all-on]     0.060s      101x  _rn_bwd_kernel
+[all-on]     0.059s       64x  _ZN2at6native43_GLOBAL__N__bcfaaeff_10_SoftMax_cu_0af7be2120cunn_SoftMaxBackwardILi8EN3c108BFloat16EfS4_NS1_26LogSoftMax
+[all-on]     0.059s      202x  _l2n_bwd_kernel
+[all-on]     0.057s      101x  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13BinaryFunctorIfffNS0_15binary_internal10MulFunctorIfEEEESt5arrayI
+[all-on]     0.057s      202x  _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_28sigmoid_backward_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE0
+[all-on]     0.046s      328x  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIfEESt5arrayIPcLy1EEEEviT0_T1_
+[all-on]     0.031s      153x  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_10AbsFunctorIN3c108BFloat16EEESt5arrayIPcLy2EEEEviT0_T1_
+[all-on]     0.028s        5x  _ZN7cutlass7Kernel2I57cutlass_75_tensorop_bf16_s1688gemm_bf16_256x128_nn_align1EEvNT_6ParamsE
+[all-on]     0.027s      101x  _cc_bwd_kernel
+[all-on]     0.027s      143x  _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_13BinaryFunctorIN3c108BFloat16ES5_S5_NS0_1
+[all-on]     0.026s       32x  Memcpy DtoH (Device -> Pageable)
+[all-on]     0.025s      277x  _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_62_GLOBAL__N__a30504db_23_ActivationSiluKernel_cu_9ffbb073_15396
+[all-on]     0.025s      101x  _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_62_GLOBAL__N__a30504db_23_ActivationSiluKernel_cu_9ffbb073_15396
+[all-on]     0.024s      277x  ampere_bf16_s1688gemm_bf16_64x128_sliced1x2_ldg8_f2f_tt
+[all-on]     0.023s        5x  _ZN7cutlass7Kernel2I57cutlass_75_tensorop_bf16_s1688gemm_bf16_128x128_nt_align1EEvNT_6ParamsE
+[all-on]     0.019s       52x  _ZN2at6native40_GLOBAL__N__27eda9f4_8_Shape_cu_85d9f36c19CatArrayBatchedCopyINS1_10OpaqueTypeILj2EEEjLi4ELi64ELi64EEEvPT
+[all-on]     0.018s      242x  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIN3c108BFloat16ES4_S4_NS0_15binary_internal10MulFunc
+[all-on]     0.013s       14x  _ZN2at6native18elementwise_kernelILi128ELi2EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorI
+[all-on]     0.009s       39x  _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorI
+[all-on]     0.007s       71x  _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_15neg_kernel_cudaERNS_18TensorIteratorB
+[all-on]     0.007s       75x  _ZN2at6native13reduce_kernelILi128ELi4ENS0_8ReduceOpIN3c108BFloat16ENS0_14func_wrapper_tIS4_ZNS0_11sum_functorIS4_fS4_Ec
+[all-on]     0.007s        8x  _ZN2at6native24vectorized_gather_kernelILi16ExEEvPcS2_PT0_ixxxxb
+[all-on]     0.006s       15x  _ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f35GammaBetaBackwardCUDAKernelTemplateIffLj32ELj32ELj
+[all-on]     0.006s       93x  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIfffNS0_15binary_internal10MulFunctorIfEEEESt5arrayI
+[all-on]     0.006s       13x  _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_10AbsFunctorIfEESt5arrayIPcLy2EEEEviT0_T1_
+[all-on]     0.005s        8x  _ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f39layer_norm_grad_input_kernel_vectorizedIffLb0EEEvP
+[all-on]     0.004s      153x  _ZN2at6native13reduce_kernelILi512ELi1ENS0_8ReduceOpIN3c108BFloat16ENS0_7MeanOpsIS4_ffS4_EEjS4_Li4ELi8EEEEEvT1_
+[all-on]     0.004s       14x  _ZN2at6native51_GLOBAL__N__68a3d168_18_DepthwiseConv2d_cu_2ee6150b35conv_depthwise2d_grad_weight_kernelIN3c108BFloat16Ej
+[all-on]     0.004s        5x  _ZN2at6native63_GLOBAL__N__305b55ac_30_ForeachBinaryOpScalarTensor_cu_64fe0ca525multi_tensor_apply_kernelINS1_18TensorLi
+[all-on]     0.003s        8x  _ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f28vectorized_layer_norm_kernelIffLb0EEEviT0_PKT_S6_S
+[done]

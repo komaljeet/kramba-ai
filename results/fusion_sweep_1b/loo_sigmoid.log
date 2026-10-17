@@ -1,0 +1,65 @@
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.0
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → results/fusion_sweep_1b/loo_sigmoid_ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from results/fusion_sweep_1b/loo_sigmoid_ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+[cfg] disabled: ['sigmoid']
+[sigmoid warm 0] token_embedding                    loss 11.222667
+[sigmoid warm 1] blocks.0+blocks.1                  loss 8.939555
+[sigmoid c0  0] blocks.2+blocks.3                  wall  17.39 loss 9.710948 gn 2.448
+[sigmoid c0  1] blocks.4+blocks.5                  wall  16.43 loss 8.468461 gn 1.955
+[sigmoid c0  2] blocks.6+blocks.7                  wall  15.43 loss 7.558186 gn 1.954
+[sigmoid c0  3] blocks.8+blocks.9                  wall  14.40 loss 6.914548 gn 1.208
+[sigmoid c0  4] blocks.10+blocks.11                wall  13.49 loss 6.285156 gn 0.989
+[sigmoid c0  5] blocks.12+blocks.13                wall  12.48 loss 5.747486 gn 0.852
+[sigmoid c0  6] blocks.14+blocks.15                wall  11.52 loss 5.268952 gn 0.756
+[sigmoid c0  7] blocks.16+blocks.17                wall  10.55 loss 4.846133 gn 0.699
+[sigmoid c0  8] blocks.18+blocks.19                wall   9.57 loss 4.461710 gn 0.707
+[sigmoid c0  9] blocks.20+blocks.21                wall   8.54 loss 4.178058 gn 0.586
+[sigmoid c0 10] blocks.22+blocks.23+final_norm+decoder wall   7.57 loss 3.845423 gn 0.581
+[sigmoid c0 11] token_embedding                    wall  19.05 loss 3.537622 gn 1.684
+[sigmoid c0 12] blocks.0+blocks.1                  wall  18.27 loss 2.999612 gn 14.650
+[sigmoid c1  0] blocks.2+blocks.3                  wall  17.38 loss 7.741523 gn 3.323
+[sigmoid c1  1] blocks.4+blocks.5                  wall  16.43 loss 6.581857 gn 2.533
+[sigmoid c1  2] blocks.6+blocks.7                  wall  15.43 loss 5.667810 gn 2.456
+[sigmoid c1  3] blocks.8+blocks.9                  wall  14.40 loss 5.018493 gn 1.283
+[sigmoid c1  4] blocks.10+blocks.11                wall  13.45 loss 4.392046 gn 0.982
+[sigmoid c1  5] blocks.12+blocks.13                wall  12.50 loss 3.857256 gn 0.761
+[sigmoid c1  6] blocks.14+blocks.15                wall  11.53 loss 3.384546 gn 0.631
+[sigmoid c1  7] blocks.16+blocks.17                wall  10.57 loss 2.970728 gn 0.547
+[sigmoid c1  8] blocks.18+blocks.19                wall   9.58 loss 2.608199 gn 0.504
+[sigmoid c1  9] blocks.20+blocks.21                wall   8.55 loss 2.344527 gn 0.441
+[sigmoid c1 10] blocks.22+blocks.23+final_norm+decoder wall   7.56 loss 2.049114 gn 0.437
+[sigmoid c1 11] token_embedding                    wall  19.04 loss 1.788073 gn 1.454
+[sigmoid c1 12] blocks.0+blocks.1                  wall  18.28 loss 1.267365 gn 6.822
+[sigmoid] fast-path forward calls (whole run): {'sigmoid': 0, 'add3': 4928, 'read_gate': 7904}
+[sigmoid] mean 13.438 s/step, cycles [13.438, 13.438], peak reserved 4998 MiB alloc 3041 MiB, peak WS 5.02 GiB peak commit 10.84 GiB
+[done]
