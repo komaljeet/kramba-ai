@@ -1,0 +1,17 @@
+arm=bf16 plan=['deltanet', 'deltanet', 'transformer', 'deltanet'] fp8 modules=0
+  fp8: []
+  opt: Muon (muon_lr=0.02 on 33 matrices / 2,624,512 params; AdamW aux lr=0.0003 / 12,927,069 params)
+step 0 val 10.8658
+step 250 loss 7.0542 val 6.6969 gn 0.623 abias [2.9999, 2.9987, 3.0002] disp [0.0029, 0.0031, 0.0025] alpha [0.9446, 0.94, 0.9472] nonfinite 0 63s
+step 500 loss 6.2061 val 6.1550 gn 0.444 abias [2.9978, 2.9959, 2.9983] disp [0.0055, 0.0056, 0.0045] alpha [0.9168, 0.8956, 0.906] nonfinite 0 125s
+step 750 loss 6.1340 val 5.9033 gn 0.471 abias [2.9959, 2.9934, 2.9969] disp [0.0078, 0.0082, 0.0059] alpha [0.8913, 0.8535, 0.8766] nonfinite 0 188s
+step 1000 loss 5.9821 val 5.7268 gn 0.438 abias [2.9938, 2.9917, 2.9958] disp [0.01, 0.0101, 0.0074] alpha [0.8648, 0.824, 0.8508] nonfinite 0 251s
+step 1250 loss 5.8499 val 5.5972 gn 0.469 abias [2.9919, 2.9906, 2.9951] disp [0.0119, 0.0115, 0.0083] alpha [0.8473, 0.8082, 0.8375] nonfinite 0 313s
+step 1500 loss 5.5174 val 5.4983 gn 0.454 abias [2.9907, 2.9899, 2.9945] disp [0.0133, 0.0124, 0.0091] alpha [0.8353, 0.7976, 0.8285] nonfinite 0 376s
+step 1750 loss 5.2969 val 5.4161 gn 0.470 abias [2.9899, 2.9894, 2.9941] disp [0.0142, 0.0131, 0.0098] alpha [0.8292, 0.7941, 0.826] nonfinite 0 439s
+step 2000 loss 5.2729 val 5.3561 gn 0.477 abias [2.9892, 2.9889, 2.9938] disp [0.015, 0.0137, 0.0102] alpha [0.8256, 0.7914, 0.8195] nonfinite 0 501s
+step 2250 loss 5.3842 val 5.3153 gn 0.494 abias [2.9887, 2.9886, 2.9935] disp [0.0155, 0.0141, 0.0107] alpha [0.8238, 0.7895, 0.8183] nonfinite 0 563s
+step 2500 loss 5.2815 val 5.2768 gn 0.476 abias [2.9884, 2.9884, 2.9935] disp [0.0159, 0.0144, 0.0107] alpha [0.8228, 0.7887, 0.8221] nonfinite 0 626s
+step 2750 loss 5.2525 val 5.2471 gn 0.494 abias [2.9882, 2.9884, 2.9933] disp [0.0161, 0.0145, 0.0109] alpha [0.8222, 0.784, 0.8218] nonfinite 0 688s
+step 3000 loss 5.2925 val 5.2313 gn 0.509 abias [2.988, 2.9883, 2.9932] disp [0.0163, 0.0146, 0.011] alpha [0.8219, 0.7915, 0.8184] nonfinite 0 750s
+DONE

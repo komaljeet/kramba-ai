@@ -1,0 +1,181 @@
+{
+ "args": {
+  "arm": "fp8_noscale",
+  "seed": 0,
+  "data_seed": 0,
+  "steps": 1000,
+  "d_model": 256,
+  "n_heads": 4,
+  "layers": 4,
+  "attn_layers": "2",
+  "seq": 1024,
+  "batch": 8,
+  "lr": 0.0003,
+  "warmup": 200,
+  "eval_every": 250,
+  "data": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data_cache\\tokenized\\fineweb_edu.bin",
+  "out": "C:/Users/komal/Documents/Codes/kramba-wt-fp8/results/fp8_feasibility/fp8_noscale_s0"
+ },
+ "fp8_modules": [
+  "blocks.0.q_proj",
+  "blocks.0.k_proj",
+  "blocks.0.v_proj",
+  "blocks.0.gate_proj",
+  "blocks.0.out_proj",
+  "blocks.0.ffn.0",
+  "blocks.0.ffn.3",
+  "blocks.1.q_proj",
+  "blocks.1.k_proj",
+  "blocks.1.v_proj",
+  "blocks.1.gate_proj",
+  "blocks.1.out_proj",
+  "blocks.1.ffn.0",
+  "blocks.1.ffn.3",
+  "blocks.2.q_proj",
+  "blocks.2.k_proj",
+  "blocks.2.v_proj",
+  "blocks.2.out_proj",
+  "blocks.2.ffn.0",
+  "blocks.2.ffn.3",
+  "blocks.3.q_proj",
+  "blocks.3.k_proj",
+  "blocks.3.v_proj",
+  "blocks.3.gate_proj",
+  "blocks.3.out_proj",
+  "blocks.3.ffn.0",
+  "blocks.3.ffn.3"
+ ],
+ "evals": [
+  {
+   "step": 0,
+   "val": 10.865998804569244,
+   "gates": {
+    "blocks.0.beta_proj": 0.5,
+    "blocks.0.alpha_proj": 0.9525739550590515,
+    "blocks.1.beta_proj": 0.5,
+    "blocks.1.alpha_proj": 0.9525739550590515,
+    "blocks.3.beta_proj": 0.5,
+    "blocks.3.alpha_proj": 0.9525739550590515
+   },
+   "alpha_bias_mean": {
+    "blocks.0.alpha_proj.bias": 3.0,
+    "blocks.1.alpha_proj.bias": 3.0,
+    "blocks.3.alpha_proj.bias": 3.0
+   }
+  },
+  {
+   "step": 250,
+   "val": 7.509711682796478,
+   "gates": {
+    "blocks.0.beta_proj": 0.13390039186924696,
+    "blocks.0.alpha_proj": 0.9192634075880051,
+    "blocks.1.beta_proj": 0.01894840272143483,
+    "blocks.1.alpha_proj": 0.9208518862724304,
+    "blocks.3.beta_proj": 0.5094177722930908,
+    "blocks.3.alpha_proj": 0.9443799629807472
+   },
+   "alpha_bias_mean": {
+    "blocks.0.alpha_proj.bias": 3.0003180503845215,
+    "blocks.1.alpha_proj.bias": 3.0000476837158203,
+    "blocks.3.alpha_proj.bias": 3.000418186187744
+   },
+   "alpha_bias_mean_abs_disp": {
+    "blocks.0.alpha_proj.bias": 0.00143363606184721,
+    "blocks.1.alpha_proj.bias": 0.0017301030457019806,
+    "blocks.3.alpha_proj.bias": 0.0016797352582216263
+   },
+   "alpha_w_norm": {
+    "blocks.0.alpha_proj.weight": 35.00436019897461,
+    "blocks.1.alpha_proj.weight": 29.645462036132812,
+    "blocks.3.alpha_proj.weight": 18.009733200073242
+   },
+   "nonfinite_so_far": 0
+  },
+  {
+   "step": 500,
+   "val": 7.325899034738541,
+   "gates": {
+    "blocks.0.beta_proj": 0.05403834767639637,
+    "blocks.0.alpha_proj": 0.8489349596202374,
+    "blocks.1.beta_proj": 0.0013630261164507829,
+    "blocks.1.alpha_proj": 0.8556640036404133,
+    "blocks.3.beta_proj": 0.5002780109643936,
+    "blocks.3.alpha_proj": 0.9207101240754128
+   },
+   "alpha_bias_mean": {
+    "blocks.0.alpha_proj.bias": 3.0003180503845215,
+    "blocks.1.alpha_proj.bias": 3.0000476837158203,
+    "blocks.3.alpha_proj.bias": 3.000418186187744
+   },
+   "alpha_bias_mean_abs_disp": {
+    "blocks.0.alpha_proj.bias": 0.00143363606184721,
+    "blocks.1.alpha_proj.bias": 0.0017301030457019806,
+    "blocks.3.alpha_proj.bias": 0.0016797352582216263
+   },
+   "alpha_w_norm": {
+    "blocks.0.alpha_proj.weight": 61.50358200073242,
+    "blocks.1.alpha_proj.weight": 48.74266052246094,
+    "blocks.3.alpha_proj.weight": 32.9610710144043
+   },
+   "nonfinite_so_far": 0
+  },
+  {
+   "step": 750,
+   "val": 7.255315035581589,
+   "gates": {
+    "blocks.0.beta_proj": 0.04011407517828047,
+    "blocks.0.alpha_proj": 0.8511949703097343,
+    "blocks.1.beta_proj": 0.0011977373724221252,
+    "blocks.1.alpha_proj": 0.8594712615013123,
+    "blocks.3.beta_proj": 0.5003202334046364,
+    "blocks.3.alpha_proj": 0.9203697443008423
+   },
+   "alpha_bias_mean": {
+    "blocks.0.alpha_proj.bias": 3.0003180503845215,
+    "blocks.1.alpha_proj.bias": 3.0000476837158203,
+    "blocks.3.alpha_proj.bias": 3.000418186187744
+   },
+   "alpha_bias_mean_abs_disp": {
+    "blocks.0.alpha_proj.bias": 0.00143363606184721,
+    "blocks.1.alpha_proj.bias": 0.0017301030457019806,
+    "blocks.3.alpha_proj.bias": 0.0016797352582216263
+   },
+   "alpha_w_norm": {
+    "blocks.0.alpha_proj.weight": 59.9642219543457,
+    "blocks.1.alpha_proj.weight": 47.52397537231445,
+    "blocks.3.alpha_proj.weight": 32.154747009277344
+   },
+   "nonfinite_so_far": 0
+  },
+  {
+   "step": 1000,
+   "val": 7.227414220571518,
+   "gates": {
+    "blocks.0.beta_proj": 0.03635905310511589,
+    "blocks.0.alpha_proj": 0.8519846014678478,
+    "blocks.1.beta_proj": 0.0011489709722809494,
+    "blocks.1.alpha_proj": 0.8610395900905132,
+    "blocks.3.beta_proj": 0.5003631822764874,
+    "blocks.3.alpha_proj": 0.9206156842410564
+   },
+   "alpha_bias_mean": {
+    "blocks.0.alpha_proj.bias": 3.0003180503845215,
+    "blocks.1.alpha_proj.bias": 3.0000476837158203,
+    "blocks.3.alpha_proj.bias": 3.000418186187744
+   },
+   "alpha_bias_mean_abs_disp": {
+    "blocks.0.alpha_proj.bias": 0.00143363606184721,
+    "blocks.1.alpha_proj.bias": 0.0017301030457019806,
+    "blocks.3.alpha_proj.bias": 0.0016797352582216263
+   },
+   "alpha_w_norm": {
+    "blocks.0.alpha_proj.weight": 59.458805084228516,
+    "blocks.1.alpha_proj.weight": 47.123409271240234,
+    "blocks.3.alpha_proj.weight": 31.883724212646484
+   },
+   "nonfinite_so_far": 0
+  }
+ ],
+ "peak_mem_mib": 5267.04150390625,
+ "wall_s": 255.63410806655884
+}

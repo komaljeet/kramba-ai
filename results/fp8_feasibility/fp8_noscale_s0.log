@@ -1,0 +1,9 @@
+arm=fp8_noscale plan=['deltanet', 'deltanet', 'transformer', 'deltanet'] fp8 modules=27
+  fp8: ['blocks.0.q_proj', 'blocks.0.k_proj', 'blocks.0.v_proj', 'blocks.0.gate_proj', 'blocks.0.out_proj', 'blocks.0.ffn.0', 'blocks.0.ffn.3', 'blocks.1.q_proj', 'blocks.1.k_proj', 'blocks.1.v_proj', 'blocks.1.gate_proj', 'blocks.1.out_proj', 'blocks.1.ffn.0', 'blocks.1.ffn.3', 'blocks.2.q_proj', 'blocks.2.k_proj', 'blocks.2.v_proj', 'blocks.2.out_proj', 'blocks.2.ffn.0', 'blocks.2.ffn.3', 'blocks.3.q_proj', 'blocks.3.k_proj', 'blocks.3.v_proj', 'blocks.3.gate_proj', 'blocks.3.out_proj', 'blocks.3.ffn.0', 'blocks.3.ffn.3']
+  opt: Muon (muon_lr=0.02 on 33 matrices / 2,624,512 params; AdamW aux lr=0.0003 / 12,927,069 params)
+step 0 val 10.8660
+step 250 loss 7.8141 val 7.5097 gn 0.375 abias [3.0003, 3.0, 3.0004] disp [0.0014, 0.0017, 0.0017] alpha [0.9193, 0.9209, 0.9444] nonfinite 0 64s
+step 500 loss 7.3269 val 7.3259 gn 0.279 abias [3.0003, 3.0, 3.0004] disp [0.0014, 0.0017, 0.0017] alpha [0.8489, 0.8557, 0.9207] nonfinite 0 128s
+step 750 loss 7.3585 val 7.2553 gn 0.248 abias [3.0003, 3.0, 3.0004] disp [0.0014, 0.0017, 0.0017] alpha [0.8512, 0.8595, 0.9204] nonfinite 0 192s
+step 1000 loss 7.5003 val 7.2274 gn 0.259 abias [3.0003, 3.0, 3.0004] disp [0.0014, 0.0017, 0.0017] alpha [0.852, 0.861, 0.9206] nonfinite 0 256s
+DONE

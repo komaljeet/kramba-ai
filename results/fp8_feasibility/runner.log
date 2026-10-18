@@ -1,0 +1,11 @@
+=== bf16_s0 start Sun, Oct 18, 2026 11:49:34 AM
+=== bf16_s0 exit=0 Sun, Oct 18, 2026 12:02:10 PM
+=== fp8_all_s0 start Sun, Oct 18, 2026 12:02:10 PM
+=== fp8_all_s0 exit=0 Sun, Oct 18, 2026 12:32:04 PM
+=== fp8_mixed_s0 start Sun, Oct 18, 2026 12:32:04 PM
+=== fp8_mixed_s0 exit=0 Sun, Oct 18, 2026 12:45:35 PM
+=== bf16_s1 start Sun, Oct 18, 2026 12:45:35 PM
+=== bf16_s1 exit=0 Sun, Oct 18, 2026 12:57:43 PM
+=== fp8_noscale_s0 start Sun, Oct 18, 2026 12:57:43 PM
+=== fp8_noscale_s0 exit=0 Sun, Oct 18, 2026  1:02:04 PM
+=== ALL DONE Sun, Oct 18, 2026  1:02:04 PM
