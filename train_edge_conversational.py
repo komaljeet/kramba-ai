@@ -3438,7 +3438,7 @@ def train(
         if batch_src is not None:
             with torch.no_grad():
                 per_sample = tok_loss.detach().reshape(batch_x.shape[0], -1).mean(dim=1)  # [B]
-                src_ids = (batch_src.to(device=device, dtype=torch.long)
+                src_ids = (batch_src.to(device=device, dtype=torch.long, non_blocking=True)
                            if isinstance(batch_src, torch.Tensor)
                            else torch.tensor(batch_src, device=device, dtype=torch.long))
                 src_loss_t.scatter_add_(0, src_ids, per_sample.to(src_loss_t.dtype))
