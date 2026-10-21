@@ -88,6 +88,13 @@ estimated): **14.385 s/step**, 5060 MiB peak -- confirms the ~14.35 estimate. Up
 1B days: **~154** (accepting BCD's own quality cost) / **~246** (matching full BCD
 quality), down from 161/258.
 
+**Correction (2026-10-21):** this day-count was never recomputed after the four-fusion
+sweep above (14.096 -> 13.294 s/step) landed. Redone with the current number: tokens/step
+is unchanged (batch 1 x grad_accum 8 x seq 4096 = 32,768), so tok/s = 32768/13.294 = 2,464,
+and against the 30.3B-token budget that's **~142 days** (accepting BCD's quality cost) /
+**~227 days** (matching full BCD quality) -- down from 154/246. README, docs/training.md
+and HF_BLOG_POST.md updated to match.
+
 **270M, re-measured on the same merged code:** 3,640 tok/s with dropout (default),
 **3,775 tok/s without** -- **~20.1 days** vs **~19.3 days**. 270M's own token budget
 (6.31B) is UNDER the 6.64B unique tokens cached, so it would not need to repeat data at

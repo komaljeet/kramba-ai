@@ -4,7 +4,7 @@
 
 A training and evaluation stack for linear-attention language models that runs on a single
 consumer graphics card. The headline result, measured rather than estimated: **a 1.11-billion
-parameter model trains in 5.31 GB** (82.4% of the card, measured 2026-10-17 — up from 4.51 GB
+parameter model trains in 5.24 GB** (81.4% of the card, measured 2026-10-17 — up from 4.51 GB
 in September, see the before/after table below for why), and ~1.6B is the ceiling on the card.
 
 That's the whole project. The rest of this page is about what that does and doesn't mean.
@@ -28,12 +28,12 @@ re-measuring.
 
 | | August 2026 | October 2026 (now) |
 |---|---|---|
-| 1B step time | 21.81 s/step | **14.385 s/step** (-34%) |
-| Throughput | 1,579 tok/s | **2,278 tok/s** |
+| 1B step time | 21.81 s/step | **13.294 s/step** (-39%) |
+| Throughput | 1,579 tok/s | **2,464 tok/s** |
 | **BCD's own quality cost** | **~4× worse perplexity** than full training (one block trains at a time, naive partition) | **~1.6× worse perplexity** (balanced block partitioning, issue #164) |
-| 1B pretrain time | ~375 days | **~154-246 days**, depending on how the BCD quality cost above is counted |
+| 1B pretrain time | ~375 days | **~142-227 days**, depending on how the BCD quality cost above is counted |
 | Offload correctness | silent weight-corruption bug, undetected for 76 days | found, fixed, validated end-to-end |
-| Peak VRAM at 1.11B | 4.51 GB | **5.31 GB** (82.4% of the card) — up, not down; this week's fused kernels/caches add some transient buffers even while speeding things up |
+| Peak VRAM at 1.11B | 4.51 GB | **5.24 GB** (81.4% of the card) — up, not down; this week's fused kernels/caches add some transient buffers even while speeding things up |
 
 The BCD row is a real cut in how much worse the memory-saving training mode is compared to
 training the full model at once — not a speed change. See [`docs/state.md`](docs/state.md)
@@ -57,7 +57,7 @@ error-swallowing bug that made argument mistakes look like crashes) — all merg
 tested together, no bad interaction found. Separately, four more real step-time levers
 landed this week, plus dropout turned off after a real multi-epoch quality test (not just
 assumed) found it actually costs quality in this project's repeated-data regime, not helps
-it — cutting the measured 1B step from 21.81 to **14.385 s/step** (-34.0%, a 1.52× speedup),
+it — cutting the measured 1B step from 21.81 to **13.294 s/step** (-39.0%, a 1.64× speedup),
 stacked and re-measured together, not just added up on paper. **The "reality check" section
 below is now corrected for these numbers — see [`docs/state.md`](docs/state.md) for the full
 measured trail.**
@@ -101,7 +101,7 @@ Triton scan and megakernel, and the fixes that make them work together.
 
 | claim | status |
 |---|---|
-| 1.11B-parameter model **trains in 4.51 GB**, 1,579 tok/s | measured 2026-09-19 — **stale**: current measured peak is 5.31 GB reserved (82.4% of the card) at 2,278 tok/s (2026-10-17); VRAM went up, not down, as this week's fused kernels/caches added some transient buffers even while speeding things up |
+| 1.11B-parameter model **trains in 4.51 GB**, 1,579 tok/s | measured 2026-09-19 — **stale**: current measured peak is 5.24 GB reserved (81.4% of the card) at 2,464 tok/s (2026-10-17); VRAM went up, not down, as this week's fused kernels/caches added some transient buffers even while speeding things up |
 | **~1.6B is the size ceiling** (2.45B spills to system RAM) | measured 2026-08-17 |
 | the stack is **not architecture-specific** — a plain 1.07B transformer also trains in 4.04 GB | measured 2026-08-17 |
 | flat ms/token from 256 → 4096 tokens of context | measured, [benchmarks_speed.md](docs/benchmarks_speed.md) |
@@ -110,7 +110,7 @@ Triton scan and megakernel, and the fixes that make them work together.
 | chunked cross-entropy saves **1436 MB at 48M** | measured 2026-08-17 |
 | **not cheaper to train** — a transformer is 1.41× faster per step | measured; the win is at inference only |
 | the 1B step runs at **close to hardware limits** — matmuls hit 100.6% of the card's own measured GEMM ceiling | measured 2026-08-31 |
-| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 — **stale**: current measured step is 14.385 s/step (~154-246 days depending on BCD quality framing, see the reality check below), from four more real speed levers landed 2026-10-12/14 |
+| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 — **stale**: current measured step is 13.294 s/step (~142-227 days depending on BCD quality framing, see the reality check below), from five more real speed levers landed 2026-10-12/17 |
 | **1.11B fits and runs in 4.51 GB with 5-technique stack** (BCD + offload + ternary + grad checkpoint + chunked loss) | VRAM measured 2026-09-19, 1350 steps — **but see the correction above: this run used an offload path with a weight-corruption bug (fixed 2026-10-10), so the loss curve from this run needs re-verifying, the VRAM figure does not** |
 | **tied embeddings + offload + BCD + chunked_loss fit without OOM** (previously OOM, fixed by pinning + chunked loss) | measured 2026-09-26, 79% VRAM (4.85 GB of 6 GB) at 1.11B fp32 — "composes" here means *fits*; whether it trains *correctly* at this combination and scale was never checked before 2026-10-10, and is only confirmed at small scale since |
 
@@ -139,12 +139,12 @@ parameters — so cost grows with the **square** of model size.
 The memory engineering got a 6B model to run forward and backward on this card at
 ~1 GB peak. **That is not the same as being able to train it.** 6B is still out of reach here.
 1B, with `--block-coordinate --offload`, is real but slow: at the current measured
-**14.385 s/step** (2,278 tok/s), hitting this project's 30-tokens-per-body-param convention
-takes **~154 days** accepting BCD's own ~1.6× quality cost as measured, or **~246 days**
+**13.294 s/step** (2,464 tok/s), hitting this project's 30-tokens-per-body-param convention
+takes **~142 days** accepting BCD's own ~1.6× quality cost as measured, or **~227 days**
 if you want BCD's output to actually match full-training quality instead (that's the
 multiplier's actual direction — the shorter number is the one with the quality cost baked
 in, not the other way around). This was **375 days at a smaller, un-fixed config as of
-2026-08-31**; four real speed levers and a from-scratch BCD-quality fix (balanced block
+2026-08-31**; five real speed levers and a from-scratch BCD-quality fix (balanced block
 partitioning, cutting BCD's quality cost from ~4× to ~1.6×) landed since, measured together,
 not assumed additive. See [`docs/state.md`](docs/state.md) for the full trail.
 
