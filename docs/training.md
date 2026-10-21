@@ -51,6 +51,15 @@ grouping layers into balanced-size blocks reclaimed it, letting more layers trai
 at once for the same VRAM budget. Full trail: `docs/state.md`'s BCD-balanced-partition and
 offload-bugs entries.
 
+**13.294 s/step is a full-BCD-cycle average, not every step (2026-10-22).** Per block it
+ranges from **18.9 s/step** (`token_embedding`, slowest, trained first) down to **7.5 s/step**
+(the last block) -- `results/fusion_sweep_1b/on_all.json` has the per-block breakdown. A fresh
+launch starts on the slowest block, so the first ~100 steps genuinely run at ~19 s/step
+(~1,720 tok/s), not 13.294 -- that's expected, not a regression. It steps down at each block
+switch and averages to 13.294 s/step over a full ~1,300-step cycle (~4.8 hours). This was found
+the hard way: a fresh launch of the exact command in `HF_BLOG_POST.md` looked broken for its
+first 100 steps because the docs never said this.
+
 ## HVN vs Transformer — Fundamental Differences
 
 | Aspect | Transformer (MHA) | HVN |

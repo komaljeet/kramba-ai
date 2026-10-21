@@ -95,6 +95,15 @@ and against the 30.3B-token budget that's **~142 days** (accepting BCD's quality
 **~227 days** (matching full BCD quality) -- down from 154/246. README, docs/training.md
 and HF_BLOG_POST.md updated to match.
 
+**Correction (2026-10-22): 13.294 s/step is a cycle average, and nothing above said so.**
+A real launch of the exact command this doc and HF_BLOG_POST.md recommend measured a steady
+~19 s/step (~1,720 tok/s) across its first 22 steps -- flat, not warming up -- and looked
+broken. Debugger confirmed both numbers are correct: `results/fusion_sweep_1b/on_all.json`
+shows per-block times from **18.9 s/step** (`token_embedding`, trained first) down to
+**7.5 s/step** (the last block), averaging to 13.294 across a full 13-block, ~1,300-step
+cycle. A fresh run always starts on the slowest block. README, docs/training.md and
+HF_BLOG_POST.md now say this explicitly next to every place 13.294/2,464 is quoted.
+
 **270M, re-measured on the same merged code:** 3,640 tok/s with dropout (default),
 **3,775 tok/s without** -- **~20.1 days** vs **~19.3 days**. 270M's own token budget
 (6.31B) is UNDER the 6.64B unique tokens cached, so it would not need to repeat data at

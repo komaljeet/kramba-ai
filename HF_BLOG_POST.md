@@ -1,4 +1,4 @@
-**Pre-training a 1.11B LLM on a 6 GB Laptop GPU - simply**
+**Pre-training a 1.11B LLM on a 6 GB Laptop GPU**
 
 [DOI 10.5281/zenodo.22725431](https://zenodo.org/records/22725431)
 
@@ -27,6 +27,8 @@ This is a power-limited laptop GPU on Windows with notably tight system RAM rela
 | Peak VRAM at 1.11B | 4.51 GB | **5.24 GB** (81.4% of the card) — up, not down; fused kernels/caches add some transient buffers even while speeding things up |
 
 The BCD quality row is easy to miss but matters as much as the speed numbers: the **about 4x to about 1.6x figure is a real cut in how much worse the memory-saving training mode is** compared to training the full model at once, not a speed change at all. It came from changing how BCD splits the model into trainable blocks — one big slot sized for the vocabulary table wasted memory for every other block; grouping layers into balanced-size blocks reclaimed it, which let more layers train "live" at once for the same VRAM budget.
+
+**13.294 s/step is a full-BCD-cycle average, not every step.** Per block it ranges from **18.9 s/step** (the token_embedding block, slowest, trained first) down to **7.5 s/step** (the last block). A fresh launch starts on the slowest block, so the first about 100 steps genuinely run at about 19 s/step (about 1,720 tok/s) — that is expected, not a regression. It steps down at each block switch and averages to 13.294 s/step over a full about 1,300-step cycle (about 4.8 hours).
 
 **Correction (2026-10-11):** the CPU weight-offload path used in the runs below had a bug, present from 2026-07-26 to 2026-10-10, that could swap weights between same-shaped matrices during training — fixed in commit 2f94d7a, and independently confirmed on the original historical code. The **VRAM/fits-in-X-GB numbers throughout this post are unaffected** (that bug was about weight correctness, not memory). The **loss-curve and "it trains" claims for the offloaded runs below are not** — they need re-running on fixed code before being trusted again. See the repo's docs/state.md for the full writeup.
 
@@ -207,11 +209,13 @@ Command: python train_edge_conversational.py --arch hvn-hybrid --d-model 2048 --
 
 Key flags explained: **--arch hvn-hybrid** selects the gated DeltaNet trunk with 2 sliding-attention layers. **--attn-layers 6,18** places those attention layers for exact-token recall. **--tie-embeddings** shares the vocab table between embedding and decoder (saves 103M params; compatible with offload since Issue #157 pinned the shared table). **--offload** does CPU weight offload for inactive blocks (auto-enables **--block-coordinate** and **--grad-checkpoint**). **--block-coordinate** is BAdam: train one block at a time, clear its optimizer state. **--chunked-loss 512** scores loss 512 positions at a time, recomputing in backward (saves about 1.5 GB) — this is what makes tied embeddings plus offload fit without OOM. **--precision bf16** (on by default via **--fast**) gives 2-3x speed and 2x less VRAM, needs RTX 30/40 series. **--optimizer muon** needs 1.6x fewer steps to the same loss (about 12% slower per step, still a net win).
 
+**If you run this command yourself, the first about 100 steps will print about 19 s/step, not 13.294.** That is correct, not broken — BCD trains one block at a time, and a fresh launch always starts on the slowest block (token_embedding). It steps down at every block switch after that. See the before/after table above for the per-block range.
+
 **Traps That Cost Real Hours**
 
 1) **torch.compile is 2.4x SLOWER** on this architecture (4 independent measurements). Use **--fast**, which deliberately skips it.
 2) Bare **--no-fast** silently drops you to fp32 — 74.6 s/step instead of 8.66. Re-add the precision flags by hand.
-3) The default data mix caps a pretrain at 0.13 billion tokens. OpenAssistant is only 15.7M tokens but takes a 35% share, which binds the whole budget — enough for a about 7M model. A 1B run on defaults gets 270x less data than it needs, and the loss curve looks perfectly healthy while it re-reads the same tokens. Pass **--pretrain-mix 0.0,0.0,0.0,1.0** to use FineWeb-Edu instead.
+3) The default data mix caps a pretrain at 0.13 billion tokens. OpenAssistant is only 15.7M tokens but takes a 35% share, which binds the whole budget — enough for about a 7M model. A 1B run on defaults gets 270x less data than it needs, and the loss curve looks perfectly healthy while it re-reads the same tokens. Pass **--pretrain-mix 0.0,0.0,0.0,1.0** to use FineWeb-Edu instead.
 4) Nothing prints until step 50. A short run looks hung when it's fine. Watch training_log.csv, which flushes every row.
 5) tokenizer.vocab_size excludes added tokens. Use len(tokenizer) for embedding table sizing — otherwise sentinels index out of bounds (bare CUDA device-side assert).
 
