@@ -39,6 +39,13 @@ The BCD row is a real cut in how much worse the memory-saving training mode is c
 training the full model at once — not a speed change. See [`docs/state.md`](docs/state.md)
 for the full trail.
 
+**13.294 s/step is a full-BCD-cycle average, not every step.** Per block it ranges from
+**18.9 s/step** (the `token_embedding` block, slowest, trained first) down to **7.5 s/step**
+(the last block). A fresh launch starts on the slowest block, so the first ~100 steps really do
+run at ~19 s/step (~1,720 tok/s) — that's expected, not a regression. It steps down at each
+block switch and averages out to 13.294 s/step over a full ~1,300-step cycle (~4.8 hours).
+Compare a short run's own number against the `token_embedding` row, not the cycle mean.
+
 **Correction (2026-10-11):** the CPU weight-offload path used by the 1.11B run below had a bug
 from 2026-07-26 to 2026-10-10 that could swap weights between same-shaped matrices during
 training (fixed in commit `2f94d7a`, confirmed present as far back as the offload code itself,
@@ -139,7 +146,9 @@ parameters — so cost grows with the **square** of model size.
 The memory engineering got a 6B model to run forward and backward on this card at
 ~1 GB peak. **That is not the same as being able to train it.** 6B is still out of reach here.
 1B, with `--block-coordinate --offload`, is real but slow: at the current measured
-**13.294 s/step** (2,464 tok/s), hitting this project's 30-tokens-per-body-param convention
+**13.294 s/step** (2,464 tok/s) cycle average — see the per-block spread note above, a fresh
+launch's first ~100 steps run at ~19 s/step, not 13.294 — hitting this project's
+30-tokens-per-body-param convention
 takes **~142 days** accepting BCD's own ~1.6× quality cost as measured, or **~227 days**
 if you want BCD's output to actually match full-training quality instead (that's the
 multiplier's actual direction — the shorter number is the one with the quality cost baked
