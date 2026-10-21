@@ -36,12 +36,12 @@ numbers transferring across scale, let alone across hardware.
 
 | | August 2026 | October 2026 (now) |
 |---|---|---|
-| 1B step time | 21.81 s/step | **14.385 s/step** (-34%) |
-| Throughput | 1,579 tok/s | **2,278 tok/s** |
+| 1B step time | 21.81 s/step | **13.294 s/step** (-39%) |
+| Throughput | 1,579 tok/s | **2,464 tok/s** |
 | **BCD's own quality cost** | **~4x worse perplexity** than full training (one block trains at a time, naive partition) | **~1.6x worse perplexity** (balanced block partitioning, issue #164) |
-| 1B pretrain time | ~375 days | **~154-246 days**, depending on how the BCD quality cost above is counted |
+| 1B pretrain time | ~375 days | **~142-227 days**, depending on how the BCD quality cost above is counted |
 | Offload correctness | silent weight-corruption bug, present undetected for 76 days (2026-07-26 to 2026-10-10) | found, fixed, and validated end-to-end with real hard-kill-and-resume tests |
-| Peak VRAM at 1.11B | 4.51 GB | **5.31 GB** (82.4% of the card) -- up, not down; fused kernels/caches add some transient buffers even while speeding things up |
+| Peak VRAM at 1.11B | 4.51 GB | **5.24 GB** (81.4% of the card) -- up, not down; fused kernels/caches add some transient buffers even while speeding things up |
 
 The BCD quality row matters as much as the speed numbers, and is easy to miss in a wall of
 step-time figures: the **~4x -> ~1.6x is a real cut in how much worse the memory-saving
