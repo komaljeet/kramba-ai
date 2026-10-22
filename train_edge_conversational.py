@@ -653,15 +653,29 @@ GPT2_VOCAB_SIZE = 50257
 _PROF = None
 
 
-def _fmt_profile_table(prof, row_limit: int = 25) -> str:
+def _fmt_profile_table(prof, row_limit: int = 25, n_steps: int = 1) -> str:
     """Render torch.profiler key_averages as a self-device-time-sorted table.
 
     Robust across torch versions: EventList.table()'s kwargs change between
     releases (torch 2.12 rejects ``sort=``), so we read the Event attributes
     directly and sort by self device (GPU) time — the metric that attributes the
     bottleneck to the op whose own kernels actually burn the GPU.
+
+    ONLY CUDA kernel rows are kept. key_averages() also returns the op-level
+    rows (aten::mm, AddmmBackward0, autograd::engine::evaluate_function: ...)
+    that launched those kernels, plus the whole-step ``ProfilerStep*`` range, and
+    they all carry the same device time -- ranking them together double/triple
+    counts it (same filter as scripts/attribute_1b_step.py, #131). User
+    annotations (``ProfilerStep*``, ``Optimizer.step#...``) also get a CUDA-side
+    copy spanning their kernels, so those are dropped too. Times are divided by
+    ``n_steps`` (the number of profiled steps) so they are per step.
     """
-    ka = prof.key_averages()
+    from torch.autograd import DeviceType
+    ka = [e for e in prof.key_averages()
+          if getattr(e, "device_type", None) == DeviceType.CUDA
+          and not getattr(e, "is_user_annotation", False)
+          and not e.key.startswith("ProfilerStep")]
+    n_steps = max(1, int(n_steps))
 
     def _self_dev(e):
         for a in ("self_device_time_total", "self_cuda_time_total",
@@ -677,13 +691,18 @@ def _fmt_profile_table(prof, row_limit: int = 25) -> str:
     def _cnt(e):
         return int(getattr(e, "count", 0) or 0)
 
+    # Filter (above) happens before both the total and the row_limit cut, so
+    # %GPU is a share of kernel-only time.
     rows = sorted(ka, key=_self_dev, reverse=True)[:row_limit]
     tot = sum(_self_dev(e) for e in ka) or 1.0
-    out = [f"{'self GPU us':>14} {'%GPU':>6} {'cpu us':>12} {'count':>8}  key",
+    out = [f"per step, averaged over {n_steps} profiled step(s); "
+           f"total kernel GPU time {tot / n_steps / 1e6:.3f} s/step",
+           f"{'GPU us/step':>14} {'%GPU':>6} {'cpu us/step':>12} {'cnt/step':>8}  kernel",
            "-" * 80]
     for e in rows:
         d = _self_dev(e)
-        out.append(f"{d:>14.0f} {100 * d / tot:>5.1f}% {_cpu(e):>12.0f} {_cnt(e):>8d}  {e.key}")
+        out.append(f"{d / n_steps:>14.0f} {100 * d / tot:>5.1f}% "
+                   f"{_cpu(e) / n_steps:>12.0f} {_cnt(e) / n_steps:>8.1f}  {e.key}")
     return "\n".join(out)
 
 
@@ -4525,17 +4544,27 @@ def main():
     # known shape.
 
     if args.profile:
-        # Steady-state profiling: skip the first ~12 compile-warmup optimizer steps,
-        # warm up 2, record the next 30, then stop. _PROF.step() (called once per
-        # optimizer step in train()) marks the step boundaries the schedule counts.
+        # Skip 2 optimizer steps (one-time allocator / optimizer-state setup),
+        # warm up 1, record 3, then stop. _PROF.step() (called once per optimizer
+        # step in train()) marks the step boundaries the schedule counts.
+        # The window is kept SMALL on purpose: at the 1B shape (24 layers,
+        # offload, chunked loss, grad checkpoint) one step records ~265K events
+        # at ~3.4 KB each on the host. The old 30-step window was ~7.9M events,
+        # ~27 GB -- more than this 15 GB machine has -> MemoryError after
+        # training finished. 3 steps is ~0.8M events (measured ~5.3 GB total added
+        # host RAM incl. parsing overhead), which fits. Like the old window,
+        # it samples only one BCD block, so it is not a full-cycle average.
         import torch.profiler as _tp
+        _PROF_WAIT, _PROF_WARMUP, _PROF_ACTIVE = 2, 1, 3
         _prof = _tp.profile(
             activities=[_tp.ProfilerActivity.CPU, _tp.ProfilerActivity.CUDA],
-            schedule=_tp.schedule(wait=12, warmup=2, active=30, repeat=1),
+            schedule=_tp.schedule(wait=_PROF_WAIT, warmup=_PROF_WARMUP,
+                                  active=_PROF_ACTIVE, repeat=1),
         )
         _prof.__enter__()
         globals()["_PROF"] = _prof
-        print("\n  [profile] torch.profiler armed — skipping first ~12 compile-warmup steps.")
+        print(f"\n  [profile] torch.profiler armed — skip {_PROF_WAIT}, warm up "
+              f"{_PROF_WARMUP}, record {_PROF_ACTIVE} optimizer steps.")
         try:
             train(
                 model=model,
@@ -4554,8 +4583,23 @@ def main():
             print("\n" + "=" * 78)
             print("[profile] steady-state kernel breakdown (self GPU time, top 25)")
             print("=" * 78)
+            # Steps actually recorded (fewer than _PROF_ACTIVE if the run ended
+            # inside the window).
+            _n_rec = min(_PROF_ACTIVE, max(0, _prof.step_num - _PROF_WAIT - _PROF_WARMUP))
             try:
-                print(_fmt_profile_table(_prof, row_limit=25))
+                # Loud size signal: if someone widens the window again, this
+                # shows the host-RAM cost before it turns into a silent OOM.
+                _n_ev = len(_prof.events())
+                print(f"[profile] {_n_ev:,} events over {_n_rec} recorded step(s) "
+                      f"(~{_n_ev * 3.4e3 / 1e9:.1f} GB host RAM at ~3.4 KB/event; "
+                      f"this machine has ~15 GB)")
+                if _n_ev == 0:
+                    print(f"[profile] window never completed: the run needs > "
+                          f"{_PROF_WAIT + _PROF_WARMUP + _PROF_ACTIVE} optimizer steps.")
+            except Exception as _e:
+                print(f"[profile] could not count events: {_e!r}")
+            try:
+                print(_fmt_profile_table(_prof, row_limit=25, n_steps=_n_rec))
             except Exception as _e:
                 print(f"[profile] could not render table: {_e!r}")
             _prof.__exit__(None, None, None)
