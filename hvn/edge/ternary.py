@@ -200,7 +200,22 @@ def _invalidate_step_cache(*_args, **_kwargs) -> None:
     for m in list(_STEP_LIVE):
         m._scache = None
         m._fscale = None
+        m._f8cache = None      # fp8 weight cache (hvn/edge/fp8_fused.py)
     _STEP_LIVE.clear()
+
+
+def _ensure_step_hooks() -> None:
+    """Install (once, process-wide) the hooks that expire every step cache."""
+    if _STEP_HOOKS:
+        return
+    from torch.optim.optimizer import (register_optimizer_step_post_hook,
+                                       register_optimizer_step_pre_hook)
+    _STEP_HOOKS.append(register_optimizer_step_pre_hook(_invalidate_step_cache))
+    _STEP_HOOKS.append(register_optimizer_step_post_hook(_invalidate_step_cache))
+    # A BCD switch re-parks frozen weights without an optimizer step in
+    # between being guaranteed; the frozen-scale cache must drop there too.
+    from hvn.core.block_coordinate import register_activate_callback
+    register_activate_callback(_invalidate_step_cache)
 
 
 def enable_ternary_step_cache(model: nn.Module, enabled: bool = True) -> int:
@@ -210,15 +225,8 @@ def enable_ternary_step_cache(model: nn.Module, enabled: bool = True) -> int:
     cached entry, so a cache can never outlive the weights it was built from.
     Returns the number of modules switched.
     """
-    if enabled and not _STEP_HOOKS:
-        from torch.optim.optimizer import (register_optimizer_step_post_hook,
-                                           register_optimizer_step_pre_hook)
-        _STEP_HOOKS.append(register_optimizer_step_pre_hook(_invalidate_step_cache))
-        _STEP_HOOKS.append(register_optimizer_step_post_hook(_invalidate_step_cache))
-        # A BCD switch re-parks frozen weights without an optimizer step in
-        # between being guaranteed; the frozen-scale cache must drop there too.
-        from hvn.core.block_coordinate import register_activate_callback
-        register_activate_callback(_invalidate_step_cache)
+    if enabled:
+        _ensure_step_hooks()
     n = 0
     for mod in model.modules():
         if isinstance(mod, TernaryLinear):
@@ -278,8 +286,12 @@ class TernaryLinear(nn.Module):
     use_step_cache = False
     #: Training path dequantizes to the autocast dtype (see ``_compute_dtype``).
     use_autocast_dtype = True
+    #: FP8 training GEMMs (``--fp8-linear``, see ``hvn/edge/fp8_fused.py``).
+    use_fp8 = False
+    fp8_weight_cache = False
     _scache = None
     _fscale = None
+    _f8cache = None
 
     def __init__(self, in_features: int, out_features: int, bias: bool = False,
                  group_size: int = GROUP_PER_TENSOR, *,
@@ -412,6 +424,10 @@ class TernaryLinear(nn.Module):
             # Training / grad-enabled path is unchanged and uncached: the STE
             # needs the live shadow weight inside the autograd graph, and the
             # weight moves every optimizer step.
+            if self.use_fp8:
+                from .fp8_fused import fp8_active, fp8_module_forward
+                if fp8_active(self, x):
+                    return fp8_module_forward(self, x)
             return F.linear(x, self._dequantized(self._compute_dtype(x)), self.bias)
 
         # Inference: the weight is frozen for the duration, so re-deriving it
@@ -447,12 +463,14 @@ class TernaryLinear(nn.Module):
         self._wcache = None
         self._scache = None
         self._fscale = None
+        self._f8cache = None
         return super().train(mode)
 
     def _load_from_state_dict(self, *args, **kwargs):
         self._wcache = None
         self._scache = None
         self._fscale = None
+        self._f8cache = None
         return super()._load_from_state_dict(*args, **kwargs)
 
     def freeze(self) -> None:
