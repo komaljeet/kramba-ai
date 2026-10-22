@@ -2121,7 +2121,8 @@ def apply_fast_stack(model, triton_scan: bool = True,
                      compile_model: bool = True, verbose: bool = True,
                      fused_ternary: bool = False,
                      ternary_step_cache: bool = False,
-                     fused_rmsnorm: bool = False):
+                     fused_rmsnorm: bool = False,
+                     fp8_linear: bool = False):
     """Put a built model into the execution mode training actually uses (#136).
 
     **The single implementation of what ``--fast`` means.** ``--fast`` is
@@ -2216,6 +2217,22 @@ def apply_fast_stack(model, triton_scan: bool = True,
         if verbose:
             print(f"\n  Within-step ternary weight cache enabled on {n} "
                   f"TernaryLinear layer(s).")
+
+    if fp8_linear:
+        # 2026-10-22: q/k/v/gate/out_proj + FFN GEMMs on the FP8 tensor cores
+        # (hvn/edge/fp8_fused.py). Fused quantizer, bit-identical to the eager
+        # recipe validated on exp/fp8-pretrain-feasibility; the fp8 weight is
+        # cached per optimizer step when the ternary step cache is on.
+        # Training forwards only -- eval/val stays bf16.
+        from hvn.edge.fp8_fused import enable_fp8_linear
+        done, skipped = enable_fp8_linear(model, weight_cache=ternary_step_cache
+                                          and not compile_model)
+        if verbose:
+            print(f"\n  FP8 Linear enabled on {len(done)} layer(s) "
+                  f"(alpha/beta gates + vocab head stay bf16); weight cache "
+                  f"{'ON' if ternary_step_cache and not compile_model else 'OFF'}.")
+            if skipped:
+                print(f"  FP8: {len(skipped)} layer(s) kept bf16, dims not %16: {skipped}")
 
     if compile_model:
         # Issue #158: torch.compile is a NET LOSS on this architecture. Measured
@@ -3836,6 +3853,13 @@ def main():
                              "grad-checkpoint recompute (bit-identical; 0.8%% at 1B, "
                              "+192 MiB allocated). On under --fast; "
                              "--no-ternary-step-cache opts out.")
+    parser.add_argument("--fp8-linear", action=argparse.BooleanOptionalAction,
+                        default=False,
+                        help="Run the q/k/v/gate/out_proj and FFN GEMMs on the FP8 "
+                             "tensor cores (sm_89+, tensorwise e4m3 fwd / e5m2 grad, "
+                             "fused Triton quantizer). alpha/beta gates and the vocab "
+                             "head stay bf16; eval stays bf16. Needs --precision bf16. "
+                             "Default OFF, not part of --fast.")
     parser.add_argument("--fused-rmsnorm", action=argparse.BooleanOptionalAction,
                         default=False,
                         help="Run each block's pre-norm RMSNorm as F.rms_norm's single "
@@ -4189,6 +4213,14 @@ def main():
             args.num_workers = 4; fast_enabled.append("num-workers=4")
         print(f"[--fast] Enabled recommended training stack: {', '.join(fast_enabled)}")
 
+    if args.fp8_linear:
+        # FP8 replaces autocast's bf16 GEMMs; under fp32/fp16 there is nothing
+        # for it to hook into and the flag would silently do nothing.
+        if args.precision != "bf16":
+            parser.error("--fp8-linear needs --precision bf16")
+        if args.compile:
+            parser.error("--fp8-linear is not supported with --compile")
+
     # --- Issue #93/#120: parse --pretrain-mix 'slim,oasst,wiki,fineweb_edu' -> float tuple (or None) ---
     if args.pretrain_mix is not None:
         parts = [float(x) for x in args.pretrain_mix.split(",")]
@@ -4524,6 +4556,7 @@ def main():
         fused_ternary=args.fused_ternary,
         ternary_step_cache=args.ternary_step_cache,
         fused_rmsnorm=args.fused_rmsnorm,
+        fp8_linear=args.fp8_linear,
     )
 
     # Adaptive-exact chunk (#95): pick the largest numerically-exact chunk per
