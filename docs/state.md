@@ -5,6 +5,54 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## num-workers 4->2 saves ~1.1GB RAM for free; second fusion-tail scoping found no new lever (2026-10-23)
+
+**One line: dropping `--num-workers` from 4 to 2 is a real, free win -- ~1.1GB less resident
+RAM, identical step time. A follow-up scoping pass looking for a second wave of kernel
+fusions (beyond the Oct 17 four-fusion sweep) found the obvious candidate already fused and
+firing correctly, and nothing else large enough to justify building.**
+
+**num-workers A/B, measured on the real production config** (1.11B, offload+BCD+fp8-linear,
+15 real steps each, peak resident memory sampled every 1s across all `python.exe` processes):
+
+| workers | peak total RSS | avg s/step |
+|---|---:|---:|
+| 4 (current `--fast` default) | 7.16 GB | 17.890 |
+| 2 | 6.04 GB | 17.875 |
+
+No throughput cost (within noise) -- each worker is a fresh Windows `spawn` process
+re-importing torch/transformers from scratch (no `fork`/COW on this OS), and the earlier
+CPU-idle finding already showed the GPU, not the loader, is the bottleneck, so the extra
+workers were never buying anything. Recommend `--num-workers 2` as the default going
+forward; **not changed in code yet, flag only, pending a decision on whether to flip the
+`--fast` default.**
+
+**Fusion-tail scoping, second pass since Oct 17: no new lever found.** Looked for a second
+wave of elementwise-kernel fusions in the ~26% of step time not already GEMM/scan/offload,
+now that FP8 shrank the GEMM share and grew everything else's relative weight. Checked the
+obvious candidate -- `fused_residual_add3` (`hvn/core/fused_gates.py`), the Oct 17 fusion that
+merges a DeltaNet block's `x + branch1 + branch2` into one kernel -- against a theory that
+FP8 (landed after that fusion was built) might have silently broken its dtype/contiguity fast
+path for some layers, the same class of bug as #117/#138. **It hasn't**: a live counter
+patched into the real call site during 5 real training steps with `--fp8-linear` on measured
+exactly 880/880 expected calls (22 DeltaNet layers x 8 grad_accum x 5 steps) -- the fusion
+fires every single time. (A first attempt at this measurement wrongly read 0/880 -- caused by
+my own test harness, not training code: a module-level `atexit` hook fired in the two
+Windows `spawn` dataloader-worker processes too, and their always-zero stats overwrote the
+real result, last-writer-wins. Fixed by counting inside the real call site during training
+instead of reading a shared counter after the fact.)
+
+Two real, small gaps found and not worth building on their own: (1) `fused_residual_add3` is
+wired into `deltanet.py` only, not `transformer_block.py` -- the 2 attention layers (of 24)
+never get it, upper bound well under 1% of step time; (2) FP8's own quantizer
+(`_amax_kernel` + `_cast_kernel`, ~5.1% of step) is already the minimal 2-kernel design
+(amax reduction, then clamp/cast/quantize) and merging further would mean either an
+online-running-max single-kernel rewrite (real complexity, same class of risk as the #96
+chunk-parallel scan design that lost) or giving up the bit-identical quantization guarantee.
+The remaining ~6% of scattered `copy`/`cast` kernels were not traced to source (would need a
+`with_stack=True` profiler pass); not pursued given everything else checked came back already
+near its floor.
+
 ## CPU idle time during the 1B step: none worth reclaiming (reconfirms #153 on the current offload+BCD+FP8 build, 2026-10-23)
 
 **One line: asked whether anything could be deferred onto the CPU during its idle windows.
