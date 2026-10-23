@@ -5,6 +5,34 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## CPU idle time during the 1B step: none worth reclaiming (reconfirms #153 on the current offload+BCD+FP8 build, 2026-10-23)
+
+**One line: asked whether anything could be deferred onto the CPU during its idle windows.
+`cudaEventSynchronize` (the offload prefetch wait) blocks the host for ~10s of an ~18.9s
+step -- looks large -- but the GPU's own kernel table for the same window sums to 20.05s of
+device-busy time against that same wall clock. The GPU is still ~100%+ saturated. The host's
+"idle" time is it blocked on the one thing actually gating the step, not spare capacity
+sitting unused. Nothing to defer into it.**
+
+Measured on the real production config (hvn-hybrid 1.11B, `--offload --bcd-partition
+balanced --fp8-linear --fast`), reusing the existing `--profile` torch.profiler capture
+(CPU+CUDA activities) rather than a smaller reference harness, so offload's real host-side
+bookkeeping is included. `scripts/profile_cpu_hotspots.py`'s own reference-config measurement
+(d896/L16/H14, no offload) would have missed this entirely -- confirmed by running it: this is
+why the question needed a fresh measurement on the real config instead of reusing #153's
+August number, which also predates offload/BCD/FP8 and is not a measurement of this harness.
+
+Side finding, consistent with earlier reasoning rather than new: the DeltaNet scan kernels
+(`_mk_bwd_kernel_s` + `_gated_delta_fwd_kernel_s` + `_mk_ckpt_kernel_s`) came back at 26.6% of
+GPU self-time on this block -- matching the ~27% estimate made when FP8 shrank the GEMM share.
+FP8 tensor-core GEMM kernels (`sm89_xmma_gemm_e4m3...`) confirmed actually executing, ~18% of
+this block. No new lever found; this closes out the "anything else to leverage" question for
+now the same way epic #78 did in August -- re-verified on the current build, not assumed.
+
+(First attempt at this measurement hung for ~2h on a Windows multiprocessing bug in the probe
+script itself -- missing the `if __name__ == "__main__":` guard needed when `--fast` spawns
+dataloader workers via `spawn` on Windows. Not a training-code bug; killed and re-run.)
+
 ## 1B pretrain: FP8 full-cycle CONFIRMED -- 7.81% faster, 132/211 days (2026-10-23)
 
 **One line: the stalled run below finished all 1300 steps after the mmap/reaper fixes. Real
