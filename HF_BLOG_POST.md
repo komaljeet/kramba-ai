@@ -241,10 +241,14 @@ probe (recalling exact facts from provided context, not just chatting fluently) 
 partially succeeds. Don't read "chat fine-tune works" as "the model knows things" — those
 are different, separately-measured properties.
 
-**Open, unresolved as of this post:** chat fine-tuning runs about 3x slower per token than
-pretraining on the same hardware, most likely Prodigy-optimizer VRAM pressure/spill rather
-than anything about the fine-tune data path itself — not yet root-caused. Tracked as a known
-gap, not quietly dropped.
+**Update (2026-10-23): the 3x slowdown above is fixed.** Chat fine-tuning was measured at
+about 3x slower per token than pretraining on the same hardware. Root-caused: a checkpoint
+loader at the time loaded straight onto the GPU and never freed about 664 MB of dead weight,
+which combined with Prodigy's own ~2.7 GB optimizer state to push the card into the same
+silent WDDM-spill failure mode documented elsewhere in this post. An unrelated commit fixed
+the loader two days after the slowdown was first measured; current code runs the same
+Prodigy config at about 4,130 tok/s, matching pretrain's throughput, confirmed both in an
+isolated benchmark and end to end on the real fine-tune script.
 
 **Traps That Cost Real Hours**
 
