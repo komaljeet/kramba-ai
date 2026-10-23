@@ -2309,6 +2309,27 @@ def check_head_dim(d_model: int, n_heads: int, triton_scan: bool = True) -> None
             f"{hint}")
 
 
+def _expected_block_plan(arch: str, num_layers: int, attn_layers=None) -> list[str]:
+    """The per-layer block plan EdgeHVN ends up with for ``--arch``.
+
+    Mirrors EdgeHVN.__init__ (hvn/edge/model.py), which since b0cef7b always
+    fills in a plan -- so a resume check must compare plans, not ask whether one
+    exists (#175). Hybrid arches need ``attn_layers``.
+    """
+    if arch == "transformer":
+        return ["transformer"] * num_layers
+    if arch in ("hvn-hybrid", "hvn-original-hybrid"):
+        attn_set = set(int(x) for x in (attn_layers or ()))
+        # #166: hvn-original-hybrid swaps ONLY the recurrent block -- the
+        # original HVNBlock instead of the published gated-DeltaNet one -- so a
+        # comparison against hvn-hybrid isolates that single variable rather
+        # than also changing whether attention layers are present.
+        recurrent = "hvn" if arch == "hvn-original-hybrid" else "deltanet"
+        return ["transformer" if i in attn_set else recurrent
+                for i in range(num_layers)]
+    return ["deltanet"] * num_layers     # arch == "hvn": use_deltanet=True
+
+
 def build_model_and_config(
     settings: dict,
     tokenizer,
@@ -2422,15 +2443,7 @@ def build_model_and_config(
                     f"--attn-layers position {li} out of range for "
                     f"num_layers={settings['num_layers']}"
                 )
-        # #166: hvn-original-hybrid swaps ONLY the recurrent block -- the
-        # original HVNBlock instead of the published gated-DeltaNet one -- so a
-        # comparison against hvn-hybrid isolates that single variable rather
-        # than also changing whether attention layers are present.
-        recurrent = "hvn" if arch == "hvn-original-hybrid" else "deltanet"
-        block_plan = [
-            "transformer" if i in attn_set else recurrent
-            for i in range(settings["num_layers"])
-        ]
+        block_plan = _expected_block_plan(arch, settings["num_layers"], attn_set)
         config["attn_layers"] = attn_set
         config["attn_window"] = attn_window
         print(f"  Hybrid block_plan: {block_plan} (window={attn_window})")
@@ -2876,13 +2889,40 @@ def _check_resume_matches_request(requested, ckpt: dict, path: str, args) -> Non
         if want is not None and have is not None and have != want:
             mismatches.append(f"{name}: checkpoint={have}, requested={want}")
 
+    # #175: since b0cef7b EdgeHVN fills in a block_plan for EVERY arch, so
+    # "does the checkpoint have a plan" no longer means "is it hybrid". Compare
+    # the saved plan against the plan this request builds.
+    arch = getattr(args, "arch", None) or "hvn"
     ckpt_plan = ckpt.get("block_plan")
-    want_hybrid = getattr(args, "arch", None) == "hvn-hybrid"
-    if want_hybrid and not ckpt_plan:
-        mismatches.append("arch: checkpoint is not hybrid, requested hvn-hybrid")
-    if ckpt_plan and not want_hybrid:
-        mismatches.append(f"arch: checkpoint is hybrid, requested "
-                          f"{getattr(args, 'arch', '?')}")
+    if ckpt_plan is None and ckpt.get("num_layers") is not None:
+        # Pre-b0cef7b checkpoint: rebuild the plan EdgeHVN would have used
+        # (same broadcast as hvn/edge/model.py's block_plan=None path).
+        _bt = ("transformer" if ckpt.get("block_type") == "transformer"
+               else ("deltanet" if ckpt.get("use_deltanet") else "hvn"))
+        ckpt_plan = [_bt] * int(ckpt["num_layers"])
+    # Prefer the plan of the model main() actually built from the flags; fall
+    # back to deriving it from args (callers that pass no model).
+    want_plan = getattr(requested, "block_plan", None)
+    if want_plan is None:
+        attn = getattr(args, "attn_layers", None)
+        if isinstance(attn, str):
+            attn = [int(x) for x in attn.split(",") if x.strip() != ""]
+        n = _want("num_layers") or (len(ckpt_plan) if ckpt_plan is not None else None)
+        hybrid = arch in ("hvn-hybrid", "hvn-original-hybrid")
+        if n is not None and (attn or not hybrid):
+            want_plan = _expected_block_plan(arch, int(n), attn)
+        elif ckpt_plan is not None and hybrid:
+            # Hybrid with no attention positions known: can only check the
+            # block FAMILY (right recurrent type, at least one attention layer).
+            recurrent = "hvn" if arch == "hvn-original-hybrid" else "deltanet"
+            if ("transformer" not in ckpt_plan
+                    or not set(ckpt_plan) <= {recurrent, "transformer"}):
+                mismatches.append(f"arch: checkpoint block_plan={list(ckpt_plan)} "
+                                  f"is not an {arch} plan")
+    if ckpt_plan is not None and want_plan is not None \
+            and list(ckpt_plan) != list(want_plan):
+        mismatches.append(f"arch: checkpoint block_plan={list(ckpt_plan)}, "
+                          f"requested {arch} -> {list(want_plan)}")
 
     if mismatches:
         raise SystemExit(
@@ -4511,10 +4551,13 @@ def main():
         # The CLI-built model is about to be replaced; free it BEFORE building
         # the second one rather than holding two full fp32 copies at once
         # (4.4 GB each at 1B on a 16 GB box). The resume check below only
-        # needs its vocab size.
+        # needs its vocab size and block plan.
         import gc
         import types
-        _requested = types.SimpleNamespace(vocab_size=getattr(model, "vocab_size", None))
+        _requested = types.SimpleNamespace(
+            vocab_size=getattr(model, "vocab_size", None),
+            # #175: the plan the flags built, compared against the checkpoint's.
+            block_plan=list(getattr(model, "block_plan", None) or []) or None)
         del model
         gc.collect()
         if torch.cuda.is_available():
