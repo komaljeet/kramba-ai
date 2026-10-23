@@ -60,6 +60,16 @@ switch and averages to 13.294 s/step over a full ~1,300-step cycle (~4.8 hours).
 the hard way: a fresh launch of the exact command in `HF_BLOG_POST.md` looked broken for its
 first 100 steps because the docs never said this.
 
+**FP8 matmul (`--fp8-linear`, v1.2.0, 2026-10-22/23): CONFIRMED, full 13-block cycle, +7.81%.**
+A fused Triton FP8 quantizer (Ada Lovelace's real FP8 tensor cores, ~2x faster raw GEMM) first
+measured 1748.83 -> 1856.28 tok/s (+6.14%) on one block (`token_embedding`, the slowest); the
+full-cycle run launched to confirm this across all 13 BCD blocks (initially stalled at step
+340/1300 by an unrelated host-RAM issue during checkpoint resume, fixed with `mmap=True` +
+the pressure-reaper opt-out, see `docs/state.md`) finished to step 1300/1300. Real cycle
+average: **13.294 -> 12.335 s/step, 2,464 -> 2,656 tok/s (+7.81%)** -- slightly better than
+the one-block projection. Day estimate: **142 -> ~132 days / 227 -> ~211 days**. This is now
+the real number, not a projection.
+
 ## HVN vs Transformer — Fundamental Differences
 
 | Aspect | Transformer (MHA) | HVN |

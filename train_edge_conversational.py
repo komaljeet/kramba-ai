@@ -2917,7 +2917,13 @@ def load_checkpoint_for_resume(
     the run (+0.67 GB peak allocated, +1 GB reserved at 262M, 2026-10-12;
     the checkpoint is several GB at 1B -- past the card).
     """
-    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    # mmap=True: the checkpoint's tensors are read from disk lazily instead of
+    # being materialized as ~2.6 GB of anonymous RAM up front. load_state_dict
+    # below copies them into the model's own tensors, so nothing downstream
+    # ever touches the mmap'd storage directly -- this is purely a resume-time
+    # RAM-headroom fix (2026-10-23 memory-pressure investigation).
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False,
+                       mmap=True)
 
     block_plan = ckpt.get("block_plan", None)
     attn_window = ckpt.get("attn_window", None)

@@ -152,10 +152,18 @@ launch's first ~100 steps run at ~19 s/step, not 13.294 — hitting this project
 takes **~142 days** accepting BCD's own ~1.6× quality cost as measured, or **~227 days**
 if you want BCD's output to actually match full-training quality instead (that's the
 multiplier's actual direction — the shorter number is the one with the quality cost baked
-in, not the other way around). This was **375 days at a smaller, un-fixed config as of
-2026-08-31**; five real speed levers and a from-scratch BCD-quality fix (balanced block
+in, not the other way around). **With `--fp8-linear` (confirmed 7.81% faster, see below) this
+is now ~132 / ~211 days** — 142/227 is the bf16-only number. This was **375 days at a smaller,
+un-fixed config as of 2026-08-31**; five real speed levers and a from-scratch BCD-quality fix
+(balanced block
 partitioning, cutting BCD's quality cost from ~4× to ~1.6×) landed since, measured together,
 not assumed additive. See [`docs/state.md`](docs/state.md) for the full trail.
+
+**A fused FP8 matmul path (`--fp8-linear`, v1.2.0) is now confirmed 7.81% faster** over a
+real full 13-block BCD cycle (first measured at 6.14% on one block; the full-cycle run that
+confirmed it ran into an unrelated host-RAM resume bug partway through, fixed, then finished
+cleanly — see [`docs/state.md`](docs/state.md)). **142-227 days is now ~132-211 days — this
+is the current, confirmed number.**
 
 Everything smaller than 1B fits and trains *without* BCD/offload at all, measured directly
 on current code: **270M in ~19.3 days with dropout off (~20.1 with), 300M in ~32 days**
