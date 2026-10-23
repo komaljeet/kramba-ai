@@ -42,6 +42,28 @@ I looked everywhere to be able to **pre-train** an LLM on my low-end GPU and cou
 
 Though I can **pre-train** a 1B LLM on 6 GB VRAM, it still takes about **142 days** (accepting block-coordinate descent's own quality cost as measured) or **about 227 days** (if you want the output to match full-training quality instead) to finish **pretraining** it properly — down from 375 days measured in August, after real speed and quality fixes landed since. More details below.
 
+**What This Means for Your GPU (Projected VRAM Ceilings — Extrapolated, Not Measured)**
+
+**Only the 6 GB row below is measured.** All other rows are linear extrapolation from the 6 GB ceiling (about 1.58B) assuming fixed-ratio savings. Real VRAM ceilings will vary by GPU architecture, WDDM behavior, and batch size — treat the rest as upper-bound estimates.
+
+The stack scales with VRAM. On a 6 GB card we measured about a 1.58B ceiling. Here's what the same stack projects for larger cards (linear extrapolation from measured points, stopping at first WDDM spill):
+
+| GPU VRAM | Max Model (Recurrent Hybrid) | Max Model (Plain Transformer) | Pretrain Time (Chinchilla) |
+|----------|------------------------------|-------------------------------|----------------------------|
+| **6 GB** (RTX 4050 laptop) | **about 1.58B** | **about 1.58B** | about 132-211 days @ 1.1B (was about 375, Aug measurement) |
+| **8 GB** (RTX 3070/4060 laptop) | **about 2.2B** | **about 2.2B** | about 61-97 days @ 1.5B |
+| **12 GB** (RTX 3060/4070) | **about 3.5B** | **about 3.5B** | about 28-45 days @ 2.5B |
+| **16 GB** (RTX 4080) | **about 4.8B** | **about 4.8B** | about 15-24 days @ 3.5B |
+| **24 GB** (RTX 3090/4090) | **about 7.5B** | **about 7.5B** | about 6-11 days @ 5B |
+
+(Pretrain-time column rescaled 2026-10-21 by the same factor the 6 GB row's own measurement moved by since the last pass — not independently re-extrapolated, since nothing on these other cards has actually been measured. This stacks a speed-lever update on top of an already rough linear extrapolation, so treat these four rows as even more approximate than the warning above already says.)
+
+Key insight: the 6.5x multiplier (standard script to this stack) applies at every VRAM tier because the savings are proportional. BCD saves about 8x optimizer state (scales with params). Offload moves inactive blocks to CPU (scales with depth). Ternary gives 2.33x weight compression (fixed ratio). Tied embeddings save 103M params at 1B (fixed absolute). Chunked loss saves about 1.5 GB at 4K context (fixed absolute).
+
+The ceiling is linear in VRAM because the dominant terms (weights + optimizer state) scale with model size, and our techniques compress them by fixed ratios. A 24 GB card doesn't just fit "a bit more" — it fits about 5x the parameters of a 6 GB card.
+
+What changes at larger VRAM: you can drop **--offload** (no PCIe bottleneck) for about a 20% speedup; you can increase **--batch-size** for better GPU utilization; you hit the compute wall sooner (matmuls at 100% ceiling); and at 24 GB, a 7B pretrain is about 18 days — actually finishable.
+
 **The Headline Numbers (Measured on RTX 4050 6 GB)**
 
 | Metric | Value |
@@ -105,28 +127,6 @@ The attention layers add only about 13% VRAM (2 TransformerBlocks with windowed 
 About 243M on a standard script, about 1.58B with the stack — roughly 6.5x. Both numbers measured on the same 6 GB card at 4,096 context, stopping at the first spill into system RAM (on Windows/WDDM, exceeding VRAM does not error — it silently gets 4-15x slower).
 
 What the table does not show: a transformer and the recurrent hybrid need almost identical memory at these sizes (4.80 GB vs 5.09 GB at 243M), and a plain 1.07B transformer runs under the same stack in 4.04 GB. The 6.5x comes from the pretraining stack, not from the architecture — so it applies to whatever model you are pretraining, including an ordinary transformer.
-
-**What This Means for Your GPU (Projected VRAM Ceilings — Extrapolated, Not Measured)**
-
-**Only the 6 GB row below is measured.** All other rows are linear extrapolation from the 6 GB ceiling (about 1.58B) assuming fixed-ratio savings. Real VRAM ceilings will vary by GPU architecture, WDDM behavior, and batch size — treat the rest as upper-bound estimates.
-
-The stack scales with VRAM. On a 6 GB card we measured about a 1.58B ceiling. Here's what the same stack projects for larger cards (linear extrapolation from measured points, stopping at first WDDM spill):
-
-| GPU VRAM | Max Model (Recurrent Hybrid) | Max Model (Plain Transformer) | Pretrain Time (Chinchilla) |
-|----------|------------------------------|-------------------------------|----------------------------|
-| **6 GB** (RTX 4050 laptop) | **about 1.58B** | **about 1.58B** | about 132-211 days @ 1.1B (was about 375, Aug measurement) |
-| **8 GB** (RTX 3070/4060 laptop) | **about 2.2B** | **about 2.2B** | about 61-97 days @ 1.5B |
-| **12 GB** (RTX 3060/4070) | **about 3.5B** | **about 3.5B** | about 28-45 days @ 2.5B |
-| **16 GB** (RTX 4080) | **about 4.8B** | **about 4.8B** | about 15-24 days @ 3.5B |
-| **24 GB** (RTX 3090/4090) | **about 7.5B** | **about 7.5B** | about 6-11 days @ 5B |
-
-(Pretrain-time column rescaled 2026-10-21 by the same factor the 6 GB row's own measurement moved by since the last pass — not independently re-extrapolated, since nothing on these other cards has actually been measured. This stacks a speed-lever update on top of an already rough linear extrapolation, so treat these four rows as even more approximate than the warning above already says.)
-
-Key insight: the 6.5x multiplier (standard script to this stack) applies at every VRAM tier because the savings are proportional. BCD saves about 8x optimizer state (scales with params). Offload moves inactive blocks to CPU (scales with depth). Ternary gives 2.33x weight compression (fixed ratio). Tied embeddings save 103M params at 1B (fixed absolute). Chunked loss saves about 1.5 GB at 4K context (fixed absolute).
-
-The ceiling is linear in VRAM because the dominant terms (weights + optimizer state) scale with model size, and our techniques compress them by fixed ratios. A 24 GB card doesn't just fit "a bit more" — it fits about 5x the parameters of a 6 GB card.
-
-What changes at larger VRAM: you can drop **--offload** (no PCIe bottleneck) for about a 20% speedup; you can increase **--batch-size** for better GPU utilization; you hit the compute wall sooner (matmuls at 100% ceiling); and at 24 GB, a 7B pretrain is about 18 days — actually finishable.
 
 **System RAM Requirements (Often Overlooked)**
 
@@ -212,6 +212,39 @@ Command: python train_edge_conversational.py --arch hvn-hybrid --d-model 2048 --
 Key flags explained: **--arch hvn-hybrid** selects the gated DeltaNet trunk with 2 sliding-attention layers. **--attn-layers 6,18** places those attention layers for exact-token recall. **--tie-embeddings** shares the vocab table between embedding and decoder (saves 103M params; compatible with offload since Issue #157 pinned the shared table). **--offload** does CPU weight offload for inactive blocks (auto-enables **--block-coordinate** and **--grad-checkpoint**). **--block-coordinate** is BAdam: train one block at a time, clear its optimizer state. **--chunked-loss 512** scores loss 512 positions at a time, recomputing in backward (saves about 1.5 GB) — this is what makes tied embeddings plus offload fit without OOM. **--precision bf16** (on by default via **--fast**) gives 2-3x speed and 2x less VRAM, needs RTX 30/40 series. **--optimizer muon** needs 1.6x fewer steps to the same loss (about 12% slower per step, still a net win).
 
 **If you run this command yourself, the first about 100 steps will print about 17.6 s/step with `--fp8-linear` (about 19 s/step without it), not the cycle average.** That is correct, not broken — BCD trains one block at a time, and a fresh launch always starts on the slowest block (token_embedding). It steps down at every block switch after that. See the before/after table above for the per-block range.
+
+**Fine-Tuning the Result (Full FT, Not LoRA)**
+
+This stack also supports instruction/chat fine-tuning of a pretrained checkpoint
+(`finetune_edge_conversational.py`, plus `continue_ft_hybrid.py` / `continue_ft_looped.py`
+for resumed/looped runs). It's full fine-tuning, not LoRA — the ternary-STE latent weights
+make full FT both simpler and cleaner for keeping the all-ternary inference story than a
+LoRA adapter would be. OpenAssistant (oasst1) message trees are reconstructed into
+multi-turn conversations and rendered with a GPT-2-friendly chat template (no new vocab
+needed: `<|user|>\n{text}\n<|assistant|>\n{text}<|endoftext|>`), and the loss is masked to
+only the assistant-turn tokens — the model learns to respond, not to parrot the prompt.
+
+**Packing (`--pack`, default on) is a free, measured win.** Reusing the SequenceDataset's
+already-tokenized rows, --pack concatenates several short conversations into one training
+row instead of padding each to the batch's longest example. Re-gated against a 300-trial
+recall probe (not just assumed free): about 5.15x faster on grounded-QA-style short
+examples, about 1.45x faster on OASST, no measurable quality cost at either end of the
+length distribution. Both arms land within noise of each other on recall; the speedup is
+simply the row-reduction ratio.
+
+**Conversational fluency is solved and measured here; knowledge and grounding are not the
+same axis and are weaker.** At 83M, chat fine-tuning on OASST reaches about 26.5-30
+perplexity — a real, measured conversational model (it responds correctly to "hi" and to
+factual one-liners like "what is the capital of France?"). That's fluency, not knowledge:
+the same checkpoint's perplexity on general web text is far higher, and a grounded-reading
+probe (recalling exact facts from provided context, not just chatting fluently) only
+partially succeeds. Don't read "chat fine-tune works" as "the model knows things" — those
+are different, separately-measured properties.
+
+**Open, unresolved as of this post:** chat fine-tuning runs about 3x slower per token than
+pretraining on the same hardware, most likely Prodigy-optimizer VRAM pressure/spill rather
+than anything about the fine-tune data path itself — not yet root-caused. Tracked as a known
+gap, not quietly dropped.
 
 **Traps That Cost Real Hours**
 
