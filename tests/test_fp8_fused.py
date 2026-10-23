@@ -207,6 +207,16 @@ def _train(m, steps=5, accum=2, fixed=False):
     return losses
 
 
+@pytest.fixture(autouse=True)
+def _restore_tf32():
+    # apply_fast_stack(tf32=True) flips TF32 process-wide. Put it back so later
+    # tests in the same pytest run do not inherit it (#170: it broke
+    # test_bcd_balanced_offload[True-1]/[True-3] when run after this file).
+    saved = (torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32)
+    yield
+    torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32 = saved
+
+
 def _fast(m, fp8, cache=True):
     return apply_fast_stack(m, triton_scan=True, megakernel_scan=True, tf32=True,
                             compile_model=False, verbose=False, fused_ternary=True,
