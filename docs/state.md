@@ -5,6 +5,67 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B pretrain: FP8 full-cycle CONFIRMED -- 7.81% faster, 132/211 days (2026-10-23)
+
+**One line: the stalled run below finished all 1300 steps after the mmap/reaper fixes. Real
+13-block average, not a projection: 13.294 -> 12.335 s/step, 2,464 -> 2,656 tok/s = 7.81% more
+tok/s (7.21% less step time). Slightly better than the single-block projection of 6.14% /
+~12.52 s/step made below.**
+
+Measured directly from `checkpoints/pretrain_1b_fp8_fullcycle/training_log.csv` (260 logged
+rows, steps 5-1300, same run the entry below describes resuming). Per-block steady-state tok/s
+climbs from 1857.2 (block0, `token_embedding`, slowest) to 4714.1 (block12, last, fastest) --
+the same 18.9 -> 7.5 s/step bf16 spread already documented, just uniformly faster throughout.
+The run's own printed "7.997 s/step" summary line is wrong -- it divides this resume's wall
+time by the full 1300-step target instead of the ~960 steps it actually ran in this process;
+the per-step CSV data above is the real source, not that line.
+
+**Day estimate, confirmed:** 30.3B-token budget / 2,656 tok/s = **~132 days** (accepting BCD's
+~1.6x quality cost) / **~211 days** (matching full BCD quality) -- down from 142/227. The
+~134/~214 projected below (from one block) undershot slightly; the real full-cycle number is
+~132/~211. README, docs/training.md and HF_BLOG_POST.md updated to match.
+
+## 1B pretrain: FP8 tensor-core matmul finished an unfinished lead -- 6.14% faster on one block, full-cycle confirmation stalled on a RAM issue (2026-10-22/23)
+
+**One line: an orphaned feasibility branch from 2026-10-18 (`exp/fp8-pretrain-feasibility`,
+never merged) found Ada Lovelace's real FP8 tensor cores are ~2x faster on raw GEMM, but the
+naive ("unfused, eager") quantizer made the full `Linear` op 1.4-1.7x SLOWER end to end -- a
+real, positive lead left unfinished. Root-caused and fixed this session: a fused Triton
+quantizer (one amax-reduction kernel + one scale/clamp/cast kernel, matching PyTorch's exact
+`448.0/amax` rounding order bit-for-bit) flips the op positive. `--fp8-linear` (default off),
+merged as v1.2.0.**
+
+**Measured on the real 1B model, 25 steps, `token_embedding` block (the slowest), same day as
+4+ bf16 baselines run for comparison:** steady-state tok/s (steps 5-25) 1748.83 (bf16) vs
+1856.28 (fp8) = **6.14% faster**. Loss trajectories near-identical (fp8 11.2221 -> 11.1631,
+bf16 11.2236 -> 11.1638 over the same 25 steps). VRAM barely moved (4.91 vs 4.88 GB reserved).
+`tests/test_fp8_fused.py` (14 tests): bit-identical vs the reference quantizer at every
+shape/dtype/edge case, and identical loss/params after 5 real-trainer steps under
+Muon/grad-accum/grad-checkpoint/Triton-scan/megakernel/BCD+offload vs eager.
+
+**Projected cycle time -- NOT YET CONFIRMED.** If the same 6.14% holds across all 13 BCD
+blocks (it was only measured on one, the slowest), 13.294 -> ~12.52 s/step, 2,464 -> ~2,616
+tok/s, and the day estimate below would drop **142 -> ~134** / **227 -> ~214**. This is a
+projection from one block, not a cycle measurement -- exactly the gap the full-cycle run below
+was launched to close. Until that run finishes, 142/227 stays the official number.
+
+**Full-cycle confirmation run: stalled at step 340/1300, not a code bug.** Launched to measure
+the real 13-block average with `--fp8-linear` on. Killed three times by Claude Code's own
+background-shell low-memory "pressure reaper," each time within 0.2s of a checkpoint write
+finishing. A dedicated live-counter investigation found the checkpoint write itself only costs
+~0.4-0.7 GB for 1-2s -- not enough to explain the kills -- but found a bigger, separate risk:
+*resuming* a checkpoint crashes available RAM to ~25 MB and system commit to 98% for a few
+seconds (old model + new checkpoint + 4 persistent dataloader workers all alive at once). The
+exact trigger for the three real kills is still unconfirmed -- Windows Update was running
+during at least one of them, and the box runs chronically tight on commit (~26.5/30.5 GB)
+regardless of that. Two real fixes applied: `mmap=True` on the checkpoint load
+(`train_edge_conversational.py:2920`, ~2.6 GB less RAM during resume) and
+`CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` added to `.claude/settings.local.json` (takes
+effect on the next restart). The step-340 checkpoint is good and resumable.
+
+**Resolved (2026-10-23):** resumed cleanly after the restart and ran to completion, step
+1300/1300. See the CONFIRMED entry above for the real cycle-average numbers.
+
 ## 1B pretrain: four bit-identical fusions = 14.096 -> 13.294 s/step, -5.7% (2026-10-17)
 
 **One line: a code-reading sweep (no GPU) named six candidates with sizes scaled from

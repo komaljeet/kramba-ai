@@ -19,22 +19,24 @@ This is a power-limited laptop GPU on Windows with notably tight system RAM rela
 
 | | August 2026 | October 2026 (now) |
 |---|---|---|
-| 1B step time | 21.81 s/step | **13.294 s/step** (-39%) |
-| Throughput | 1,579 tok/s | **2,464 tok/s** |
+| 1B step time | 21.81 s/step | **12.335 s/step** (-43%) |
+| Throughput | 1,579 tok/s | **2,656 tok/s** |
 | **BCD's own quality cost** | **about 4x worse perplexity** than full training (one block trains at a time, balance was naive) | **about 1.6x worse perplexity** (balanced block partitioning, issue #164) |
-| 1B pretrain time | about 375 days | **about 142-227 days**, depending on how the BCD quality cost above is counted |
+| 1B pretrain time | about 375 days | **about 132-211 days**, depending on how the BCD quality cost above is counted |
 | Offload correctness | silent weight-corruption bug, present undetected for 76 days (2026-07-26 to 2026-10-10) | found, fixed, and validated end-to-end with real hard-kill-and-resume tests |
 | Peak VRAM at 1.11B | 4.51 GB | **5.24 GB** (81.4% of the card) — up, not down; fused kernels/caches add some transient buffers even while speeding things up |
 
 The BCD quality row is easy to miss but matters as much as the speed numbers: the **about 4x to about 1.6x figure is a real cut in how much worse the memory-saving training mode is** compared to training the full model at once, not a speed change at all. It came from changing how BCD splits the model into trainable blocks — one big slot sized for the vocabulary table wasted memory for every other block; grouping layers into balanced-size blocks reclaimed it, which let more layers train "live" at once for the same VRAM budget.
 
-**13.294 s/step is a full-BCD-cycle average, not every step.** Per block it ranges from **18.9 s/step** (the token_embedding block, slowest, trained first) down to **7.5 s/step** (the last block). A fresh launch starts on the slowest block, so the first about 100 steps genuinely run at about 19 s/step (about 1,720 tok/s) — that is expected, not a regression. It steps down at each block switch and averages to 13.294 s/step over a full about 1,300-step cycle (about 4.8 hours).
+**12.335 s/step is a full-BCD-cycle average (with `--fp8-linear`), not every step.** Per block it ranges from about 17.6 s/step (the token_embedding block, slowest, trained first) down to about 6.95 s/step (the last block). A fresh launch starts on the slowest block, so the first about 100 steps genuinely run at that slower end — that is expected, not a regression. It steps down at each block switch and averages to 12.335 s/step over a full about 1,300-step cycle (about 4.5 hours). Without `--fp8-linear` the same cycle averages 13.294 s/step (18.9 down to 7.5 s/step per block).
 
 **Correction (2026-10-11):** the CPU weight-offload path used in the runs below had a bug, present from 2026-07-26 to 2026-10-10, that could swap weights between same-shaped matrices during training — fixed in commit 2f94d7a, and independently confirmed on the original historical code. The **VRAM/fits-in-X-GB numbers throughout this post are unaffected** (that bug was about weight correctness, not memory). The **loss-curve and "it trains" claims for the offloaded runs below are not** — they need re-running on fixed code before being trusted again. See the repo's docs/state.md for the full writeup.
 
 **Update (2026-10-14):** that offload+BCD path has since been validated end-to-end — a real run hard-killed and resumed mid-training three times, plus a real 1.1B fresh-build and resume — and four more real bugs it had were found and fixed along the way (details in docs/state.md). Separately, the step time below was stale at the time: four more real speed levers had just landed on top of the ones already in this post, and 375 days became 154-246 days depending on how you count BCD's own quality cost (explained where it first comes up below). The "nothing left, 20-25% at most" line further down in this post turned out to be wrong, too — it's corrected in place rather than deleted, so the mistake stays visible.
 
 **Update (2026-10-21):** that 154-246 day figure was itself never recomputed after a fifth speed lever (four bit-identical kernel fusions) landed on 2026-10-17, bringing the measured step from 14.385 down to **13.294 s/step**. Redone with the current number: 154-246 days becomes **142-227 days**. Every number in this post below has been updated to match. This project has now corrected its own "current" number three times in six weeks — treat every figure here as a thing to re-check against docs/state.md, not a constant.
+
+**Update (2026-10-23):** a sixth lever landed — a fused FP8 matmul path (**--fp8-linear**) using the GPU's real FP8 tensor cores, not just a faster cast. First measured at 6.14% faster on one block (the slowest), then confirmed over a real full 13-block cycle after a host-RAM resume bug (unrelated to the model, fixed) was worked through: **7.81% faster** (2,464 to 2,656 tok/s, 13.294 to 12.335 s/step), quality unaffected. 142-227 days is now about **132-211 days** — this is the confirmed number, not a projection. Every s/step, tok/s and day-count figure in this post below has been updated to match, the same way the 2026-10-21 update below did.
 
 I looked everywhere to be able to **pre-train** an LLM on my low-end GPU and could not find one. Everywhere I looked, the same conclusion was reached: "You need an A100", "You can only train a 20M toy model on your hardware". So being 'broke', I did the only thing I could do — subscribe to Claude and try to find a way... after much prompting and testing, I finally stitched together the stack that allowed me to **pre-train** a 1B LLM on my laptop. After much testing, we are at **100.6% of the card's measured GEMM peak** (I don't know how 100.6% is even possible, I'm not a scientist, just a broke guy).
 
@@ -46,8 +48,8 @@ Though I can **pre-train** a 1B LLM on 6 GB VRAM, it still takes about **142 day
 |--------|-------|
 | **Model size** | 1.11B parameters (pretraining, not inference) |
 | **Peak VRAM** | 4.51 GB, 1.5 GB to spare (August); **5.24 GB measured 2026-10-17**, 81.4% of the card — up, not down, from this week's fused kernels/caches |
-| **Throughput** | 1,579 tokens/sec at 4,096 context (August measurement); **2,464 tok/s measured 2026-10-17** after this week's speed levers |
-| **Pretraining time (Chinchilla-optimal)** | about 375 days for 36B tokens (August); **about 142-227 days now**, see the update note above |
+| **Throughput** | 1,579 tokens/sec at 4,096 context (August measurement); **2,656 tok/s confirmed 2026-10-23** with `--fp8-linear` |
+| **Pretraining time (Chinchilla-optimal)** | about 375 days for 36B tokens (August); **about 132-211 days now**, see the update note above |
 
 **The 5-Technique Stack That Made Pretraining Possible**
 
@@ -112,7 +114,7 @@ The stack scales with VRAM. On a 6 GB card we measured about a 1.58B ceiling. He
 
 | GPU VRAM | Max Model (Recurrent Hybrid) | Max Model (Plain Transformer) | Pretrain Time (Chinchilla) |
 |----------|------------------------------|-------------------------------|----------------------------|
-| **6 GB** (RTX 4050 laptop) | **about 1.58B** | **about 1.58B** | about 142-227 days @ 1.1B (was about 375, Aug measurement) |
+| **6 GB** (RTX 4050 laptop) | **about 1.58B** | **about 1.58B** | about 132-211 days @ 1.1B (was about 375, Aug measurement) |
 | **8 GB** (RTX 3070/4060 laptop) | **about 2.2B** | **about 2.2B** | about 61-97 days @ 1.5B |
 | **12 GB** (RTX 3060/4070) | **about 3.5B** | **about 3.5B** | about 28-45 days @ 2.5B |
 | **16 GB** (RTX 4080) | **about 4.8B** | **about 4.8B** | about 15-24 days @ 3.5B |
@@ -165,7 +167,7 @@ The largest consumer is not the model — it's the cross-entropy over the vocabu
 
 **The Hard Reality: Fitting Is Not Training**
 
-A 1B model ran at about 1,100 tokens/sec here in August; **2,464 tok/s measured 2026-10-17** after this week's fixes. Pretraining one properly still needs roughly 30 billion-plus tokens — **about 142-227 days** now, down from 375, depending on how you count block-coordinate descent's own quality cost. The ceiling this stack raises is what you can hold; the wall it does not touch is arithmetic — just a smaller wall than it was in August.
+A 1B model ran at about 1,100 tokens/sec here in August; **2,656 tok/s confirmed 2026-10-23** with the FP8 matmul lever. Pretraining one properly still needs roughly 30 billion-plus tokens — **about 132-211 days** now, down from 375, depending on how you count block-coordinate descent's own quality cost. The ceiling this stack raises is what you can hold; the wall it does not touch is arithmetic — just a smaller wall than it was in August.
 
 Why 375 days (now 142)? The card was first timed on the one thing it does best (GEMM) to find its real speed — not the number on the box. Then a pretraining step was broken into parts:
 
@@ -189,7 +191,7 @@ The Chinchilla paper (Hoffmann et al., 2022) recommended about 20 tokens/paramet
 
 30 is where the trade turns. Going from 20 to 30 buys significant quality for 50% more compute; going 30 to 40 buys marginal gains for 33% more compute. Why this architecture needs more data: the recurrent state compresses history differently than attention, exact-token recall (the hybrid's attention window) needs more exposure to learn the pattern, and the gated DeltaNet update has more learnable dynamics than a static attention matrix. How this moves with model size is unresolved — fitting the standard scaling form to all measured points gives a degenerate answer (it implies a 1B model needs less data than it has parameters, contradicting every raw curve), and three model sizes are not enough to separate the terms.
 
-**Practical rule:** budget for 30 tokens per body-param minimum with this stack. A 1.11B model (about 1.01B body params) needs about 30B tokens — **about 142-227 days at 2,464 tok/s** (was 375 days at 1,579 tok/s in August), depending on how you count block-coordinate descent's own quality cost. At 20 tokens/param you'd stop earlier and leave quality on the table.
+**Practical rule:** budget for 30 tokens per body-param minimum with this stack. A 1.11B model (about 1.01B body params) needs about 30B tokens — **about 132-211 days at 2,656 tok/s** (was 375 days at 1,579 tok/s in August), depending on how you count block-coordinate descent's own quality cost. At 20 tokens/param you'd stop earlier and leave quality on the table.
 
 **What a 6 GB Card Is Good For**
 
@@ -209,7 +211,7 @@ Command: python train_edge_conversational.py --arch hvn-hybrid --d-model 2048 --
 
 Key flags explained: **--arch hvn-hybrid** selects the gated DeltaNet trunk with 2 sliding-attention layers. **--attn-layers 6,18** places those attention layers for exact-token recall. **--tie-embeddings** shares the vocab table between embedding and decoder (saves 103M params; compatible with offload since Issue #157 pinned the shared table). **--offload** does CPU weight offload for inactive blocks (auto-enables **--block-coordinate** and **--grad-checkpoint**). **--block-coordinate** is BAdam: train one block at a time, clear its optimizer state. **--chunked-loss 512** scores loss 512 positions at a time, recomputing in backward (saves about 1.5 GB) — this is what makes tied embeddings plus offload fit without OOM. **--precision bf16** (on by default via **--fast**) gives 2-3x speed and 2x less VRAM, needs RTX 30/40 series. **--optimizer muon** needs 1.6x fewer steps to the same loss (about 12% slower per step, still a net win).
 
-**If you run this command yourself, the first about 100 steps will print about 19 s/step, not 13.294.** That is correct, not broken — BCD trains one block at a time, and a fresh launch always starts on the slowest block (token_embedding). It steps down at every block switch after that. See the before/after table above for the per-block range.
+**If you run this command yourself, the first about 100 steps will print about 17.6 s/step with `--fp8-linear` (about 19 s/step without it), not the cycle average.** That is correct, not broken — BCD trains one block at a time, and a fresh launch always starts on the slowest block (token_embedding). It steps down at every block switch after that. See the before/after table above for the per-block range.
 
 **Traps That Cost Real Hours**
 
