@@ -1,5 +1,9 @@
 # How I Made It Possible to Pretrain a 1B LLM on 6GB VRAM
 
+[DOI 10.5281/zenodo.22725431](https://zenodo.org/records/22725431) ·
+[30 min run video of a 1B param LLM pretrain on the laptop](https://youtu.be/8m0Hwrzfmaw?si=bDE6Gen5Sey_2wNg) ·
+[code on GitLab](https://gitlab.com/komalbarun/kramba-ai)
+
 ## The problem
 
 I wanted to train a language model from scratch. Not fine-tune one, not call an API for
