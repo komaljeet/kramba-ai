@@ -127,7 +127,13 @@ it, on real data, to make sure the answers didn't change in any way that mattere
 they didn't. What changed was speed: about 8% faster across a full cycle through all the
 blocks. Nothing about training the model got worse to get that.
 
-Here's what each real idea above actually removes, side by side:
+Here's what each real idea above actually removes, side by side, plus two more small ones
+that don't earn a whole section of their own: the input and output vocabulary tables are
+really the same lookup used twice, so sharing one copy instead of two is a clean cut with
+no real cost; and instead of keeping every intermediate result from the forward pass
+sitting in memory until it's needed for the backward pass, most of it gets thrown away and
+quickly recalculated when it's actually needed — more GPU work, far less memory held open
+at once.
 
 | Idea | What it removes | How much |
 |---|---|---|
@@ -196,7 +202,7 @@ On this laptop's 6GB graphics card, right now: a 1.1 billion parameter model tra
 cleanly, using about 5.2GB of the card's 6GB — close to full, but not spilling over. It
 processes a little over 2,600 words' worth of tokens per second. A full, proper training
 run — enough real text for the model to actually learn something, not just memorize a
-small sample — takes somewhere between about four and a half and seven months, depending
+small sample — takes somewhere between four and a half and seven months, depending
 on whether you're willing to accept the one-block-at-a-time quality cost described above
 or insist on matching full-quality training exactly.
 
