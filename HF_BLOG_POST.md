@@ -17,6 +17,48 @@
 
 This is a power-limited laptop GPU on Windows with notably tight system RAM relative to its VRAM. Don't assume these numbers transfer to a desktop RTX 4050, a different OS, or more system RAM without re-measuring.
 
+**Every real measurement in this project, chronological, at a glance**
+
+Every row is a real measured number, not a guess — wins and rejected ideas both. "Before/After or Verdict" is what changed or why it died. Full detail and citations for every row are in the repo's `docs/state.md`.
+
+| Date | What was tried | Before | After / Verdict |
+|---|---|---|---|
+| 2026-07-12 | Vanilla full AdamW VRAM cost measured | — | 16.8 bytes/param — 1B needs ~16.8GB, 3x over this 6GB card |
+| 2026-07-12 | Block-coordinate-descent, BCD (#99) | 268M: 6.9GiB; 1.04B: hard OOM | 268M: 4.2GiB (-39%); 1.04B: **runs** |
+| 2026-07-12 | Grad-checkpoint stacked on BCD (#100) | 1.04B still spilling past 6GB | 4.6GiB peak, clean fit, no spill |
+| 2026-07-24 | Audit double-copy OOM found (#112) | looked like BCD itself failing | root cause found, fixed, skipped under BCD — **recurred today as #182** |
+| 2026-07-24 | BCD stacked with `torch.compile` | hoped it would help | 6.73 vs 4.41 s/step — **slower**, recompiles every block switch |
+| 2026-08-02 | Mixture-of-Experts FFN (#123) | dense baseline | -11.8% loss but 1.91x compute cost — **rejected** |
+| 2026-08-03 | GHOST phase-transition detector (#125) | claimed real phase transitions | 0 real transitions found; fires on pure noise too — **rejected** |
+| 2026-08-03 | GHOST weight extrapolator (#126) | — | **worse than doing nothing — rejected** |
+| 2026-08-06 | Padding-free packing (#132) | 1x, padded | **5.17x cheaper** per real token, grounded-QA |
+| 2026-08-07 | Packing re-gate on OASST | 5.17x on grounded-QA | win shrinks to **1.45x** on longer conversations |
+| 2026-08-09 | Dynamic phase-aware LR (#133) | fixed cosine, 4.3374 held-out | +0.30 nats, but correct constant LR beats it by 0.108 — **"method does not work"** |
+| 2026-08-09 | Prodigy parameter-free LR (#134) | hand-tuned Muon | FT: Prodigy wins by 0.178. Pretrain: Muon wins by 0.068 — split by regime |
+| 2026-08-10 | RAG, BM25 top-k retrieval (#137) | closed-book 0.0% | **22.5%** at top-1 (top-3 hurts — more context backfires) |
+| 2026-08-10 | Tied embeddings (#139) | untied: 5.56450 held-out, 83.0M params | **5.50681 (better) + 31% fewer params** |
+| 2026-08-10/11 | `torch.compile`, 4 measurements | eager 8.66 s/step, 98% GPU busy | **20.72 s/step, 35% busy — 2.4x slower, rejected** |
+| 2026-08-11 | GPU idle-time audit (#153) | assumed pipeline-starved | **97.2% GPU-busy — nothing to reclaim** |
+| 2026-08-11/12 | Megakernel scan search, 12 designs | chunk-parallel Design A hoped faster | A: **1.5-4x slower, dead**. B (blockwise backward): **~1.05x win, kept** |
+| 2026-08-14 | Adafactor, no BCD/offload, at 1B (#157) | BCD+offload: 4.68 s/step | spills to 9.42GiB, 48.50 s/step — **10.4x slower** |
+| 2026-08-17 | Chunked cross-entropy (#158) | 1.21B/seq4096: spilling (103%) | **fits (73%)** |
+| 2026-08-27 | Tensor-train projections (#161) | dense 8.05M params @ d=896 | **3.96x fewer params**, 1.05x step time, quality not yet gated |
+| 2026-09-29 | BCD balanced block partition (#164) | layer partition (one oversized slot) | **41% of the full-vs-BCD quality gap closed** |
+| 2026-10-12 | Fused DeltaNet glue + prefetch + offload overlap | baseline | **+10.2%, +3.8%, +8.7%** stacked |
+| 2026-10-14 | Four ternary micro-fusions | baseline | **+0.8%, +0.9%, +3.7%, +3.5%** |
+| 2026-10-15 | Fused pre-norm RMSNorm | original baseline | **15.067 s/step, -30.9%** from the original baseline |
+| 2026-10-16/17 | Dropout off, tested not assumed | default 0.1 | **real quality win** (not just speed), confirmed 2 seeds |
+| 2026-10-17 | Four bit-identical kernel fusions | 14.385 s/step | **13.294 s/step, -5.7%** |
+| 2026-10-22/23 | `--fp8-linear`, real FP8 tensor cores | 13.294 s/step | **12.335 s/step confirmed, -7.81%** (2,464 → 2,656 tok/s) |
+| 2026-10-23 | `--num-workers` 4 → 2 | 7.16GB peak resident RAM | **~1.1GB RAM saved, zero throughput cost** |
+| 2026-10-24 | Scan-kernel FP8 quantization (revisited) | bf16 path: ~0.4-0.5% error | **5-18x worse error — rejected** (no reset point in the recurrent state) |
+| 2026-10-24 | Real GPU-only (no BCD/offload) ceiling, current stack | assumed ~700M-1.1B (stale Aug extrapolation) | **measured ~340M** (85% of card) |
+| 2026-10-24 | Audit double-copy OOM recurs (#182) | looked like the training loop itself failing | same bug class as #112 — fix in progress |
+
+**Overall, same hardware:** 21.81 s/step → **12.335 s/step** (-43%), 1,579 → **2,656 tok/s**, 375 days → **132-211 days** for a real 1.1B pretrain. BCD's own quality cost: about 4x worse perplexity than full training → **about 1.6x** (balanced partitioning, #164).
+
+Also rejected, real but without a pinned date in the log above: the original HVN architecture lost by 13% at equal data vs. the gated DeltaNet that replaced it; looped/weight-shared models (3 layers x 4 passes lost to 12 real layers by 11x the noise floor); sequence-length curriculum (2.9% slower, fights occupancy on 20 SMs); per-token entanglement rate (no gain at 83M); entropy-gated early exit (does not work).
+
 **Before / after — same hardware, one week of real fixes (2026-08 to 2026-10)**
 
 | | August 2026 | October 2026 (now) |
@@ -266,7 +308,7 @@ isolated benchmark and end to end on the real fine-tune script.
 
 **What Failed (The Dead Ends, Recorded on Purpose)**
 
-11 ideas tested and rejected, measured not guessed: 1) original HVN architecture, lost by 13% at equal data vs gated DeltaNet (retracted). 2) torch.compile, 2.4x slower (4 independent measurements). 3) Mixture-of-Experts, loses to simply scaling the dense model. 4) Tensor-train factorisation, half params, 22% worse. 5) GHOST (weight extrapolation), loses to doing nothing. 6) Looped/weight-shared models, 3 layers x 4 loses to 12 layers by 11x noise floor. 7) Chunk-parallel scan, 4x slower (serial triangular solves). 8) Sequence-length curriculum, 2.9% slower (occupancy against 20 SMs). 9) Per-token entanglement rate, no gain at 83M. 10) Entropy-gated early exit, does not work (retracted). 11) Adafactor without BCD, spills to host RAM, 10x slower.
+Every idea tried and rejected here, with its real measured reason, is in the chronological measurements table near the top of this post.
 
 5 retractions — conclusions this project withdrew: 1) original HVN "novel architecture" claim, lost to published DeltaNet by 13%. 2) #117 cache serving untrained weights, whole epic graded on aggregate loss that still trended down. 3) #122 5-item recall gate, gating a scale-up decision on a measurement dominated by luck. 4) #132 verdict on train loss, a multi-pass regime that measures memorisation, not quality. 5) #138 CUDA graph "6.8x speedup", compared one replay against one eager step from the same state — both do the same thing, passed at max|dlogits|=0 while the context had silently stopped growing.
 
