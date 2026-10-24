@@ -608,11 +608,18 @@ def finetune(model, dataloader, device, *, lr, epochs, grad_accum,
     # Issue #142: peak RESERVED, not allocated -- see the note in
     # continue_ft_hybrid.py. A config can read "fits" on allocated while
     # reserving past the card and silently spilling to host RAM.
+    # #178: WDDM spills BELOW the literal card size (the desktop and other
+    # processes hold part of it). A real spill was measured at 5,752 MiB
+    # reserved on a 6,140 MiB card (93.7%), which "reserved > card" missed.
+    # 90% catches that with ~225 MiB of margin, while configs measured to run
+    # clean at 86-87% (docs/state.md) stay quiet. The 85% pretrain guard
+    # (#163) is stricter on purpose: it refuses to start; this only warns.
     if torch.cuda.is_available():
         card = torch.cuda.get_device_properties(0).total_memory / 2**20
         alloc = torch.cuda.max_memory_allocated() / 2**20
         reserved = torch.cuda.max_memory_reserved() / 2**20
-        warn = "  ⚠ SPILLING TO HOST RAM" if reserved > card else ""
+        warn = ("  ⚠ LIKELY SPILLED TO HOST RAM (>90% of card reserved)"
+                if reserved > 0.90 * card else "")
         print(f"  peak VRAM: {alloc:.0f} MiB allocated / {reserved:.0f} MiB "
               f"reserved of {card:.0f} MiB card{warn}")
 
