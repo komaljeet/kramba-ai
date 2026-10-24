@@ -1,10 +1,5 @@
 # How I Made It Possible to Pretrain a 1B LLM on 6GB VRAM
 
-This is the story, with the real measurements built into it as it goes — not a separate
-spreadsheet to go cross-reference. If you want the full citations behind every number
-here, those live in `docs/state.md`; `HF_BLOG_POST.md` in this same repo covers the same
-ground in denser, more clinical form. This file is for reading start to finish.
-
 ## The problem
 
 I wanted to train a language model from scratch. Not fine-tune one, not call an API for
@@ -321,14 +316,9 @@ them, which lost badly to just having more real layers; gradually growing the tr
 sequence length, which fought the hardware instead of helping it; and a scheme to let the
 model stop computing early on easy tokens, which never worked.
 
-## Where the actual numbers live
-
-Every claim in this story has a measured number behind it, with the date it was measured
-and the exact before/after figures — the table just above has the full dated list, and
-`HF_BLOG_POST.md` plus this repository's `docs/state.md` have the citations behind every
-row of it. If something here sounds too good, that's where to go check it — and if it
-turns out to be wrong, the project's own habit is to say so in public rather than quietly
-fix it, which is also where you'll find the handful of times that's already happened.
+If any of this turns out to be wrong, the habit here is to say so in public and correct it
+in place rather than quietly edit it away — this file already does that once, a few
+sections up.
 
 The code is Apache 2.0 — free to use, change, or build on. Any weights you train yourself
 are yours.
