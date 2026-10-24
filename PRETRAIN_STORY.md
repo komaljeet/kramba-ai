@@ -1,4 +1,4 @@
-# How I Trained a Billion-Parameter Language Model on a Laptop I Bought to Play Games On
+# How I Made It Possible to Pretrain a 1B LLM on 6GB VRAM
 
 This is the story version. If you want the spreadsheet — every number, every date, every
 dead end with a citation — that's `HF_BLOG_POST.md` in this same repo. This file is for
