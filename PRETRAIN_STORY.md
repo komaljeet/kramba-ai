@@ -1,8 +1,9 @@
 # How I Made It Possible to Pretrain a 1B LLM on 6GB VRAM
 
-This is the story version. If you want the spreadsheet — every number, every date, every
-dead end with a citation — that's `HF_BLOG_POST.md` in this same repo. This file is for
-reading on a couch.
+This is the story, with the real measurements built into it as it goes — not a separate
+spreadsheet to go cross-reference. If you want the full citations behind every number
+here, those live in `docs/state.md`; `HF_BLOG_POST.md` in this same repo covers the same
+ground in denser, more clinical form. This file is for reading start to finish.
 
 ## The problem
 
@@ -18,10 +19,28 @@ fine for games and a joke for anything people call "AI."
 So I didn't do the sensible thing. I opened Claude and started asking: is that actually
 true, or is it just what everyone assumes because nobody's tried hard to make it not true?
 
-It took weeks. It is not a joke anymore. There's now a real 1.1 billion parameter model
-that trains, end to end, on that same 6GB laptop GPU. It's slow — measured in months, not
-hours — but it runs, it learns, and every number below is something I actually watched
-happen on my own machine, not a projection.
+It took weeks. It is not a joke anymore. The training pipeline — building a real 1.1
+billion parameter model, running real steps, saving a checkpoint, killing the process and
+resuming it correctly — works, start to finish, on that same 6GB laptop GPU. I want to be
+precise about what that does and doesn't mean: nobody, including me, has sat through an
+entire training run yet. A full run takes months, not hours, so "it works end to end"
+means the machinery is correct and measured, not that a finished model is sitting on my
+disk. Every number below is something I actually watched happen on my own machine, over
+real measured stretches of training — not a finished model, and not a projection dressed
+up as one.
+
+Here's the honest before-and-after, same laptop, from the first working version to now:
+
+| | First working version | Now |
+|---|---|---|
+| Time for one training step | 21.81 seconds | **12.335 seconds** (-43%) |
+| Tokens processed per second | 1,579 | **2,656** |
+| Estimated time for a full pretrain | about 375 days | **about 132-211 days** |
+| Peak memory used | 4.51 GB of 6 GB | **5.24 GB of 6 GB** |
+
+That "132-211 days" range, not a single number, is itself an honest admission: the cheap
+way of fitting the model (described next) costs some quality, and the range is "if you
+accept that cost" versus "if you insist on matching full-quality training instead."
 
 ## Why a laptop GPU can't just "fit" a model this size
 
@@ -108,6 +127,16 @@ it, on real data, to make sure the answers didn't change in any way that mattere
 they didn't. What changed was speed: about 8% faster across a full cycle through all the
 blocks. Nothing about training the model got worse to get that.
 
+Here's what each real idea above actually removes, side by side:
+
+| Idea | What it removes | How much |
+|---|---|---|
+| Train one block at a time | Training-memory for every block but the active one | about 8x less optimizer memory |
+| Park frozen blocks in system RAM | Those blocks leave the graphics card entirely | scales with how deep the model is |
+| Three-value weights | Full-precision weight storage | 2.33x smaller, checkpoint and inference only |
+| Share one vocabulary table instead of two | A whole duplicate table of weights | 103M parameters at this model's size |
+| Recompute instead of store | Saved activations from the forward pass | activation memory down to about 50 MB |
+
 ## The part nobody finds exciting but that added up anyway
 
 A lot of the rest of the speed came from doing dozens of small, boring things slightly
@@ -185,6 +214,26 @@ model fits in the same amount of memory, which is the actual headline: it's not 
 making training faster so much as making it possible in the first place on hardware this
 small.
 
+Only the 6GB row below is something I actually measured — the rest is a straight-line
+projection from that one real point, assuming the same savings hold at bigger sizes. Treat
+it as a reasonable guess for other cards, not a promise:
+
+| Card's VRAM | Biggest model that fits | Rough pretrain time |
+|---|---|---|
+| **6GB** (what I have) | **~1.58B — measured** | **132-211 days — measured** |
+| 8GB | ~2.2B | a floor guess, same speed as this laptop: 246-392 days |
+| 12GB | ~3.5B | a floor guess, same speed as this laptop: 682-1,090 days |
+| 16GB | ~4.8B | real desktop-card specs say roughly 333-532 days |
+| 24GB | ~7.5B | real desktop-card specs say roughly 401-1,490 days |
+
+Two honest caveats on that table. First, "biggest model that fits" past the 6GB row is a
+simple ratio, not a measurement — nobody's run this on an 8, 12, 16, or 24GB card yet.
+Second, the time estimates for the 8 and 12GB rows assume that bigger card runs at the
+exact same speed as this laptop chip, which is almost certainly too pessimistic — I just
+don't have reliable enough public specs for those specific chips to say by how much. The
+16 and 24GB rows use real published numbers for those cards instead, which is why they
+look more confident.
+
 ## After pretraining: turning it into something that talks back
 
 A model that's only been shown raw web text doesn't know how to have a conversation — it
@@ -218,12 +267,61 @@ story is a single run against a single run — not yet repeated across several r
 result by an amount comparable to some of the differences reported here. Some of what I
 call a "win" above might partly be luck; where that matters, the full writeup says so.
 
+## The full timeline, for the record
+
+Everything above is the story. This is the same project's complete measured history,
+dated, every real win and every rejected idea, so nothing in the story above is taking
+your word for it — or mine. "Before" and "After/Verdict" are what changed, or why an idea
+died.
+
+| Date | What was tried | Before | After / Verdict |
+|---|---|---|---|
+| 2026-07-12 | How much memory normal training needs | — | 16.8x the model's own weight — 1B needs ~16.8GB, 3x over this 6GB card |
+| 2026-07-12 | Train one block at a time | 268M: 6.9GB; 1.04B: hard crash | 268M: 4.2GB (-39%); 1.04B: **runs** |
+| 2026-07-12 | Recompute instead of storing activations | 1.04B still spilling past 6GB | 4.6GB peak, clean fit, no spill |
+| 2026-07-24 | A startup check that doubled memory use | looked like block-training itself failing | root cause found, fixed for that case — the same bug resurfaced today in a slightly different form |
+| 2026-07-24 | Combining block-training with PyTorch's auto-compiler | hoped it would help | slower, and it recompiles on every block switch |
+| 2026-08-02 | Splitting the "thinking" layer into specialist sub-pieces | dense baseline | better loss, but 1.91x the compute cost — **rejected** |
+| 2026-08-03 | Auto-detecting a sudden jump in ability | claimed real jumps | 0 real jumps found; fired on pure noise too — **rejected** |
+| 2026-08-03 | Extrapolating weights forward instead of training them | — | **worse than doing nothing — rejected** |
+| 2026-08-06 | Packing several short examples into one training row instead of padding | 1x, padded | **5.17x cheaper** per real token |
+| 2026-08-07 | Same packing idea, re-checked on longer conversations | 5.17x on short examples | win shrinks to **1.45x** on longer ones |
+| 2026-08-09 | A learning-rate schedule that reacts to the loss curve | fixed schedule | looked better, but a correctly-set fixed schedule still won in the end — **"the method doesn't work"** |
+| 2026-08-09 | A learning-rate method with no manual tuning at all | hand-tuned schedule | wins for fine-tuning, fixed schedule still wins for pretraining — split by use case |
+| 2026-08-10 | Letting the model search real documents for an answer | 0% correct closed-book | **22.5%** correct with the right amount of retrieved text (too much backfires) |
+| 2026-08-10 | Sharing one vocabulary table instead of two | separate tables, slightly worse loss | **better loss, and 31% fewer parameters** |
+| 2026-08-10/11 | PyTorch's automatic compiler, checked four separate times | normal speed | **more than twice as slow, every time — rejected** |
+| 2026-08-11 | Checking whether the GPU was sitting idle waiting on anything | assumed there was slack to reclaim | **97% busy — there wasn't any** |
+| 2026-08-11/12 | A faster scan calculation, 12 different designs tried | one design hoped to be faster | that one: **1.5-4x slower, dead**. A different design: **a real, small, kept win** |
+| 2026-08-14 | A leaner optimizer as a substitute for block-training | block-training: fast and clean | spilled past the card anyway, **10x slower** |
+| 2026-08-17 | Computing the loss in smaller pieces instead of all at once | a large model spilling past the card | **fits cleanly instead** |
+| 2026-08-27 | A different way to compress certain weight matrices | — | **4x fewer parameters** there, same speed, quality not yet fully checked |
+| 2026-09-29 | Fixing how blocks get split up for block-training | one lopsided split wasting memory | **cut the block-training quality cost by more than half** |
+| 2026-10-12 | Combining several small internal calculations into one, three separate times | baseline | each a real few-percent win, stacked together |
+| 2026-10-14 | Caching the three-value weight conversion instead of redoing it | baseline | four small real wins, stacked |
+| 2026-10-15 | Combining a normalization step into the surrounding calculation | original baseline | a real step-time cut, measured honestly against the true original baseline |
+| 2026-10-16/17 | Turning off a regularization setting that's usually left on | on by default | genuinely better, not just faster — checked twice to be sure it wasn't luck |
+| 2026-10-17 | Four more small calculation-combining wins | before this batch | **a real, further 5.7% cut** |
+| 2026-10-22/23 | Doing the biggest matrix multiplication in the lowest-precision tensor format | before this change | **confirmed 7.81% faster**, answers unaffected |
+| 2026-10-23 | Using fewer data-loading worker processes | 7.16GB of RAM in use | **about 1.1GB saved, free, no slowdown** |
+| 2026-10-24 | Trying the lowest-precision format on the recurrent calculation too | normal path: small, safe error | **5-18x worse error — rejected** (this calculation has no natural reset point, unlike the one that won above) |
+| 2026-10-24 | Measuring, for real, how big a model fits with everything except block-training | assumed around 700M-1.1B from an old estimate | **measured ~340M** — the old estimate used the wrong optimizer as its stand-in |
+| 2026-10-24 | The startup double-memory check, again | looked like the real training loop failing | same underlying bug as the July one, just the other half of it — fixed |
+
+A few more real rejected ideas that don't have an exact date pinned down: an earlier,
+"novel" version of the core architecture, which turned out to simply lose to the published
+design it was replaced with; training several smaller copies of a layer and averaging
+them, which lost badly to just having more real layers; gradually growing the training
+sequence length, which fought the hardware instead of helping it; and a scheme to let the
+model stop computing early on easy tokens, which never worked.
+
 ## Where the actual numbers live
 
 Every claim in this story has a measured number behind it, with the date it was measured
-and the exact before/after figures, in `HF_BLOG_POST.md` and in this repository's
-`docs/state.md`. If something here sounds too good, that's where to go check it — and if
-it turns out to be wrong, the project's own habit is to say so in public rather than quietly
+and the exact before/after figures — the table just above has the full dated list, and
+`HF_BLOG_POST.md` plus this repository's `docs/state.md` have the citations behind every
+row of it. If something here sounds too good, that's where to go check it — and if it
+turns out to be wrong, the project's own habit is to say so in public rather than quietly
 fix it, which is also where you'll find the handful of times that's already happened.
 
 The code is Apache 2.0 — free to use, change, or build on. Any weights you train yourself
