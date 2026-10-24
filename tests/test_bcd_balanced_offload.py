@@ -117,11 +117,12 @@ def _check_residency(m, sched, when: str, strict_inactive: bool = True) -> int:
 
 
 def _run(offload: bool, tie: bool, n_steps: int, *, cache_blocks: int = 1,
-         old_single_name_check: bool = False, check_residency: bool = True):
+         old_single_name_check: bool = False, check_residency: bool = True,
+         lr: float = 1e-2):
     device = torch.device("cuda")
     torch.manual_seed(0)
     m = _model(tie).to(device)
-    opt = torch.optim.AdamW(m.parameters(), lr=1e-2)
+    opt = torch.optim.AdamW(m.parameters(), lr=lr)
     sched = BlockCoordinateScheduler(
         m, opt, steps_per_block=SPB, partition="balanced", partition_budget=_budget(m),
         offload_inactive_weights=offload, device=device if offload else None,
@@ -195,8 +196,21 @@ def test_balanced_offload_matches_no_offload_over_rotations(tie, cache_blocks):
         diff = (params[name] - ref).abs().max().item()
         assert diff <= 1e-4, f"{name}: max|diff| {diff:.2e} after {n} steps"
     # The sequence must actually have trained (not a frozen model matching a
-    # frozen model).
-    assert ref_losses[-1] < ref_losses[0]
+    # frozen model). #176: the old first-vs-last-step check rode on batch
+    # noise -- each step sees a fresh random batch, so one step swings
+    # ~0.1-0.3 nats; it sat at 6.2054 vs 6.2195 with TF32 on and flipped.
+    # A first-k vs last-k mean is not enough either: untied, a FROZEN model
+    # "passes" it (6.50 -> 6.37) just because the late batches are easier.
+    # So pair it: same seeds, same batches, lr=0, and compare the last k
+    # steps. Batch difficulty cancels; a frozen model gives exactly 0.
+    # Measured margin 0.09-0.25 nats, fp32 and TF32, tied and untied.
+    _, frozen_losses, _, _ = _run(False, tie, n, lr=0.0)
+    k = 4  # two groups' worth at SPB=2
+    trained = sum(ref_losses[-k:]) / k
+    frozen = sum(frozen_losses[-k:]) / k
+    assert trained < frozen - 0.03, (
+        f"did not train: last-{k} mean loss {trained:.4f} vs {frozen:.4f} "
+        f"for the same batches at lr=0")
 
 
 def test_old_single_name_check_is_caught():
