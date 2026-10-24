@@ -2553,6 +2553,37 @@ def resolve_bcd_partition(partition: str | None, offload: bool) -> str:
     return "balanced"
 
 
+# Issue #182: the most of the card the audit's throwaway copies may push peak
+# VRAM to. Same 90% margin as #178/#180: real spills were measured at ~94%
+# reserved on this card, and on WDDM going past the card does not reliably
+# raise -- it either OOMs (what #182 hit) or silently spills to host RAM.
+AUDIT_COPY_MAX_VRAM_FRAC = 0.90
+
+
+def _audit_extra_copies_fit(model: nn.Module, device: torch.device, n_copies: int):
+    """Would `n_copies` more full copies of the model's weights fit on the card?
+
+    Returns (fits, need_gb, room_gb). Check 2 holds a deepcopy plus that copy's
+    grads; Check 3 holds the checkpoint's state dict (loaded onto `device`) plus
+    the rebuilt model -- both are 2 extra weight-sized copies on top of the real
+    model. Activations are NOT counted, so this only skips cases that cannot
+    possibly fit; borderline ones still run and report as before.
+    """
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return True, 0.0, float("inf")
+    m = getattr(model, "_orig_mod", model)
+    copy_bytes = sum(t.numel() * t.element_size()
+                     for t in list(m.parameters()) + list(m.buffers()))
+    need = n_copies * copy_bytes
+    total = torch.cuda.get_device_properties(device).total_memory
+    driver_free, _ = torch.cuda.mem_get_info(device)
+    # Memory PyTorch has cached but not handed out is reusable by the allocator.
+    cached = torch.cuda.memory_reserved(device) - torch.cuda.memory_allocated(device)
+    in_use = total - driver_free - cached  # real model + other processes
+    room = AUDIT_COPY_MAX_VRAM_FRAC * total - in_use
+    return need <= room, need / 2**30, max(room, 0) / 2**30
+
+
 def pre_training_audit(
     model: EdgeHVN,
     dataloader: DataLoader,
@@ -2619,6 +2650,7 @@ def pre_training_audit(
     # while still validating that the architecture + ternary STE forward/backward
     # works. The copy is freed immediately after.
     print("\n  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...")
+    _fits2, _need2, _room2 = _audit_extra_copies_fit(model, device, n_copies=2)
     if config.get("block_coordinate", False):
         print("    ⚠ Skipped under --block-coordinate: this check deepcopies the whole")
         print("      model onto GPU and runs an UN-FROZEN backward pass across every")
@@ -2626,6 +2658,13 @@ def pre_training_audit(
         print("      at large model sizes that alone can OOM a 6 GB card (Issue #112).")
         print("      BCD's own per-block freeze already bounds real-training risk; any")
         print("      real forward/backward issue will surface immediately on step 1.")
+    elif not _fits2:
+        # Issue #182: same class of issue as #112, without BCD.
+        print("    ⚠ Skipped: a second full-precision copy would exceed the card's VRAM")
+        print("      at this model size (same class of issue as #112, Issue #182).")
+        print(f"      Needs ~{_need2:.2f} GB (model copy + its grads), only ~{_room2:.2f} GB")
+        print(f"      left under {AUDIT_COPY_MAX_VRAM_FRAC:.0%} of the card. Any real")
+        print("      forward/backward issue will surface immediately on step 1.")
     else:
         audit_model = None
         try:
@@ -2709,6 +2748,7 @@ def pre_training_audit(
 
     # --- Check 3: Checkpoint save and load cycle ---
     print("\n  [Check 3] Checkpoint save/load cycle...")
+    _fits3, _need3, _room3 = _audit_extra_copies_fit(model, device, n_copies=2)
     if config.get("block_coordinate", False):
         print("    ⚠ Skipped under --block-coordinate: this check rebuilds a SECOND full")
         print("      EdgeHVN and moves it onto GPU alongside the real model (no BCD/freeze")
@@ -2716,6 +2756,14 @@ def pre_training_audit(
         print("      once can OOM a 6 GB card at large sizes, same class of issue as Check 2")
         print("      (Issue #112). The real training loop's own checkpoint saves/resumes")
         print("      exercise this same code path, so a real problem still surfaces there.")
+    elif not _fits3:
+        # Issue #182: torch.load(map_location=device) + the rebuilt model = two
+        # extra weight copies; at ~1B this OOMed inside torch.load itself.
+        print("    ⚠ Skipped: a second full-precision copy would exceed the card's VRAM")
+        print("      at this model size (same class of issue as #112, Issue #182).")
+        print(f"      Needs ~{_need3:.2f} GB (loaded state dict + rebuilt model), only")
+        print(f"      ~{_room3:.2f} GB left under {AUDIT_COPY_MAX_VRAM_FRAC:.0%} of the card. The real")
+        print("      training loop's own checkpoint saves exercise this same code path.")
     else:
         test_ckpt_path = os.path.join(checkpoint_dir, "audit_test_checkpoint.pt")
         try:
