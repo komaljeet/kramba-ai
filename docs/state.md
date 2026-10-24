@@ -5,6 +5,74 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Real GPU-only (no BCD/offload) VRAM ceiling measured: ~340M, not ~1.1B (2026-10-24)
+
+**One line: on this 6GB card, with the current full stack (ternary, tied embeddings,
+chunked-loss, grad-checkpoint, fp8-linear, Muon) but WITHOUT `--block-coordinate` and
+WITHOUT `--offload`, the real clean-fit ceiling is ~340M params, not the ~700M-1.1B a
+stale Aug-14 extrapolation implied.**
+
+Measured by scanning `d_model` at fixed `num_layers=24`, `--arch hvn-hybrid`, batch 1,
+seq 4096, real training steps on the actual production entrypoint
+(`train_edge_conversational.py`), audit bypassed (see #182 below):
+
+| d_model | params | peak reserved | verdict |
+|---:|---:|---:|---|
+| 1024 | 304,175,889 | 72% of card | fits |
+| 1088 | 339,943,293 | **85% of card** | fits (at the spill threshold) |
+| 1152 | 377,682,409 | 96% of card | spills (#163 guard) |
+| 1280 | 459,075,777 | 108% of card | spills |
+| 1536 | 645,523,057 | 150% of card | spills |
+| 1920 | 984,345,337 | — | hard OOM |
+| 2048 | 1,113,059,793 | — | hard OOM |
+
+**Why the old anchor was wrong.** Issue #157 (2026-08-14) measured 9.42 GiB reserved
+(spilling) for a 1.1B no-BCD-no-offload config and implied a ~700M-1.1B ceiling when
+scaled. That run used **Adafactor**, a leaner optimizer than this project's actual
+default (**Muon**, since #129). Muon's optimizer state is heavier, and #157's own table
+already showed `muon, no BCD, no offload: OOM` at 1.1B -- the real ceiling with the
+optimizer this project actually trains with is much smaller than Adafactor's.
+
+**BCD+offload's real contribution at 6GB: ~4.6x model-size multiplier** (1.58B with
+BCD+offload vs ~340M without, same card, same stack otherwise).
+
+**Found a real bug along the way, filed separately (#182):** `pre_training_audit()`'s
+Check 2 and Check 3 each build a SECOND full-precision model copy and move it onto GPU,
+already known to OOM at large sizes under `--block-coordinate` (guarded, cites #112) but
+NOT guarded when BCD is off -- this OOM'd before the real training loop even started at
+d_model>=1920, looking exactly like a training-loop failure. Bypassed for this
+measurement by monkeypatching `pre_training_audit` to a no-op; real fix tracked in #182.
+
+## Scan-kernel FP8 quantization: rejected, 5-18x worse error (2026-10-24)
+
+**One line: quantizing the DeltaNet recurrent state to FP8 (the same kind of fused
+quantizer that won for `--fp8-linear`) does not work for the scan -- 5-18x worse
+numerical error than the current bf16 path, measured, not assumed.**
+
+Scan is 26.6% of step time at the current (FP8-enabled) kernel profile
+(`_mk_bwd_kernel_s` 12.3%, `_gated_delta_fwd_kernel_s` 10.2%, `_mk_ckpt_kernel_s` 4.1%) --
+the single biggest remaining chunk, which made it worth checking before dropping it again.
+
+Numerical simulation (`torch.float8_e4m3fn`, real amax/scale quantization matching this
+project's actual quantizer convention) of quantizing the recurrent state every 1/8/64
+steps across a full 4096-token sequence at the trained decay regime (alpha=0.95):
+
+| quantize every | relative error vs current bf16 path |
+|---:|---:|
+| 1 step | ~7-8% (bf16 baseline: ~0.4-0.5%) |
+| 8 steps | similar order |
+| 64 steps | ~2.5% |
+
+**Why it fails where `--fp8-linear` won.** The Linear-layer FP8 win has a reset point --
+each GEMM starts fresh from its own input. The DeltaNet state feeds back into itself
+every step with no reset in the production sequential megakernel, so quantization error
+compounds instead of washing out. The per-step math (32x32 state x 32-length vector) is
+also structurally too small for FP8 tensor cores to help regardless of error.
+
+A September 2026 arXiv lead (LeapQuant/STEPQuant, outlier-aware mixed precision, a
+different technique from the naive uniform cast tested here) was surfaced but not
+pursued -- flagged as unverified and explicitly not something to re-raise without reason.
+
 ## num-workers 4->2 saves ~1.1GB RAM for free; second fusion-tail scoping found no new lever (2026-10-23)
 
 **One line: dropping `--num-workers` from 4 to 2 is a real, free win -- ~1.1GB less resident
