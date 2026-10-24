@@ -2,7 +2,7 @@
 
 [DOI 10.5281/zenodo.22725431](https://zenodo.org/records/22725431)
 
-[30 min run on the laptop of a 1b param llm pretrain](https://youtu.be/8m0Hwrzfmaw?si=bDE6Gen5Sey_2wNg)
+[30 min run video of a 1b param llm pretrain on the laptop](https://youtu.be/8m0Hwrzfmaw?si=bDE6Gen5Sey_2wNg)
 
 **Laptop Specs**
 
@@ -53,12 +53,14 @@ The stack scales with VRAM. On a 6 GB card we measured about a 1.58B ceiling. He
 | GPU VRAM | Max Model (Recurrent Hybrid) | Max Model (Plain Transformer) | Pretrain Time (Chinchilla) |
 |----------|------------------------------|-------------------------------|----------------------------|
 | **6 GB** (RTX 4050 laptop) | **about 1.58B** | **about 1.58B** | about 132-211 days @ 1.1B (was about 375, Aug measurement) |
-| **8 GB** (RTX 3070/4060 laptop) | **about 2.2B** | **about 2.2B** | ~~about 61-97 days @ 1.5B~~ retracted |
-| **12 GB** (RTX 3060/4070) | **about 3.5B** | **about 3.5B** | ~~about 28-45 days @ 2.5B~~ retracted |
-| **16 GB** (RTX 4080) | **about 4.8B** | **about 4.8B** | ~~about 15-24 days @ 3.5B~~ retracted |
-| **24 GB** (RTX 3090/4090) | **about 7.5B** | **about 7.5B** | ~~about 6-11 days @ 5B~~ retracted |
+| **8 GB** (RTX 3070/4060 laptop) | **about 2.2B** | **about 2.2B** | ~~about 61-97 days @ 1.5B~~ about 246-392 days (floor) |
+| **12 GB** (RTX 3060/4070) | **about 3.5B** | **about 3.5B** | ~~about 28-45 days @ 2.5B~~ about 682-1,090 days (floor) |
+| **16 GB** (RTX 4080) | **about 4.8B** | **about 4.8B** | ~~about 15-24 days @ 3.5B~~ about 1,336-2,136 days (floor) |
+| **24 GB** (RTX 3090/4090) | **about 7.5B** | **about 7.5B** | ~~about 6-11 days @ 5B~~ about 2,727-4,360 days (floor) |
 
-**Retracted (2026-10-24):** those four day-counts were wrong, and wrong in the direction that makes bigger GPUs look better than they are. They were made by taking the measured 6 GB/1.1B time and rescaling it by a flat percentage whenever that number moved. That assumes training time stays proportional to model size — it doesn't. Compute cost grows close to the *square* of parameter count (a bigger model also needs more training tokens, not just more FLOPs per token), so a 5B model does not train faster than the measured 1.1B model just because the card has more VRAM. Caught this by sanity-checking a reader's "7.5B on a 3090 in 6-11 days" reading of this row — a 5B model needs on the order of 20x more compute than the measured 1.1B one, which alone puts it past the old number even on much faster hardware. None of these cards have actually been benchmarked, so there is no trustworthy replacement figure yet — the old numbers are struck through and kept, not deleted, so the mistake stays visible.
+**Corrected (2026-10-24):** those four day-counts were wrong, and wrong in the direction that makes bigger GPUs look better than they are. They were made by taking the measured 6 GB/1.1B time and rescaling it by a flat percentage whenever that number moved. That assumes training time stays proportional to model size — it doesn't. Compute cost grows close to the *square* of parameter count (a bigger model also needs more training tokens, not just more FLOPs per token), so a 5B model does not train faster than the measured 1.1B model just because the card has more VRAM. Caught this by sanity-checking a reader's "7.5B on a 3090 in 6-11 days" reading of this row.
+
+The new numbers are a **floor**, not a prediction: they assume the bigger card runs at the *same per-token speed* as the measured 6 GB laptop GPU, and the only thing that changes is more VRAM letting a bigger model fit (days scale with the square of the model size off the real 132/211-day, 1.1B anchor). No 8/12/16/24 GB card has actually been benchmarked on this stack, so a real card in any of these tiers would train faster than this floor by some amount nobody has measured yet — likely a lot faster for the 24 GB desktop cards, which is exactly why this is a floor and not a final answer. Old numbers struck through and kept rather than deleted, so the mistake stays visible.
 
 Key insight: the 6.5x multiplier (standard script to this stack) applies at every VRAM tier because the savings are proportional. BCD saves about 8x optimizer state (scales with params). Offload moves inactive blocks to CPU (scales with depth). Ternary gives 2.33x weight compression (fixed ratio). Tied embeddings save 103M params at 1B (fixed absolute). Chunked loss saves about 1.5 GB at 4K context (fixed absolute).
 
