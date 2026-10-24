@@ -23,3 +23,23 @@ way. Same root cause as the ordering note at the top of
 
 import pyarrow  # noqa: F401  (ordering is load-bearing -- see above)
 import pandas  # noqa: F401
+
+import pytest
+import torch
+
+
+@pytest.fixture(autouse=True)
+def _restore_tf32_flags():
+    """Suite-wide TF32 guard (#177).
+
+    ``apply_fast_stack(tf32=True)`` and several tests flip TF32 process-wide.
+    A leaked True silently loosens every later fp32 matmul in the run -- #170
+    nearly flipped test_bcd_balanced_offload's loss check that way. The
+    per-file fixtures in test_fp8_fused.py / test_fused_ternary_in_loop.py
+    only cover those two files; this covers every test, including any new
+    one. tests/test_tf32_guard.py fails if this fixture stops working.
+    """
+    saved = (torch.backends.cuda.matmul.allow_tf32,
+             torch.backends.cudnn.allow_tf32)
+    yield
+    torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32 = saved
