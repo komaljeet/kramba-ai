@@ -24,26 +24,26 @@ Every row is a real measured number, not a guess — wins and rejected ideas bot
 | Date | What was tried | Before | After / Verdict |
 |---|---|---|---|
 | 2026-07-12 | Vanilla full AdamW VRAM cost measured | — | 16.8 bytes/param — 1B needs ~16.8GB, 3x over this 6GB card |
-| 2026-07-12 | Block-coordinate-descent, BCD (#99) | 268M: 6.9GiB; 1.04B: hard OOM | 268M: 4.2GiB (-39%); 1.04B: **runs** |
-| 2026-07-12 | Grad-checkpoint stacked on BCD (#100) | 1.04B still spilling past 6GB | 4.6GiB peak, clean fit, no spill |
-| 2026-07-24 | Audit double-copy OOM found (#112) | looked like BCD itself failing | root cause found, fixed, skipped under BCD — **recurred today as #182** |
+| 2026-07-12 | Block-coordinate-descent, BCD | 268M: 6.9GiB; 1.04B: hard OOM | 268M: 4.2GiB (-39%); 1.04B: **runs** |
+| 2026-07-12 | Grad-checkpoint stacked on BCD | 1.04B still spilling past 6GB | 4.6GiB peak, clean fit, no spill |
+| 2026-07-24 | Audit double-copy OOM found | looked like BCD itself failing | root cause found, fixed, skipped under BCD — **recurred today, same bug class** |
 | 2026-07-24 | BCD stacked with `torch.compile` | hoped it would help | 6.73 vs 4.41 s/step — **slower**, recompiles every block switch |
-| 2026-08-02 | Mixture-of-Experts FFN (#123) | dense baseline | -11.8% loss but 1.91x compute cost — **rejected** |
-| 2026-08-03 | GHOST phase-transition detector (#125) | claimed real phase transitions | 0 real transitions found; fires on pure noise too — **rejected** |
-| 2026-08-03 | GHOST weight extrapolator (#126) | — | **worse than doing nothing — rejected** |
-| 2026-08-06 | Padding-free packing (#132) | 1x, padded | **5.17x cheaper** per real token, grounded-QA |
+| 2026-08-02 | Mixture-of-Experts FFN | dense baseline | -11.8% loss but 1.91x compute cost — **rejected** |
+| 2026-08-03 | GHOST phase-transition detector | claimed real phase transitions | 0 real transitions found; fires on pure noise too — **rejected** |
+| 2026-08-03 | GHOST weight extrapolator | — | **worse than doing nothing — rejected** |
+| 2026-08-06 | Padding-free packing | 1x, padded | **5.17x cheaper** per real token, grounded-QA |
 | 2026-08-07 | Packing re-gate on OASST | 5.17x on grounded-QA | win shrinks to **1.45x** on longer conversations |
-| 2026-08-09 | Dynamic phase-aware LR (#133) | fixed cosine, 4.3374 held-out | +0.30 nats, but correct constant LR beats it by 0.108 — **"method does not work"** |
-| 2026-08-09 | Prodigy parameter-free LR (#134) | hand-tuned Muon | FT: Prodigy wins by 0.178. Pretrain: Muon wins by 0.068 — split by regime |
-| 2026-08-10 | RAG, BM25 top-k retrieval (#137) | closed-book 0.0% | **22.5%** at top-1 (top-3 hurts — more context backfires) |
-| 2026-08-10 | Tied embeddings (#139) | untied: 5.56450 held-out, 83.0M params | **5.50681 (better) + 31% fewer params** |
+| 2026-08-09 | Dynamic phase-aware LR | fixed cosine, 4.3374 held-out | +0.30 nats, but correct constant LR beats it by 0.108 — **"method does not work"** |
+| 2026-08-09 | Prodigy parameter-free LR | hand-tuned Muon | FT: Prodigy wins by 0.178. Pretrain: Muon wins by 0.068 — split by regime |
+| 2026-08-10 | RAG, BM25 top-k retrieval | closed-book 0.0% | **22.5%** at top-1 (top-3 hurts — more context backfires) |
+| 2026-08-10 | Tied embeddings | untied: 5.56450 held-out, 83.0M params | **5.50681 (better) + 31% fewer params** |
 | 2026-08-10/11 | `torch.compile`, 4 measurements | eager 8.66 s/step, 98% GPU busy | **20.72 s/step, 35% busy — 2.4x slower, rejected** |
-| 2026-08-11 | GPU idle-time audit (#153) | assumed pipeline-starved | **97.2% GPU-busy — nothing to reclaim** |
+| 2026-08-11 | GPU idle-time audit | assumed pipeline-starved | **97.2% GPU-busy — nothing to reclaim** |
 | 2026-08-11/12 | Megakernel scan search, 12 designs | chunk-parallel Design A hoped faster | A: **1.5-4x slower, dead**. B (blockwise backward): **~1.05x win, kept** |
-| 2026-08-14 | Adafactor, no BCD/offload, at 1B (#157) | BCD+offload: 4.68 s/step | spills to 9.42GiB, 48.50 s/step — **10.4x slower** |
-| 2026-08-17 | Chunked cross-entropy (#158) | 1.21B/seq4096: spilling (103%) | **fits (73%)** |
-| 2026-08-27 | Tensor-train projections (#161) | dense 8.05M params @ d=896 | **3.96x fewer params**, 1.05x step time, quality not yet gated |
-| 2026-09-29 | BCD balanced block partition (#164) | layer partition (one oversized slot) | **41% of the full-vs-BCD quality gap closed** |
+| 2026-08-14 | Adafactor, no BCD/offload, at 1B | BCD+offload: 4.68 s/step | spills to 9.42GiB, 48.50 s/step — **10.4x slower** |
+| 2026-08-17 | Chunked cross-entropy | 1.21B/seq4096: spilling (103%) | **fits (73%)** |
+| 2026-08-27 | Tensor-train projections | dense 8.05M params @ d=896 | **3.96x fewer params**, 1.05x step time, quality not yet gated |
+| 2026-09-29 | BCD balanced block partition | layer partition (one oversized slot) | **41% of the full-vs-BCD quality gap closed** |
 | 2026-10-12 | Fused DeltaNet glue + prefetch + offload overlap | baseline | **+10.2%, +3.8%, +8.7%** stacked |
 | 2026-10-14 | Four ternary micro-fusions | baseline | **+0.8%, +0.9%, +3.7%, +3.5%** |
 | 2026-10-15 | Fused pre-norm RMSNorm | original baseline | **15.067 s/step, -30.9%** from the original baseline |
@@ -53,9 +53,9 @@ Every row is a real measured number, not a guess — wins and rejected ideas bot
 | 2026-10-23 | `--num-workers` 4 → 2 | 7.16GB peak resident RAM | **~1.1GB RAM saved, zero throughput cost** |
 | 2026-10-24 | Scan-kernel FP8 quantization (revisited) | bf16 path: ~0.4-0.5% error | **5-18x worse error — rejected** (no reset point in the recurrent state) |
 | 2026-10-24 | Real GPU-only (no BCD/offload) ceiling, current stack | assumed ~700M-1.1B (stale Aug extrapolation) | **measured ~340M** (85% of card) |
-| 2026-10-24 | Audit double-copy OOM recurs (#182) | looked like the training loop itself failing | same bug class as #112 — fix in progress |
+| 2026-10-24 | Audit double-copy OOM recurs | looked like the training loop itself failing | same bug class as the July one — fix in progress |
 
-**Overall, same hardware:** 21.81 s/step → **12.335 s/step** (-43%), 1,579 → **2,656 tok/s**, 375 days → **132-211 days** for a real 1.1B pretrain. BCD's own quality cost: about 4x worse perplexity than full training → **about 1.6x** (balanced partitioning, #164).
+**Overall, same hardware:** 21.81 s/step → **12.335 s/step** (-43%), 1,579 → **2,656 tok/s**, 375 days → **132-211 days** for a real 1.1B pretrain. BCD's own quality cost: about 4x worse perplexity than full training → **about 1.6x** (balanced partitioning).
 
 Also rejected, real but without a pinned date in the log above: the original HVN architecture lost by 13% at equal data vs. the gated DeltaNet that replaced it; looped/weight-shared models (3 layers x 4 passes lost to 12 real layers by 11x the noise floor); sequence-length curriculum (2.9% slower, fights occupancy on 20 SMs); per-token entanglement rate (no gain at 83M); entropy-gated early exit (does not work).
 
@@ -65,7 +65,7 @@ Also rejected, real but without a pinned date in the log above: the original HVN
 |---|---|---|
 | 1B step time | 21.81 s/step | **12.335 s/step** (-43%) |
 | Throughput | 1,579 tok/s | **2,656 tok/s** |
-| **BCD's own quality cost** | **about 4x worse perplexity** than full training (one block trains at a time, balance was naive) | **about 1.6x worse perplexity** (balanced block partitioning, issue #164) |
+| **BCD's own quality cost** | **about 4x worse perplexity** than full training (one block trains at a time, balance was naive) | **about 1.6x worse perplexity** (balanced block partitioning) |
 | 1B pretrain time | about 375 days | **about 132-211 days**, depending on how the BCD quality cost above is counted |
 | Offload correctness | silent weight-corruption bug, present undetected for 76 days (2026-07-26 to 2026-10-10) | found, fixed, and validated end-to-end with real hard-kill-and-resume tests |
 | Peak VRAM at 1.11B | 4.51 GB | **5.24 GB** (81.4% of the card) — up, not down; fused kernels/caches add some transient buffers even while speeding things up |
@@ -134,11 +134,11 @@ No new algorithms — every piece is published and attributed. The work was maki
 | **Gradient checkpointing** | Stored activations — recomputed instead | Activations to about 50 MB |
 | **Chunked cross-entropy** | Logits materialized slice-by-slice, recomputed in backward | about 1.5 GB saved at 4,096 x 50K vocab |
 
-Ternary quantization details (BitNet b1.58): what 2.33x means is weight tensors only, not total VRAM — fp32 (32 bits) becomes ternary stored as int8 (8 bits) plus a per-matrix fp32 scale, theoretical 20x (log base 2 of 3, about 1.58 bits), practical 2.33x after scale overhead. About a third of weights round to exactly 0 (35% sparsity), spread across rows rather than collapsing whole rows. This only works trained from scratch with a straight-through estimator — post-hoc quantization loses the learned dynamics, so **--ternary** is on by default in production runs. It also buys no training-VRAM win: fp32 shadow weights stay resident for gradient updates, so ternary only saves checkpoint size and inference memory. Fresh layers can zero out before learning (Issue #109), fixed by warm-starting the trunk from a pre-trained checkpoint. Finer, group-wise scales were tested (Issue #146) and lost to one scale per tensor — the storage ratio improves with width, but quality doesn't.
+Ternary quantization details (BitNet b1.58): what 2.33x means is weight tensors only, not total VRAM — fp32 (32 bits) becomes ternary stored as int8 (8 bits) plus a per-matrix fp32 scale, theoretical 20x (log base 2 of 3, about 1.58 bits), practical 2.33x after scale overhead. About a third of weights round to exactly 0 (35% sparsity), spread across rows rather than collapsing whole rows. This only works trained from scratch with a straight-through estimator — post-hoc quantization loses the learned dynamics, so **--ternary** is on by default in production runs. It also buys no training-VRAM win: fp32 shadow weights stay resident for gradient updates, so ternary only saves checkpoint size and inference memory. Fresh layers can zero out before learning, fixed by warm-starting the trunk from a pre-trained checkpoint. Finer, group-wise scales were tested and lost to one scale per tensor — the storage ratio improves with width, but quality doesn't.
 
 Two of these did not previously work together. Tied embeddings share one tensor between the input lookup and the output layer, and the offload system rejected that outright — it assigns every parameter to exactly one block, and this tensor belongs to two. The combination was guarded off as unsupported.
 
-The fix (Issue #157): pin the tied table — a parameter reachable from two modules is never evicted, because the forward pass uses it at both ends and no single block's residency window covers both uses. Cost: one vocabulary table held resident (about 250 MB at 1B scale). When combined with chunked cross-entropy (**--chunked-loss 512**), the previously OOM combination (tied embeddings + CPU offload) now fits without OOM — a 5-step fp32 test at 1.11B parameters ran at **79% of 6 GB = 4.85 GB**. The pinned tied table (about 206 MB bf16) plus chunked loss (about 1.5 GB saved) makes the four-technique stack (BCD + offload + tied + chunked) fit together in memory. (2026-10-11: "fits" is confirmed; "trains correctly" at this combination and scale was never separately checked before an unrelated offload bug was found and fixed on 2026-10-10 — see the correction above.)
+The fix: pin the tied table — a parameter reachable from two modules is never evicted, because the forward pass uses it at both ends and no single block's residency window covers both uses. Cost: one vocabulary table held resident (about 250 MB at 1B scale). When combined with chunked cross-entropy (**--chunked-loss 512**), the previously OOM combination (tied embeddings + CPU offload) now fits without OOM — a 5-step fp32 test at 1.11B parameters ran at **79% of 6 GB = 4.85 GB**. The pinned tied table (about 206 MB bf16) plus chunked loss (about 1.5 GB saved) makes the four-technique stack (BCD + offload + tied + chunked) fit together in memory. (2026-10-11: "fits" is confirmed; "trains correctly" at this combination and scale was never separately checked before an unrelated offload bug was found and fixed on 2026-10-10 — see the correction above.)
 
 **Architecture**
 
@@ -253,11 +253,11 @@ The first two are real projects here. The third is not — code models many time
 
 **Pretraining Config Used (1.11B Run)**
 
-This is the recommended config: the hybrid architecture (10 DeltaNet layers + 2 sliding-attention layers at 6 and 18), tied embeddings, and the fully composable memory stack (offload + BCD + chunked loss), all confirmed compatible together per Issue #157. Shown here as the config to use going forward, not a literal transcript of any one past run.
+This is the recommended config: the hybrid architecture (10 DeltaNet layers + 2 sliding-attention layers at 6 and 18), tied embeddings, and the fully composable memory stack (offload + BCD + chunked loss), all confirmed compatible together. Shown here as the config to use going forward, not a literal transcript of any one past run.
 
 Command: python train_edge_conversational.py --arch hvn-hybrid --d-model 2048 --num-layers 24 --n-heads 64 --attn-layers 6,18 --attn-window 4096 --batch-size 1 --seq-len 4096 --grad-accum 8 --chunked-loss 512 --offload --block-coordinate --bcd-partition balanced --bcd-steps-per-block 100 --optimizer muon --muon-lr 0.02 --lr 3e-4 --dropout 0 --tie-embeddings --pretrain-mix 0.0,0.0,0.0,1.0 --min-tokens-per-param 0
 
-Key flags explained: **--arch hvn-hybrid** selects the gated DeltaNet trunk with 2 sliding-attention layers. **--attn-layers 6,18** places those attention layers for exact-token recall. **--tie-embeddings** shares the vocab table between embedding and decoder (saves 103M params; compatible with offload since Issue #157 pinned the shared table). **--offload** does CPU weight offload for inactive blocks (auto-enables **--block-coordinate** and **--grad-checkpoint**). **--block-coordinate** is BAdam: train one block at a time, clear its optimizer state. **--chunked-loss 512** scores loss 512 positions at a time, recomputing in backward (saves about 1.5 GB) — this is what makes tied embeddings plus offload fit without OOM. **--precision bf16** (on by default via **--fast**) gives 2-3x speed and 2x less VRAM, needs RTX 30/40 series. **--optimizer muon** needs 1.6x fewer steps to the same loss (about 12% slower per step, still a net win).
+Key flags explained: **--arch hvn-hybrid** selects the gated DeltaNet trunk with 2 sliding-attention layers. **--attn-layers 6,18** places those attention layers for exact-token recall. **--tie-embeddings** shares the vocab table between embedding and decoder (saves 103M params; compatible with offload now that the shared table is pinned). **--offload** does CPU weight offload for inactive blocks (auto-enables **--block-coordinate** and **--grad-checkpoint**). **--block-coordinate** is BAdam: train one block at a time, clear its optimizer state. **--chunked-loss 512** scores loss 512 positions at a time, recomputing in backward (saves about 1.5 GB) — this is what makes tied embeddings plus offload fit without OOM. **--precision bf16** (on by default via **--fast**) gives 2-3x speed and 2x less VRAM, needs RTX 30/40 series. **--optimizer muon** needs 1.6x fewer steps to the same loss (about 12% slower per step, still a net win).
 
 **If you run this command yourself, the first about 100 steps will print about 17.6 s/step with `--fp8-linear` (about 19 s/step without it), not the cycle average.** That is correct, not broken — BCD trains one block at a time, and a fresh launch always starts on the slowest block (token_embedding). It steps down at every block switch after that. See the before/after table above for the per-block range.
 
@@ -310,11 +310,11 @@ isolated benchmark and end to end on the real fine-tune script.
 
 Every idea tried and rejected here, with its real measured reason, is in the chronological measurements table near the top of this post.
 
-5 retractions — conclusions this project withdrew: 1) original HVN "novel architecture" claim, lost to published DeltaNet by 13%. 2) #117 cache serving untrained weights, whole epic graded on aggregate loss that still trended down. 3) #122 5-item recall gate, gating a scale-up decision on a measurement dominated by luck. 4) #132 verdict on train loss, a multi-pass regime that measures memorisation, not quality. 5) #138 CUDA graph "6.8x speedup", compared one replay against one eager step from the same state — both do the same thing, passed at max|dlogits|=0 while the context had silently stopped growing.
+5 retractions — conclusions this project withdrew: 1) original HVN "novel architecture" claim, lost to published DeltaNet by 13%. 2) a weight cache serving untrained weights, missed because the only test watched aggregate loss, which still trended down anyway. 3) a 5-item recall gate used to justify a scale-up decision, later found to be dominated by luck, not signal. 4) a verdict based on train loss in a multi-pass regime, which measures memorisation, not real quality. 5) a CUDA graph "6.8x speedup", which compared one replay against one eager step from the same state — both do the same thing, so it passed at zero difference while the model's context had silently stopped growing.
 
 4 optimisations measured slower than doing nothing: 1) torch.compile, 2.4x slower (20.72 vs 8.66 s/step). 2) Chunk-parallel scan (Design A), 2-4x slower at d=64. 3) Sequence-length curriculum, 2.9% slower at 83M. 4) Attention layer removal, 6.4% slower (attention is the cheap part during training).
 
-8 silent bugs caught by falsifiable tests: 1) #117, cache served untrained weights, only test watched aggregate loss which trended down anyway. 2) #122, 5-item recall gate passed by luck, not signal. 3) #132, graded on train loss in a multi-pass regime, which measures memorisation. 4) #138, CUDA graph compared one step against one step from the same state, both identical, passed at zero diff. 5) #155, tokenizer.vocab_size excludes added tokens, embedding sized 3 rows short, out-of-bounds CUDA assert. 6) #157, tokenized .bin cache keyed on the string "code", not the corpus, silently reused the old cache. 7) #112, pre-training audit deepcopied the model to GPU, OOM'd the 6 GB card at large sizes. 8) #159, cosine LR scheduler compounded decay on every resume, a sawtooth LR.
+8 silent bugs caught by falsifiable tests, not by eyeballing a loss curve: a weight cache serving untrained weights; a recall gate that passed by luck; a verdict graded on train loss in a multi-pass regime; a CUDA graph compared against itself, passing at zero difference; a tokenizer whose vocab_size excludes added tokens, sizing an embedding table 3 rows short and crashing with a bare CUDA assert; a tokenized data cache keyed on the string "code" instead of the actual corpus, so pointing it at a different file silently reused stale data; a pre-training self-check that copied the whole model onto the GPU a second time, OOM-ing large configs; a cosine learning-rate schedule that compounded its own decay on every resume, producing a sawtooth instead of a smooth curve.
 
 **Limits (Read Before Scaling)**
 
@@ -330,7 +330,7 @@ Code: https://gitlab.com/komalbarun/kramba-ai (Apache-2.0). Documentation: https
 
 **2026-10-11:** a separate, unrelated bug in the CPU offload path (present since 2026-07-26, fixed in 2f94d7a) could swap weights between same-shaped matrices during training whenever **--offload** was active with prefetch on. It did not affect any VRAM/fit numbers in this post, only the correctness of the weights during offloaded training. Every "trains"/"works"/"loss drops" claim above that came from an **--offload** run (the 1,350-step 1.11B headline run included) needs re-running on fixed code before it can be trusted again. The fix itself has been verified correct — confirmed at small scale (8-layer test), with the quality finding below (BCD balanced partition) confirmed to hold under offload too.
 
-**2026-10-21:** every s/step, tok/s, VRAM and day-count figure in this post has been re-measured against the current code and updated — 14.385 to 13.294 s/step, 2,278 to 2,464 tok/s, 5.31 GB to 5.24 GB peak, and the day estimate from 154-246 to 142-227. The **--offload** plus tied-embeddings compatibility question raised earlier (#151) is confirmed fixed and current (#157) — the config above uses tied embeddings together with offload without issue.
+**2026-10-21:** every s/step, tok/s, VRAM and day-count figure in this post has been re-measured against the current code and updated — 14.385 to 13.294 s/step, 2,278 to 2,464 tok/s, 5.31 GB to 5.24 GB peak, and the day estimate from 154-246 to 142-227. The **--offload** plus tied-embeddings compatibility question raised earlier is confirmed fixed and current — the config above uses tied embeddings together with offload without issue.
 
 **License**
 
