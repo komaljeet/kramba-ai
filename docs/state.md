@@ -5,6 +5,13 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Open: 80W to 120W GPU power limit is an untested lead (2026-11-05)
+
+`nvidia-smi` reports a default limit of 80 W and a max of 120 W, with the current limit
+`[N/A]`. Power draw under training load has never been logged, so the real headroom is
+unknown and could be zero. Log `power.draw` and `clocks.gr` during a real run before calling
+this a lever.
+
 ## Real GPU-only (no BCD/offload) VRAM ceiling measured: ~340M, not ~1.1B (2026-10-24)
 
 **One line: on this 6GB card, with the current full stack (ternary, tied embeddings,
@@ -33,21 +40,23 @@ default (**Muon**, since #129). Muon's optimizer state is heavier, and #157's ow
 already showed `muon, no BCD, no offload: OOM` at 1.1B -- the real ceiling with the
 optimizer this project actually trains with is much smaller than Adafactor's.
 
-**BCD+offload's real contribution at 6GB: ~4.6x model-size multiplier** (1.58B with
-BCD+offload vs ~340M without, same card, same stack otherwise).
+**BCD+offload's real contribution at 6GB: roughly 4x model size** (1.58B at about 99% of
+the card with BCD+offload, vs between 378M at 96% and 459M at 108% without). Corrected
+2026-11-05: this first said ~4.6x, which compared that near-full point against the 85% point.
 
 **Found a real bug along the way, filed separately (#182):** `pre_training_audit()`'s
 Check 2 and Check 3 each build a SECOND full-precision model copy and move it onto GPU,
 already known to OOM at large sizes under `--block-coordinate` (guarded, cites #112) but
 NOT guarded when BCD is off -- this OOM'd before the real training loop even started at
-d_model>=1920, looking exactly like a training-loop failure. Bypassed for this
+d_model=2048, looking exactly like a training-loop failure. Bypassed for this
 measurement by monkeypatching `pre_training_audit` to a no-op; real fix tracked in #182.
 
-## Scan-kernel FP8 quantization: rejected, 5-18x worse error (2026-10-24)
+## Scan-kernel FP8 quantization: rejected, up to 6-18x worse error (2026-10-23)
 
 **One line: quantizing the DeltaNet recurrent state to FP8 (the same kind of fused
-quantizer that won for `--fp8-linear`) does not work for the scan -- 5-18x worse
-numerical error than the current bf16 path, measured, not assumed.**
+quantizer that won for `--fp8-linear`) does not work for the scan -- up to 6-18x worse
+numerical error than the current bf16 path in a simulation, with no speed gain unless it
+is done every step.**
 
 Scan is 26.6% of step time at the current (FP8-enabled) kernel profile
 (`_mk_bwd_kernel_s` 12.3%, `_gated_delta_fwd_kernel_s` 10.2%, `_mk_ckpt_kernel_s` 4.1%) --
@@ -57,11 +66,17 @@ Numerical simulation (`torch.float8_e4m3fn`, real amax/scale quantization matchi
 project's actual quantizer convention) of quantizing the recurrent state every 1/8/64
 steps across a full 4096-token sequence at the trained decay regime (alpha=0.95):
 
-| quantize every | relative error vs current bf16 path |
-|---:|---:|
-| 1 step | ~7-8% (bf16 baseline: ~0.4-0.5%) |
-| 8 steps | similar order |
-| 64 steps | ~2.5% |
+| quantize every | error right after quantizing (step 4096) | error at step 4000 |
+|---:|---:|---:|
+| 1 step | 7.58% | 8.35% |
+| 8 steps | 3.36% | 3.43% |
+| 64 steps | 2.52% | 0.26% (32 steps after the last quantize) |
+| bf16 every step (baseline) | 0.42% | 0.46% |
+
+Re-run on CPU 2026-11-05. The state and inputs are random (d=32, alpha=0.95, random k/v), not
+a trained model. Sparse quantizing recovers between quantizes, but then the state stays in
+higher precision most of the time, so it gains no speed. Corrected 2026-11-05: the 8-step row
+first said "similar order" with no number.
 
 **Why it fails where `--fp8-linear` won.** The Linear-layer FP8 win has a reset point --
 each GEMM starts fresh from its own input. The DeltaNet state feeds back into itself

@@ -26,7 +26,7 @@ Every row is a real measured number, not a guess — wins and rejected ideas bot
 | 2026-07-12 | Vanilla full AdamW VRAM cost measured | — | 16.8 bytes/param — 1B needs ~16.8GB, 3x over this 6GB card |
 | 2026-07-12 | Block-coordinate-descent, BCD | 268M: 6.9GiB; 1.04B: hard OOM | 268M: 4.2GiB (-39%); 1.04B: **runs** |
 | 2026-07-12 | Grad-checkpoint stacked on BCD | 1.04B still spilling past 6GB | 4.6GiB peak, clean fit, no spill |
-| 2026-07-24 | Audit double-copy OOM found | looked like BCD itself failing | root cause found, fixed, skipped under BCD — **recurred today, same bug class** |
+| 2026-07-24 | Audit double-copy OOM found | looked like BCD itself failing | root cause found, fixed, skipped under BCD — **recurred 2026-10-24 with BCD off, same bug class** |
 | 2026-07-24 | BCD stacked with `torch.compile` | hoped it would help | 6.73 vs 4.41 s/step — **slower**, recompiles every block switch |
 | 2026-08-02 | Mixture-of-Experts FFN | dense baseline | -11.8% loss but 1.91x compute cost — **rejected** |
 | 2026-08-03 | GHOST phase-transition detector | claimed real phase transitions | 0 real transitions found; fires on pure noise too — **rejected** |
@@ -42,7 +42,7 @@ Every row is a real measured number, not a guess — wins and rejected ideas bot
 | 2026-08-11/12 | Megakernel scan search, 12 designs | chunk-parallel Design A hoped faster | A: **1.5-4x slower, dead**. B (blockwise backward): **~1.05x win, kept** |
 | 2026-08-14 | Adafactor, no BCD/offload, at 1B | BCD+offload: 4.68 s/step | spills to 9.42GiB, 48.50 s/step — **10.4x slower** |
 | 2026-08-17 | Chunked cross-entropy | 1.21B/seq4096: spilling (103%) | **fits (73%)** |
-| 2026-08-27 | Tensor-train projections | dense 8.05M params @ d=896 | **3.96x fewer params**, 1.05x step time, quality not yet gated |
+| 2026-08-27 | Tensor-train projections | dense 8.05M params @ d=896 | **3.96x fewer params**, 1.05x step time, quality not gated here; an earlier test at half the params was 22% worse |
 | 2026-09-29 | BCD balanced block partition | layer partition (one oversized slot) | **41% of the full-vs-BCD quality gap closed** |
 | 2026-10-12 | Fused DeltaNet glue + prefetch + offload overlap | baseline | **+10.2%, +3.8%, +8.7%** stacked |
 | 2026-10-14 | Four ternary micro-fusions | baseline | **+0.8%, +0.9%, +3.7%, +3.5%** |
@@ -51,15 +51,15 @@ Every row is a real measured number, not a guess — wins and rejected ideas bot
 | 2026-10-17 | Four bit-identical kernel fusions | 14.385 s/step | **13.294 s/step, -5.7%** |
 | 2026-10-22/23 | `--fp8-linear`, real FP8 tensor cores | 13.294 s/step | **12.335 s/step confirmed, -7.81%** (2,464 → 2,656 tok/s) |
 | 2026-10-23 | `--num-workers` 4 → 2 | 7.16GB peak resident RAM | **~1.1GB RAM saved, zero throughput cost** |
-| 2026-10-24 | Scan-kernel FP8 quantization (revisited) | bf16 path: ~0.4-0.5% error | **5-18x worse error — rejected** (no reset point in the recurrent state) |
-| 2026-10-24 | Real GPU-only (no BCD/offload) ceiling, current stack | assumed ~700M-1.1B (stale Aug extrapolation) | **measured ~340M** (85% of card) |
-| 2026-10-24 | Audit double-copy OOM recurs | looked like the training loop itself failing | same bug class as the July one — fix in progress |
+| 2026-10-23 | Scan-kernel FP8 quantization (revisited) | bf16 path: ~0.4-0.5% error (simulated) | **up to 6-18x worse error right after quantizing, no speed gain unless done every step — rejected** |
+| 2026-10-24 | Real GPU-only (no BCD/offload) ceiling, current stack | assumed ~700M-1.1B (stale Aug extrapolation) | **measured ~340M** at 85% of card; ~378M at 96% |
+| 2026-10-24 | Audit double-copy OOM recurs | looked like the training loop itself failing | same bug class as the July one — fixed |
 
 **Overall, same hardware:** 21.81 s/step → **12.335 s/step** (-43%), 1,579 → **2,656 tok/s**, 375 days → **132-211 days** for a real 1.1B pretrain. BCD's own quality cost: about 4x worse perplexity than full training → **about 1.6x** (balanced partitioning).
 
 Also rejected, real but without a pinned date in the log above: the original HVN architecture lost by 13% at equal data vs. the gated DeltaNet that replaced it; looped/weight-shared models (3 layers x 4 passes lost to 12 real layers by 11x the noise floor); sequence-length curriculum (2.9% slower, fights occupancy on 20 SMs); per-token entanglement rate (no gain at 83M); entropy-gated early exit (does not work).
 
-**Before / after — same hardware, one week of real fixes (2026-08 to 2026-10)**
+**Before / after — same hardware, real fixes (2026-08 to 2026-10)**
 
 | | August 2026 | October 2026 (now) |
 |---|---|---|
@@ -84,33 +84,33 @@ The BCD quality row is easy to miss but matters as much as the speed numbers: th
 
 I looked everywhere to be able to **pre-train** an LLM on my low-end GPU and could not find one. Everywhere I looked, the same conclusion was reached: "You need an A100", "You can only train a 20M toy model on your hardware". So being 'broke', I did the only thing I could do — subscribe to Claude and try to find a way... after much prompting and testing, I finally stitched together the stack that allowed me to **pre-train** a 1B LLM on my laptop. After much testing, we are at **100.6% of the card's measured GEMM peak** (I don't know how 100.6% is even possible, I'm not a scientist, just a broke guy).
 
-Though I can **pre-train** a 1B LLM on 6 GB VRAM, it still takes about **142 days** (accepting block-coordinate descent's own quality cost as measured) or **about 227 days** (if you want the output to match full-training quality instead) to finish **pretraining** it properly — down from 375 days measured in August, after real speed and quality fixes landed since. More details below.
+Though I can **pre-train** a 1B LLM on 6 GB VRAM, it would still take about **132 days** (accepting block-coordinate descent's own quality cost as measured) or **about 211 days** (if you want the output to match full-training quality instead) to finish **pretraining** it properly — down from 375 days measured in August, after real speed and quality fixes landed since. More details below.
 
 **What This Means for Your GPU (Projected VRAM Ceilings — Extrapolated, Not Measured)**
 
-**Only the 6 GB row below is measured.** All other rows are linear extrapolation from the 6 GB ceiling (about 1.58B) assuming fixed-ratio savings. Real VRAM ceilings will vary by GPU architecture, WDDM behavior, and batch size — treat the rest as upper-bound estimates.
+**Only the 6 GB memory ceiling below is measured. Its day count is projected from measured speed, because no full run has finished.** All other rows are linear extrapolation from the 6 GB ceiling (about 1.58B) assuming fixed-ratio savings. Real VRAM ceilings will vary by GPU architecture, WDDM behavior, and batch size — treat the rest as upper-bound estimates.
 
 The stack scales with VRAM. On a 6 GB card we measured about a 1.58B ceiling. Here's what the same stack projects for larger cards (linear extrapolation from measured points, stopping at first WDDM spill):
 
 | GPU VRAM | Max Model (Recurrent Hybrid) | Max Model (Plain Transformer) | Pretrain Time (Chinchilla) |
 |----------|------------------------------|-------------------------------|----------------------------|
-| **6 GB** (RTX 4050 laptop) | **about 1.58B** | **about 1.58B** | about 132-211 days @ 1.1B (was about 375, Aug measurement) |
-| **8 GB** (RTX 3070/4060 laptop) | **about 2.2B** | **about 2.2B** | ~~about 61-97 days @ 1.5B~~ about 246-392 days (floor — see note) |
-| **12 GB** (RTX 3060/4070) | **about 3.5B** | **about 3.5B** | ~~about 28-45 days @ 2.5B~~ about 682-1,090 days (floor — see note) |
-| **16 GB** (RTX 4080) | **about 4.8B** | **about 4.8B** | ~~about 15-24 days @ 3.5B~~ about 333-532 days (spec-based, see note) |
-| **24 GB** (RTX 3090/4090) | **about 7.5B** | **about 7.5B** | ~~about 6-11 days @ 5B~~ about 401-1,490 days (spec-based, see note) |
+| **6 GB** (RTX 4050 laptop) | **about 1.58B** | **about 1.58B** | about 132-211 days @ 1.1B, projected (was about 375 in August) |
+| **8 GB** (RTX 3070/4060 laptop) | **about 2.2B** | **about 2.2B** | ~~about 61-97 days @ 1.5B~~ up to about 246-392 days @ 1.5B (upper limit, see note) |
+| **12 GB** (RTX 3060/4070) | **about 3.5B** | **about 3.5B** | ~~about 28-45 days @ 2.5B~~ up to about 682-1,090 days @ 2.5B (upper limit, see note) |
+| **16 GB** (RTX 4080) | **about 4.8B** | **about 4.8B** | ~~about 15-24 days @ 3.5B~~ about 333-532 days @ 3.5B (rough guess, see note) |
+| **24 GB** (RTX 3090/4090) | **about 7.5B** | **about 7.5B** | ~~about 6-11 days @ 5B~~ about 401-1,490 days @ 5B (rough guess, see note) |
 
 **Corrected (2026-10-24):** those four day-counts were wrong, and wrong in the direction that makes bigger GPUs look better than they are. They were made by taking the measured 6 GB/1.1B time and rescaling it by a flat percentage whenever that number moved. That assumes training time stays proportional to model size — it doesn't. Compute cost grows close to the *square* of parameter count (a bigger model also needs more training tokens, not just more FLOPs per token), so a 5B model does not train faster than the measured 1.1B model just because the card has more VRAM. Caught this by sanity-checking a reader's "7.5B on a 3090 in 6-11 days" reading of this row.
 
-All four still scale time by the square of the model size off the real 132/211-day, 1.1B anchor — that part doesn't change. What changed from the first fix: the 16 GB and 24 GB rows are no longer "same speed as this laptop" floors. This laptop's GPU is the specific RTX 4050 Laptop GPU in the specs table above, power-limited to 120 W, which public spec pages put at a 2,370 MHz boost clock on 2,560 CUDA cores. Cross-checked against the RTX 4080 and RTX 4090's own published dense FP16 Tensor-core TFLOPS (194.9 and 330, which independently back out the same Ada tensor-core-per-clock constant to 3 decimal places — a good sign those two numbers are real), that puts this laptop's own tensor throughput at about 48.5 TFLOPS dense FP16. Dividing: the RTX 4080 is about 4.0x faster, the RTX 3090 about 2.9x, the RTX 4090 about 6.8x. That is where 333-532 days (4080) and 401-1,490 days (3090 to 4090 spread) come from — real spec sheets, not a guess, though still not a benchmark on this actual stack, so treat it as a solid estimate, not a measurement.
+All four still scale time by the square of the model size off the real 132/211-day, 1.1B anchor — that part doesn't change. What changed from the first fix: the 16 GB and 24 GB rows no longer assume "same speed as this laptop". This laptop's GPU is the specific RTX 4050 Laptop GPU in the specs table above, power-limited to 120 W, which public spec pages put at a 2,370 MHz boost clock on 2,560 CUDA cores. Scaling from the published dense FP16 Tensor-core TFLOPS of the RTX 4080 and RTX 4090 (194.9 and 330) gives a calculated figure of about 48.5 TFLOPS for this laptop. Dividing published figures by that gives: RTX 4080 about 4.0x faster, RTX 3090 about 2.9x (142 TFLOPS), RTX 4090 about 6.8x. That is where 333-532 days (4080) and 401-1,490 days (3090 to 4090 spread) come from. **Treat these as rough guesses.** The 48.5 is a calculated peak, while the peak actually measured on this laptop is 25.6 TFLOP/s, and none of these cards has run this stack.
 
-The 8 GB and 12 GB rows (RTX 3070/4060 Laptop, RTX 3060/4070) are still the same-speed floor, not spec-based — the public tensor-TFLOPS figures for those four chips disagreed with each other on methodology (shader rate vs. tensor rate, which accumulate type) enough that turning them into a number would mean guessing which source to trust, the same mistake this whole correction started from. Old numbers struck through and kept rather than deleted, so the mistake stays visible.
+The 8 GB and 12 GB rows (RTX 3070/4060 Laptop, RTX 3060/4070) assume the bigger card runs no faster than this laptop. Real cards should be faster, so these numbers are upper limits on time, not floors as an earlier version of this post said. The public tensor-TFLOPS figures for those four chips disagreed on method (shader rate vs. tensor rate, which accumulate type), so no speedup is applied to them. Old numbers are struck through and kept rather than deleted, so the mistake stays visible.
 
 Key insight: the 6.5x multiplier (standard script to this stack) applies at every VRAM tier because the savings are proportional. BCD saves about 8x optimizer state (scales with params). Offload moves inactive blocks to CPU (scales with depth). Ternary gives 2.33x weight compression (fixed ratio). Tied embeddings save 103M params at 1B (fixed absolute). Chunked loss saves about 1.5 GB at 4K context (fixed absolute).
 
 The ceiling is linear in VRAM because the dominant terms (weights + optimizer state) scale with model size, and our techniques compress them by fixed ratios. A 24 GB card doesn't just fit "a bit more" — it fits about 5x the parameters of a 6 GB card.
 
-What changes at larger VRAM: you can drop **--offload** (no PCIe bottleneck) for about a 20% speedup; you can increase **--batch-size** for better GPU utilization; you hit the compute wall sooner (matmuls at 100% ceiling); and at 24 GB, a 7B pretrain is about 18 days — actually finishable.
+What changes at larger VRAM: you can drop **--offload** (no PCIe bottleneck) for about a 20% speedup; you can increase **--batch-size** for better GPU utilization; you hit the compute wall sooner (matmuls at 100% ceiling); ~~and at 24 GB, a 7B pretrain is about 18 days — actually finishable~~ (retracted 2026-11-05: same scaling mistake as the old table above; by the same rough method, even 5B takes over a year on an RTX 4090).
 
 **The Headline Numbers (Measured on RTX 4050 6 GB)**
 
@@ -217,7 +217,7 @@ The largest consumer is not the model — it's the cross-entropy over the vocabu
 
 A 1B model ran at about 1,100 tokens/sec here in August; **2,656 tok/s confirmed 2026-10-23** with the FP8 matmul lever. Pretraining one properly still needs roughly 30 billion-plus tokens — **about 132-211 days** now, down from 375, depending on how you count block-coordinate descent's own quality cost. The ceiling this stack raises is what you can hold; the wall it does not touch is arithmetic — just a smaller wall than it was in August.
 
-Why 375 days (now 142)? The card was first timed on the one thing it does best (GEMM) to find its real speed — not the number on the box. Then a pretraining step was broken into parts:
+Why 375 days (now 132-211)? The card was first timed on the one thing it does best (GEMM) to find its real speed — not the number on the box. Then a pretraining step was broken into parts:
 
 | Part of One Training Step | Share | How Close to Limit? |
 |---------------------------|-------|---------------------|
