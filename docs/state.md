@@ -5,6 +5,15 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Audit's Check 2 leaked its model copy, making Check 3 skip at 304M: fixed (2026-11-05)
+
+Check 2's local `loss` kept its autograd graph alive, and the graph kept every parameter of
+the deepcopy alive, so `del audit_model` freed nothing. At 304M that held 1.13 GiB after
+Check 2 and cut the room Check 3 saw from 3.23 to 2.04 GB, against the 2.27 GB it needs.
+With the leak fixed, the real 304M config runs Check 3 and it passes. The leak ended when the
+audit returned, so training speed and VRAM during training were never affected. The first
+audit in a process also allocates about 16 MiB once, so the regression test measures a second run.
+
 ## Open: 80W to 120W GPU power limit is an untested lead (2026-11-05)
 
 `nvidia-smi` reports a default limit of 80 W and a max of 120 W, with the current limit
