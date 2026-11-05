@@ -2743,6 +2743,8 @@ def pre_training_audit(
             all_passed = False
         finally:
             # Free the throwaway copy's VRAM before training allocates activations.
+            # `loss` must go too: its graph keeps every parameter of the copy alive.
+            loss = None
             del audit_model
             torch.cuda.empty_cache()
 
