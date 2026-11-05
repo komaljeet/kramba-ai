@@ -18,23 +18,23 @@ fine for games and a joke for anything people call "AI."
 So I didn't do the sensible thing. I opened Claude and started asking: is that actually
 true, or is it just what everyone assumes because nobody's tried hard to make it not true?
 
-It took weeks. It is not a joke anymore. The training pipeline — building a real 1.1
+It took months. It is not a joke anymore. The training pipeline — building a real 1.1
 billion parameter model, running real steps, saving a checkpoint, killing the process and
 resuming it correctly — works, start to finish, on that same 6GB laptop GPU. I want to be
 precise about what that does and doesn't mean: nobody, including me, has sat through an
 entire training run yet. A full run takes months, not hours, so "it works end to end"
 means the machinery is correct and measured, not that a finished model is sitting on my
-disk. Every number below is something I actually watched happen on my own machine, over
-real measured stretches of training — not a finished model, and not a projection dressed
-up as one.
+disk. Speed and memory numbers below were measured on my own machine over real stretches
+of training. Day counts and numbers for other cards are projections, and I say so where
+they appear.
 
-Here's the honest before-and-after, same laptop, from the first working version to now:
+Here's the honest before-and-after, same laptop, from August 2026 to now:
 
-| | First working version | Now |
+| | August 2026 | Now |
 |---|---|---|
 | Time for one training step | 21.81 seconds | **12.335 seconds** (-43%) |
 | Tokens processed per second | 1,579 | **2,656** |
-| Estimated time for a full pretrain | about 375 days | **about 132-211 days** |
+| Projected time for a full pretrain | about 375 days | **about 132-211 days** |
 | Peak memory used | 4.51 GB of 6 GB | **5.24 GB of 6 GB** |
 
 That "132-211 days" range, not a single number, is itself an honest admission: the cheap
@@ -50,9 +50,10 @@ gradient), and a running history of how it's been moving (the optimizer's memory
 updates) — and on top of the model itself, there's the scratch space for the actual
 calculation as it works through a chunk of text.
 
-Add all that up with no tricks at all, and a billion-parameter model needs somewhere
-around 16-17 times its own weight in GPU memory. A 6GB card can hold maybe 350-400 million
-parameters that way. Not 1.1 billion. Not close.
+Add all that up with no tricks at all, and training needs about 16.8 bytes of GPU memory
+per parameter, so a billion-parameter model needs about 16.8GB. On this 6GB card, with a
+standard training script, I measured a 243 million parameter model fitting and a 434 million
+one spilling over. Not 1.1 billion. Not close.
 
 This is the real reason "you need an A100" is the standard advice: it's true if you train
 the obvious way. Everything that follows is about not training the obvious way.
@@ -85,8 +86,8 @@ surprised the model is by real text — lower is better) compared to training ev
 once with the same data and the same time. It used to cost about 4x worse, until I found
 a dumb inefficiency in how the blocks were split up — one of them was sized to fit the
 vocabulary table and ended up way bigger than the others, which wasted memory that could
-have gone to training more of the model live at once. Fixing that split cut the quality
-cost by more than half. It's still a real cost, not a free lunch, and I'd rather say that
+have gone to training more of the model live at once. Fixing that split brought the cost
+down from about 4x to about 1.6x. It's still a real cost, not a free lunch, and I'd rather say that
 plainly than let anyone think this is a trick with no tradeoff.
 
 ## Idea two: shrink the weights themselves
@@ -151,7 +152,7 @@ first result is still sitting right there; moving data around in the order the h
 actually likes instead of the order that was easiest to write first.
 
 None of these individually sound like much. Stacked together, over weeks, they're a big
-part of why the step time came down by more than 40% since the very first working version.
+part of why the step time came down by more than 40% since August.
 The lesson I keep re-learning: "I think there's nothing left to speed up" has been wrong
 multiple times in a row now. I try to say it a lot less confidently these days.
 
@@ -169,9 +170,8 @@ so training could react to it — it never found a real jump. Every "detection" 
 pure random noise, which means it wasn't detecting anything at all.
 
 Compiling the model with PyTorch's automatic compiler, which usually speeds things up —
-here it made things more than twice as slow, every single time I tried it, because this
-particular architecture recompiles itself constantly in a way that eats the benefit. I
-stopped trying it a while ago.
+here it made things more than twice as slow, every single time I measured it. I stopped
+trying it a while ago.
 
 Teaching the model to read exact facts out of provided text turned out to need a
 completely different ability than holding a fluent conversation. The chat-tuned model
@@ -180,64 +180,55 @@ to recall something specific from a document it was just given is a separate, mu
 skill — fluency and grounded recall are not the same thing, and I'd misjudged how much one
 implies the other.
 
-And one I'll be fully honest about because it happened a few hours before I wrote this:
-I tried to work out how much faster a nicer graphics card would make all of this, and I
-got it wrong — twice, in two different ways, before getting a defensible number. The first
-mistake assumed a much bigger card would run at exactly the same speed as this laptop's,
-which badly understated it. The second mistake, trying to correct the first, used a lazy
-shortcut — just scaling an old percentage — that implied a 24GB desktop card could train a
-5-billion-parameter model in about a week, which is backwards: bigger models need more
-compute, not less, so they should always take longer on the same hardware, never less time.
-The real, carefully worked-out answer is that a strong desktop card would cut the time
-down meaningfully — from months to something more like a few weeks for a model this size —
-but nothing close to days. I'm leaving this paragraph in instead of quietly fixing the
-numbers and moving on, because getting caught, correcting it in public, and explaining
-exactly where the reasoning broke is more useful to anyone reading this than pretending it
-never happened.
+And one I'll be fully honest about: I tried to work out how much faster a nicer graphics
+card would make all of this, and I got it wrong more than once. The first version used a
+lazy shortcut — just scaling an old percentage — that implied a 24GB desktop card could
+train a 5-billion-parameter model in about a week. That's backwards: a bigger model needs
+much more compute. The second version assumed a bigger card would run at exactly the same
+speed as this laptop, which badly overstated the time. The current version uses spec sheets,
+and it is still only a rough guess: for a model this size, somewhere around three weeks to
+two and a half months on a strong desktop card, not days. Nobody has run this stack on one
+of those cards. I'm leaving this paragraph in because explaining where the reasoning broke
+is more useful than pretending it never happened.
 
 ## So what does this actually get you?
 
 On this laptop's 6GB graphics card, right now: a 1.1 billion parameter model trains
 cleanly, using about 5.2GB of the card's 6GB — close to full, but not spilling over. It
-processes a little over 2,600 words' worth of tokens per second. A full, proper training
-run — enough real text for the model to actually learn something, not just memorize a
-small sample — takes somewhere between four and a half and seven months, depending
+processes a little over 2,600 tokens per second. A full, proper training run — enough real
+text for the model to actually learn something, not just memorize a small sample — is
+projected to take somewhere between four and a half and seven months, depending
 on whether you're willing to accept the one-block-at-a-time quality cost described above
 or insist on matching full-quality training exactly.
 
 That's not fast. It's genuinely possible, on hardware nobody expected to be capable of it,
-which is the whole point. If I had a stronger desktop card instead of this laptop, the
-same training would very plausibly come down to a handful of weeks rather than months
-— real spec sheets for current high-end desktop cards suggest something like four to
-seven times faster raw number-crunching than this laptop chip, even before accounting for
-not needing as many of these memory tricks in the first place.
+which is the whole point. A stronger desktop card should be faster. Spec sheets suggest
+very roughly three to seven times the raw number-crunching of this laptop chip, which is
+where the guess of three weeks to two and a half months comes from. That is not a
+measurement.
 
-Without any of these techniques at all — the straightforward way everyone recommends — this
-same 6GB card tops out somewhere around a 350-400 million parameter model, and that's before
-even trying to make it fast. The techniques here are roughly a 4-to-5x jump in how big a
-model fits in the same amount of memory, which is the actual headline: it's not about
-making training faster so much as making it possible in the first place on hardware this
-small.
+With a standard training script, this same 6GB card fits about 243 million parameters. With
+this stack, it fits about 1.58 billion. That's roughly a 6.5x jump in how big a model fits
+in the same amount of memory, which is the actual headline: it's not about making training
+faster so much as making it possible in the first place on hardware this small.
 
-Only the 6GB row below is something I actually measured — the rest is a straight-line
-projection from that one real point, assuming the same savings hold at bigger sizes. Treat
-it as a reasonable guess for other cards, not a promise:
+Only the 6GB memory ceiling below is measured. Everything else is a projection, so treat it
+as a guess for other cards, not a promise. The time column is for a smaller model than the
+biggest one that fits, so don't read across a row as "this size in this time":
 
 | Card's VRAM | Biggest model that fits | Rough pretrain time |
 |---|---|---|
-| **6GB** (what I have) | **~1.58B — measured** | **132-211 days — measured** |
-| 8GB | ~2.2B | a floor guess, same speed as this laptop: 246-392 days |
-| 12GB | ~3.5B | a floor guess, same speed as this laptop: 682-1,090 days |
-| 16GB | ~4.8B | real desktop-card specs say roughly 333-532 days |
-| 24GB | ~7.5B | real desktop-card specs say roughly 401-1,490 days |
+| **6GB** (what I have) | **~1.58B — measured** | 132-211 days for 1.1B, projected from measured speed |
+| 8GB | ~2.2B | up to 246-392 days for 1.5B |
+| 12GB | ~3.5B | up to 682-1,090 days for 2.5B |
+| 16GB | ~4.8B | rough guess: 333-532 days for 3.5B |
+| 24GB | ~7.5B | rough guess: 401-1,490 days for 5B |
 
 Two honest caveats on that table. First, "biggest model that fits" past the 6GB row is a
 simple ratio, not a measurement — nobody's run this on an 8, 12, 16, or 24GB card yet.
-Second, the time estimates for the 8 and 12GB rows assume that bigger card runs at the
-exact same speed as this laptop chip, which is almost certainly too pessimistic — I just
-don't have reliable enough public specs for those specific chips to say by how much. The
-16 and 24GB rows use real published numbers for those cards instead, which is why they
-look more confident.
+Second, the 8 and 12GB times assume that bigger card runs no faster than this laptop, so
+they are upper limits. The 16 and 24GB times use published spec-sheet numbers, but they
+compare those against a calculated figure for this laptop, not a benchmark.
 
 ## After pretraining: turning it into something that talks back
 
@@ -274,17 +265,16 @@ call a "win" above might partly be luck; where that matters, the full writeup sa
 
 ## The full timeline, for the record
 
-Everything above is the story. This is the same project's complete measured history,
-dated, every real win and every rejected idea, so nothing in the story above is taking
-your word for it — or mine. "Before" and "After/Verdict" are what changed, or why an idea
+Everything above is the story. This is the project's main measured history, dated, wins
+and rejected ideas both. "Before" and "After/Verdict" are what changed, or why an idea
 died.
 
 | Date | What was tried | Before | After / Verdict |
 |---|---|---|---|
-| 2026-07-12 | How much memory normal training needs | — | 16.8x the model's own weight — 1B needs ~16.8GB, 3x over this 6GB card |
+| 2026-07-12 | How much memory normal training needs | — | 16.8 bytes per parameter — 1B needs ~16.8GB, 3x over this 6GB card |
 | 2026-07-12 | Train one block at a time | 268M: 6.9GB; 1.04B: hard crash | 268M: 4.2GB (-39%); 1.04B: **runs** |
 | 2026-07-12 | Recompute instead of storing activations | 1.04B still spilling past 6GB | 4.6GB peak, clean fit, no spill |
-| 2026-07-24 | A startup check that doubled memory use | looked like block-training itself failing | root cause found, fixed for that case — the same bug resurfaced today in a slightly different form |
+| 2026-07-24 | A startup check that doubled memory use | looked like block-training itself failing | root cause found, fixed for that case — the same bug resurfaced in October in a slightly different form |
 | 2026-07-24 | Combining block-training with PyTorch's auto-compiler | hoped it would help | slower, and it recompiles on every block switch |
 | 2026-08-02 | Splitting the "thinking" layer into specialist sub-pieces | dense baseline | better loss, but 1.91x the compute cost — **rejected** |
 | 2026-08-03 | Auto-detecting a sudden jump in ability | claimed real jumps | 0 real jumps found; fired on pure noise too — **rejected** |
@@ -300,8 +290,8 @@ died.
 | 2026-08-11/12 | A faster scan calculation, 12 different designs tried | one design hoped to be faster | that one: **1.5-4x slower, dead**. A different design: **a real, small, kept win** |
 | 2026-08-14 | A leaner optimizer as a substitute for block-training | block-training: fast and clean | spilled past the card anyway, **10x slower** |
 | 2026-08-17 | Computing the loss in smaller pieces instead of all at once | a large model spilling past the card | **fits cleanly instead** |
-| 2026-08-27 | A different way to compress certain weight matrices | — | **4x fewer parameters** there, same speed, quality not yet fully checked |
-| 2026-09-29 | Fixing how blocks get split up for block-training | one lopsided split wasting memory | **cut the block-training quality cost by more than half** |
+| 2026-08-27 | A different way to compress certain weight matrices | — | **4x fewer parameters** there, about the same speed, quality not checked here; an earlier test at half the parameters was 22% worse |
+| 2026-09-29 | Fixing how blocks get split up for block-training | one lopsided split wasting memory | **closed 41% of the quality gap with full training** |
 | 2026-10-12 | Combining several small internal calculations into one, three separate times | baseline | each a real few-percent win, stacked together |
 | 2026-10-14 | Caching the three-value weight conversion instead of redoing it | baseline | four small real wins, stacked |
 | 2026-10-15 | Combining a normalization step into the surrounding calculation | original baseline | a real step-time cut, measured honestly against the true original baseline |
@@ -309,14 +299,14 @@ died.
 | 2026-10-17 | Four more small calculation-combining wins | before this batch | **a real, further 5.7% cut** |
 | 2026-10-22/23 | Doing the biggest matrix multiplication in the lowest-precision tensor format | before this change | **confirmed 7.81% faster**, answers unaffected |
 | 2026-10-23 | Using fewer data-loading worker processes | 7.16GB of RAM in use | **about 1.1GB saved, free, no slowdown** |
-| 2026-10-24 | Trying the lowest-precision format on the recurrent calculation too | normal path: small, safe error | **5-18x worse error — rejected** (this calculation has no natural reset point, unlike the one that won above) |
-| 2026-10-24 | Measuring, for real, how big a model fits with everything except block-training | assumed around 700M-1.1B from an old estimate | **measured ~340M** — the old estimate used the wrong optimizer as its stand-in |
+| 2026-10-23 | Trying the lowest-precision format on the recurrent calculation too | normal path: small error in a simulation | **up to 6-18x worse error right after converting, and no speed gain unless done every step — rejected** |
+| 2026-10-24 | Measuring, for real, how big a model fits with everything except block-training | assumed around 700M-1.1B from an old estimate | **measured ~340M** at 85% of the card, ~378M at 96% — the old estimate used the wrong optimizer as its stand-in |
 | 2026-10-24 | The startup double-memory check, again | looked like the real training loop failing | same underlying bug as the July one, just the other half of it — fixed |
 
 A few more real rejected ideas that don't have an exact date pinned down: an earlier,
 "novel" version of the core architecture, which turned out to simply lose to the published
-design it was replaced with; training several smaller copies of a layer and averaging
-them, which lost badly to just having more real layers; gradually growing the training
+design it was replaced with; reusing the same few layers several times over, which lost
+badly to just having more real layers; gradually growing the training
 sequence length, which fought the hardware instead of helping it; and a scheme to let the
 model stop computing early on easy tokens, which never worked.
 
