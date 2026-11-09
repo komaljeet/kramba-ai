@@ -1,0 +1,321 @@
+"""Does a local loss per BCD block keep quality while skipping the layers after it?
+
+Under block-coordinate descent only one block trains per step, but the loss sits
+at the end, so every step still runs the frozen layers after the active block
+forward and backpropagates through them. bcd_balanced_local instead puts the
+model's own final_norm + decoder (shared and frozen while a middle block trains)
+right after the active block, scores the loss there, and never runs the layers
+after it. The embedding block and the last block keep the normal end-to-end loss.
+
+The risk is quality: a feature that is only useful to a later layer gets no
+signal. Deep supervision already collapsed recall to 0% in this project, so this
+measures in-context copying as well as held-out loss.
+
+Arms (identical seed, batches, LR schedule; all use the same model):
+  full                no BCD (quality reference, more memory)
+  bcd_balanced        today's production BCD
+  bcd_balanced_local  bcd_balanced + local loss for middle blocks
+
+Guards against a vacuous result:
+  * known-answer: the manual forward used by the local arm must match
+    model(x) when run to the last layer, or nothing it measures means anything.
+  * bcd_balanced must trail full by a real margin, or there is no gap to judge.
+  * every parameter must move in every BCD arm.
+  * the copy test only counts if the full arm learned to copy; otherwise its
+    verdict is VOID rather than "no difference".
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import sys
+import time
+from typing import Dict, List, Optional, Sequence
+
+import torch
+import torch.nn as nn
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from scripts.ab_prodigy import (                                   # noqa: E402
+    as_pair, enable_scan_flags, evaluate, require_cuda,
+)
+from hvn.core.block_coordinate import BlockCoordinateScheduler     # noqa: E402
+from hvn.edge.ternary import apply_ternary_to_model                # noqa: E402
+from hvn.optimizers import build_optimizer                         # noqa: E402
+
+ARMS = {"full": (None, False), "bcd_balanced": ("balanced", False),
+        "bcd_balanced_local": ("balanced", True)}
+COPY_LEN = 128      # random tokens, then the same tokens again
+COPY_SEQS = 32
+
+
+def build(args, device, grad_checkpoint=False):
+    from hvn.edge.model import EdgeHVN
+    plan = ["deltanet"] * args.num_layers
+    for i in args.attn_layers:
+        plan[i] = "transformer"
+    model = EdgeHVN(
+        vocab_size=args.vocab_size, d_model=args.d_model, num_layers=len(plan),
+        n_heads=args.n_heads, block_plan=plan, attn_window=args.seq_len,
+        tie_embeddings=True, dropout=0.0, grad_checkpoint=grad_checkpoint,
+    ).to(device)
+    linears = {n for n, m in model.named_modules() if isinstance(m, nn.Linear)}
+    exclude = ("beta_proj", "alpha_proj", "decoder")
+    apply_ternary_to_model(
+        model, target_names=[n for n in linears if not any(p in n for p in exclude)])
+    enable_scan_flags(model)
+    return model
+
+
+def forward_to(model, input_ids, last: int):
+    """Embedding, blocks[0..last], then the shared final_norm + decoder."""
+    S = input_ids.shape[1]
+    pos = torch.arange(S, device=input_ids.device).unsqueeze(0).expand(input_ids.shape[0], -1)
+    x = model.token_embedding(input_ids)
+    for block in model.blocks[:last + 1]:
+        x = block(x, position_ids=pos)
+    return model.decoder(model.final_norm(x))
+
+
+def local_target(sched) -> Optional[int]:
+    """Last layer index of the active block, or None if it needs the full loss."""
+    members = sched.active_block_members
+    if any(not m.startswith("blocks.") for m in members):
+        return None                     # token_embedding or final_norm+decoder
+    return max(int(m.split(".")[1]) for m in members)
+
+
+@torch.no_grad()
+def copy_accuracy(model, seqs, device) -> Dict[str, float]:
+    """Top-1 accuracy predicting the repeated half of [random | same random]."""
+    model.eval()
+    hit_first = hit_repeat = n = 0
+    for s in seqs:
+        x = s.unsqueeze(0).to(device)
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            pred = model(x).argmax(-1)[0]
+        nxt = s.to(device)[1:]
+        p = pred[:-1]
+        half = COPY_LEN - 1
+        hit_first += int((p[:half] == nxt[:half]).sum())
+        # Position COPY_LEN-1 predicts the first repeated token, which is not
+        # predictable yet; start one later.
+        hit_repeat += int((p[COPY_LEN:] == nxt[COPY_LEN:]).sum())
+        n += 1
+    rep_n = n * (2 * COPY_LEN - 1 - COPY_LEN)
+    return {"first_half": hit_first / (n * half), "repeat": hit_repeat / rep_n}
+
+
+def run_arm(arm, args, batches, probes, copy_seqs, device) -> dict:
+    partition, local = ARMS[arm]
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    # The full arm keeps every layer's grads and optimizer state, which spilled past
+    # this 6 GiB card in the smoke run. Recompute is exact, and this arm is the
+    # quality reference only; train-time comparisons are between the BCD arms.
+    model = build(args, device, grad_checkpoint=partition is None)
+    init = {n: p.detach().clone() for n, p in model.named_parameters()}
+    opt, desc = build_optimizer(model, "muon", lr=args.aux_lr,
+                                weight_decay=args.weight_decay, muon_lr=args.muon_lr)
+    sched = None
+    if partition is not None:
+        sched = BlockCoordinateScheduler(model, opt, steps_per_block=args.steps_per_block,
+                                         partition=partition)
+    cos = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.steps)
+    base_lrs = [pg["lr"] for pg in opt.param_groups]
+
+    print(f"\n[ab] === arm '{arm}' ===\n[ab]     {desc}", flush=True)
+    blocks_desc = []
+    if sched is not None:
+        for name, params in sched.blocks:
+            blocks_desc.append((name, sum(p.numel() for p in params)))
+            print(f"[ab]     block {name:<70} {blocks_desc[-1][1]/1e6:7.2f}M", flush=True)
+
+    traj = [{"step": 0, "train_sec": 0.0, "heldout_loss": evaluate(model, probes, device)}]
+    model.train()
+    train_sec = 0.0
+    warmup_done = args.warmup_steps <= 0
+    block_time: Dict[str, List[float]] = {}
+    torch.cuda.reset_peak_memory_stats()
+
+    for i, (bx, by) in enumerate(batches, start=1):
+        torch.cuda.synchronize()
+        t = time.time()
+        x = bx.to(device, non_blocking=True)
+        y = by.to(device, non_blocking=True)
+        last = local_target(sched) if (local and sched is not None) else None
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            logits = model(x) if last is None else forward_to(model, x, last)
+            loss = nn.functional.cross_entropy(
+                logits.reshape(-1, logits.size(-1)).float(), y.reshape(-1))
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
+        if not warmup_done:
+            s = (i - 1) / max(1, args.warmup_steps)
+            for pg, b in zip(opt.param_groups, base_lrs):
+                pg["lr"] = b * s
+            if i >= args.warmup_steps:
+                warmup_done = True
+        opt.step()
+        opt.zero_grad(set_to_none=True)
+        if warmup_done:
+            cos.step()
+        name = sched.active_block_name if sched is not None else "all"
+        if sched is not None:
+            sched.step()
+        torch.cuda.synchronize()
+        dt = time.time() - t
+        train_sec += dt
+        block_time.setdefault(name, []).append(dt)
+
+        if i % args.eval_every == 0:
+            hl = evaluate(model, probes, device)
+            traj.append({"step": i, "train_sec": train_sec, "heldout_loss": hl})
+            print(f"[ab]   step {i:>5}  held-out {hl:.5f}  train {train_sec/60:.1f} min",
+                  flush=True)
+            model.train()
+
+    copy = copy_accuracy(model, copy_seqs, device)
+    unmoved = [n for n, p in model.named_parameters() if torch.equal(p.detach(), init[n])]
+    # Median, so the first step of each block (switch overhead) doesn't dominate.
+    per_block = {n: sorted(v)[len(v) // 2] for n, v in block_time.items()}
+    out = {"arm": arm, "partition": partition, "local": local, "blocks": blocks_desc,
+           "final_heldout_loss": traj[-1]["heldout_loss"],
+           "final_ppl": math.exp(traj[-1]["heldout_loss"]),
+           "train_sec": train_sec, "median_step_sec_by_block": per_block,
+           "copy": copy, "peak_allocated_gib": torch.cuda.max_memory_allocated() / 2**30,
+           "unmoved_params": unmoved, "trajectory": traj}
+    print(f"[ab]   copy acc first-half {copy['first_half']:.3f} repeat {copy['repeat']:.3f}; "
+          f"train {train_sec/60:.1f} min; unmoved {len(unmoved)}", flush=True)
+    for n, v in per_block.items():
+        print(f"[ab]   median step {v*1000:7.1f} ms  {n}", flush=True)
+    del model, opt, sched, init
+    torch.cuda.empty_cache()
+    return out
+
+
+def heldout_at(traj, sec) -> Optional[float]:
+    """Held-out loss at a given training time, linearly interpolated."""
+    for a, b in zip(traj, traj[1:]):
+        if a["train_sec"] <= sec <= b["train_sec"]:
+            f = (sec - a["train_sec"]) / max(b["train_sec"] - a["train_sec"], 1e-9)
+            return a["heldout_loss"] + f * (b["heldout_loss"] - a["heldout_loss"])
+    return None
+
+
+def check_forward_to(args, batches, device) -> float:
+    model = build(args, device).eval()
+    x = batches[0][0][:1].to(device)
+    with torch.no_grad(), torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        diff = float((model(x).float() - forward_to(model, x, args.num_layers - 1).float())
+                     .abs().max())
+    del model
+    torch.cuda.empty_cache()
+    return diff
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--arms", nargs="+", default=list(ARMS), choices=list(ARMS))
+    p.add_argument("--steps", type=int, default=4000)
+    p.add_argument("--steps-per-block", type=int, default=100)
+    p.add_argument("--warmup-steps", type=int, default=100)
+    p.add_argument("--eval-every", type=int, default=250)
+    p.add_argument("--batch-size", type=int, default=4)
+    p.add_argument("--seq-len", type=int, default=512)
+    p.add_argument("--d-model", type=int, default=1024)
+    p.add_argument("--num-layers", type=int, default=16)
+    p.add_argument("--attn-layers", type=int, nargs="*", default=[4, 12])
+    p.add_argument("--n-heads", type=int, default=32)
+    p.add_argument("--muon-lr", type=float, default=0.02)
+    p.add_argument("--aux-lr", type=float, default=3e-4)
+    p.add_argument("--weight-decay", type=float, default=0.01)
+    p.add_argument("--probe-batches", type=int, default=16)
+    p.add_argument("--data-dir", default="data_cache")
+    p.add_argument("--seed", type=int, default=7)
+    p.add_argument("--tokenizer", default="gpt2")
+    p.add_argument("--out", default="results/local_loss/ab.json")
+    args = p.parse_args(argv)
+
+    # Import BEFORE touching CUDA (pyarrow after CUDA init aborts natively).
+    import train_edge_conversational as tec
+    device = require_cuda()
+    tok = tec.load_tokenizer(args.tokenizer)
+    args.vocab_size = len(tok)
+    torch.manual_seed(args.seed)
+    loader, _v, _s = tec.build_dataset_pipeline(
+        tokenizer=tok, seq_len=args.seq_len, batch_size=args.batch_size,
+        data_dir=args.data_dir, val_fraction=0.0, num_workers=0)
+    pairs = []
+    for b in loader:
+        x, y = as_pair(b)
+        pairs.append((x.clone(), y.clone()))
+        if len(pairs) >= args.probe_batches + args.steps:
+            break
+    probes, batches = pairs[:args.probe_batches], pairs[args.probe_batches:]
+    assert len(batches) == args.steps, f"only {len(batches)} batches"
+    g = torch.Generator().manual_seed(args.seed + 1)
+    copy_seqs = []
+    for _ in range(COPY_SEQS):
+        r = torch.randint(0, args.vocab_size, (COPY_LEN,), generator=g)
+        copy_seqs.append(torch.cat([r, r]))
+
+    diff = check_forward_to(args, batches, device)
+    print(f"[ab] known-answer: forward_to(last layer) vs model(x) max |diff| {diff:.3e}",
+          flush=True)
+    if diff > 1e-2:
+        raise SystemExit("forward_to does not reproduce model(x); local arm would be wrong")
+
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    results: Dict[str, dict] = {}
+    for arm in args.arms:
+        results[arm] = run_arm(arm, args, batches, probes, copy_seqs, device)
+        with open(args.out, "w", encoding="utf-8") as fh:
+            json.dump({"config": vars(args), "forward_to_diff": diff, "arms": results},
+                      fh, indent=2)
+
+    print("\n[ab] ================ local-loss BCD ================")
+    print(f"[ab] {'arm':<20}{'held-out':>10}{'ppl':>9}{'copy':>8}{'train min':>11}{'GiB':>7}")
+    for n, r in results.items():
+        print(f"[ab] {n:<20}{r['final_heldout_loss']:>10.4f}{r['final_ppl']:>9.1f}"
+              f"{r['copy']['repeat']:>8.3f}{r['train_sec']/60:>11.1f}"
+              f"{r['peak_allocated_gib']:>7.2f}")
+    verdict = []
+    if set(ARMS) <= set(results):
+        f, b, l = (results[a] for a in ("full", "bcd_balanced", "bcd_balanced_local"))
+        gap = b["final_heldout_loss"] - f["final_heldout_loss"]
+        if gap < 0.1:
+            verdict.append(f"VOID: bcd_balanced only {gap:+.3f} nats behind full")
+        elif b["unmoved_params"] or l["unmoved_params"]:
+            verdict.append("VOID: some parameters never trained in a BCD arm")
+        else:
+            d_tok = l["final_heldout_loss"] - b["final_heldout_loss"]
+            verdict.append(f"equal tokens: local {d_tok:+.4f} nats vs bcd_balanced "
+                           f"({l['train_sec']/b['train_sec']:.2f}x the train time)")
+            at = heldout_at(b["trajectory"], l["train_sec"])
+            if at is not None:
+                verdict.append(f"equal train time ({l['train_sec']/60:.1f} min): local "
+                               f"{l['final_heldout_loss'] - at:+.4f} nats vs bcd_balanced")
+        if f["copy"]["repeat"] - f["copy"]["first_half"] < 0.10:
+            verdict.append(f"copy test VOID: full arm only {f['copy']['repeat']:.3f} on the "
+                           f"repeat vs {f['copy']['first_half']:.3f} first half")
+        else:
+            verdict.append(f"copy (repeat acc): full {f['copy']['repeat']:.3f}, "
+                           f"bcd_balanced {b['copy']['repeat']:.3f}, "
+                           f"local {l['copy']['repeat']:.3f}")
+    for v in verdict:
+        print(f"[ab] VERDICT: {v}")
+    with open(args.out, "w", encoding="utf-8") as fh:
+        json.dump({"config": vars(args), "forward_to_diff": diff, "arms": results,
+                   "verdict": verdict}, fh, indent=2)
+    print(f"[ab] wrote {args.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
