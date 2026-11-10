@@ -47,8 +47,13 @@ from hvn.core.block_coordinate import BlockCoordinateScheduler     # noqa: E402
 from hvn.edge.ternary import apply_ternary_to_model                # noqa: E402
 from hvn.optimizers import build_optimizer                         # noqa: E402
 
-ARMS = {"full": (None, False), "bcd_balanced": ("balanced", False),
-        "bcd_balanced_local": ("balanced", True)}
+# (partition, lookahead): lookahead None = normal end loss; k = run k frozen layers
+# past the active block before the shared head (0 = plain local loss, #188).
+ARMS = {"full": (None, None), "bcd_balanced": ("balanced", None),
+        "bcd_balanced_local": ("balanced", 0),
+        "bcd_balanced_look2": ("balanced", 2), "bcd_balanced_look4": ("balanced", 4)}
+DEFAULT_ARMS = ["full", "bcd_balanced", "bcd_balanced_local"]
+LOCAL_ARMS = [a for a, (_, k) in ARMS.items() if k is not None]
 COPY_LEN = 128      # random tokens, then the same tokens again
 COPY_SEQS = 32
 
@@ -81,12 +86,13 @@ def forward_to(model, input_ids, last: int):
     return model.decoder(model.final_norm(x))
 
 
-def local_target(sched) -> Optional[int]:
-    """Last layer index of the active block, or None if it needs the full loss."""
+def local_target(sched, lookahead: int, num_layers: int) -> Optional[int]:
+    """Last layer to run before the head, or None if it needs the full loss."""
     members = sched.active_block_members
     if any(not m.startswith("blocks.") for m in members):
         return None                     # token_embedding or final_norm+decoder
-    return max(int(m.split(".")[1]) for m in members)
+    last = max(int(m.split(".")[1]) for m in members) + lookahead
+    return None if last >= num_layers - 1 else last
 
 
 @torch.no_grad()
@@ -111,7 +117,8 @@ def copy_accuracy(model, seqs, device) -> Dict[str, float]:
 
 
 def run_arm(arm, args, batches, probes, copy_seqs, device) -> dict:
-    partition, local = ARMS[arm]
+    partition, lookahead = ARMS[arm]
+    local = lookahead is not None
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     # The full arm keeps every layer's grads and optimizer state, which spilled past
@@ -147,7 +154,8 @@ def run_arm(arm, args, batches, probes, copy_seqs, device) -> dict:
         t = time.time()
         x = bx.to(device, non_blocking=True)
         y = by.to(device, non_blocking=True)
-        last = local_target(sched) if (local and sched is not None) else None
+        last = (local_target(sched, lookahead, args.num_layers)
+                if (local and sched is not None) else None)
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
             logits = model(x) if last is None else forward_to(model, x, last)
             loss = nn.functional.cross_entropy(
@@ -183,7 +191,8 @@ def run_arm(arm, args, batches, probes, copy_seqs, device) -> dict:
     unmoved = [n for n, p in model.named_parameters() if torch.equal(p.detach(), init[n])]
     # Median, so the first step of each block (switch overhead) doesn't dominate.
     per_block = {n: sorted(v)[len(v) // 2] for n, v in block_time.items()}
-    out = {"arm": arm, "partition": partition, "local": local, "blocks": blocks_desc,
+    out = {"arm": arm, "partition": partition, "local": local, "lookahead": lookahead,
+           "blocks": blocks_desc,
            "final_heldout_loss": traj[-1]["heldout_loss"],
            "final_ppl": math.exp(traj[-1]["heldout_loss"]),
            "train_sec": train_sec, "median_step_sec_by_block": per_block,
@@ -221,7 +230,10 @@ def check_forward_to(args, batches, device) -> float:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--arms", nargs="+", default=list(ARMS), choices=list(ARMS))
+    p.add_argument("--arms", nargs="+", default=DEFAULT_ARMS, choices=list(ARMS))
+    p.add_argument("--baseline", default=None,
+                   help="JSON from an earlier run with the same config; its arms are "
+                        "reused instead of retrained")
     p.add_argument("--steps", type=int, default=4000)
     p.add_argument("--steps-per-block", type=int, default=100)
     p.add_argument("--warmup-steps", type=int, default=100)
@@ -273,6 +285,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     results: Dict[str, dict] = {}
+    if args.baseline:
+        base = json.load(open(args.baseline, encoding="utf-8"))
+        same = ("steps", "steps_per_block", "warmup_steps", "eval_every", "batch_size",
+                "seq_len", "d_model", "num_layers", "attn_layers", "n_heads", "muon_lr",
+                "aux_lr", "weight_decay", "probe_batches", "seed", "tokenizer")
+        diff_keys = [k for k in same if base["config"].get(k) != getattr(args, k)]
+        if diff_keys:
+            raise SystemExit(f"--baseline config differs on {diff_keys}; not comparable")
+        results.update({n: r for n, r in base["arms"].items() if n not in args.arms})
     for arm in args.arms:
         results[arm] = run_arm(arm, args, batches, probes, copy_seqs, device)
         with open(args.out, "w", encoding="utf-8") as fh:
@@ -286,28 +307,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               f"{r['copy']['repeat']:>8.3f}{r['train_sec']/60:>11.1f}"
               f"{r['peak_allocated_gib']:>7.2f}")
     verdict = []
-    if set(ARMS) <= set(results):
-        f, b, l = (results[a] for a in ("full", "bcd_balanced", "bcd_balanced_local"))
+    locals_ = [a for a in LOCAL_ARMS if a in results]
+    if {"full", "bcd_balanced"} <= set(results) and locals_:
+        f, b = results["full"], results["bcd_balanced"]
         gap = b["final_heldout_loss"] - f["final_heldout_loss"]
         if gap < 0.1:
             verdict.append(f"VOID: bcd_balanced only {gap:+.3f} nats behind full")
-        elif b["unmoved_params"] or l["unmoved_params"]:
-            verdict.append("VOID: some parameters never trained in a BCD arm")
-        else:
+        for a in locals_:
+            l = results[a]
+            if gap < 0.1:
+                break
+            if b["unmoved_params"] or l["unmoved_params"]:
+                verdict.append(f"{a} VOID: some parameters never trained")
+                continue
             d_tok = l["final_heldout_loss"] - b["final_heldout_loss"]
-            verdict.append(f"equal tokens: local {d_tok:+.4f} nats vs bcd_balanced "
-                           f"({l['train_sec']/b['train_sec']:.2f}x the train time)")
+            line = (f"{a}: equal tokens {d_tok:+.4f} nats vs bcd_balanced, "
+                    f"{l['train_sec']/b['train_sec']:.2f}x the train time")
             at = heldout_at(b["trajectory"], l["train_sec"])
             if at is not None:
-                verdict.append(f"equal train time ({l['train_sec']/60:.1f} min): local "
-                               f"{l['final_heldout_loss'] - at:+.4f} nats vs bcd_balanced")
+                line += f"; equal train time {l['final_heldout_loss'] - at:+.4f} nats"
+            verdict.append(line)
         if f["copy"]["repeat"] - f["copy"]["first_half"] < 0.10:
             verdict.append(f"copy test VOID: full arm only {f['copy']['repeat']:.3f} on the "
                            f"repeat vs {f['copy']['first_half']:.3f} first half")
         else:
-            verdict.append(f"copy (repeat acc): full {f['copy']['repeat']:.3f}, "
-                           f"bcd_balanced {b['copy']['repeat']:.3f}, "
-                           f"local {l['copy']['repeat']:.3f}")
+            verdict.append("copy (repeat acc): " + ", ".join(
+                f"{a} {results[a]['copy']['repeat']:.3f}"
+                for a in ["full", "bcd_balanced"] + locals_))
     for v in verdict:
         print(f"[ab] VERDICT: {v}")
     with open(args.out, "w", encoding="utf-8") as fh:

@@ -42,6 +42,22 @@ Known-answer: the local arm's manual forward matched `model(x)` exactly (max dif
 At 1B the speed ceiling is larger (13 blocks, more layers after each), but the quality
 trend here points the wrong way. Not adopted.
 
+**Lookahead follow-up (#189, same config/seed/batches, `ab_d1024_L16_lookahead.json`):**
+run k frozen layers past the active block before the head, to give back some downstream
+signal. A block whose lookahead reaches the last layer takes the normal path.
+
+| arm | held-out | train min | vs bcd_balanced, equal tokens | equal train time |
+|---|---:|---:|---:|---:|
+| bcd_balanced | 5.383 | 18.7 | -- | -- |
+| local, k=0 | 5.449 | 15.1 | +0.067 | +0.025 |
+| lookahead k=2 | 5.418 | 16.0 | +0.035 | +0.014 |
+| lookahead k=4 | 5.481 | 16.9 | +0.099 | +0.089 |
+
+None beats bcd_balanced, at equal tokens or at equal train time. k=4 doing worst is the
+opposite of the expected order (more downstream signal should help), so the differences
+between the local variants look like single-seed noise and can't be ranked. The safe
+conclusion is only the shared one: no variant wins. The local-loss line is closed.
+
 ## Audit's Check 2 leaked its model copy, making Check 3 skip at 304M: fixed (2026-11-05)
 
 Check 2's local `loss` kept its autograd graph alive, and the graph kept every parameter of
