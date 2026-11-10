@@ -27,7 +27,27 @@ Implemented as a scheduler subclass in the harness; production code untouched.
   large at the end.
 - Speed: unchanged at this size (the embedding step is not the slowest here). At 1B the
   projected gain was only ~1.7-2.6% anyway.
-- Untested follow-up this points to: the opposite, a LONGER embedding turn.
+- Follow-up: the opposite, a LONGER embedding turn (#191, `ab_d1024_L16_longemb.json`):
+
+| embedding turn | embedding steps | held-out | vs bcd_balanced |
+|---:|---:|---:|---:|
+| 25 | 250 | 5.556 | +0.173 |
+| 50 | 450 | 5.473 | +0.090 |
+| 100 (default) | 800 | 5.383 | -- |
+| 150 | 1200 | 5.358 | -0.025 |
+| 200 | 1400 | 5.351 | -0.031 |
+
+  A consistent trend with diminishing returns: past 100 steps, extra embedding time helps a
+  little. Turn 150 led at every eval point; turn 200's mid-run evals swung (+0.068 at step
+  2000) depending on where in the rotation they fell, so its final number is less steady.
+
+  **Does it shorten the 211-day full-quality estimate? Roughly break-even, so not adopted.**
+  At 1B the embedding step is the slowest (17.6 s vs 12.3 s average), so turn 150 makes the
+  average step about 1.6% slower and turn 200 about 3.0% slower: about +3.4 and +6.3 days on
+  211. The gain closes only 4-5% of the BCD-vs-full gap (0.025-0.031 of 0.602 nats). If the
+  79 days between 132 and 211 scale with that gap — a rough assumption, not measured — that
+  saves about 3-4 days. Net: about zero for turn 150, slower for turn 200. Single seed,
+  small model; a 1B effect could differ either way.
 
 ## Local loss per BCD block: 19% faster, but worse even at equal time — not adopted (2026-11-10)
 

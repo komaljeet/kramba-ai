@@ -1,0 +1,106 @@
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.0, 'OpenAssistant': 0.0, 'WikiText-103': 0.0, 'FineWeb-Edu': 1.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 144,853,865  |  windows/source: [252205, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 144853865
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[ab] triton+megakernel scan on 14 DeltaNet blocks
+[ab] known-answer: forward_to(last layer) vs model(x) max |diff| 0.000e+00
+[ab] triton+megakernel scan on 14 DeltaNet blocks
+
+[ab] === arm 'bcd_balanced_emb150' ===
+[ab]     Muon (muon_lr=0.02 on 138 matrices / 168,230,912 params; AdamW aux lr=0.0003 / 51,698,193 params)
+[ab]     block token_embedding                                                          51.46M
+[ab]     block blocks.0+blocks.1+blocks.2+blocks.3                                      42.12M
+[ab]     block blocks.4+blocks.5+blocks.6+blocks.7                                      42.08M
+[ab]     block blocks.8+blocks.9+blocks.10+blocks.11                                    42.12M
+[ab]     block blocks.12+blocks.13+blocks.14+blocks.15+final_norm+decoder               42.14M
+[ab]   step   250  held-out 6.72488  train 1.2 min
+[ab]   step   500  held-out 6.39999  train 2.4 min
+[ab]   step   750  held-out 6.02692  train 3.6 min
+[ab]   step  1000  held-out 5.84538  train 4.8 min
+[ab]   step  1250  held-out 5.84596  train 5.9 min
+[ab]   step  1500  held-out 5.66241  train 7.1 min
+[ab]   step  1750  held-out 5.70626  train 8.2 min
+[ab]   step  2000  held-out 5.57256  train 9.5 min
+[ab]   step  2250  held-out 5.56526  train 10.6 min
+[ab]   step  2500  held-out 5.47747  train 11.8 min
+[ab]   step  2750  held-out 5.42023  train 12.9 min
+[ab]   step  3000  held-out 5.42808  train 14.1 min
+[ab]   step  3250  held-out 5.38790  train 15.3 min
+[ab]   step  3500  held-out 5.37756  train 16.5 min
+[ab]   step  3750  held-out 5.35999  train 17.7 min
+[ab]   step  4000  held-out 5.35795  train 18.8 min
+[ab]   copy acc first-half 0.000 repeat 0.000; train 18.8 min; unmoved 0
+[ab]   median step   279.2 ms   1200 steps  token_embedding
+[ab]   median step   323.6 ms    700 steps  blocks.0+blocks.1+blocks.2+blocks.3
+[ab]   median step   293.0 ms    700 steps  blocks.4+blocks.5+blocks.6+blocks.7
+[ab]   median step   269.9 ms    700 steps  blocks.8+blocks.9+blocks.10+blocks.11
+[ab]   median step   242.3 ms    700 steps  blocks.12+blocks.13+blocks.14+blocks.15+final_norm+decoder
+[ab] triton+megakernel scan on 14 DeltaNet blocks
+
+[ab] === arm 'bcd_balanced_emb200' ===
+[ab]     Muon (muon_lr=0.02 on 138 matrices / 168,230,912 params; AdamW aux lr=0.0003 / 51,698,193 params)
+[ab]     block token_embedding                                                          51.46M
+[ab]     block blocks.0+blocks.1+blocks.2+blocks.3                                      42.12M
+[ab]     block blocks.4+blocks.5+blocks.6+blocks.7                                      42.08M
+[ab]     block blocks.8+blocks.9+blocks.10+blocks.11                                    42.12M
+[ab]     block blocks.12+blocks.13+blocks.14+blocks.15+final_norm+decoder               42.14M
+[ab]   step   250  held-out 6.91346  train 1.2 min
+[ab]   step   500  held-out 6.37541  train 2.4 min
+[ab]   step   750  held-out 6.15030  train 3.5 min
+[ab]   step  1000  held-out 5.84594  train 4.8 min
+[ab]   step  1250  held-out 5.89042  train 5.9 min
+[ab]   step  1500  held-out 5.72975  train 7.1 min
+[ab]   step  1750  held-out 5.60748  train 8.2 min
+[ab]   step  2000  held-out 5.66631  train 9.4 min
+[ab]   step  2250  held-out 5.51043  train 10.6 min
+[ab]   step  2500  held-out 5.52107  train 11.7 min
+[ab]   step  2750  held-out 5.44977  train 13.0 min
+[ab]   step  3000  held-out 5.39701  train 14.1 min
+[ab]   step  3250  held-out 5.40381  train 15.3 min
+[ab]   step  3500  held-out 5.36380  train 16.5 min
+[ab]   step  3750  held-out 5.35747  train 17.6 min
+[ab]   step  4000  held-out 5.35125  train 18.9 min
+[ab]   copy acc first-half 0.000 repeat 0.000; train 18.9 min; unmoved 0
+[ab]   median step   279.2 ms   1400 steps  token_embedding
+[ab]   median step   323.8 ms    700 steps  blocks.0+blocks.1+blocks.2+blocks.3
+[ab]   median step   294.0 ms    700 steps  blocks.4+blocks.5+blocks.6+blocks.7
+[ab]   median step   269.1 ms    600 steps  blocks.8+blocks.9+blocks.10+blocks.11
+[ab]   median step   243.5 ms    600 steps  blocks.12+blocks.13+blocks.14+blocks.15+final_norm+decoder
+
+[ab] ================ local-loss BCD ================
+[ab] arm                   held-out      ppl    copy  train min    GiB
+[ab] full                    4.7814    119.3   0.000       48.1   4.30
+[ab] bcd_balanced            5.3827    217.6   0.000       18.7   4.82
+[ab] bcd_balanced_local      5.4493    232.6   0.000       15.1   4.82
+[ab] bcd_balanced_emb150     5.3579    212.3   0.000       18.8   4.82
+[ab] bcd_balanced_emb200     5.3512    210.9   0.000       18.9   4.82
+[ab] VERDICT: bcd_balanced_local: equal tokens +0.0665 nats vs bcd_balanced, 0.81x the train time; equal train time +0.0252 nats
+[ab] VERDICT: bcd_balanced_emb150: equal tokens -0.0248 nats vs bcd_balanced, 1.00x the train time
+[ab] VERDICT: bcd_balanced_emb200: equal tokens -0.0315 nats vs bcd_balanced, 1.01x the train time
+[ab] VERDICT: copy test VOID: full arm only 0.000 on the repeat vs 0.000 first half
+[ab] wrote results/local_loss/ab_d1024_L16_longemb.json
