@@ -52,9 +52,11 @@ from hvn.optimizers import build_optimizer                         # noqa: E402
 ARMS = {"full": (None, None), "bcd_balanced": ("balanced", None),
         "bcd_balanced_local": ("balanced", 0),
         "bcd_balanced_look2": ("balanced", 2), "bcd_balanced_look4": ("balanced", 4),
-        "bcd_balanced_emb50": ("balanced", None), "bcd_balanced_emb25": ("balanced", None)}
+        "bcd_balanced_emb50": ("balanced", None), "bcd_balanced_emb25": ("balanced", None),
+        "bcd_balanced_emb150": ("balanced", None), "bcd_balanced_emb200": ("balanced", None)}
 # Embedding-block turn length per arm (#190); every other block keeps --steps-per-block.
-EMB_STEPS = {"bcd_balanced_emb50": 50, "bcd_balanced_emb25": 25}
+EMB_STEPS = {"bcd_balanced_emb50": 50, "bcd_balanced_emb25": 25,
+             "bcd_balanced_emb150": 150, "bcd_balanced_emb200": 200}
 DEFAULT_ARMS = ["full", "bcd_balanced", "bcd_balanced_local"]
 LOCAL_ARMS = [a for a, (_, k) in ARMS.items() if k is not None]
 VARIANT_ARMS = LOCAL_ARMS + list(EMB_STEPS)
