@@ -5,6 +5,43 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Local loss per BCD block: 19% faster, but worse even at equal time — not adopted (2026-11-10)
+
+**One line: training each middle BCD block from a loss right after it (skipping the
+layers after it) cut training time 19%, but held-out loss was worse at equal tokens and
+still worse at equal training time, and the gap widened as training went on.**
+
+Idea: under BCD the loss sits at the end, so every step still runs the frozen layers
+after the active block forward and backprops through them. The local arm applies the
+model's own final_norm + decoder (frozen, shared) right after the active block and stops
+there. The embedding and last blocks keep the normal loss.
+
+Setup (`scripts/ab_local_loss.py`, `results/local_loss/ab_d1024_L16.json`): hybrid, d1024
+x 16 layers (DeltaNet + attention at 4 and 12), ternary, tied, Muon, balanced partition
+(5 blocks), 4000 steps x 4 x 512 tokens, identical seed and batches per arm. The full arm
+uses grad checkpointing (exact) because without it the smoke run spilled past the card.
+Known-answer: the local arm's manual forward matched `model(x)` exactly (max diff 0.0).
+
+| arm | held-out | ppl | train min |
+|---|---:|---:|---:|
+| full | 4.781 | 119 | 48.1 |
+| bcd_balanced | 5.383 | 218 | 18.7 |
+| bcd_balanced_local | 5.449 | 233 | 15.1 |
+
+- Equal tokens: local +0.067 nats. The gap grew over training: about even at step 1000,
+  +0.03 at 2000, +0.067 at 4000.
+- Equal training time (15.1 min): local +0.025 nats worse than bcd_balanced at that time.
+- Median step per block, bcd_balanced vs local: middle blocks 323/292/268 ms vs
+  185/200/224 ms; embedding and last block unchanged.
+- Single seed, same batches. The differences are smaller than the 0.089 seed-to-seed
+  spread measured elsewhere, but the direction is consistent and the gap widens.
+- Recall copy test (random tokens repeated): VOID. Even the full arm scored 0% on the
+  repeat after ~8M tokens, so it could not detect anything. Not re-run: the loss result
+  already rules the idea out, and a recall loss could only make it worse.
+
+At 1B the speed ceiling is larger (13 blocks, more layers after each), but the quality
+trend here points the wrong way. Not adopted.
+
 ## Audit's Check 2 leaked its model copy, making Check 3 skip at 304M: fixed (2026-11-05)
 
 Check 2's local `loss` kept its autograd graph alive, and the graph kept every parameter of
