@@ -51,9 +51,27 @@ from hvn.optimizers import build_optimizer                         # noqa: E402
 # past the active block before the shared head (0 = plain local loss, #188).
 ARMS = {"full": (None, None), "bcd_balanced": ("balanced", None),
         "bcd_balanced_local": ("balanced", 0),
-        "bcd_balanced_look2": ("balanced", 2), "bcd_balanced_look4": ("balanced", 4)}
+        "bcd_balanced_look2": ("balanced", 2), "bcd_balanced_look4": ("balanced", 4),
+        "bcd_balanced_emb50": ("balanced", None), "bcd_balanced_emb25": ("balanced", None)}
+# Embedding-block turn length per arm (#190); every other block keeps --steps-per-block.
+EMB_STEPS = {"bcd_balanced_emb50": 50, "bcd_balanced_emb25": 25}
 DEFAULT_ARMS = ["full", "bcd_balanced", "bcd_balanced_local"]
 LOCAL_ARMS = [a for a, (_, k) in ARMS.items() if k is not None]
+VARIANT_ARMS = LOCAL_ARMS + list(EMB_STEPS)
+
+
+class UnequalTurnsBCD(BlockCoordinateScheduler):
+    """BCD with a different turn length for the token_embedding block."""
+
+    def __init__(self, *a, emb_steps: int, **k):
+        super().__init__(*a, **k)
+        self.base_steps = self.steps_per_block
+        self.emb_steps = emb_steps
+
+    def step(self) -> bool:
+        self.steps_per_block = (self.emb_steps if self.active_block_name == "token_embedding"
+                                else self.base_steps)
+        return super().step()
 COPY_LEN = 128      # random tokens, then the same tokens again
 COPY_SEQS = 32
 
@@ -129,7 +147,10 @@ def run_arm(arm, args, batches, probes, copy_seqs, device) -> dict:
     opt, desc = build_optimizer(model, "muon", lr=args.aux_lr,
                                 weight_decay=args.weight_decay, muon_lr=args.muon_lr)
     sched = None
-    if partition is not None:
+    if partition is not None and arm in EMB_STEPS:
+        sched = UnequalTurnsBCD(model, opt, steps_per_block=args.steps_per_block,
+                                partition=partition, emb_steps=EMB_STEPS[arm])
+    elif partition is not None:
         sched = BlockCoordinateScheduler(model, opt, steps_per_block=args.steps_per_block,
                                          partition=partition)
     cos = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.steps)
@@ -147,6 +168,7 @@ def run_arm(arm, args, batches, probes, copy_seqs, device) -> dict:
     train_sec = 0.0
     warmup_done = args.warmup_steps <= 0
     block_time: Dict[str, List[float]] = {}
+    block_steps: Dict[str, int] = {}
     torch.cuda.reset_peak_memory_stats()
 
     for i, (bx, by) in enumerate(batches, start=1):
@@ -179,6 +201,7 @@ def run_arm(arm, args, batches, probes, copy_seqs, device) -> dict:
         dt = time.time() - t
         train_sec += dt
         block_time.setdefault(name, []).append(dt)
+        block_steps[name] = block_steps.get(name, 0) + 1
 
         if i % args.eval_every == 0:
             hl = evaluate(model, probes, device)
@@ -196,12 +219,13 @@ def run_arm(arm, args, batches, probes, copy_seqs, device) -> dict:
            "final_heldout_loss": traj[-1]["heldout_loss"],
            "final_ppl": math.exp(traj[-1]["heldout_loss"]),
            "train_sec": train_sec, "median_step_sec_by_block": per_block,
+           "steps_by_block": block_steps,
            "copy": copy, "peak_allocated_gib": torch.cuda.max_memory_allocated() / 2**30,
            "unmoved_params": unmoved, "trajectory": traj}
     print(f"[ab]   copy acc first-half {copy['first_half']:.3f} repeat {copy['repeat']:.3f}; "
           f"train {train_sec/60:.1f} min; unmoved {len(unmoved)}", flush=True)
     for n, v in per_block.items():
-        print(f"[ab]   median step {v*1000:7.1f} ms  {n}", flush=True)
+        print(f"[ab]   median step {v*1000:7.1f} ms  {block_steps[n]:>5} steps  {n}", flush=True)
     del model, opt, sched, init
     torch.cuda.empty_cache()
     return out
@@ -307,7 +331,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               f"{r['copy']['repeat']:>8.3f}{r['train_sec']/60:>11.1f}"
               f"{r['peak_allocated_gib']:>7.2f}")
     verdict = []
-    locals_ = [a for a in LOCAL_ARMS if a in results]
+    locals_ = [a for a in VARIANT_ARMS if a in results]
     if {"full", "bcd_balanced"} <= set(results) and locals_:
         f, b = results["full"], results["bcd_balanced"]
         gap = b["final_heldout_loss"] - f["final_heldout_loss"]

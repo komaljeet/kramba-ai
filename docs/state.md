@@ -5,6 +5,30 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Shorter embedding-block BCD turns: clearly worse, dose-dependent — not adopted (2026-11-10)
+
+**One line: cutting the embedding block's BCD turn from 100 to 50 or 25 steps (so the layer
+blocks get more of the budget) made held-out loss worse, and worse in proportion to the cut.
+The embedding table needs its training time more than the layers need the extra steps.**
+
+Same harness and config as the local-loss entry below (`scripts/ab_local_loss.py`, d1024 x 16
+hybrid, balanced BCD, 4000 steps, same seed and batches; `ab_d1024_L16_unequal.json`).
+Implemented as a scheduler subclass in the harness; production code untouched.
+
+| arm | embedding steps | layer-block steps | held-out | vs bcd_balanced |
+|---|---:|---:|---:|---:|
+| bcd_balanced | 800 | 800 each | 5.383 | -- |
+| embedding turn 50 | 450 | 850-900 each | 5.473 | +0.090 |
+| embedding turn 25 | 250 | 900-1000 each | 5.556 | +0.173 |
+
+- Halving the turn costs about +0.09 and quartering it about +0.17: a clean dose-response,
+  much larger than any single-seed wobble seen in these runs.
+- The gap narrows over training (turn 50: +0.19 at step 1000, +0.09 at 4000) but is still
+  large at the end.
+- Speed: unchanged at this size (the embedding step is not the slowest here). At 1B the
+  projected gain was only ~1.7-2.6% anyway.
+- Untested follow-up this points to: the opposite, a LONGER embedding turn.
+
 ## Local loss per BCD block: 19% faster, but worse even at equal time — not adopted (2026-11-10)
 
 **One line: training each middle BCD block from a loss right after it (skipping the
