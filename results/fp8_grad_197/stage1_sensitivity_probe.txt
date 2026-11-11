@@ -1,0 +1,2 @@
+   fp8_4w vs fp8_4    blocks.6+blocks.7      rel 6.6769e-02 cos 0.997771 differ 84051989/84052032 attention=3.006e-02 deltanet=1.420e-01 ffn=7.040e-02 norm=7.143e-02 | med 1.140e-01 max 1.656e-01 (blocks.6.q_proj.weight) peak 3138/3138 MiB
+  bf16_4w vs bf16_4   blocks.6+blocks.7      rel 4.1915e-03 cos 0.999991 differ 84051843/84052032 attention=2.114e-03 deltanet=8.708e-03 ffn=4.410e-03 norm=4.486e-03 | med 7.720e-03 max 1.081e-02 (blocks.7.beta_proj.weight) peak 3152/3152 MiB

@@ -1,0 +1,27 @@
+{
+ "tag": "fp8hb_6",
+ "mode": "fp8hb",
+ "active": 6,
+ "pert": false,
+ "block": "blocks.10+blocks.11",
+ "n_blocks": 13,
+ "param_sha": "709a686d0f38a8651b30e96991efbb49da958b41e4ed817c69de54aeebb311ec",
+ "target_sha": "5f18ab28409dbc2033ed9e1f131edda02750310a6fad17691aeff5c4a629eff3",
+ "loss_calls": 8,
+ "tensors": 36,
+ "numel": 84197504,
+ "peak_alloc": 2894792704,
+ "peak_res": 3189768192,
+ "total_mem": 6438780928,
+ "fp8": {
+  "fwd": 2104,
+  "bwd": 0,
+  "w_hits": 210,
+  "w_misses": 14,
+  "fallback_rows": 0,
+  "x_hits": 888,
+  "skipped": 176
+ },
+ "hb_bwd_calls": 776,
+ "wall_s": 33.16029739379883
+}
