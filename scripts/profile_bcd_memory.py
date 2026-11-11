@@ -27,6 +27,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -39,7 +40,7 @@ PROD_ARGV = (
 ).split()
 
 
-def install_hooks(out_path: str):
+def install_hooks(out_path: str, budget_layers: int = 0):
     import torch
     from torch.optim.optimizer import (register_optimizer_step_post_hook,
                                        register_optimizer_step_pre_hook)
@@ -48,12 +49,27 @@ def install_hooks(out_path: str):
     sched_ref = []
     orig_init = bc.BlockCoordinateScheduler.__init__
 
-    def init(self, *a, **k):
-        orig_init(self, *a, **k)
+    def init(self, model, optimizer, *a, **k):
+        if budget_layers:
+            # Cap each balanced block at N x the largest layer instead of the
+            # embedding table's size (the production default).
+            sizes = [sum(p.numel() for p in b.parameters()) for b in model.blocks]
+            k["partition_budget"] = budget_layers * max(sizes)
+        orig_init(self, model, optimizer, *a, **k)
         sched_ref.append(self)
 
     bc.BlockCoordinateScheduler.__init__ = init
-    state = {"n": 0}
+    if budget_layers:
+        # Keep the embedding table in its own block, as at budget 1 layer. Otherwise a
+        # budget above embedding+1 layer packs the heavy AdamW-state embedding with
+        # layers, and the first block (not the block size being tested) hits the guard.
+        orig_bg = bc._balance_groups
+
+        def keep_emb(blocks, budget=None):
+            return [([blocks[0][0]], blocks[0][1])] + orig_bg(blocks[1:], budget)
+
+        bc._balance_groups = keep_emb
+    state = {"n": 0, "t": None}
     f = open(out_path, "w", encoding="utf-8")
 
     def pre(opt, args, kwargs):
@@ -75,7 +91,16 @@ def install_hooks(out_path: str):
                 if torch.is_tensor(v) and v.is_cuda:
                     st += v.numel() * v.element_size()
         alloc = torch.cuda.memory_allocated()
+        ms = torch.cuda.memory_stats()
+        now = time.perf_counter()
+        step_sec = None if state["t"] is None else now - state["t"]
+        state["t"] = now
         row = {
+            "step_sec": step_sec,
+            "reserved_now": ms["reserved_bytes.all.current"],
+            "inactive_split": ms["inactive_split_bytes.all.current"],
+            "segments": ms["segment.all.current"],
+            "alloc_retries": ms["num_alloc_retries"],
             "opt_step": state["n"], "block": name, "step_in_block": sched._step_in_block,
             "weights": w, "grads": g, "state": st, "allocated": alloc,
             "other": alloc - w - g - st,
@@ -100,16 +125,20 @@ def main():
     ap.add_argument("--steps-per-block", type=int, default=3)
     ap.add_argument("--blocks", type=int, default=13)
     ap.add_argument("--ckpt-dir", default="checkpoints/bcd_memory_scratch")
+    ap.add_argument("--data-dir", default="data_cache")
+    ap.add_argument("--budget-layers", type=int, default=0,
+                    help="0 = production default; N = blocks of up to N layers")
     a = ap.parse_args()
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     sys.path.insert(0, REPO)
     os.chdir(REPO)
-    install_hooks(a.out)
+    install_hooks(a.out, a.budget_layers)
     import train_edge_conversational as T
     steps = a.steps_per_block * a.blocks + 2
     sys.argv = (["train_edge_conversational.py"] + PROD_ARGV
                 + ["--grad-accum", "1", "--bcd-steps-per-block", str(a.steps_per_block),
-                   "--max-steps", str(steps), "--checkpoint-dir", a.ckpt_dir])
+                   "--max-steps", str(steps), "--checkpoint-dir", a.ckpt_dir,
+                   "--data-dir", a.data_dir])
     T.main()
 
 

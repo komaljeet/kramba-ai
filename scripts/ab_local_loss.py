@@ -54,11 +54,11 @@ ARMS = {"full": (None, None), "bcd_balanced": ("balanced", None),
         "bcd_balanced_look2": ("balanced", 2), "bcd_balanced_look4": ("balanced", 4),
         "bcd_balanced_emb50": ("balanced", None), "bcd_balanced_emb25": ("balanced", None),
         "bcd_balanced_emb150": ("balanced", None), "bcd_balanced_emb200": ("balanced", None),
-        "bcd_k1": ("balanced", None), "bcd_k2": ("balanced", None),
+        "bcd_k1": ("balanced", None), "bcd_k2": ("balanced", None), "bcd_k3": ("balanced", None),
         "bcd_k6": ("balanced", None), "bcd_k8": ("balanced", None)}
 # Block-size cap in layers (#192): partition_budget = k x the largest layer. The default
 # arm's cap is the embedding table (4 layers at d1024; 2 layers at 1B).
-BUDGET_LAYERS = {"bcd_k1": 1, "bcd_k2": 2, "bcd_k6": 6, "bcd_k8": 8}
+BUDGET_LAYERS = {"bcd_k1": 1, "bcd_k2": 2, "bcd_k3": 3, "bcd_k6": 6, "bcd_k8": 8}
 # Embedding-block turn length per arm (#190); every other block keeps --steps-per-block.
 EMB_STEPS = {"bcd_balanced_emb50": 50, "bcd_balanced_emb25": 25,
              "bcd_balanced_emb150": 150, "bcd_balanced_emb200": 200}
@@ -162,8 +162,16 @@ def run_arm(arm, args, batches, probes, copy_seqs, device) -> dict:
         if arm in BUDGET_LAYERS:
             layer_sizes = [sum(p.numel() for p in b.parameters()) for b in model.blocks]
             budget = BUDGET_LAYERS[arm] * max(layer_sizes)
+            # Keep the embedding table in its own block in every budget arm, so only
+            # layers-per-block changes (a big budget would otherwise pack it with layers).
+            import hvn.core.block_coordinate as _bc
+            _orig_bg = _bc._balance_groups
+            _bc._balance_groups = lambda blocks, b=None: (
+                [([blocks[0][0]], blocks[0][1])] + _orig_bg(blocks[1:], b))
         sched = BlockCoordinateScheduler(model, opt, steps_per_block=args.steps_per_block,
                                          partition=partition, partition_budget=budget)
+        if arm in BUDGET_LAYERS:
+            _bc._balance_groups = _orig_bg
     cos = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.steps)
     base_lrs = [pg["lr"] for pg in opt.param_groups]
 

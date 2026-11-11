@@ -1,0 +1,7 @@
+=== budget_layers=3
+exit=0 rows=29
+=== budget_layers=4
+exit=1 rows=1
+=== budget_layers=6
+exit=1 rows=1
+DONE
