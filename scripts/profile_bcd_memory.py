@@ -126,6 +126,8 @@ def main():
     ap.add_argument("--blocks", type=int, default=13)
     ap.add_argument("--ckpt-dir", default="checkpoints/bcd_memory_scratch")
     ap.add_argument("--data-dir", default="data_cache")
+    ap.add_argument("--grad-accum", type=int, default=1,
+                    help="micro-batches per optimizer step (production uses 8)")
     ap.add_argument("--budget-layers", type=int, default=0,
                     help="0 = production default; N = blocks of up to N layers")
     a = ap.parse_args()
@@ -136,7 +138,7 @@ def main():
     import train_edge_conversational as T
     steps = a.steps_per_block * a.blocks + 2
     sys.argv = (["train_edge_conversational.py"] + PROD_ARGV
-                + ["--grad-accum", "1", "--bcd-steps-per-block", str(a.steps_per_block),
+                + ["--grad-accum", str(a.grad_accum), "--bcd-steps-per-block", str(a.steps_per_block),
                    "--max-steps", str(steps), "--checkpoint-dir", a.ckpt_dir,
                    "--data-dir", a.data_dir])
     T.main()
