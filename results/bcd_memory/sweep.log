@@ -1,0 +1,9 @@
+=== none
+exit=0 rows=41
+=== garbage_collection_threshold:0.7
+exit=0 rows=41
+=== max_split_size_mb:128
+exit=0 rows=41
+=== garbage_collection_threshold:0.7,max_split_size_mb:128
+exit=0 rows=41
+DONE

@@ -1,0 +1,279 @@
+[#163] --offload implies --block-coordinate; enabling it.
+[#163] --offload requires --grad-checkpoint; enabling it (offload evicts weights after the forward and relies on the recompute to bring them back).
+[--fast] Enabled recommended training stack: precision=bf16, tf32, triton-scan, megakernel-scan, fused-ternary, ternary-step-cache, fused-rmsnorm, num-workers=4
+TF32 matmul enabled (Issue #81): fp32 matmuls use TF32 on Ampere+ tensor cores.
+======================================================================
+STEP 1 — HARDWARE SCAN
+======================================================================
+
+--- nvidia-smi ---
+Wed Nov 11 16:19:32 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 610.74                 KMD Version: 610.74        CUDA UMD Version: 13.3     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                  Driver-Model | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 4050 ...  WDDM  |   00000000:01:00.0 Off |                  N/A |
+| N/A   52C    P8              2W /   80W |     138MiB /   6141MiB |      7%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A            2992    C+G   ...App_cw5n1h2txyewy\LockApp.exe      N/A      |
+|    0   N/A  N/A            7728    C+G   ...2txyewy\CrossDeviceResume.exe      N/A      |
+|    0   N/A  N/A           11588    C+G   ..._cw5n1h2txyewy\SearchHost.exe      N/A      |
+|    0   N/A  N/A           11616    C+G   ...y\StartMenuExperienceHost.exe      N/A      |
+|    0   N/A  N/A           15100    C+G   ....0.4341.42\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           17784    C+G   ...Free Download Manager\fdm.exe      N/A      |
+|    0   N/A  N/A           18492    C+G   ...ms\Microsoft VS Code\Code.exe      N/A      |
++-----------------------------------------------------------------------------------------+
+
+--- System RAM ---
+  Total RAM: 15.29 GB
+  Free RAM:  7.78 GB
+
+--- Torch Device Checks ---
+  GPU:              NVIDIA GeForce RTX 4050 Laptop GPU
+  VRAM total:       6.00 GB
+  VRAM free:        4.96 GB
+  bf16 supported:   True
+  Torch version:    2.12.1+cu126
+
+--- Chosen Settings (with reasoning) ---
+  d_model:       512  (reference dimension from README)
+  num_layers:    12  (depth for language understanding)
+  n_heads:       8  (standard head count for d=512)
+  batch_size:    4  (fits in VRAM with ternary compression)
+  seq_len:       512  (good context for conversational training)
+  grad_accum:    8  (effective batch = 32)
+  precision:     bf16  (RTX 4050 supports bf16)
+  Est. peak VRAM: ~3.3 GB (safe within 5.0 GB free)
+  Effective batch size: 32
+
+✓ Step 1 complete.
+
+  Loading GPT-2 tokenizer...
+  Tokenizer: gpt2 | vocab_size = 50257 | eos_token_id = 50256
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.0, 'OpenAssistant': 0.0, 'WikiText-103': 0.0, 'FineWeb-Edu': 1.0}
+Sequence length: 4096
+Batch size: 1
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\fineweb_edu.bin (6,642,451,492 tokens) -- skipping parquet extraction
+[data mix] total pretrain budget capped at 6,642,450,432 tokens (6.64B) by DATA VOLUME, not the mix ratio -- every available window from every source is already being used (1,621,692 total), none of them hit their max_repeat=3 limit. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~332M-param model -- if you're targeting something bigger, download more data (proportionate to the current mix shares); adjusting the mix ratio alone will not raise this ceiling until raw volume grows enough for a source's repeat limit to become the active constraint instead.
+
+    Mixed dataset: 1,621,692 train samples (0 held-out val), seq_len=4096
+    Unique tokens on disk: 6,642,451,492  |  windows/source: [1621692]
+    Per-source (train): FineWeb-Edu=1,621,692 (100.0%)
+  Tokens: 6642451492
+  Samples: 1621692
+
+  DataLoader ready: batch_size=1
+✓ Step 2 complete.
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        1 (effective batch = 1)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.0
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → checkpoints/bcd_memory_scratch/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from checkpoints/bcd_memory_scratch/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+
+======================================================================
+STEP 4 — PRE-TRAINING AUDIT
+======================================================================
+
+  [Check 1] DataLoader token shapes...
+    batch_src (source IDs): tensor([0])
+    batch_x shape: torch.Size([1, 4096]) (expected (1, 4096))
+    batch_y shape: torch.Size([1, 4096]) (expected (1, 4096))
+    batch_x dtype: torch.int64 (expected torch.long)
+    batch_x range: [0, 50035]
+    ✓ Shapes correct
+
+  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...
+    ⚠ Skipped under --block-coordinate: this check deepcopies the whole
+      model onto GPU and runs an UN-FROZEN backward pass across every
+      param, before BlockCoordinateScheduler exists to bound memory --
+      at large model sizes that alone can OOM a 6 GB card (Issue #112).
+      BCD's own per-block freeze already bounds real-training risk; any
+      real forward/backward issue will surface immediately on step 1.
+
+  [Check 3] Checkpoint save/load cycle...
+    ⚠ Skipped under --block-coordinate: this check rebuilds a SECOND full
+      EdgeHVN and moves it onto GPU alongside the real model (no BCD/freeze
+      applies here either) -- two full-precision weight copies resident at
+      once can OOM a 6 GB card at large sizes, same class of issue as Check 2
+      (Issue #112). The real training loop's own checkpoint saves/resumes
+      exercise this same code path, so a real problem still surfaces there.
+
+  ✓ All audit checks passed!
+✓ Step 4 complete.
+
+  Fused Triton scan enabled on 22 DeltaNet block(s) (#83).
+
+  Design B blockwise-recompute backward enabled on 22 DeltaNet block(s) (#96) -- ~1.05x faster step under --fast.
+
+  Fused ternary quantizer enabled on 166 TernaryLinear layer(s) (#154).
+
+  Fused RMSNorm enabled on 24 module(s).
+
+  Within-step ternary weight cache enabled on 166 TernaryLinear layer(s).
+
+  FP8 Linear enabled on 166 layer(s) (alpha/beta gates + vocab head stay bf16); weight cache ON.
+
+======================================================================
+STEP 5 — START TRAINING
+======================================================================
+
+  Model parameter count:     1,113,059,793
+  Ternary compression ratio: 4.56x
+  Dense fp32 weight size:     4245.99 MB
+  Ternary weight size:        930.75 MB
+  Optimizer: Muon (muon_lr=0.02 on 210 matrices / 1,009,516,544 params; AdamW aux lr=0.0003 / 103,543,249 params)
+  Block-coordinate-descent: 13 blocks (balanced partition), 3 steps/block, active='token_embedding'
+  CPU weight offload: ON (bf16 parked, prefetch on, cache=1 blocks)
+  Mixed-precision: BF16 (Issue #80)
+
+  Training for up to 41 steps (effective batch = 1)
+  Logging every 1 steps | Checkpoint every 100000 steps
+----------------------------------------------------------------------
+  Step      1 (epoch 0)  |  Loss: 11.2434  |  PPL: 76377.14  |  LR: 0.000000  |  0.3 steps/s (1349 tok/s)  |  VRAM: 1.97/4.91 GB
+    Per-source: FineWeb-Edu: 11.2434 (n=1)
+  ⏱ Estimated 3.04s/step | ~303758s per checkpoint interval
+  [vram] peak 82% of card — under the 85% spill threshold
+  Step      2 (epoch 0)  |  Loss: 11.1900  |  PPL: 72399.64  |  LR: 0.000040  |  0.4 steps/s (1798 tok/s)  |  VRAM: 1.97/4.91 GB
+    Per-source: FineWeb-Edu: 11.1900 (n=1)
+  Step      3 (epoch 0)  |  Loss: 11.2433  |  PPL: 76367.82  |  LR: 0.000080  |  0.4 steps/s (1773 tok/s)  |  VRAM: 1.97/4.91 GB
+    Per-source: FineWeb-Edu: 11.2433 (n=1)
+  Step      4 (epoch 0)  |  Loss: 11.2158  |  PPL: 74293.19  |  LR: 0.000120  |  0.4 steps/s (1726 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2158 (n=1)
+  Step      5 (epoch 0)  |  Loss: 11.2350  |  PPL: 75735.37  |  LR: 0.000160  |  0.4 steps/s (1738 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2350 (n=1)
+  Step      6 (epoch 0)  |  Loss: 11.2448  |  PPL: 76477.43  |  LR: 0.000200  |  0.4 steps/s (1661 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2448 (n=1)
+  Step      7 (epoch 0)  |  Loss: 11.2586  |  PPL: 77541.44  |  LR: 0.000240  |  0.4 steps/s (1818 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2586 (n=1)
+  Step      8 (epoch 0)  |  Loss: 11.2451  |  PPL: 76503.11  |  LR: 0.000280  |  0.4 steps/s (1813 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2451 (n=1)
+  Step      9 (epoch 0)  |  Loss: 11.2292  |  PPL: 75300.95  |  LR: 0.000320  |  0.4 steps/s (1733 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2292 (n=1)
+  Step     10 (epoch 0)  |  Loss: 11.2264  |  PPL: 75085.25  |  LR: 0.000360  |  0.5 steps/s (1910 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2264 (n=1)
+  Step     11 (epoch 0)  |  Loss: 11.2334  |  PPL: 75612.98  |  LR: 0.000400  |  0.5 steps/s (1903 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2334 (n=1)
+  Step     12 (epoch 0)  |  Loss: 11.2339  |  PPL: 75653.94  |  LR: 0.000440  |  0.4 steps/s (1816 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2339 (n=1)
+  Step     13 (epoch 0)  |  Loss: 11.2399  |  PPL: 76107.24  |  LR: 0.000480  |  0.5 steps/s (2013 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2399 (n=1)
+  Step     14 (epoch 0)  |  Loss: 11.2495  |  PPL: 76841.22  |  LR: 0.000520  |  0.5 steps/s (2017 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2495 (n=1)
+  Step     15 (epoch 0)  |  Loss: 11.1749  |  PPL: 71314.18  |  LR: 0.000560  |  0.5 steps/s (1923 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1749 (n=1)
+  Step     16 (epoch 0)  |  Loss: 11.2164  |  PPL: 74339.68  |  LR: 0.000600  |  0.5 steps/s (2139 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2164 (n=1)
+  Step     17 (epoch 0)  |  Loss: 11.2265  |  PPL: 75093.27  |  LR: 0.000640  |  0.5 steps/s (2136 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2265 (n=1)
+  Step     18 (epoch 0)  |  Loss: 11.2336  |  PPL: 75625.67  |  LR: 0.000680  |  0.5 steps/s (2029 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2336 (n=1)
+  Step     19 (epoch 0)  |  Loss: 11.1966  |  PPL: 72880.69  |  LR: 0.000720  |  0.6 steps/s (2262 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1966 (n=1)
+  Step     20 (epoch 0)  |  Loss: 11.1775  |  PPL: 71505.41  |  LR: 0.000760  |  0.6 steps/s (2258 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1775 (n=1)
+  Step     21 (epoch 0)  |  Loss: 11.2083  |  PPL: 73739.78  |  LR: 0.000800  |  0.5 steps/s (2135 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2083 (n=1)
+  Step     22 (epoch 0)  |  Loss: 11.1968  |  PPL: 72897.37  |  LR: 0.000840  |  0.6 steps/s (2408 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1968 (n=1)
+  Step     23 (epoch 0)  |  Loss: 11.2156  |  PPL: 74280.15  |  LR: 0.000880  |  0.6 steps/s (2406 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2156 (n=1)
+  Step     24 (epoch 0)  |  Loss: 11.1772  |  PPL: 71479.77  |  LR: 0.000920  |  0.6 steps/s (2279 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1772 (n=1)
+  Step     25 (epoch 0)  |  Loss: 11.2141  |  PPL: 74165.76  |  LR: 0.000960  |  0.6 steps/s (2580 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2141 (n=1)
+  Step     26 (epoch 0)  |  Loss: 11.1678  |  PPL: 70810.51  |  LR: 0.001000  |  0.6 steps/s (2571 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1678 (n=1)
+  Step     27 (epoch 0)  |  Loss: 11.2155  |  PPL: 74272.78  |  LR: 0.001040  |  0.6 steps/s (2426 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2155 (n=1)
+  Step     28 (epoch 0)  |  Loss: 11.1973  |  PPL: 72932.97  |  LR: 0.001080  |  0.7 steps/s (2776 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1973 (n=1)
+  Step     29 (epoch 0)  |  Loss: 11.1752  |  PPL: 71341.39  |  LR: 0.001120  |  0.7 steps/s (2769 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1752 (n=1)
+  Step     30 (epoch 0)  |  Loss: 11.2018  |  PPL: 73264.81  |  LR: 0.001160  |  0.6 steps/s (2603 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.2018 (n=1)
+  Step     31 (epoch 0)  |  Loss: 11.1748  |  PPL: 71313.09  |  LR: 0.001200  |  0.7 steps/s (3023 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1748 (n=1)
+  Step     32 (epoch 0)  |  Loss: 11.1993  |  PPL: 73076.12  |  LR: 0.001240  |  0.7 steps/s (3034 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1993 (n=1)
+  Step     33 (epoch 0)  |  Loss: 11.1706  |  PPL: 71014.48  |  LR: 0.001280  |  0.7 steps/s (2830 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1706 (n=1)
+  Step     34 (epoch 0)  |  Loss: 11.1587  |  PPL: 70168.93  |  LR: 0.001320  |  0.8 steps/s (3310 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1587 (n=1)
+  Step     35 (epoch 0)  |  Loss: 11.1861  |  PPL: 72122.89  |  LR: 0.001360  |  0.8 steps/s (3321 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1861 (n=1)
+  Step     36 (epoch 0)  |  Loss: 11.1849  |  PPL: 72035.45  |  LR: 0.001400  |  0.7 steps/s (3069 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1849 (n=1)
+  Step     37 (epoch 0)  |  Loss: 11.1566  |  PPL: 70021.33  |  LR: 0.001440  |  0.9 steps/s (3635 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1566 (n=1)
+  Step     38 (epoch 0)  |  Loss: 11.1541  |  PPL: 69851.65  |  LR: 0.001480  |  0.9 steps/s (3630 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1541 (n=1)
+  Step     39 (epoch 0)  |  Loss: 11.1839  |  PPL: 71964.04  |  LR: 0.001520  |  0.9 steps/s (3488 tok/s)  |  VRAM: 1.76/4.91 GB
+    Per-source: FineWeb-Edu: 11.1839 (n=1)
+  Step     40 (epoch 0)  |  Loss: 11.1551  |  PPL: 69919.37  |  LR: 0.001560  |  0.4 steps/s (1796 tok/s)  |  VRAM: 1.97/4.91 GB
+    Per-source: FineWeb-Edu: 11.1551 (n=1)
+  Step     41 (epoch 0)  |  Loss: 11.1260  |  PPL: 67915.69  |  LR: 0.001600  |  0.4 steps/s (1805 tok/s)  |  VRAM: 1.97/4.91 GB
+    Per-source: FineWeb-Edu: 11.1260 (n=1)
+
+======================================================================
+TRAINING COMPLETE
+======================================================================
+  Total steps:     41
+  Total time:       79.1s (1.3 min)
+  Avg time/step:    1.929s
+  Final checkpoint: checkpoints/bcd_memory_scratch\edge_conversational.pt
+  Training log:     checkpoints/bcd_memory_scratch\training_log.csv
+✓ Step 5 complete.

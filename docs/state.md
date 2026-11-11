@@ -5,6 +5,100 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Bigger BCD blocks: memory is not the limit, and 3-4 layers per block looks ~12-17% cheaper to full quality — unproven at 1B (2026-11-11)
+
+**One line: the 1B run packs only 2 layers per BCD block because the embedding table sets the
+block size cap, but memory does not actually require that. 3 and 4 layers per block fit
+(82% of the card) and cost 5-10% more per step; at small scale each step buys a lot more
+quality. Under the project's own days formula that is ~12-17% fewer days to full quality.
+6 layers per block spills past the card. Small-scale evidence only; not yet tried at 1B.**
+
+### What fills the GPU at 1B (real `train_edge_conversational.main`, production flags)
+
+`scripts/profile_bcd_memory.py` hooks every optimizer step. Known-answer check passed for all
+13 blocks: gradient bytes = active params x 4. Cross-check: its grad_accum=8 cycle average
+(12.279 s/step) is within 0.5% of the production-reported 12.335 s. At grad_accum=1,
+production layout (MB = GiB):
+
+| block | weights | grads | opt state | other | peak allocated |
+|---|---:|---:|---:|---:|---:|
+| embedding (103M, AdamW state) | 0.38 | 0.38 | 0.77 | 0.44 | 3.34 |
+| each layer block (84M, 2 layers, Muon) | 0.70 | 0.31 | 0.31 | 0.58 | 2.4-2.95 |
+
+The process holds **4.91 GiB reserved** while real allocation peaks at 2.4-3.3 GiB. Allocator
+settings do not reclaim it: `garbage_collection_threshold:0.7` changes nothing (4.91 GiB,
+1.79 s vs 1.82 s per step); `max_split_size_mb:128` is worse (5.78 GiB, 2.53 s). Badly
+split memory is only 0.38 GiB, so this is cached whole segments, not fragmentation, and
+`expandable_segments` is unsupported on Windows (see `GPUBufferPool`). The cache is reusable,
+which is why bigger blocks fit with no change in reserved memory.
+
+### Bigger blocks at 1B, production grad_accum=8 (`ga8_k*.jsonl`)
+
+`partition_budget` = N x the largest layer, embedding kept in its own block. Blocks counted
+without a tail-only `final_norm+decoder` block, which trains just a LayerNorm (the tied
+decoder is the embedding table) and is merged into the last group in production.
+
+| layers/block | training blocks | peak allocated | peak reserved | cycle step | vs 2 layers |
+|---:|---:|---:|---:|---:|---:|
+| 2 (today) | 13 | 3.72 | 4.91 | 12.279 s | 1.000 |
+| 3 | 9 | 3.81 | 4.91 | 12.886 s | 1.049 |
+| 4 | 7 | 4.35 | 4.92 | 13.448 s | 1.095 |
+| 6 | 5 | 5.43 | **5.97 (99.5%)** | **36.838 s** | **3.000** |
+
+**6 layers per block spilled**: layer blocks ran 41-88 s/step against 12-20 s. The
+production #163 guard did not fire, because this profile resets the peak statistics every step.
+Peak allocation at grad_accum=8 is 0.4-0.8 GiB higher than at grad_accum=1, so any memory
+conclusion must use these rows, not the grad_accum=1 runs (`blocksize_*.jsonl`), which
+showed 6 layers fitting at 82%. 5 layers at grad_accum=8 was not run.
+
+### Quality vs block size, small scale (`ab_d1024_L16_blocksize.json`)
+
+d1024 x 16 layers, hybrid, ternary, Muon, 4000 steps, same seed and batches as #188.
+
+| layers/block | training blocks | held-out | gap to full (4.781) | ppl vs full | train min |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 17 | 5.868 | 1.087 | x2.96 | 14.0 |
+| 2 | 9 | 5.599 | 0.818 | x2.27 | 15.0 |
+| 3 | 7 | 5.495 | 0.713 | x2.04 | 16.6 |
+| 4 | 5 | 5.383 | 0.601 | x1.82 | 18.7 |
+
+At equal wall-clock the 4-layer arm still wins by 0.100 (vs 3), 0.174 (vs 2) and 0.425 (vs 1):
+extra steps from smaller blocks do not make up for it. The 1- and 2-layer arms carried a
+wasted tail-only turn (1/18 and 1/10 of the rotation), which flatters 3 and 4 slightly.
+
+### Projection to 1B (`scripts/analyze_block_size.py`)
+
+Block count at 1B is matched to the small-scale quality at the same number of training blocks,
+interpolated linearly in 1/N. Days follow the project's convention, full quality = BCD-accepted
+days x exp(gap to full), so only the relative change is reported:
+
+| layers/block | training blocks | step vs 2 | gap | ppl x | relative days | days if today = 211 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 (today) | 13 | 1.000 | 0.994 | 2.70 | 1.000 | 211 |
+| 3 | 9 | 1.049 | 0.818 | 2.27 | 0.880 | 186 |
+| 4 | 7 | 1.095 | 0.713 | 2.04 | 0.828 | 175 |
+| 6 | 5 | spilled | -- | -- | invalid | -- |
+
+### Caveats, in order of weight
+
+1. **The 211-day figure itself is probably optimistic.** 211 = 132 x 1.6, where 1.6 is BCD's
+   ppl penalty from the d1024 x 8 test: 4 of 8 layers per block (50%). 1B trains 2 of 24 (8%).
+   Interpolated from the small test, 1B's penalty is ~2.7x, so by the same formula today's
+   full-quality estimate is ~357 days. An inference, not a 1B measurement.
+2. **The mapping from small scale to 1B is an assumption** (same training-block count, same
+   quality), and 4000 steps is short. The gaps narrow with training: 1-layer vs 4-layer was
+   0.718 at step 1000 and 0.485 at step 4000; 2-layer vs 4-layer 0.620 and 0.216; 3-layer vs
+   4-layer stayed flat (0.102, 0.112). A long run may show smaller differences.
+3. Single seed; the 3- and 4-layer differences (0.11) are close to the 0.089 seed spread.
+4. Local-loss and unequal-turn results above are unchanged by this.
+
+### Next
+
+1. Longer small-scale confirmation (12,000 steps, 2 vs 3 vs 4 layers per block), since the
+   gaps narrow with training.
+2. Expose `partition_budget` as a CLI flag and merge the tail block into the last group,
+   then a real 1B run at 3 layers per block. Not built: production code is untouched.
+
 ## Shorter embedding-block BCD turns: clearly worse, dose-dependent — not adopted (2026-11-10)
 
 **One line: cutting the embedding block's BCD turn from 100 to 50 or 25 steps (so the layer

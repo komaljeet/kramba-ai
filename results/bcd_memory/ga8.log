@@ -1,0 +1,9 @@
+=== ga8 budget_layers=2
+exit=0 rows=41
+=== ga8 budget_layers=3
+exit=0 rows=32
+=== ga8 budget_layers=4
+exit=0 rows=26
+=== ga8 budget_layers=6
+exit=0 rows=17
+DONE
