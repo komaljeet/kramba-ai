@@ -5,6 +5,66 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B step 7% faster with no change to results: two wasted fp8 operations removed (2026-11-11, #195)
+
+**One line: the 1B production step now averages 11.45 s instead of 12.30 s over a full 13-block
+cycle (-0.85 s, -6.9%). Gradients of the trained block are bit-identical to before. Peak VRAM
+is unchanged at 82.5% of the card.**
+
+An Opus audit of the 1B hot path (24L d2048, seq 4096, grad_accum 8, BCD offload, FP8) found
+two wastes. Both are fixed in this change:
+
+1. **fp8 quantized the same tensor four times per layer.** The fused conv returns a transposed
+   view, so q, k, v and gate each made a contiguous copy and quantized it again. Now a
+   transposed-view input is quantized by transposing the code path (same bytes, same scale),
+   and a one-entry cache lets q/k/v/gate share one quantization (`hvn/edge/fp8_fused.py`).
+   The cache is keyed on data_ptr, `_version`, shape, stride, dtype and device and holds a strong
+   reference, so a reused address can never serve stale codes. It is dropped at every optimizer
+   step and BCD switch. Works at batch size 1 only (production); with B > 1 `reshape` copies
+   the view and nothing is shared, which is no slower than before.
+2. **Frozen blocks recomputed two GEMMs nobody reads.** In the backward recompute of a frozen
+   layer, `out_proj` and `ffn[3]` ran their matrix multiplies but their outputs are unused. They now save the
+   same tensor metadata and skip the GEMM (SwiGLU and MoE keep the full recompute).
+
+| measurement (real `train_edge_conversational.main`, seed 0) | before | after |
+|---|---:|---:|
+| full-cycle mean of per-block medians, 13 blocks | 12.297 s | 11.452 s |
+| blocks.10+11 | 12.31-12.38 s | 11.44-11.45 s |
+| blocks.0+1 | 16.76-16.78 s | 15.52-15.53 s |
+| embedding block | 17.65 s | 16.38-16.40 s |
+
+Peak reserved stays at the embedding block's 5070 MiB (82.5% of 6 GiB) for every block; peak
+allocated rose about 8 MiB. 0 allocator retries in both cycles. Headroom under the 85%
+guard is about 150 MiB.
+
+**The audit's "bit-identical loss" check could not see backward bugs.** LR warmup is `step/500`,
+so step 0 trains at lr 0 and the step-1 losses depend only on the forward pass. A deliberate
+1-ulp error placed only in the skipped path's saved scale changed the gradients and left all
+16 losses identical. The gate that counts is a sha256 of every trainable gradient at steps 0
+and 1. Fixed grads equal baseline in default mode (blocks 20+21) and in `--deterministic` mode
+(blocks 10+11, blocks 0+1, embedding). Two 1-ulp falsifiers (activation scale, skipped-path
+weight scale) both make that check fail.
+
+**Found along the way, not fixed: the production backward is not repeatable run to run.** Two
+unchanged baseline runs at blocks 10+11 differ in ~84.197M of 84.198M gradient elements, by up
+to 9% of each tensor's max. At blocks 20+21 (no attention downstream) two baselines are
+bit-identical, and `--deterministic` makes blocks 10+11 reproducible, so the likely cause is
+the attention layers (6 and 18) downstream. Not isolated.
+
+**Tests.** `tests/test_fp8_input_share_and_skip.py` (16 tests) fails if the cache serves stale
+codes after an in-place write, a write through another view or a same-address view of different
+shape/stride; if the transposed path's bytes differ; if a backward reads the skipped outputs
+(NaN-poisoned, CPU); or if the skip changes any active-block gradient (GPU, with a 1-ulp
+must-fail partner). Mutation checks: reducing the cache key to data_ptr fails 3 tests; not
+swapping the transposed outputs fails 12. 227 relevant tests pass on GPU.
+
+**Not done, measured but not built:** storing the active block's activations instead of
+recomputing them (-0.32 s/step on one block, +0.65 GiB peak; the #163 guard only checks step 1,
+so a later-block spill would go unnoticed; needs a per-block VRAM check first); chunked-loss
+logit recompute (~0.36 s/step); ternary re-quantization of frozen weights (~0.15-0.2 s/step
+estimated); chunk slicing (~0.06 s/step). The audit found no stalls in offload, data loading,
+Muon or the block switch.
+
 ## Bigger BCD blocks: memory is not the limit, and 3-4 layers per block looks ~12-17% cheaper to full quality — unproven at 1B (2026-11-11)
 
 **One line: the 1B run packs only 2 layers per BCD block because the embedding table sets the

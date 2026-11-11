@@ -202,6 +202,10 @@ def _invalidate_step_cache(*_args, **_kwargs) -> None:
         m._fscale = None
         m._f8cache = None      # fp8 weight cache (hvn/edge/fp8_fused.py)
     _STEP_LIVE.clear()
+    # fp8 activation cache: not needed for correctness (its key proves
+    # freshness), dropped so it does not pin a tensor across the step.
+    from . import fp8_fused
+    fp8_fused._X_CACHE[0] = None
 
 
 def _ensure_step_hooks() -> None:

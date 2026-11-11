@@ -346,6 +346,20 @@ class DeltaNetBlock(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
+    def fp8_unread_output_linears(self) -> list:
+        """Linears whose output no backward reads (#195, hvn/edge/fp8_fused.py).
+
+        out_proj and the plain FFN's last Linear feed only dropout and the
+        residual sum in :meth:`forward`; neither saves its inputs. A frozen
+        block's checkpoint recompute may therefore skip their GEMMs. Looked up
+        at call time, so a module swap (ternary) is picked up. SwiGLU / MoE FFNs
+        are not listed (not checked), so they keep the full recompute.
+        """
+        mods = [self.out_proj]
+        if isinstance(self.ffn, nn.Sequential):
+            mods.append(self.ffn[3])
+        return mods
+
     # ------------------------------------------------------------------
     # Shared projection / gating helpers
     # ------------------------------------------------------------------

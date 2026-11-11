@@ -413,6 +413,13 @@ class EdgeHVN(nn.Module):
                 # own backward -- see GPUBufferPool.prefetch.
                 prev_name, prev_params = order[pos - 1]
                 pool.prefetch(prev_name, prev_params, behind=True)
+            if calls[0] >= 2:
+                # The recompute of this frozen block: its output is discarded
+                # (only saved tensors are kept), so fp8 Linears whose output
+                # nothing reads skip their GEMM (#195). Bit-identical grads.
+                from .fp8_fused import skip_unread_outputs
+                with skip_unread_outputs(block):
+                    return block(x_arg, position_ids=pos_arg, **_kw)
             return block(x_arg, position_ids=pos_arg, **_kw)
 
         pool.load(name, params)  # ensure call #1 itself has weights present
