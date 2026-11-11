@@ -397,3 +397,5 @@ def test_bcd_offload_trajectory_bit_identical_to_reference():
         assert torch.equal(a, b), f"param {i} diverged"
     assert sr["fwd"] == sf["fwd"] > 0 and sf["bwd"] > 0
     assert sf["w_hits"] > 0 and sf["w_misses"] > 0, sf
+    # #195: both savings ran in the fused arm, so the equality above covers them.
+    assert sf["x_hits"] > 0 and sf["skipped"] > 0, sf

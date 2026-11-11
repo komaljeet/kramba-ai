@@ -59,6 +59,8 @@ validation loss measures the weights, not the training arithmetic.
 
 from __future__ import annotations
 
+import contextlib
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -78,7 +80,8 @@ _FP8_MAX = {E4M3: 448.0, E5M2: 57344.0}
 DEFAULT_EXEMPT = ("alpha_proj", "beta_proj", "decoder")
 
 #: Call counters. Python ints, cheap; tests use them to prove the path ran.
-FP8_STATS = {"fwd": 0, "bwd": 0, "w_hits": 0, "w_misses": 0, "fallback_rows": 0}
+FP8_STATS = {"fwd": 0, "bwd": 0, "w_hits": 0, "w_misses": 0, "fallback_rows": 0,
+             "x_hits": 0, "skipped": 0}
 
 #: Test hook: route every fp8 module through the eager reference (feasibility
 #: branch semantics, no fused kernels, no weight cache) instead.
@@ -213,6 +216,15 @@ def fp8_quantize(t: torch.Tensor, dtype, transpose: bool = False):
         q, inv = fp8_quantize_reference(t, dtype)
         return q, inv, (q.t().contiguous() if transpose else None)
     assert t.dim() == 2, t.shape
+    if not t.is_contiguous() and t.t().is_contiguous():
+        # A transposed view: the fused causal conv returns ``y.transpose(1, 2)``,
+        # so q/k/v/gate_proj all get a column-major x (#195). Quantize the
+        # row-major ``t.t()`` instead, writing its transposed copy, and swap the
+        # two outputs: same elements, so the same amax and scale, and the
+        # "transposed copy" of t.t() is q(t) row-major -- the same bytes as the
+        # path below, minus a bf16 ``.contiguous()`` copy of the whole tensor.
+        q_t, inv, q = fp8_quantize(t.t(), dtype, transpose=True)
+        return q, inv, (q_t if transpose else None)
     t = t.contiguous()
     M, N = t.shape
     amax = torch.zeros((), device=t.device, dtype=torch.float32)
@@ -229,6 +241,32 @@ def fp8_quantize(t: torch.Tensor, dtype, transpose: bool = False):
     return out, inv, (out_t if transpose else None)
 
 
+#: One-entry cache of the last activation quantized by ``_FP8Linear`` (#195):
+#: q/k/v/gate_proj read the same x, and each used to quantize it again.
+#: ``(key, x_ref, (xq, xs, xq_t))``. The stale-cache hazard is a hit on a
+#: tensor whose bytes are not the cached ones, so the key holds everything that
+#: can change them -- storage address, version counter (any in-place write to
+#: x or a view of it bumps it), shape, stride, dtype, device -- and ``x_ref``
+#: is a strong reference (``detach()``: same storage and version counter, no
+#: autograd graph kept alive), so the address cannot be freed and reused by a
+#: different tensor while it is cached. Dropped at every optimizer step and BCD
+#: switch with the weight caches (``ternary._invalidate_step_cache``).
+_X_CACHE = [None]
+
+
+def _quantize_input(x: torch.Tensor, transpose: bool):
+    if x.is_inference():             # no version counter: freshness unprovable
+        return fp8_quantize(x, E4M3, transpose=transpose)
+    key = (x.data_ptr(), x._version, tuple(x.shape), x.stride(), x.dtype, x.device)
+    c = _X_CACHE[0]
+    if c is not None and c[0] == key and (c[2][2] is not None or not transpose):
+        FP8_STATS["x_hits"] += 1
+        return c[2]
+    val = fp8_quantize(x, E4M3, transpose=transpose)
+    _X_CACHE[0] = (key, x.detach(), val)
+    return val
+
+
 class _FP8Linear(torch.autograd.Function):
     """y = x @ W.T with x [N,K] (bf16 or fp32), fp8 weight supplied pre-quantized.
 
@@ -239,7 +277,7 @@ class _FP8Linear(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x, w, wq, ws, wq_t):
-        xq, xs, xq_t = fp8_quantize(x, E4M3, transpose=w.requires_grad)
+        xq, xs, xq_t = _quantize_input(x, transpose=w.requires_grad)
         # B = wq.t(): [K, O] column-major, as _scaled_mm requires on Ada.
         y = torch._scaled_mm(xq, wq.t(), scale_a=xs, scale_b=ws,
                              out_dtype=torch.bfloat16)
@@ -264,6 +302,56 @@ class _FP8Linear(torch.autograd.Function):
                                   out_dtype=torch.bfloat16).to(ctx.w_dtype)
         FP8_STATS["bwd"] += 1
         return dx, dw, None, None, None
+
+
+class _FP8LinearOutputUnread(_FP8Linear):
+    """``_FP8Linear`` for a FROZEN weight whose output nothing reads (#195).
+
+    In a frozen offloaded block's checkpoint recompute, out_proj and the last
+    FFN Linear only feed dropout + the residual sum, whose backwards read no
+    values, and the recomputed block output is discarded -- so their GEMM is
+    dead work. Only the saved tensors matter, and non-reentrant checkpoint
+    checks their count, shape, dtype and device against the first call, so this
+    saves the same layout ``_FP8Linear.forward`` does with a frozen weight:
+    ``(None, xs, wq_t, ws)``. ``ws`` stands in for ``xs`` (both 0-d fp32 on the
+    same device); backward never reads ``xs`` because a frozen weight has no dW.
+    """
+
+    @staticmethod
+    def forward(ctx, x, w, wq, ws, wq_t):
+        assert not w.requires_grad, "dW needs x; only a frozen weight may skip"
+        ctx.save_for_backward(None, ws, wq_t, ws)
+        ctx.x_dtype, ctx.w_dtype = x.dtype, w.dtype
+        FP8_STATS["fwd"] += 1
+        FP8_STATS["skipped"] += 1
+        return x.new_empty((x.shape[0], wq.shape[0]), dtype=torch.bfloat16)
+
+
+#: ids of the Linears whose GEMM may be skipped right now: set only while
+#: EdgeHVN re-runs a frozen offloaded block inside backward (see
+#: :func:`skip_unread_outputs`); empty everywhere else.
+_SKIP_IDS = [frozenset()]
+
+
+@contextlib.contextmanager
+def skip_unread_outputs(block: nn.Module):
+    """Within: skip the GEMM of ``block``'s output-unread fp8 Linears.
+
+    Blocks declare those Linears via ``fp8_unread_output_linears()``. Only for
+    a checkpoint RECOMPUTE of a frozen block: there the block's output is
+    discarded. Never wrap a forward whose output is used.
+    """
+    ids = set()
+    for m in block.modules():
+        f = getattr(m, "fp8_unread_output_linears", None)
+        if f is not None:
+            ids.update(id(lin) for lin in f())
+    prev = _SKIP_IDS[0]
+    _SKIP_IDS[0] = frozenset(ids)
+    try:
+        yield
+    finally:
+        _SKIP_IDS[0] = prev
 
 
 # ---------------------------------------------------------------------------
@@ -323,8 +411,11 @@ def fp8_module_forward(mod: nn.Module, x: torch.Tensor) -> torch.Tensor:
     lead, K = x.shape[:-1], x.shape[-1]
     wq, ws, wq_t = _fp8_weight(mod)
     x2 = x.reshape(-1, K)
+    fn = _FP8Linear
+    if id(mod) in _SKIP_IDS[0] and not mod.weight.requires_grad:
+        fn = _FP8LinearOutputUnread
     with torch.autocast("cuda", enabled=False):
-        y = _FP8Linear.apply(x2, mod.weight, wq, ws, wq_t)
+        y = fn.apply(x2, mod.weight, wq, ws, wq_t)
     if mod.bias is not None:
         y = y + mod.bias.to(torch.bfloat16)
     return y.reshape(*lead, wq.shape[0])
