@@ -53,13 +53,18 @@ ARMS = {"full": (None, None), "bcd_balanced": ("balanced", None),
         "bcd_balanced_local": ("balanced", 0),
         "bcd_balanced_look2": ("balanced", 2), "bcd_balanced_look4": ("balanced", 4),
         "bcd_balanced_emb50": ("balanced", None), "bcd_balanced_emb25": ("balanced", None),
-        "bcd_balanced_emb150": ("balanced", None), "bcd_balanced_emb200": ("balanced", None)}
+        "bcd_balanced_emb150": ("balanced", None), "bcd_balanced_emb200": ("balanced", None),
+        "bcd_k1": ("balanced", None), "bcd_k2": ("balanced", None),
+        "bcd_k6": ("balanced", None), "bcd_k8": ("balanced", None)}
+# Block-size cap in layers (#192): partition_budget = k x the largest layer. The default
+# arm's cap is the embedding table (4 layers at d1024; 2 layers at 1B).
+BUDGET_LAYERS = {"bcd_k1": 1, "bcd_k2": 2, "bcd_k6": 6, "bcd_k8": 8}
 # Embedding-block turn length per arm (#190); every other block keeps --steps-per-block.
 EMB_STEPS = {"bcd_balanced_emb50": 50, "bcd_balanced_emb25": 25,
              "bcd_balanced_emb150": 150, "bcd_balanced_emb200": 200}
 DEFAULT_ARMS = ["full", "bcd_balanced", "bcd_balanced_local"]
 LOCAL_ARMS = [a for a, (_, k) in ARMS.items() if k is not None]
-VARIANT_ARMS = LOCAL_ARMS + list(EMB_STEPS)
+VARIANT_ARMS = LOCAL_ARMS + list(EMB_STEPS) + list(BUDGET_LAYERS)
 
 
 class UnequalTurnsBCD(BlockCoordinateScheduler):
@@ -153,8 +158,12 @@ def run_arm(arm, args, batches, probes, copy_seqs, device) -> dict:
         sched = UnequalTurnsBCD(model, opt, steps_per_block=args.steps_per_block,
                                 partition=partition, emb_steps=EMB_STEPS[arm])
     elif partition is not None:
+        budget = None
+        if arm in BUDGET_LAYERS:
+            layer_sizes = [sum(p.numel() for p in b.parameters()) for b in model.blocks]
+            budget = BUDGET_LAYERS[arm] * max(layer_sizes)
         sched = BlockCoordinateScheduler(model, opt, steps_per_block=args.steps_per_block,
-                                         partition=partition)
+                                         partition=partition, partition_budget=budget)
     cos = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.steps)
     base_lrs = [pg["lr"] for pg in opt.param_groups]
 
