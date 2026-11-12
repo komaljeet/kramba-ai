@@ -5,6 +5,47 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## The run-to-run gradient difference is attention-backward rounding noise; fixed for `--deterministic` at +0.4% (2026-11-12, #196)
+
+**One line: two identical 1B runs gave different gradients because PyTorch's memory-efficient
+attention backward adds up `dq` with atomics in a different order each run. It is harmless
+rounding noise, not a race on stale data. Repeatable gradients now cost +0.4% step time and no
+extra VRAM; the default run is unchanged.**
+
+- **Cause (measured).** Blocks 10+11 active, real `train_edge_conversational.main`, production
+  flags, seed 0, sha256 of every trainable gradient. Baseline: 3 runs, 3 different hashes.
+  Deterministic attention backward only: 3/3 identical. Full `--deterministic` but attention
+  backward forced nondeterministic: 3/3 different. So attention is the only source; scan,
+  megakernel, fp8, chunked loss, offload and recompute are already repeatable. Only attention
+  layer 18 runs backward at blocks 10+11, which is why blocks 20+21 were already identical.
+- **Why 6-9%.** At the source the gap is tiny: about 2,900 of 8.4M `dq` elements differ, by 2e-5
+  of `dq`'s norm (1x64x4096x32 bf16); `dk`, `dv`, output never differ. fp8's per-tensor e5m2
+  gradient rounding (2 mantissa bits) amplifies it. A seeded 1-ulp bump on a deterministic run
+  gives 6.9% with fp8 and 0.43% without, matching the real race (6.2-6.7% / 0.42%).
+- **Harmless for accuracy.** Forward is bit-repeatable. The deterministic fp8 gradient is 22.4%
+  from the bf16 reference and so are the nondeterministic ones (22.42-22.44%), so being
+  deterministic is not more accurate. That 22% is a separate finding, issue #197.
+- **Fix.** `hvn/core/transformer_block.py`: a custom autograd Function calls the same two aten
+  efficient-attention ops and switches `use_deterministic_algorithms` on only around the
+  backward call, restoring it in a `finally`. Off by default; new `--deterministic-attention`
+  turns on just this; `--deterministic` includes it, sets `fill_uninitialized_memory=False`
+  and uses `CUBLAS_WORKSPACE_CONFIG=:16:8`.
+- **Cost.** Blocks 10+11: 11.439 s -> 11.487 s (+0.05 s, +0.4%). Old full `--deterministic` was
+  12.78 s (+11.6%): the NaN fill of every buffer cost 1.33 s and `:4096:8` cost 304 MiB, which
+  would have broken the 85% guard at the embedding block (82.5% today). New `--deterministic`:
+  11.45 s, 3312 MiB at blocks 10+11 (old 3698). Embedding block 5066 MiB on or off. Embedding
+  timings are 2 steps per run, rough.
+- **Hashes.** Fix ON blocks 10+11: 3/3 identical; OFF: 3/3 different. Embedding block ON 3/3
+  identical, OFF 2/2 different. New `--deterministic` repeats but its hash differs from
+  attention-only (`:16:8` picks other cuBLAS algorithms).
+- **Tests.** `tests/test_deterministic_attention_196.py`, 7 GPU tests: output bit-equal to
+  `F.scaled_dot_product_attention`; dq/dk/dv bit-equal over 3 runs; a falsifier that fails if
+  plain SDPA's dq is identical across 6 runs; flag restored after a normal and a raising
+  backward. Disabling the in-backward switch makes the main test fail.
+- **Limits.** The explicit-mask path (window shorter than sequence, packed rows) is not
+  covered. On a build with the flash kernel plain SDPA would pick flash and this path's forward
+  would differ slightly; this Windows build has no flash.
+
 ## 1B step 7% faster with no change to results: two wasted fp8 operations removed (2026-11-11, #195)
 
 **One line: the 1B production step now averages 11.45 s instead of 12.30 s over a full 13-block

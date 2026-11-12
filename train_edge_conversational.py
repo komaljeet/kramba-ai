@@ -4154,7 +4154,13 @@ def main():
                         help="torch.use_deterministic_algorithms + fixed cuBLAS "
                              "workspace. Pair with --seed for an A/B whose arms "
                              "must be bit-reproducible: --seed alone still drifts "
-                             "~4.5e-3 held-out NLL in 40 steps (#152).")
+                             "~4.5e-3 held-out NLL in 40 steps (#152). "
+                             "Implies --deterministic-attention.")
+    parser.add_argument("--deterministic-attention", action="store_true", default=False,
+                        help="Make only the causal attention backward "
+                             "deterministic (#196): the mem-efficient kernel's "
+                             "atomic dq made 1B gradients differ run to run. "
+                             "No global flag, no cuBLAS workspace, no NaN fill.")
     parser.add_argument("--warmup-steps", type=int, default=None,
                         help="Linear-warmup length in OPTIMIZER steps (default "
                              "500, previously hardcoded). #152 needs it: at a "
@@ -4373,10 +4379,29 @@ def main():
     # step 3 -- the first non-zero update -- to 4.5e-3 held-out NLL apart, which
     # is the size of the #159 noise floor. The drift is non-deterministic
     # backward kernels (atomic accumulation), not data.
+    if args.deterministic or args.deterministic_attention:
+        # #196: the attention backward was the only run-to-run difference
+        # measured at 1B (blocks 10+11 and the embedding block); this fixes
+        # just that kernel, for +0.4% step time and no extra memory.
+        from hvn.core.transformer_block import set_deterministic_attention
+        set_deterministic_attention(True)
+        print("Deterministic attention backward ON (#196).")
     if args.deterministic:
-        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        # The global flag refuses cuBLAS unless this is set. #196 measured that
+        # cuBLAS here is already repeatable without it, but :4096:8 cost
+        # +304 MiB at 1B (past the 85% guard at the embedding block); :16:8
+        # costs nothing. It picks different GEMM algorithms, so its numbers are
+        # repeatable but not bit-equal to a run without --deterministic.
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
         torch.backends.cudnn.benchmark = False
         torch.use_deterministic_algorithms(True, warn_only=False)
+        # The NaN fill of every new buffer only exposes reads of uninitialized
+        # memory; it does not change any result. At 1B it cost 1.33 s/step
+        # (#196: same gradient hash with it off).
+        # (`from` import: a bare `import torch.x` here would make `torch` a
+        # local of main() and break every earlier use of it.)
+        from torch.utils import deterministic as _torch_det
+        _torch_det.fill_uninitialized_memory = False
         print("Deterministic algorithms ON (bit-reproducible run-to-run).")
 
     # === Step 1: Hardware Scan ===

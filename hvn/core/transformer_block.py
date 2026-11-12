@@ -95,6 +95,69 @@ def build_rope_table(max_positions: int, d_head: int, device, dtype,
     return emb.cos().to(dtype), emb.sin().to(dtype)
 
 
+# Issue #196: the memory-efficient attention backward (what F.sdpa runs here:
+# this Windows build has no flash kernel) adds into dq with atomics, so the same
+# step gives gradients that differ in the last bits from run to run. fp8 e5m2
+# gradient quantization then amplifies that, and an A/B whose arms must be
+# bit-identical drifts. The global torch.use_deterministic_algorithms fixes it
+# but costs +11.6% step (it NaN-fills every new buffer) and +304 MiB (the
+# cuBLAS workspace it demands). This switch makes only the attention backward
+# deterministic. Off by default, so normal training is unchanged.
+_DETERMINISTIC_ATTN = False
+
+
+def set_deterministic_attention(on: bool) -> None:
+    """Route grad-enabled causal attention through :class:`_DetCausalSDPA`."""
+    global _DETERMINISTIC_ATTN
+    _DETERMINISTIC_ATTN = bool(on)
+
+
+class _DetCausalSDPA(torch.autograd.Function):
+    """Causal mem-efficient attention whose backward uses the kernel's
+    deterministic dq path.
+
+    Calls the same two aten ops autograd uses for F.sdpa (no recompute, same
+    saved tensors, so the same memory) and switches the global deterministic
+    flag on ONLY around the backward call: that is what selects the kernel's
+    ordered dq reduction, without the NaN fill and cuBLAS rule leaking into the
+    rest of the step. Where a flash kernel exists F.sdpa would pick flash
+    instead, so there the forward is a (valid) different kernel, not bit-equal.
+    """
+
+    @staticmethod
+    def forward(ctx, q, k, v):
+        out, lse, seed, off = torch.ops.aten._scaled_dot_product_efficient_attention(
+            q, k, v, None, True, 0.0, True)  # attn_bias, compute_lse, dropout, causal
+        ctx.save_for_backward(q, k, v, out, lse, seed, off)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        q, k, v, out, lse, seed, off = ctx.saved_tensors
+        prev = torch.are_deterministic_algorithms_enabled()
+        prev_warn = torch.is_deterministic_algorithms_warn_only_enabled()
+        torch.use_deterministic_algorithms(True)
+        try:
+            dq, dk, dv, _ = torch.ops.aten._scaled_dot_product_efficient_attention_backward(
+                grad_out.contiguous(), q, k, v, None, out, lse, seed, off, 0.0,
+                [True, True, True, False], True)
+        finally:
+            torch.use_deterministic_algorithms(prev, warn_only=prev_warn)
+        return dq, dk, dv
+
+
+def _causal_sdpa(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    """F.sdpa(is_causal=True), or its deterministic-backward twin when on."""
+    if (_DETERMINISTIC_ATTN and q.is_cuda and torch.is_grad_enabled()
+            and (q.requires_grad or k.requires_grad or v.requires_grad)):
+        if torch.is_autocast_enabled("cuda"):
+            # F.sdpa is an autocast lower-precision op; the raw aten op is not.
+            dt = torch.get_autocast_dtype("cuda")
+            q, k, v = q.to(dt), k.to(dt), v.to(dt)
+        return _DetCausalSDPA.apply(q, k, v)
+    return F.scaled_dot_product_attention(q, k, v, is_causal=True)
+
+
 class TransformerBlock(nn.Module):
     """Causal MHA + RoPE block with DeltaNetBlock's scaffold (A/B baseline).
 
@@ -198,8 +261,9 @@ class TransformerBlock(nn.Module):
                 mask = mask.masked_fill(~same, float("-inf"))
             o = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, is_causal=False)
         else:
-            # Fused causal scaled-dot-product attention (flash when available)
-            o = F.scaled_dot_product_attention(q, k, v, is_causal=True)  # [B, H, S, d]
+            # Fused causal scaled-dot-product attention (flash when available).
+            # #196's deterministic switch covers this path only, not the mask one.
+            o = _causal_sdpa(q, k, v)  # [B, H, S, d]
         o = o.transpose(1, 2).reshape(B, S, D)
         return self.out_proj(o)
 
