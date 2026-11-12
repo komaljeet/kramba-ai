@@ -5,6 +5,80 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## fp8 gradients are far from bf16 gradients at 1B, but no loss cost is detectable at 180 steps (2026-11-12, #197)
+
+**One line: the production fp8 gradient differs from a bf16 gradient by 12-56% of its norm
+depending on the block, almost all of it from the e4m3 forward. A 180-step held-out test of fp8
+vs bf16 found the two within 0.002 nats, while a one-ulp nudge alone moves the loss by 0.006,
+so no cost is detectable. Smaller costs, or ones that build up over many BCD cycles, are not
+excluded. Verdict: cannot tell below ~0.01 nats.**
+
+### Stage 1: gradient error map (real 1B model, `--deterministic`, step 0 at lr 0)
+
+Same active-block weights and same 8 micro-batches (sha256-checked) for every pair. Reference =
+bf16 Linears (`--fp8-linear` dropped), fits at 69% of the card. "fwd-only" keeps the fp8 forward
+but runs the backward GEMMs in bf16 from the dequantized e4m3 x/W (no e5m2): that arm vs bf16 is
+the forward's share; fp8 vs that arm is the gradient's share (e5m2).
+
+| block | fp8 vs bf16 | cos | fwd-only | e5m2-only |
+|---|---:|---:|---:|---:|
+| token_embedding | 47.4% | 0.888 | 45.9% | 14.3% |
+| blocks.0+1 | 56.0% | 0.843 | 54.2% | 15.7% |
+| blocks.2+3 | 41.0% | 0.916 | 40.0% | 10.7% |
+| blocks.4+5 | 32.0% | 0.949 | 31.3% | 7.6% |
+| blocks.6+7 | 21.6% | 0.977 | 21.2% | 4.9% |
+| blocks.8+9 | 26.1% | 0.966 | 25.6% | 5.6% |
+| blocks.10+11 | 22.4% | 0.975 | 22.1% | 4.6% |
+| blocks.12+13 | 19.7% | 0.981 | 19.4% | 3.7% |
+| blocks.14+15 | 17.0% | 0.986 | 16.8% | 3.1% |
+| blocks.16+17 | 15.1% | 0.989 | 14.9% | 2.6% |
+| blocks.18+19 | 8.6% | 0.996 | 8.5% | 1.5% |
+| blocks.20+21 | 13.6% | 0.991 | 13.4% | 2.1% |
+| blocks.22+23+tail | 12.3% | 0.993 | 12.1% | 2.1% |
+
+The error grows with the distance the backward travels. The worst single tensor is `beta_proj`
+(~60%) in almost every block. Falsifiers: two identical runs give exactly 0 differing elements
+of 84,052,032 in all three modes; one fp32 ulp on one e5m2 scale gives 2.2%. Sensitivity: one
+bf16 ulp on `blocks.20.norm.weight[0]` moves the fp8 gradient 6.7% but the bf16 gradient 0.42%
+(fp8 ~16x more sensitive). Whether this is re-drawn rounding noise rather than a fixed bias is a
+hypothesis, not shown. Data: `results/fp8_grad_197/stage1_grad_error.json`.
+
+### Stage 2: does it cost held-out loss? (real 1B, 180 steps per arm)
+
+Seed 0, same data order, Muon, 100 steps per block: steps 1-100 train the embedding, 101-180
+blocks 0+1 (the two largest Stage 1 errors, so the worst case). Same in all arms:
+`--deterministic`, warmup 20 (500 never exceeds 36% of peak lr in 180 steps), cosine to 0 at step
+180, `--val-fraction 0.001`. Held-out = 64 windows (262,144 tokens) of the trainer's
+token-disjoint FineWeb-Edu split, fp8 off during eval. A_pert = A plus one fp32 ulp on one e5m2
+scale at step 2: the noise floor (an exact re-run is bit-identical under `--deterministic`).
+
+| held-out loss | step 1 | 100 | 140 | 180 |
+|---|---:|---:|---:|---:|
+| A fp8 (production) | 11.23556 | 7.73814 | 7.40708 | 7.31181 |
+| B bf16 | 11.23556 | 7.74018 | 7.40568 | 7.30972 |
+| A_pert (noise floor) | 11.23556 | 7.73798 | 7.40077 | 7.30558 |
+| A - B | 0 | -0.0020 | +0.0014 | +0.0021 |
+| A - A_pert | 0 | +0.0002 | +0.0063 | +0.0062 |
+
+Pre-registered rule: say "fp8 hurts" only if A - B > 0 at steps 140 and 180 AND more than twice
+|A - A_pert| at both. A - B is positive at both, but 0.0014 and 0.0021 are far below twice the
+floor (0.0126 and 0.0125). Rule not met. The floor, a one-ulp nudge, is ~3x the fp8-vs-bf16
+difference, so the test cannot see a cost that small. Step times (deterministic): fp8 12.98 s
+full-cycle mean, bf16 14.17 s (+9.2%); peak 82.9% (fp8) / 81.6% (bf16).
+
+**Honest limits.** One floor sample. 180 steps and 2 of 13 BCD blocks, no full rotation, so a
+cost that accumulates over many cycles or in the deeper blocks is untested. Deviations from
+production are the same in every arm (warmup 20, cosine to 0, deterministic).
+
+**Earlier evidence (cited, not this harness):** state.md 2026-10-22, 25 steps at the embedding
+block, train loss 11.1631 fp8 vs 11.1638 bf16 (train loss at lr ~0); `fp8_fused.py` docstring, a
+3000-step feasibility run, val 5.2292 fp8 vs 5.2313 bf16 (model size not stated);
+`results/grad_precision/` (Aug, d512 L12): 2 mantissa bits tolerated within a 0.011-nat floor.
+
+**What this means.** There is no measured reason to pay the +9.2% step time for bf16. The open
+idea, not tested, is bf16 only for the worst parts (the first blocks, `beta_proj`); it would cost
+much less than 9%, and whether it helps is unknown.
+
 ## The run-to-run gradient difference is attention-backward rounding noise; fixed for `--deterministic` at +0.4% (2026-11-12, #196)
 
 **One line: two identical 1B runs gave different gradients because PyTorch's memory-efficient
