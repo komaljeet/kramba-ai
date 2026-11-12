@@ -5,6 +5,42 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Frozen blocks before the active BCD block run forward only: no speed bug (2026-11-12, #199)
+
+**One line: at 1B, the frozen blocks before the active block (and the frozen embedding) run one
+forward per micro-batch and no backward and no recompute. Nothing to fix. Running them under
+`no_grad` changes the step by 0.1%, inside run-to-run noise (0.3%).**
+
+Real 1B production flags (`scripts/profile_bcd_memory.py` PROD_ARGV), `--grad-accum 8`, 3 steps per
+block, timings = median of steps 2-3 of each block. Counter = forward pre-hook per layer, split by
+whether autograd is running a backward (a checkpoint recompute shows up there).
+
+| active block | layers before / after | before: fwd, bwd calls per micro-batch | after: bwd calls | step time |
+|---|---:|---|---:|---:|
+| token_embedding | 0 / 24 | - | 1 | 16.5 s |
+| blocks.0+1 | 0 / 22 | - | 1 | 15.6 s |
+| blocks.10+11 | 10 / 12 | 1, 0 | 1 | 11.5 s |
+| blocks.22+23+tail | 22 / 0 | 1, 0 | - | 6.5 s |
+
+The input to every frozen prefix layer has `requires_grad=False`, so autograd builds no graph
+there. Layers after the active block show their recompute every time (positive control).
+
+**Falsifier: forcing the bug makes it show up.** Marking the embedding output as needing grad
+makes every prefix layer show 1 recompute per micro-batch, and the step gets slower: middle block
+11.5 s -> 15.7 s, last block 6.5 s -> 15.6 s. That is what the bug would cost if it existed. It
+does not. Peak memory 82.6% of the card in every arm (guard is 85%).
+
+**Skipping the prefix forward is not possible by caching.** The prefix forward is a big share of
+the step late in the rotation: 1.7 s of 11.5 s at the middle block, 3.6 s of 6.5 s at the last
+block. But its output depends on the batch, and pretraining sees each batch once. A cache would
+only hit if the same batch came back while the prefix weights were still frozen, which never
+happens in single-pass pretraining. Not measured as a speedup, because there is nothing to cache.
+
+New test `tests/test_bcd_prefix_forward_only.py` (33 cases, CPU + CUDA + offload, tied and untied)
+fails if a prefix layer ever gets a recompute, and checks that the counter does catch a forced one.
+Data: `results/bcd_prefix/` (`base`, `base2` repeat, `forced`, `nograd`, `summary.json`).
+Harness: `scripts/profile_bcd_prefix.py`.
+
 ## fp8 gradients are far from bf16 gradients at 1B, but no loss cost is detectable at 180 steps (2026-11-12, #197)
 
 **One line: the production fp8 gradient differs from a bf16 gradient by 12-56% of its norm
