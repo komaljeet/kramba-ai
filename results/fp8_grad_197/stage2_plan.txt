@@ -1,0 +1,55 @@
+#197 Stage 2 plan -- written 2026-11-12 ~02:30, BEFORE launch. Not launched yet.
+
+Question: does fp8 gradient noise cost held-out loss on the real 1B production step?
+
+Arms (all: PROD_ARGV 24L d2048 hybrid, seq 4096, batch 1, grad_accum 8, BCD offload
+balanced, Muon 0.02 / lr 3e-4, --seed 0 (same init), same sampler shuffle seed (same
+data order), --deterministic, --bcd-steps-per-block 100, --warmup-steps 20, cosine to 0
+at step 180, --val-fraction 0.001):
+  A_fp8       production --fp8-linear
+  B_bf16      --fp8-linear dropped (bf16 Linears). Stage 1: the e4m3 forward is ~all of
+              the fp8-vs-bf16 gradient gap, so the full-bf16 arm is the right reference.
+  A_fp8_pert  A again with ONE fp32 ulp on one e5m2 scale at optimizer step 2.
+              Noise floor: an exact re-run is bit-identical under --deterministic
+              (measured, Stage 1), so it cannot be a floor. This arm measures how far a
+              quality-neutral, rounding-sized nudge drifts the held-out loss; the
+              A-vs-B difference must clear it.
+
+Steps per arm: 180 (block schedule: token_embedding steps 1-100, blocks.0+1 steps
+101-180). These are the blocks with the LARGEST measured fp8 gradient error in Stage 1
+(47% / 56%), i.e. the worst case, at the production 100 steps per block.
+
+Held-out: first 64 windows (262,144 tokens) of the trainer's token-disjoint FineWeb-Edu
+val split, after optimizer steps 1, 100, 140, 180. Eval runs with fp8 OFF (eval mode),
+so both arms' weights are scored the same way. Step-1 eval must be bit-identical across
+arms (weights still at init: lr 0 at step 0) -- verified in the timing runs
+(11.235557913780212 both, same target sha).
+
+Measured seconds per step (timing runs, --deterministic, a BCD switch on every step,
+so slightly pessimistic):
+  fp8 : token_embedding 18.5 s, blocks.0+1 17.6 s, full-cycle mean 12.98 s
+  bf16: token_embedding 20.2 s, blocks.0+1 19.2 s, full-cycle mean 14.17 s
+  eval: 54 s per eval (64 windows); startup ~40 s; peak reserved 82.9% fp8 / 81.6% bf16.
+
+ETA:
+  A_fp8      100*18.5 + 80*17.6 + 40 + 4*54 = 3514 s = 59 min
+  B_bf16     100*20.2 + 80*19.2 + 40 + 4*54 = 3812 s = 64 min
+  A_fp8_pert                                   3514 s = 59 min
+  total ~3.0 h GPU, back to back.
+
+Deviations from production, identical in all arms: --deterministic; warmup 20 instead
+of 500 (with 500 the whole run would sit below 36% of peak LR, where gradient noise
+matters least); cosine ends at 180; 1,621 windows held out changes the train shuffle.
+
+Would it detect harm? Decision rule fixed in advance: call "fp8 hurts" only if
+A_fp8 - B_bf16 > 0 at steps 140 and 180 AND exceeds 2 x |A_fp8 - A_fp8_pert| at both.
+With ONE floor sample the design resolves only a difference several times that floor;
+a smaller real cost would come out "cannot tell". It also covers 2 of 13 blocks and
+180 steps; a cost that only shows after many BCD cycles is outside what it can see.
+Vacuity guards: step-3 train loss of A_fp8_pert must differ from A_fp8 (the nudge
+took effect); held-out must fall from step 1 (eval sees trained weights).
+
+Smoke check of the floor arm (5 steps, plan config, measured 02:28-02:30): train loss
+identical to A_fp8 at steps 1-2, differs from step 3 (11.222508 vs 11.223788), so the
+nudge takes effect. Steady token_embedding step with no BCD switch: 18.42-18.49 s (fp8),
+matching the 18.5 s used in the ETA.

@@ -1,0 +1,27 @@
+{
+ "tag": "bf16_9",
+ "mode": "bf16",
+ "active": 9,
+ "pert": false,
+ "block": "blocks.16+blocks.17",
+ "n_blocks": 13,
+ "param_sha": "42ada2a6ef57431f6a2df379bc387d36e38e32151af1b5b6adbc4bbac7c90e58",
+ "target_sha": "5f18ab28409dbc2033ed9e1f131edda02750310a6fad17691aeff5c4a629eff3",
+ "loss_calls": 8,
+ "tensors": 36,
+ "numel": 84197504,
+ "peak_alloc": 2701844480,
+ "peak_res": 2967470080,
+ "total_mem": 6438780928,
+ "fp8": {
+  "fwd": 0,
+  "bwd": 0,
+  "w_hits": 0,
+  "w_misses": 0,
+  "fallback_rows": 0,
+  "x_hits": 0,
+  "skipped": 0
+ },
+ "hb_bwd_calls": 0,
+ "wall_s": 33.12833571434021
+}
