@@ -1,0 +1,4 @@
+ab_A_fp8 0 07:13:39
+ab_B_bf16 0 08:16:30
+ab_A_fp8_pert 0 09:14:03
+STAGE2_DONE
