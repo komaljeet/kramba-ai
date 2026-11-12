@@ -769,6 +769,35 @@ def _balance_groups(
     return out
 
 
+def _layer_count_groups(
+    blocks: list[tuple[str, list[nn.Parameter]]],
+    layers_per_block: int,
+) -> list[tuple[list[str], list[nn.Parameter]]]:
+    """Blocks of up to `layers_per_block` layers (#194).
+
+    The default 'balanced' packing is capped by the embedding table, which gives about
+    2 layers per block at 1B. This sets the layer count directly instead:
+      - the embedding stays alone in the first block (its AdamW state is the heaviest);
+      - consecutive layers are packed `layers_per_block` at a time;
+      - the tail (final_norm+decoder) joins the last group. Alone it would train only
+        a LayerNorm, because the tied decoder is the embedding table: a wasted turn.
+    Requires the usual block order: embedding, layers..., tail.
+    """
+    if layers_per_block < 1:
+        raise ValueError("layers_per_block must be >= 1")
+    if len(blocks) < 3 or blocks[-1][0] != "final_norm+decoder":
+        raise ValueError("layers_per_block needs blocks ordered embedding, layers..., "
+                         "final_norm+decoder")
+    emb, layers, tail = blocks[0], blocks[1:-1], blocks[-1]
+    groups: list[tuple[list[str], list[nn.Parameter]]] = [([emb[0]], list(emb[1]))]
+    for i in range(0, len(layers), layers_per_block):
+        chunk = layers[i:i + layers_per_block]
+        groups.append(([n for n, _ in chunk], [p for _, ps in chunk for p in ps]))
+    groups[-1][0].append(tail[0])
+    groups[-1][1].extend(tail[1])
+    return groups
+
+
 def _validate_partition(model: nn.Module, blocks: list[tuple[str, list[nn.Parameter]]]) -> None:
     seen: set[int] = set()
     for name, params in blocks:
@@ -827,6 +856,7 @@ class BlockCoordinateScheduler:
         partition: str = "layer",
         partition_budget: int | None = None,
         initial_active_idx: int | None = None,
+        layers_per_block: int | None = None,
     ):
         """
         offload_inactive_weights : bool
@@ -946,12 +976,19 @@ class BlockCoordinateScheduler:
             # compared each segment's name to ONE active name and a merged name
             # like "blocks.0+blocks.1" matched none of them. The model now gets
             # the member set instead (EdgeHVN._offload_active_names).
-            groups = _balance_groups(self.blocks, partition_budget)
+            if layers_per_block:
+                groups = _layer_count_groups(self.blocks, layers_per_block)
+            else:
+                groups = _balance_groups(self.blocks, partition_budget)
             self.blocks = [("+".join(names), params) for names, params in groups]
             self._block_members = [tuple(names) for names, _ in groups]
             _validate_partition(model, self.blocks)
         elif partition != "layer":
             raise ValueError(f"unknown partition {partition!r} (layer|balanced)")
+        elif layers_per_block:
+            # #194: "layer" would silently ignore the option and train 1 layer
+            # per block, so an A/B arm asking for 4 would measure 1.
+            raise ValueError("layers_per_block needs partition='balanced'")
         self.partition = partition
         # #157: parameters reachable from more than one module must never be
         # evicted. The tied table is the case that matters: `_take()` assigns it
