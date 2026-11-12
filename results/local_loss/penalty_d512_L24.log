@@ -1,0 +1,170 @@
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.0, 'OpenAssistant': 0.0, 'WikiText-103': 0.0, 'FineWeb-Edu': 1.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 144,853,865  |  windows/source: [252205, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 144853865
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[ab] triton+megakernel scan on 22 DeltaNet blocks
+[ab] known-answer: forward_to(last layer) vs model(x) max |diff| 0.000e+00
+[ab] triton+megakernel scan on 22 DeltaNet blocks
+
+[ab] === arm 'bcd_k2' ===
+[ab]     Muon (muon_lr=0.02 on 210 matrices / 63,094,784 params; AdamW aux lr=0.0003 / 25,923,505 params)
+[ab]     block token_embedding                                                          25.73M
+[ab]     block blocks.0+blocks.1                                                         5.27M
+[ab]     block blocks.2+blocks.3                                                         5.27M
+[ab]     block blocks.4+blocks.5                                                         5.27M
+[ab]     block blocks.6+blocks.7                                                         5.26M
+[ab]     block blocks.8+blocks.9                                                         5.27M
+[ab]     block blocks.10+blocks.11                                                       5.27M
+[ab]     block blocks.12+blocks.13                                                       5.27M
+[ab]     block blocks.14+blocks.15                                                       5.27M
+[ab]     block blocks.16+blocks.17                                                       5.27M
+[ab]     block blocks.18+blocks.19                                                       5.26M
+[ab]     block blocks.20+blocks.21                                                       5.27M
+[ab]     block blocks.22+blocks.23+final_norm+decoder                                    5.32M
+[ab]   step   250  held-out 8.02251  train 0.8 min
+[ab]   step   500  held-out 7.82882  train 1.5 min
+[ab]   step   750  held-out 7.76742  train 2.1 min
+[ab]   step  1000  held-out 7.73051  train 2.6 min
+[ab]   step  1250  held-out 7.66130  train 3.1 min
+[ab]   step  1500  held-out 6.36453  train 3.9 min
+[ab]   step  1750  held-out 6.26475  train 4.6 min
+[ab]   step  2000  held-out 6.21764  train 5.2 min
+[ab]   step  2250  held-out 6.19582  train 5.8 min
+[ab]   step  2500  held-out 6.17283  train 6.3 min
+[ab]   step  2750  held-out 6.06444  train 6.9 min
+[ab]   step  3000  held-out 5.97569  train 7.6 min
+[ab]   step  3250  held-out 5.93606  train 8.3 min
+[ab]   step  3500  held-out 5.91892  train 8.9 min
+[ab]   step  3750  held-out 5.89982  train 9.4 min
+[ab]   step  4000  held-out 5.86426  train 10.0 min
+[ab]   step  4250  held-out 5.84693  train 10.7 min
+[ab]   step  4500  held-out 5.80530  train 11.4 min
+[ab]   step  4750  held-out 5.77847  train 12.0 min
+[ab]   step  5000  held-out 5.76369  train 12.5 min
+[ab]   step  5250  held-out 5.75863  train 13.0 min
+[ab]   step  5500  held-out 5.74554  train 13.8 min
+[ab]   step  5750  held-out 5.69941  train 14.4 min
+[ab]   step  6000  held-out 5.68424  train 15.1 min
+[ab]   step  6250  held-out 5.67352  train 15.6 min
+[ab]   step  6500  held-out 5.65479  train 16.1 min
+[ab]   step  6750  held-out 5.66826  train 16.8 min
+[ab]   step  7000  held-out 5.64190  train 17.5 min
+[ab]   step  7250  held-out 5.62424  train 18.1 min
+[ab]   step  7500  held-out 5.61461  train 18.7 min
+[ab]   step  7750  held-out 5.60417  train 19.2 min
+[ab]   step  8000  held-out 5.61260  train 19.9 min
+[ab]   step  8250  held-out 5.58574  train 20.6 min
+[ab]   step  8500  held-out 5.57204  train 21.2 min
+[ab]   step  8750  held-out 5.56407  train 21.8 min
+[ab]   step  9000  held-out 5.55614  train 22.3 min
+[ab]   step  9250  held-out 5.55754  train 22.9 min
+[ab]   step  9500  held-out 5.54005  train 23.7 min
+[ab]   step  9750  held-out 5.53219  train 24.3 min
+[ab]   step 10000  held-out 5.52683  train 24.9 min
+[ab]   step 10250  held-out 5.52436  train 25.4 min
+[ab]   step 10500  held-out 5.51843  train 26.0 min
+[ab]   step 10750  held-out 5.51699  train 26.7 min
+[ab]   step 11000  held-out 5.51440  train 27.4 min
+[ab]   step 11250  held-out 5.51302  train 28.0 min
+[ab]   step 11500  held-out 5.51180  train 28.5 min
+[ab]   step 11750  held-out 5.51153  train 29.1 min
+[ab]   step 12000  held-out 5.51126  train 29.8 min
+[ab]   copy acc first-half 0.000 repeat 0.000; train 29.8 min; unmoved 0
+[ab]   median step   191.3 ms   1000 steps  token_embedding
+[ab]   median step   182.0 ms   1000 steps  blocks.0+blocks.1
+[ab]   median step   174.8 ms   1000 steps  blocks.2+blocks.3
+[ab]   median step   168.0 ms    900 steps  blocks.4+blocks.5
+[ab]   median step   158.2 ms    900 steps  blocks.6+blocks.7
+[ab]   median step   156.0 ms    900 steps  blocks.8+blocks.9
+[ab]   median step   148.3 ms    900 steps  blocks.10+blocks.11
+[ab]   median step   141.7 ms    900 steps  blocks.12+blocks.13
+[ab]   median step   134.2 ms    900 steps  blocks.14+blocks.15
+[ab]   median step   126.6 ms    900 steps  blocks.16+blocks.17
+[ab]   median step   117.4 ms    900 steps  blocks.18+blocks.19
+[ab]   median step   114.4 ms    900 steps  blocks.20+blocks.21
+[ab]   median step   110.4 ms    900 steps  blocks.22+blocks.23+final_norm+decoder
+[ab] triton+megakernel scan on 22 DeltaNet blocks
+
+[ab] === arm 'full' ===
+[ab]     Muon (muon_lr=0.02 on 210 matrices / 63,094,784 params; AdamW aux lr=0.0003 / 25,923,505 params)
+[ab]   step   250  held-out 6.16376  train 1.8 min
+[ab]   step   500  held-out 5.82327  train 3.7 min
+[ab]   step   750  held-out 5.61306  train 5.5 min
+[ab]   step  1000  held-out 5.51711  train 7.3 min
+[ab]   step  1250  held-out 5.42125  train 9.1 min
+[ab]   step  1500  held-out 5.34880  train 10.9 min
+[ab]   step  1750  held-out 5.30332  train 12.7 min
+[ab]   step  2000  held-out 5.25284  train 14.6 min
+[ab]   step  2250  held-out 5.21211  train 16.4 min
+[ab]   step  2500  held-out 5.15196  train 18.2 min
+[ab]   step  2750  held-out 5.12836  train 20.0 min
+[ab]   step  3000  held-out 5.10901  train 21.8 min
+[ab]   step  3250  held-out 5.07253  train 23.7 min
+[ab]   step  3500  held-out 5.04718  train 25.5 min
+[ab]   step  3750  held-out 5.01352  train 27.3 min
+[ab]   step  4000  held-out 4.99267  train 29.1 min
+[ab]   step  4250  held-out 4.95396  train 30.9 min
+[ab]   step  4500  held-out 4.90974  train 32.8 min
+[ab]   step  4750  held-out 4.87934  train 34.6 min
+[ab]   step  5000  held-out 4.84590  train 36.4 min
+[ab]   step  5250  held-out 4.81886  train 38.2 min
+[ab]   step  5500  held-out 4.78440  train 40.0 min
+[ab]   step  5750  held-out 4.74993  train 41.9 min
+[ab]   step  6000  held-out 4.73133  train 43.7 min
+[ab]   step  6250  held-out 4.72059  train 45.5 min
+[ab]   step  6500  held-out 4.69131  train 47.3 min
+[ab]   step  6750  held-out 4.66759  train 49.1 min
+[ab]   step  7000  held-out 4.64190  train 50.9 min
+[ab]   step  7250  held-out 4.62387  train 52.8 min
+[ab]   step  7500  held-out 4.61256  train 54.6 min
+[ab]   step  7750  held-out 4.58636  train 56.4 min
+[ab]   step  8000  held-out 4.56462  train 58.2 min
+[ab]   step  8250  held-out 4.54805  train 60.0 min
+[ab]   step  8500  held-out 4.51163  train 61.8 min
+[ab]   step  8750  held-out 4.49267  train 63.6 min
+[ab]   step  9000  held-out 4.46802  train 65.5 min
+[ab]   step  9250  held-out 4.44972  train 67.3 min
+[ab]   step  9500  held-out 4.44002  train 69.1 min
+[ab]   step  9750  held-out 4.43000  train 71.0 min
+[ab]   step 10000  held-out 4.41000  train 72.8 min
+[ab]   step 10250  held-out 4.39991  train 74.6 min
+[ab]   step 10500  held-out 4.38976  train 76.4 min
+[ab]   step 10750  held-out 4.38355  train 78.2 min
+[ab]   step 11000  held-out 4.37492  train 80.0 min
+[ab]   step 11250  held-out 4.36847  train 81.9 min
+[ab]   step 11500  held-out 4.36602  train 83.7 min
+[ab]   step 11750  held-out 4.36146  train 85.5 min
+[ab]   step 12000  held-out 4.36033  train 87.3 min
+[ab]   copy acc first-half 0.000 repeat 0.122; train 87.3 min; unmoved 0
+[ab]   median step   434.4 ms  12000 steps  all
+
+[ab] ================ local-loss BCD ================
+[ab] arm                   held-out      ppl    copy  train min    GiB
+[ab] bcd_k2                  5.5113    247.5   0.000       29.8   3.16
+[ab] full                    4.3603     78.3   0.122       87.3   2.60
+[ab] wrote results/local_loss/penalty_d512_L24.json
