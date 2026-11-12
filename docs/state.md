@@ -5,6 +5,27 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## The 1.6x BCD penalty does not hold at 13 blocks per rotation: it is 2.4x at 4000 steps and 3.2x at 12000, and still growing (2026-11-12, #198)
+
+Why: the published 211-day figure (132 days x 1.6) used a penalty of 0.47 nats from ONE test (d1024 x 8 layers, 4 layers per block, about 3 blocks per rotation, 4000 steps, #164). The 1B run is 24 layers at 2 layers per block (13 blocks per rotation) and far longer. Full training does not fit at 1B, so this measures the penalty at a narrow stand-in where full fits. It is NOT a 1B measurement.
+
+Setup: d512, 16 heads, same data and harness as #192 (`scripts/ab_local_loss.py`, `scripts/run_penalty_vs_n.sh`). Arms `bcd_k2` (balanced BCD, 2 layers per block) and `full`, 12000 steps each, held-out loss. 12 layers = embedding block + 6 layer blocks (7 training blocks, attention layers 3 and 9). 24 layers = embedding block + 12 layer blocks (13 training blocks, attention layers 6 and 18). Layout checked in the logs. Raw: `results/local_loss/penalty_d512_L12.*`, `penalty_d512_L24.*`.
+
+| Step | 12L BCD | 12L full | 12L gap (nats) | 12L ppl penalty | 24L BCD | 24L full | 24L gap (nats) | 24L ppl penalty |
+|---|---|---|---|---|---|---|---|---|
+| 1000 | 6.292 | 5.516 | 0.776 | 2.17x | 7.731 | 5.517 | 2.214 | 9.2x |
+| 2000 | 5.936 | 5.256 | 0.680 | 1.97x | 6.218 | 5.253 | 0.965 | 2.62x |
+| 4000 | 5.655 | 5.008 | 0.647 | 1.91x | 5.864 | 4.993 | 0.872 | 2.39x |
+| 8000 | 5.445 | 4.602 | 0.843 | 2.32x | 5.613 | 4.565 | 1.048 | 2.85x |
+| 12000 | 5.348 | 4.405 | 0.943 | 2.57x | 5.511 | 4.360 | 1.151 | 3.16x |
+
+Findings (measured):
+- At equal steps (4000), penalty is 1.6x (old, about 3 blocks) -> 1.9x (7 blocks) -> 2.4x (13 blocks). More blocks per rotation costs more, so the old 1.6x does not describe the 1B layout.
+- After step 4000 the penalty grows with run length at both depths (12L: 1.9x -> 2.6x; 24L: 2.4x -> 3.2x). BCD flattens (24L: 5.61 at 8000 -> 5.51 at 12000) while full keeps falling. Steps 1000-2000 at 24L are dominated by each block having trained only about 77 steps in the first rotation and say little.
+- Both the 4000-step gaps differ from the old test in width, depth and block count at once, so the 1.6x vs 1.9x vs 2.4x comparison mixes factors; the 12L vs 24L pair differs only in depth/block count (same width, same data).
+
+Not measured: the penalty at 1B, and its value at the 1B run length. The curves have not flattened by 12000 steps, so the 12000-step penalty is not an upper bound. Plugging the formula (132 days x penalty) with the 24L numbers gives 316 days (2.4x) to 417 days (3.2x); that is arithmetic on a stand-in, not a measured 1B figure. The "~12-17% cheaper at 3-4 layers per block" line in the entry below is unaffected by this result but also still unproven at 1B.
+
 ## fp8 gradients are far from bf16 gradients at 1B, but no loss cost is detectable at 180 steps (2026-11-12, #197)
 
 **One line: the production fp8 gradient differs from a bf16 gradient by 12-56% of its norm
