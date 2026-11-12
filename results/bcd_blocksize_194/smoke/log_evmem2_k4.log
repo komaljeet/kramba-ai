@@ -1,0 +1,228 @@
+[#163] --offload implies --block-coordinate; enabling it.
+[#163] --offload requires --grad-checkpoint; enabling it (offload evicts weights after the forward and relies on the recompute to bring them back).
+[--fast] Enabled recommended training stack: precision=bf16, tf32, triton-scan, megakernel-scan, fused-ternary, ternary-step-cache, fused-rmsnorm, num-workers=4
+TF32 matmul enabled (Issue #81): fp32 matmuls use TF32 on Ampere+ tensor cores.
+Seeded all RNGs with 0 (reproducible init + shuffling).
+Deterministic attention backward ON (#196).
+Deterministic algorithms ON (bit-reproducible run-to-run).
+======================================================================
+STEP 1 — HARDWARE SCAN
+======================================================================
+
+--- nvidia-smi ---
+Thu Nov 12 15:24:18 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 610.74                 KMD Version: 610.74        CUDA UMD Version: 13.3     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                  Driver-Model | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 4050 ...  WDDM  |   00000000:01:00.0 Off |                  N/A |
+| N/A   51C    P8              1W /   80W |     131MiB /   6141MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A             248    C+G   ...y\StartMenuExperienceHost.exe      N/A      |
+|    0   N/A  N/A            4744    C+G   ..._cw5n1h2txyewy\SearchHost.exe      N/A      |
+|    0   N/A  N/A            7328    C+G   ...Free Download Manager\fdm.exe      N/A      |
+|    0   N/A  N/A           12060    C+G   ...2txyewy\CrossDeviceResume.exe      N/A      |
+|    0   N/A  N/A           14404    C+G   ....0.4341.46\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           17260    C+G   ...ms\Microsoft VS Code\Code.exe      N/A      |
++-----------------------------------------------------------------------------------------+
+
+--- System RAM ---
+  Total RAM: 15.29 GB
+  Free RAM:  8.54 GB
+
+--- Torch Device Checks ---
+  GPU:              NVIDIA GeForce RTX 4050 Laptop GPU
+  VRAM total:       6.00 GB
+  VRAM free:        4.96 GB
+  bf16 supported:   True
+  Torch version:    2.12.1+cu126
+
+--- Chosen Settings (with reasoning) ---
+  d_model:       512  (reference dimension from README)
+  num_layers:    12  (depth for language understanding)
+  n_heads:       8  (standard head count for d=512)
+  batch_size:    4  (fits in VRAM with ternary compression)
+  seq_len:       512  (good context for conversational training)
+  grad_accum:    8  (effective batch = 32)
+  precision:     bf16  (RTX 4050 supports bf16)
+  Est. peak VRAM: ~3.3 GB (safe within 5.0 GB free)
+  Effective batch size: 32
+
+✓ Step 1 complete.
+
+  Loading GPT-2 tokenizer...
+  Tokenizer: gpt2 | vocab_size = 50257 | eos_token_id = 50256
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.0, 'OpenAssistant': 0.0, 'WikiText-103': 0.0, 'FineWeb-Edu': 1.0}
+Sequence length: 4096
+Batch size: 1
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\fineweb_edu.bin (6,642,451,492 tokens) -- skipping parquet extraction
+[data mix] total pretrain budget capped at 6,642,450,432 tokens (6.64B) by DATA VOLUME, not the mix ratio -- every available window from every source is already being used (1,621,692 total), none of them hit their max_repeat=3 limit. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~332M-param model -- if you're targeting something bigger, download more data (proportionate to the current mix shares); adjusting the mix ratio alone will not raise this ceiling until raw volume grows enough for a source's repeat limit to become the active constraint instead.
+
+    Mixed dataset: 1,621,692 train samples (1,621 held-out val), seq_len=4096
+    Unique tokens on disk: 6,642,451,492  |  windows/source: [1621692]
+    Per-source (train): FineWeb-Edu=1,621,692 (100.0%)
+  Tokens: 6642451492
+  Samples: 1621692
+  Held-out val: 1,621 samples
+
+  DataLoader ready: batch_size=1
+✓ Step 2 complete.
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.0
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → results/bcd_blocksize_194/smoke\ckpt_evmem2_k4/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from results/bcd_blocksize_194/smoke\ckpt_evmem2_k4/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+  warmup override:   0 steps (--warmup-steps; the banner above shows the default)
+
+======================================================================
+STEP 4 — PRE-TRAINING AUDIT
+======================================================================
+
+  [Check 1] DataLoader token shapes...
+    batch_src (source IDs): tensor([0])
+    batch_x shape: torch.Size([1, 4096]) (expected (1, 4096))
+    batch_y shape: torch.Size([1, 4096]) (expected (1, 4096))
+    batch_x dtype: torch.int64 (expected torch.long)
+    batch_x range: [8, 50210]
+    ✓ Shapes correct
+
+  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...
+    ⚠ Skipped under --block-coordinate: this check deepcopies the whole
+      model onto GPU and runs an UN-FROZEN backward pass across every
+      param, before BlockCoordinateScheduler exists to bound memory --
+      at large model sizes that alone can OOM a 6 GB card (Issue #112).
+      BCD's own per-block freeze already bounds real-training risk; any
+      real forward/backward issue will surface immediately on step 1.
+
+  [Check 3] Checkpoint save/load cycle...
+    ⚠ Skipped under --block-coordinate: this check rebuilds a SECOND full
+      EdgeHVN and moves it onto GPU alongside the real model (no BCD/freeze
+      applies here either) -- two full-precision weight copies resident at
+      once can OOM a 6 GB card at large sizes, same class of issue as Check 2
+      (Issue #112). The real training loop's own checkpoint saves/resumes
+      exercise this same code path, so a real problem still surfaces there.
+
+  ✓ All audit checks passed!
+✓ Step 4 complete.
+
+  Fused Triton scan enabled on 22 DeltaNet block(s) (#83).
+
+  Design B blockwise-recompute backward enabled on 22 DeltaNet block(s) (#96) -- ~1.05x faster step under --fast.
+
+  Fused ternary quantizer enabled on 166 TernaryLinear layer(s) (#154).
+
+  Fused RMSNorm enabled on 24 module(s).
+
+  Within-step ternary weight cache enabled on 166 TernaryLinear layer(s).
+
+  FP8 Linear enabled on 166 layer(s) (alpha/beta gates + vocab head stay bf16); weight cache ON.
+
+======================================================================
+STEP 5 — START TRAINING
+======================================================================
+
+  Model parameter count:     1,113,059,793
+  Ternary compression ratio: 4.56x
+  Dense fp32 weight size:     4245.99 MB
+  Ternary weight size:        930.75 MB
+  Optimizer: Muon (muon_lr=0.02 on 210 matrices / 1,009,516,544 params; AdamW aux lr=0.0003 / 103,543,249 params)
+[h194] LAYOUT k=4: 7 blocks: ['token_embedding', 'blocks.0+blocks.1+blocks.2+blocks.3', 'blocks.4+blocks.5+blocks.6+blocks.7', 'blocks.8+blocks.9+blocks.10+blocks.11', 'blocks.12+blocks.13+blocks.14+blocks.15', 'blocks.16+blocks.17+blocks.18+blocks.19', 'blocks.20+blocks.21+blocks.22+blocks.23+final_norm+decoder']
+  Block-coordinate-descent: 7 blocks (balanced partition), 2 steps/block, active='token_embedding'
+  CPU weight offload: ON (bf16 parked, prefetch on, cache=1 blocks)
+  Mixed-precision: BF16 (Issue #80)
+
+  Training for up to 2800 steps (effective batch = 8)
+  Logging every 1 steps | Checkpoint every 100000 steps
+----------------------------------------------------------------------
+  Step      1 (epoch 0)  |  Loss: 11.2222  |  PPL: 74774.40  |  LR: 0.020000  |  0.1 steps/s (1931 tok/s)  |  VRAM: 2.95/4.94 GB
+    Per-source: FineWeb-Edu: 11.2222 (n=8)
+  ⏱ Estimated 16.97s/step | ~1696911s per checkpoint interval
+  [vram] peak 82% of card — under the 85% spill threshold
+[h194] TURN token_embedding ends @step 2: peak reserved 5054 MiB (82.3%)
+[h194] EVAL step 2: held-out 10.91863 (51s)
+  Step      2 (epoch 0)  |  Loss: 11.0710  |  PPL: 64281.60  |  LR: 0.020000  |  0.0 steps/s (484 tok/s)  |  VRAM: 1.57/1.65 GB
+    Per-source: FineWeb-Edu: 11.0710 (n=8)
+  Step      3 (epoch 0)  |  Loss: 10.9193  |  PPL: 55230.76  |  LR: 0.020000  |  0.1 steps/s (2034 tok/s)  |  VRAM: 3.71/4.27 GB
+    Per-source: FineWeb-Edu: 10.9193 (n=8)
+[h194] TURN blocks.0+blocks.1+blocks.2+blocks.3 ends @step 4: peak reserved 5034 MiB (82.0%)
+  Step      4 (epoch 0)  |  Loss: 10.7106  |  PPL: 44830.75  |  LR: 0.020000  |  0.1 steps/s (2010 tok/s)  |  VRAM: 2.69/4.92 GB
+    Per-source: FineWeb-Edu: 10.7106 (n=8)
+  Step      5 (epoch 0)  |  Loss: 10.5333  |  PPL: 37545.11  |  LR: 0.020000  |  0.1 steps/s (2262 tok/s)  |  VRAM: 3.60/4.92 GB
+    Per-source: FineWeb-Edu: 10.5333 (n=8)
+[h194] TURN blocks.4+blocks.5+blocks.6+blocks.7 ends @step 6: peak reserved 5034 MiB (82.0%)
+  Step      6 (epoch 0)  |  Loss: 10.3183  |  PPL: 30283.19  |  LR: 0.020000  |  0.1 steps/s (2232 tok/s)  |  VRAM: 2.69/4.92 GB
+    Per-source: FineWeb-Edu: 10.3183 (n=8)
+  Step      7 (epoch 0)  |  Loss: 10.1286  |  PPL: 25050.21  |  LR: 0.020000  |  0.1 steps/s (2564 tok/s)  |  VRAM: 3.46/4.92 GB
+    Per-source: FineWeb-Edu: 10.1286 (n=8)
+[h194] TURN blocks.8+blocks.9+blocks.10+blocks.11 ends @step 8: peak reserved 5034 MiB (82.0%)
+  Step      8 (epoch 0)  |  Loss: 9.9209  |  PPL: 20350.63  |  LR: 0.020000  |  0.1 steps/s (2525 tok/s)  |  VRAM: 2.69/4.92 GB
+    Per-source: FineWeb-Edu: 9.9209 (n=8)
+  Step      9 (epoch 0)  |  Loss: 9.8213  |  PPL: 18422.38  |  LR: 0.019999  |  0.1 steps/s (2933 tok/s)  |  VRAM: 3.34/4.92 GB
+    Per-source: FineWeb-Edu: 9.8213 (n=8)
+[h194] TURN blocks.12+blocks.13+blocks.14+blocks.15 ends @step 10: peak reserved 5034 MiB (82.0%)
+  Step     10 (epoch 0)  |  Loss: 9.7226  |  PPL: 16689.84  |  LR: 0.019999  |  0.1 steps/s (2887 tok/s)  |  VRAM: 2.69/4.92 GB
+    Per-source: FineWeb-Edu: 9.7226 (n=8)
+  Step     11 (epoch 0)  |  Loss: 9.6014  |  PPL: 14785.36  |  LR: 0.019999  |  0.1 steps/s (3453 tok/s)  |  VRAM: 3.22/4.92 GB
+    Per-source: FineWeb-Edu: 9.6014 (n=8)
+[h194] TURN blocks.16+blocks.17+blocks.18+blocks.19 ends @step 12: peak reserved 5034 MiB (82.0%)
+[h194] EVAL step 12: held-out 9.39613 (49s)
+  Step     12 (epoch 0)  |  Loss: 9.4464  |  PPL: 12662.81  |  LR: 0.019999  |  0.0 steps/s (555 tok/s)  |  VRAM: 2.06/2.42 GB
+    Per-source: FineWeb-Edu: 9.4464 (n=8)
+  Step     13 (epoch 0)  |  Loss: 9.4662  |  PPL: 12915.58  |  LR: 0.019999  |  0.1 steps/s (4191 tok/s)  |  VRAM: 3.16/3.51 GB
+    Per-source: FineWeb-Edu: 9.4662 (n=8)
+[h194] TURN blocks.20+blocks.21+blocks.22+blocks.23+final_norm+decoder ends @step 14: peak reserved 4106 MiB (66.9%)
+[h194] EVAL step 14: held-out 9.25490 (49s)

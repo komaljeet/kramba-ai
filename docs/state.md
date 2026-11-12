@@ -5,6 +5,66 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 2 vs 4 layers per BCD block at 1B: checks passed, 2800-step held-out run in flight (2026-11-12, #194)
+
+**One line: the real 1B A/B of 2 vs 4 layers per BCD block is running (k2 first, then k4,
+~20 h, started 2026-11-12 15:30). Every pre-run check passed. No quality result yet.**
+
+### What runs
+
+`scripts/exp_bcd_blocksize_194.py`, one arm per process, launched by
+`results/bcd_blocksize_194/run_194.sh`. Production flags (fp8, grad_accum 8, 100 steps per block
+turn, balanced partition, Muon, warmup 500, cosine to 0 at step 2800), `--seed 0
+--deterministic`. The arms differ only in `--bcd-layers-per-block` (2 is passed explicitly).
+
+- k2: 13 training blocks (embedding, 12 two-layer blocks, tail in the last). Same layout as
+  production. 2 full rotations at step 2600.
+- k4: 7 training blocks. 4 full rotations at step 2800.
+- Held-out loss every 100 steps: the same 64 windows (262,144 tokens) as #197, sha-checked.
+
+### Pre-run checks (measured, `results/bcd_blocksize_194/smoke/`)
+
+| check | k2 | k4 |
+|---|---|---|
+| training blocks | 13 | 7 |
+| params updated over one rotation (fp32, full LR) | 418/418 | 418/418 |
+| frozen params changed during a turn | 0 | 0 |
+| step time, mean of per-block medians | 11.48 s | 12.59 s (+9.7%) |
+| peak reserved, worst training turn | 82.4% | 82.4% |
+| peak reserved, during eval | 82.3% | 83.0% |
+
+- **Negative control.** At lr 0 the same checksum saw 0 of 418 params change over 3 turns.
+  A float64-sum checksum had shown fake changes (same tensor summed on CPU vs GPU), so the
+  checksum is now an exact integer sum of the bit patterns.
+- **Resume.** Killed at step 4 and resumed: train loss at steps 5-8 and all 64 held-out window
+  losses at step 8 are bit-identical to the uninterrupted run. Checkpoint every 700 steps,
+  ~3.4 GB each, ~3 s to save.
+- **Eval memory.** With a 4-layer block active, eval first reached 94% of the card and slowed
+  from 51 s to 68 s. Cause: the step's gradients were still alive. The harness now drops them
+  before eval (the trainer's `zero_grad()` does the same right after); train and eval losses
+  stayed bit-identical, eval fell to 83% and 49 s.
+- **Step-1 held-out (init weights)** is 11.23550 vs #197's 11.23556, same tokens. Not
+  investigated; #197 forced a different cuBLAS workspace setting, which may explain it.
+- Step times are lower than the 12.3 / 13.4 s from the 2026-11-11 entry because #195 landed
+  since; the ratio is unchanged (1.097 vs 1.095).
+- Step time falls with depth in both arms (embedding 16.2 s, last block 6.5-7.8 s), since a
+  deeper active block runs the backward through fewer layers.
+
+### Reading rule, set before the result
+
+The only noise floor measured in this harness is #197's: 0.006 nats, one sample, at 180 steps.
+It is not re-measured at 2800 steps. So: call k4 better only if k2 - k4 is above 0.012 nats
+(twice that floor) at step 2800 AND positive at 2100 and 2600. Below 0.012, cannot tell without
+a floor arm at this length. Call it a speed win too only if k4 is also ahead at equal training
+time (`scripts/analyze_bcd_blocksize_194.py` interpolates k4 at k2's elapsed seconds).
+
+### Found on the way, not fixed
+
+`--warmup-steps 1` trains at lr 0 forever: warmup sets lr to 0 at step 0, and the recursive
+cosine then scales 0. Logged lr was 0.0 at every step of a 6-step run. `--warmup-steps 0`
+gave full lr (measured). The default 500 hands over at 499/500 of peak, so it should be fine;
+the long run's logged lr will confirm it.
+
 ## fp8 gradients are far from bf16 gradients at 1B, but no loss cost is detectable at 180 steps (2026-11-12, #197)
 
 **One line: the production fp8 gradient differs from a bf16 gradient by 12-56% of its norm
