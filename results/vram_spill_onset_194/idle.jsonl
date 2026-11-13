@@ -1,0 +1,7 @@
+{"tag": "base_a", "ballast_mib": 0, "wall": 1794570416, "idle_smi": "130, 6141"}
+{"tag": "base_b", "ballast_mib": 0, "wall": 1794570720, "idle_smi": "129, 6141"}
+{"tag": "b150", "ballast_mib": 150, "wall": 1794571006, "idle_smi": "129, 6141"}
+{"tag": "b50", "ballast_mib": 50, "wall": 1794571297, "idle_smi": "129, 6141"}
+{"tag": "b400", "ballast_mib": 400, "wall": 1794571570, "idle_smi": "129, 6141"}
+{"tag": "b100", "ballast_mib": 100, "wall": 1794571977, "idle_smi": "130, 6141"}
+{"tag": "b50r", "ballast_mib": 50, "wall": 1794572272, "idle_smi": "130, 6141"}

@@ -5,6 +5,85 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## VRAM spill starts at about 91-92% of the card; a 90% guard leaves only 60-110 MiB (2026-11-13, #194)
+
+**One line: on this 6 GB RTX 4050 (Windows, desktop idle at 129 MiB), training is clean up to
+91.0% peak reserved (measured twice), shows the first spill at 91.8% (+4.3% step time, 64 MiB
+moved to host RAM), and spills clearly at 92.6% (+16%). A 90% guard would sit only 59 MiB under
+the last clean level and 109 MiB under the first spill. That is less than one browser tab with
+video, so 90% is NOT supported with a safe margin. The 85% guard has 366-416 MiB of room.**
+
+### Method (`scripts/exp_vram_spill_onset_194.py`, `results/vram_spill_onset_194/`)
+
+- Real 1B k5 training (production settings, grad_accum 8, fp8, balanced partition), rotation
+  started at the worst blocks: 5-9, then 0-4, then 10-14, 4 steps each, one eval at step 4.
+- A ballast tensor (0-400 MiB) is put on the GPU before step 1 and rewritten after every step,
+  so it stays resident. It sits inside PyTorch's reserved memory, so "pressure" below is
+  exactly what the #163 guard compares to the card (peak reserved incl. ballast / 6143 MiB).
+- Spill signal: block step time (median of steps 2-4) vs the no-ballast run, and the Windows
+  counter "GPU Process Memory / Shared Usage" of the training process, sampled every ~3 s.
+- Rule, written before running (`run_point.sh`): spill = step > 1.05x baseline or shared usage
+  more than 64 MiB above baseline. Baseline repeat spread: 0.13-0.36% per block, 0.67% eval.
+- Positive control: 400 MiB ballast must spill. It did (1.19-1.86x), so the method can see it.
+- The #163 guard was off for these runs (`--max-vram-pct 0`); production code is unchanged.
+
+### Result (pressure = peak reserved incl. ballast)
+
+| ballast | block | pressure | reserved MiB | step time ratio | shared usage rise |
+|---:|---|---:|---:|---:|---:|
+| 0 (x2) | 5-9 / 0-4 / 10-14 | 87.6 / 90.1 / 90.1% | 5380 / 5538 / 5538 | 1.00 / 1.00 / 1.00 | 0 |
+| 0 (x2) | eval | 88.1% | 5412 | 1.00 | 0 |
+| 50 (x2) | 0-4 and 10-14 | **91.0%** | 5588 | 1.000 / 0.999 | 0 |
+| 100 | 0-4 | **91.8%** | 5638 | **1.043** | **+64 MiB** |
+| 150 | 5-9 | 90.0% | 5530 | 0.998 | 0 |
+| 150 | eval | 90.5% | 5562 | 0.999 | 0 |
+| 150 | 0-4 | **92.6%** | 5688 | **1.163** | **+128 MiB** |
+| 150 | 10-14 | 92.6% | 5688 | 1.016 | +128 (left over from 0-4) |
+| 400 | 5-9 | 94.1% | 5780 | 1.193 | +192 MiB |
+| 400 | 0-4 / 10-14 | 96.7% | 5938 | 1.857 / 1.776 | +356 MiB |
+| 400 | eval | 94.6% | 5812 | 1.536 | +214 MiB |
+
+- Onset: between 91.0% (clean, twice) and 91.8% (first spill). The 91.8% point is just under
+  the written thresholds (4.3% < 5%, 64 MiB not > 64), but both signals moved well past the
+  0.36% noise, so it is counted as spill. By the strict rule the onset is 92.6%.
+- What the process actually got: the training process's dedicated VRAM never went above
+  5683-5722 MiB. With the desktop's 129 MiB, nvidia-smi showed 5812-5850 of 6141 MiB used
+  when spill started: about 290-330 MiB of the card is never handed to the process.
+- 0 allocator retries and 0 OOMs at every point, even at 1.86x. Spill does not raise.
+
+### What the percentages mean in MiB
+
+- Card: 6141 MiB (nvidia-smi) = 6143 MiB (torch). 1% = 61 MiB.
+- Non-allocator overhead (CUDA context, kernels, cuBLAS): process dedicated minus torch
+  reserved = **123 MiB**, the same at every point. Desktop with no training: 129-130 MiB.
+- `torch.cuda.mem_get_info()` reports **0 MiB free** from 87.6% up, with no spill. It is not a
+  usable spill signal on WDDM.
+- 85% guard = 5222 MiB reserved: 416 MiB under the first spill (5638 MiB), 366 MiB under
+  the last clean level (5588).
+- 90% guard = 5529 MiB reserved: **109 MiB** under the first spill, **59 MiB** under the last
+  clean level.
+
+### Caveats
+
+- Measured with the desktop idle (129 MiB). Browsers, video and other apps use the same VRAM.
+  It is likely, but NOT measured here, that each MiB they take lowers the onset by about a MiB.
+  A video tab can take a few hundred MiB, more than the whole 90% margin.
+- The ceiling moved by about 40 MiB between runs (5683 vs 5722 MiB dedicated), which is most of
+  the 90% margin.
+- k5 itself reached **90.1%** with no ballast in this sweep (blocks 0-4 after blocks 5-9),
+  against 86.8% in the k5 smoke for the same block. Allocated memory was the same (5000 MiB);
+  the extra 208 MiB is allocator cache from the earlier turn. Production evals are rare, so the
+  cache is not emptied between turns, and k5 would run at about 90%, only 50-100 MiB under
+  the onset.
+- Short runs: 4 steps per block. A spill that only builds up over hundreds of steps would not
+  show here.
+
+### Verdict for #194
+
+Raising the guard to 90% is not supported with a useful margin: 59-109 MiB at an idle desktop,
+and k5 already reaches 90.1%. k5 would fit only with the desktop kept nearly empty. Production
+guard code not changed.
+
 ## 5 layers per BCD block at 1B: not launched, it breaks the 85% VRAM rule (2026-11-13, #194)
 
 **One line: a k5 layout (embedding, then 5,5,5,5,4 layers: 6 blocks) is fast enough, 12.91 s
