@@ -1,0 +1,43 @@
+points: ['base_a', 'base_b', 'b150', 'b50', 'b400', 'b100', 'b50r']
+baseline spread blocks.5    14.48 vs  14.43 s  0.36%
+baseline spread blocks.0    16.40 vs  16.36 s  0.24%
+baseline spread blocks.10   12.26 vs  12.25 s  0.13%
+baseline spread eval        49.07 vs  48.74 s  0.67%
+baseline process shared-usage peak: 222 MiB
+
+tag      ballast | what       pressure    MiB     sec  ratio spill
+base_a         0 | blocks.5      87.6%   5380   14.48  1.002 ok  shared +0 ded 5535 alloc 4846  steps [34.7, 14.5, 14.5, 14.5]
+base_a         0 | blocks.0      90.1%   5538   16.40  1.001 ok  shared +0 ded 5661 alloc 5000  steps [16.6, 16.4, 16.4, 16.4]
+base_a         0 | blocks.10     90.1%   5538   12.26  1.001 ok  shared +0 ded 5661 alloc 4680  steps [12.5, 12.3, 12.3, 12.3]
+base_a         0 | eval          88.1%   5412   49.07  1.003 ok  shared +0 ded 5535
+                   retries 0 ooms 0  proc shared max 222 MiB (+0)  proc dedicated max 5661 MiB  adapter shared max 246 MiB  smi max 5790 MiB  max reserved(now) 5538 MiB  min driver free 0 MiB
+base_b         0 | blocks.5      87.6%   5380   14.43  0.998 ok  shared +0 ded 5503 alloc 4846  steps [33.5, 14.5, 14.4, 14.4]
+base_b         0 | blocks.0      90.1%   5538   16.36  0.999 ok  shared +0 ded 5661 alloc 5000  steps [16.6, 16.4, 16.4, 16.4]
+base_b         0 | blocks.10     90.1%   5538   12.25  0.999 ok  shared +0 ded 5661 alloc 4680  steps [12.5, 12.2, 12.2, 12.2]
+base_b         0 | eval          88.1%   5412   48.74  0.997 ok  shared +0 ded 5535
+                   retries 0 ooms 0  proc shared max 222 MiB (+0)  proc dedicated max 5661 MiB  adapter shared max 245 MiB  smi max 5790 MiB  max reserved(now) 5538 MiB  min driver free 0 MiB
+b150         150 | blocks.5      90.0%   5530   14.43  0.998 ok  shared +0 ded 5653 alloc 4996  steps [33.7, 14.4, 14.4, 14.5]
+b150         150 | blocks.0      92.6%   5688   19.06  1.163 SPILL  shared +128 ded 5683 alloc 5150  steps [16.6, 18.8, 19.1, 19.7]
+b150         150 | blocks.10     92.6%   5688   12.45  1.016 SPILL  shared +128 ded 5683 alloc 4830  steps [12.5, 12.5, 12.4, 12.5]
+b150         150 | eval          90.5%   5562   48.83  0.999 ok  shared +0 ded 5685
+                   retries 0 ooms 0  proc shared max 350 MiB (+128)  proc dedicated max 5685 MiB  adapter shared max 372 MiB  smi max 5814 MiB  max reserved(now) 5688 MiB  min driver free 0 MiB
+b50           50 | blocks.5      88.4%   5430   14.39  0.995 ok  shared +0 ded 5553 alloc 4896  steps [33.5, 14.4, 14.4, 14.5]
+b50           50 | blocks.0      91.0%   5588   16.37  1.000 ok  shared +0 ded 5711 alloc 5050  steps [16.6, 16.4, 16.4, 16.4]
+b50           50 | blocks.10     91.0%   5588   12.24  0.998 ok  shared +0 ded 5711 alloc 4730  steps [12.5, 12.2, 12.2, 12.2]
+b50           50 | eval          88.9%   5462   48.75  0.997 ok  shared +0 ded 5585
+                   retries 0 ooms 0  proc shared max 222 MiB (+0)  proc dedicated max 5711 MiB  adapter shared max 244 MiB  smi max 5840 MiB  max reserved(now) 5588 MiB  min driver free 0 MiB
+b400         400 | blocks.5      94.1%   5780   17.25  1.193 SPILL  shared +192 ded 5711 alloc 5246  steps [33.5, 17.0, 17.4, 17.2]
+b400         400 | blocks.0      96.7%   5938   30.42  1.857 SPILL  shared +356 ded 5706 alloc 5400  steps [16.6, 30.4, 28.8, 53.5]
+b400         400 | blocks.10     96.7%   5938   21.76  1.776 SPILL  shared +356 ded 5706 alloc 5080  steps [16.8, 25.0, 17.4, 21.8]
+b400         400 | eval          94.6%   5812   75.09  1.536 SPILL  shared +214 ded 5722
+                   retries 0 ooms 0  proc shared max 578 MiB (+356)  proc dedicated max 5722 MiB  adapter shared max 600 MiB  smi max 5850 MiB  max reserved(now) 5938 MiB  min driver free 0 MiB
+b100         100 | blocks.5      89.2%   5480   14.43  0.998 ok  shared +0 ded 5603 alloc 4946  steps [33.5, 14.4, 14.4, 14.4]
+b100         100 | blocks.0      91.8%   5638   17.09  1.043 ok  shared +64 ded 5697 alloc 5100  steps [16.6, 17.0, 17.1, 17.3]
+b100         100 | blocks.10     91.8%   5638   12.25  1.000 ok  shared +64 ded 5697 alloc 4780  steps [12.5, 12.2, 12.3, 12.3]
+b100         100 | eval          89.7%   5512   48.78  0.998 ok  shared +0 ded 5635
+                   retries 0 ooms 0  proc shared max 286 MiB (+64)  proc dedicated max 5697 MiB  adapter shared max 308 MiB  smi max 5826 MiB  max reserved(now) 5638 MiB  min driver free 0 MiB
+b50r          50 | blocks.5      88.4%   5430   14.47  1.001 ok  shared +0 ded 5553 alloc 4896  steps [33.6, 14.4, 14.5, 14.5]
+b50r          50 | blocks.0      91.0%   5588   16.37  0.999 ok  shared +0 ded 5711 alloc 5050  steps [16.6, 16.4, 16.4, 16.4]
+b50r          50 | blocks.10     91.0%   5588   12.24  0.999 ok  shared +0 ded 5711 alloc 4730  steps [12.5, 12.2, 12.2, 12.2]
+b50r          50 | eval          88.9%   5462   48.84  0.999 ok  shared +0 ded 5585
+                   retries 0 ooms 0  proc shared max 222 MiB (+0)  proc dedicated max 5711 MiB  adapter shared max 244 MiB  smi max 5840 MiB  max reserved(now) 5588 MiB  min driver free 0 MiB

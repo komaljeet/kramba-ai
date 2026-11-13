@@ -1,0 +1,3 @@
+{"step": 4, "block": "blocks.5+blocks.6+blocks.7+blocks.8+blocks.9", "peak_res": 6060769280, "peak_alloc": 5501071360, "peak_res_pct": 94.12914257796596, "over_85": true, "turn_wall_sec": 85.10902905464172}
+{"step": 8, "block": "blocks.0+blocks.1+blocks.2+blocks.3+blocks.4", "peak_res": 6226444288, "peak_alloc": 5662259200, "peak_res_pct": 96.70222294601417, "over_85": true, "turn_wall_sec": 129.3085958957672}
+{"step": 12, "block": "blocks.10+blocks.11+blocks.12+blocks.13+blocks.14", "peak_res": 6226444288, "peak_alloc": 5326714880, "peak_res_pct": 96.70222294601417, "over_85": true, "turn_wall_sec": 80.91796565055847}
