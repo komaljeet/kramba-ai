@@ -223,6 +223,12 @@ def main():
             FP["turn_name"] = s.active_block_name
             FP["turn_ids"] = {pname[id(p)] for p in s.blocks[s._active_idx][1]}
             FP["start_full"] = fingerprints_full(sorted(FP["turn_ids"]))
+            # #200: optimizer state at a switch. The trainer does not pass
+            # retain_optimizer_state, so the outgoing block's state is deleted
+            # and the incoming block starts cold: expect NO state at all here.
+            stale = [pname.get(id(p), "?") for p in opt.state if pname.get(id(p)) not in FP["turn_ids"]]
+            FP["state_at_start"] = len(opt.state)
+            assert not stale, f"optimizer state left on non-active params: {stale[:5]}"
     register_optimizer_step_pre_hook(pre)
 
     def fingerprint_turn(n):
@@ -237,13 +243,22 @@ def main():
         unch_full = sorted(FP["turn_ids"] - ch_full)
         FP["ever_full"] = FP.get("ever_full", set()) | ch_full
         dtypes = sorted({v[0] for v in end_full.values()})
+        ostate = SCHED[0].optimizer.state
+        act_ps = [p for p in MODEL[0].parameters() if pname[id(p)] in FP["turn_ids"]]
+        n_with_state = sum(p in ostate for p in act_ps)
+        n_nonfinite = sum(1 for p in act_ps if p in ostate for v in ostate[p].values()
+                          if torch.is_tensor(v) and v.is_floating_point()
+                          and not bool(torch.isfinite(v).all()))
+        assert n_nonfinite == 0, f"non-finite optimizer state in {FP['turn_name']}"
         row = {"step": n, "block": FP["turn_name"], "n_active": len(FP["turn_ids"]),
                "n_changed": len(changed), "illegal_changed": illegal,
                "active_unchanged": unchanged_active, "never_changed_so_far": len(never),
                "never_changed_names": never if len(never) <= 40 else never[:40],
                "n_changed_full": len(ch_full), "active_unchanged_full": unch_full,
                "active_dtypes": dtypes,
-               "never_changed_full_so_far": len(set(cur) - FP["ever_full"])}
+               "never_changed_full_so_far": len(set(cur) - FP["ever_full"]),
+               "optstate_at_turn_start": FP.get("state_at_start"),
+               "optstate_active_at_turn_end": n_with_state, "optstate_nonfinite": n_nonfinite}
         fpf.write(json.dumps(row) + "\n"); fpf.flush()
         print(f"[h194] FINGERPRINT turn {FP['turn_name']} @step {n}: changed "
               f"{len(changed)}/{len(FP['turn_ids'])} active (bf16), "
