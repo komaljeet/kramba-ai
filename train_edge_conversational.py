@@ -3297,6 +3297,7 @@ def train(
             offload_prefetch=offload,
             offload_cache_blocks=config.get("offload_cache_blocks", 1),
             partition=resolve_bcd_partition(config.get("bcd_partition"), offload),
+            layers_per_block=config.get("bcd_layers_per_block"),
             # #169: on resume, activate the SAVED block first. Otherwise the
             # constructor's first _activate parks it in bf16 (block 0 active)
             # and the later load_state_dict only casts it back to fp32 -- the
@@ -4118,6 +4119,11 @@ def main():
     parser.add_argument("--bcd-steps-per-block", type=int, default=100,
                         help="Optimizer steps per active block before switching to the "
                              "next (only used with --block-coordinate). Default: 100.")
+    parser.add_argument("--bcd-layers-per-block", type=int, default=None,
+                        help="Pack exactly this many layers per BCD block (embedding "
+                             "alone first, tail merged into the last group). Default: "
+                             "off, the 'balanced' packing, which is about 2 layers per "
+                             "block at 1B. Needs --bcd-partition balanced. (#194)")
     parser.add_argument("--bcd-partition", choices=["layer", "balanced"], default=None,
                         help="How --block-coordinate splits the model. 'balanced' "
                              "(default): pack consecutive layers into groups no larger "
@@ -4581,6 +4587,7 @@ def main():
     config["block_coordinate"] = args.block_coordinate
     config["bcd_steps_per_block"] = args.bcd_steps_per_block
     config["bcd_partition"] = args.bcd_partition
+    config["bcd_layers_per_block"] = args.bcd_layers_per_block
     config["log_every_steps"] = max(1, args.log_every)
     # --- Issue #163 ---
     config["offload"] = args.offload

@@ -1,0 +1,13 @@
+{"step": 3, "block": "token_embedding", "peak_res": 5299503104, "peak_alloc": 4879687168, "peak_res_pct": 82.30600113997231, "over_85": false, "turn_wall_sec": 122.33810210227966}
+{"step": 6, "block": "blocks.0+blocks.1", "peak_res": 5303697408, "peak_alloc": 3500482560, "peak_res_pct": 82.37114241511277, "over_85": false, "turn_wall_sec": 46.99372148513794}
+{"step": 9, "block": "blocks.2+blocks.3", "peak_res": 5303697408, "peak_alloc": 3433373696, "peak_res_pct": 82.37114241511277, "over_85": false, "turn_wall_sec": 44.91946530342102}
+{"step": 12, "block": "blocks.4+blocks.5", "peak_res": 5303697408, "peak_alloc": 3366264832, "peak_res_pct": 82.37114241511277, "over_85": false, "turn_wall_sec": 42.563353300094604}
+{"step": 15, "block": "blocks.6+blocks.7", "peak_res": 5303697408, "peak_alloc": 3305740288, "peak_res_pct": 82.37114241511277, "over_85": false, "turn_wall_sec": 39.83205008506775}
+{"step": 18, "block": "blocks.8+blocks.9", "peak_res": 5303697408, "peak_alloc": 3232047104, "peak_res_pct": 82.37114241511277, "over_85": false, "turn_wall_sec": 37.06505036354065}
+{"step": 21, "block": "blocks.10+blocks.11", "peak_res": 5303697408, "peak_alloc": 3164938240, "peak_res_pct": 82.37114241511277, "over_85": false, "turn_wall_sec": 34.710028409957886}
+{"step": 24, "block": "blocks.12+blocks.13", "peak_res": 5303697408, "peak_alloc": 3097829376, "peak_res_pct": 82.37114241511277, "over_85": false, "turn_wall_sec": 32.32148504257202}
+{"step": 27, "block": "blocks.14+blocks.15", "peak_res": 5303697408, "peak_alloc": 3030720512, "peak_res_pct": 82.37114241511277, "over_85": false, "turn_wall_sec": 29.78006911277771}
+{"step": 30, "block": "blocks.16+blocks.17", "peak_res": 5303697408, "peak_alloc": 2963611648, "peak_res_pct": 82.37114241511277, "over_85": false, "turn_wall_sec": 27.30575704574585}
+{"step": 33, "block": "blocks.18+blocks.19", "peak_res": 5303697408, "peak_alloc": 2903087104, "peak_res_pct": 82.37114241511277, "over_85": false, "turn_wall_sec": 24.880533933639526}
+{"step": 36, "block": "blocks.20+blocks.21", "peak_res": 5303697408, "peak_alloc": 2838042624, "peak_res_pct": 82.37114241511277, "over_85": false, "turn_wall_sec": 22.077152490615845}
+{"step": 39, "block": "blocks.22+blocks.23+final_norm+decoder", "peak_res": 5303697408, "peak_alloc": 2838913024, "peak_res_pct": 82.37114241511277, "over_85": false, "turn_wall_sec": 19.698088884353638}

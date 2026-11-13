@@ -1,0 +1,9 @@
+fp_k4 exit 0
+neg_k4 exit 0
+fp_k2 exit 0
+rs_a exit 0
+rs_b exit 0
+SMOKE_DONE
+fp2_k4 exit 0
+evmem_k4 exit 0
+evmem2_k4 exit 0
