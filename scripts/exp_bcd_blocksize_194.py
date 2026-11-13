@@ -6,8 +6,8 @@ Runs the real ``train_edge_conversational.main`` with ``PROD_ARGV`` (24L d2048
 hybrid, seq 4096, batch 1, grad_accum 8, BCD offload, balanced partition, Muon,
 fp8) plus ``--deterministic --seed 0``. Arms differ ONLY in
 ``--bcd-layers-per-block K`` (K=2 is passed explicitly so both arms take the same
-code path): K=2 -> 13 training blocks, K=4 -> 7 (embedding alone, tail merged into
-the last group). Data order, init, LR schedule and optimizer are identical.
+code path): K=2 -> 13 training blocks, K=4 -> 7, K=5 -> 6 (embedding alone, then
+5,5,5,5,4 layers; tail merged into the last group). Data order, init, LR schedule and optimizer are identical.
 
 Held-out loss is scored exactly as in ``scripts/exp_fp8_ab_197.py`` (same split,
 same first ``--eval-windows`` windows, same offload-aware forward, fp8 off), so the
@@ -103,9 +103,13 @@ def main():
         print(f"[h194] LAYOUT k={a.k}: {len(names)} blocks: {names}", flush=True)
         assert len(names) == a.expect_blocks, (len(names), a.expect_blocks)
         assert names[0] == "token_embedding" and names[-1].endswith("+final_norm+decoder"), names
-        for n in names[1:]:
-            got = sum(m.startswith("blocks.") for m in n.split("+"))
-            assert got == a.k, (n, a.k)
+        # k groups of K layers, the remainder (24 % K, e.g. 4 for K=5) in the last group.
+        n_layers = len(model.blocks)
+        want = [a.k] * (n_layers // a.k) + ([n_layers % a.k] if n_layers % a.k else [])
+        got = [sum(m.startswith("blocks.") for m in n.split("+")) for n in names[1:]]
+        assert got == want, (got, want)
+        lay["layers_per_group"] = got
+        json.dump(lay, open(os.path.join(a.out, f"layout_{a.tag}.json"), "w"), indent=1)
         covered = sorted(id(p) for _, ps in self.blocks for p in ps)
         assert covered == sorted(id(p) for p in model.parameters()), "partition gap/overlap"
     bc.BlockCoordinateScheduler.__init__ = init

@@ -5,6 +5,43 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 5 layers per BCD block at 1B: not launched, it breaks the 85% VRAM rule (2026-11-13, #194)
+
+**One line: a k5 layout (embedding, then 5,5,5,5,4 layers: 6 blocks) is fast enough, 12.91 s
+mean step vs k4's 12.60 s, and shows no spill. But three 5-layer training turns reserve
+85.2-87.6% of the card, and eval with a 5-layer block active reserves 88.3-88.6%. The gate was
+"nothing above 85%", so the 2800-step k5 run was NOT launched.**
+
+### Gate, written before running (`results/bcd_blocksize_194/smoke/run_smoke_k5.sh`, `gate_k5.py`)
+
+(a) no training turn and no eval above 85% of the card; (b) no block slower than 1.5x what its
+depth predicts from the k2/k4 runs (spill sign); (c) mean step over a rotation at most 13.9 s.
+Measured on one full rotation, 3 steps per block, full LR, every turn fingerprinted.
+
+| block | layers | step (median) | predicted | peak reserved, turn | peak reserved, eval |
+|---|---:|---:|---:|---:|---:|
+| token_embedding | 0 | 16.30 s | 16.25 | 83.3% | 73.6% |
+| blocks 0-4 | 5 | 16.57 s | 16.38 | **86.8%** | **88.6%** |
+| blocks 5-9 | 5 | 14.35 s | 14.30 | **87.6%** | **88.5%** |
+| blocks 10-14 | 5 | 12.24 s | 12.22 | **85.2%** | **88.3%** |
+| blocks 15-19 | 5 | 10.16 s | 10.15 | 80.6% | **88.3%** |
+| blocks 20-23 + tail | 4 | 7.82 s | 7.83 | 68.5% | 83.2% |
+
+- (a) FAIL. (b) pass: every block within 1.2% of its prediction (fit on k2/k4 per-block
+  medians, max error 0.06 s). (c) pass: 12.91 s.
+- No slowdown was seen even at 88.6%: eval took 49 s, same as k4. So this is a breach of the
+  safety margin, not a measured spill.
+- Peak allocated in the 5-layer turns is 4526-5000 MiB, vs 4062-4446 MiB for k4's 4-layer
+  turns. In the k4 runs the 3-step smoke reserved the same or more than the long run, so the
+  long run would likely sit near these numbers too.
+- Smoke checks passed: 6 blocks as expected; 418/418 params updated over the rotation; 0 frozen
+  params changed; lr-0 control changed 0 of 418 over all 6 blocks; lr > 0 at every step.
+
+### What would change it
+
+The parent decides. Options: accept up to ~89% because no spill showed (risky on WDDM, which
+spills silently), or cut the eval peak first (eval holds the active block's training state).
+
 ## 4 layers per BCD block beats 2 at 1B: held-out loss 0.45 nats lower at 2800 steps, for 6.8% slower steps (2026-11-13, #194)
 
 **One line: at real 1B settings, 4 layers per BCD block (7 blocks) ended 0.446 nats below 2 layers
