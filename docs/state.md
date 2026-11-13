@@ -5,10 +5,37 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
-## 2 vs 4 layers per BCD block at 1B: checks passed, 2800-step held-out run in flight (2026-11-12, #194)
+## 4 layers per BCD block beats 2 at 1B: held-out loss 0.45 nats lower at 2800 steps, for 6.8% slower steps (2026-11-13, #194)
 
-**One line: the real 1B A/B of 2 vs 4 layers per BCD block is running (k2 first, then k4,
-~20 h, started 2026-11-12 15:30). Every pre-run check passed. No quality result yet.**
+**One line: at real 1B settings, 4 layers per BCD block (7 blocks) ended 0.446 nats below 2 layers
+per block (13 blocks) on held-out loss at step 2800: 4.881 vs 5.327, a perplexity ratio of
+1.56x. A k4 step costs 6.8% more (12.60 vs 11.80 s mean). At equal training time k4 is still
+0.42 nats ahead. 2800 steps only; not shown for a full-length run.**
+
+### Result (measured, `results/bcd_blocksize_194/`, `scripts/analyze_bcd_blocksize_194.py`)
+
+Both arms scored the same 64 held-out windows (sha matches #197). Gap = k2 minus k4, positive
+means k4 better. Paired standard error 0.006-0.012.
+
+| step | k2 | k4 | gap (nats) | ppl ratio |
+|---:|---:|---:|---:|---:|
+| 700 | 6.961 | 6.798 | 0.163 | 1.18x |
+| 1300 | 6.779 | 5.421 | 1.358 | 3.89x |
+| 1400 | 5.848 | 5.385 | 0.463 | 1.59x |
+| 2100 | 5.468 | 5.031 | 0.438 | 1.55x |
+| 2600 | 5.411 | 4.899 | 0.512 | 1.67x |
+| 2800 | 5.327 | 4.881 | 0.446 | 1.56x |
+
+- The reading rule below is met: gap 0.446 at 2800 (above 0.012), positive at 2100 and 2600.
+- Steps 800-1300 are inflated: k2's first 1300-step rotation had not finished, and its loss
+  stayed near 6.8 until its second rotation began. After step 1400 the gap sits at 0.41-0.53
+  and does not shrink through step 2800.
+- Equal training time: k4 interpolated at k2's elapsed time is 0.42 nats better at k2's step
+  2800 (9.18 h); 0.35-0.45 from step 1400 on.
+- Cost: k4 mean step 12.604 s, k2 11.804 s (k4/k2 1.068). Train time 9.80 h vs 9.18 h.
+- VRAM: peak reserved 83.3% (embedding turn) in both arms, no turn over 85%.
+- Not measured: a full-length run, 3 layers per block, 5 layers per block, and a noise floor at
+  2800 steps (the 0.006 floor is #197's, at 180 steps). Both arms are one seed.
 
 ### What runs
 
