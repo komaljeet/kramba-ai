@@ -435,6 +435,7 @@ class GPUBufferPool:
         data in synchronously on the current stream (the pre-#115 behavior,
         unchanged for any block that was never prefetched)."""
         self.register_cpu_home(params)
+        self._evict_if_other_params(key, params)
         if key in self._resident:
             self._resident.move_to_end(key)
             event = self._pending_events.pop(key, None)
@@ -505,6 +506,7 @@ class GPUBufferPool:
         BCD), 144-192 misses and 1.2-1.7 s of main-stream copy time per step.
         """
         self.register_cpu_home(params)
+        self._evict_if_other_params(key, params)
         if self._prefetch_stream is None or key in self._resident:
             return
         params = self._offloadable(params)
@@ -614,6 +616,20 @@ class GPUBufferPool:
         if event is not None:
             event.synchronize()
             self._release_staging(key)
+
+    def _evict_if_other_params(self, key: str, params: list[nn.Parameter]) -> None:
+        """#204: the same block can be streamed as two different tensor lists
+        -- its bf16 weights (eval) or, in training, frozen fp8 codes holders in
+        place of some weights. A resident entry under ``key`` holding the OTHER
+        list must not count as a hit: drop it, so the caller loads its own.
+        A request for a SUBSET of the resident list is a hit, as before (the
+        tail is prefetched as final_norm+decoder and loaded as final_norm)."""
+        entry = self._resident.get(key)
+        if entry is None:
+            return
+        have = {id(p) for p in entry["params"]}
+        if any(id(p) not in have for p in self._offloadable(params)):
+            self.evict(key)
 
     def evict(self, key: str) -> None:
         """Force-release one resident entry now (used only when a call

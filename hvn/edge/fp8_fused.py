@@ -81,7 +81,7 @@ DEFAULT_EXEMPT = ("alpha_proj", "beta_proj", "decoder")
 
 #: Call counters. Python ints, cheap; tests use them to prove the path ran.
 FP8_STATS = {"fwd": 0, "bwd": 0, "w_hits": 0, "w_misses": 0, "fallback_rows": 0,
-             "x_hits": 0, "skipped": 0, "frozen_fused": 0}
+             "x_hits": 0, "skipped": 0, "frozen_fused": 0, "codes_hits": 0}
 
 #: #202 switch for A/B measurement: False sends BCD-frozen ternary weights back
 #: through the old ternary-then-fp8 route (same bits, slower).
@@ -465,6 +465,8 @@ def _fp8_weight(mod: nn.Module):
         if c is not None and c[0] == key:
             FP8_STATS["w_hits"] += 1
             return c[1]
+    elif getattr(mod, "_f8codes", None) is not None and mod._f8codes.holder.data.is_cuda:
+        return _streamed_codes(mod)
     with torch.no_grad():
         scale = None if cacheable or not FROZEN_FUSED[0] else _frozen_ternary_scale(mod)
         if scale is not None:
@@ -477,6 +479,153 @@ def _fp8_weight(mod: nn.Module):
         T._STEP_LIVE.add(mod)
         FP8_STATS["w_misses"] += 1
     return wq, ws, wq_t
+
+
+# ---------------------------------------------------------------------------
+# #204: fp8 codes of BCD-frozen weights made once per turn, streamed instead of
+# the bf16 weight.
+#
+# A frozen offloaded weight is streamed CPU -> GPU on every use (forward and
+# checkpoint recompute, every micro-batch) and quantized to fp8 codes again on
+# every use (#203: 0.94 ms per forward, 0.91 per recompute, per layer). Its
+# value cannot change within a BCD turn, so the codes are a pure function of
+# bytes that are fixed for the turn.
+#
+# Where the codes live: a GPU copy of every frozen layer's codes is the VRAM
+# the offload exists to avoid. So they live in host RAM next to the bf16
+# weight, packed as ``wq`` bytes then ``wq_t`` bytes into a "holder" tensor of
+# the SAME shape and dtype as the bf16-parked weight (2 bytes per weight either
+# way). The offload pool then streams the holder in place of the weight: same
+# PCIe bytes, same buffer-set signature (no new GPU buffers, eval keeps sharing
+# them), and the weight Parameter itself stays on the CPU, so any code path
+# that would read it instead of the codes fails loudly ("weight is on cpu")
+# rather than silently.
+#
+# Staleness (#117 is the precedent): a module's codes are used only if its key
+# matches -- the BCD turn (bumped by every block switch, which is when parking
+# rewrites weights), the weight's storage pointer and version counter, the
+# holder-home's version counter and the quantizer route. A write through
+# ``p.data`` bumps no counter, so the turn bump is the guard for those; a
+# write between turns is always caught (tests/test_frozen_fp8_codes.py).
+# The ACTIVE block never uses codes: its weight requires grad, which takes the
+# per-step cache above before the codes branch is consulted.
+# ---------------------------------------------------------------------------
+#: Master switch (``--no-frozen-fp8-codes`` turns it off).
+FROZEN_CODES = [True]
+_CODES_TURN = [0]
+CODES_STATS = {"refreshed": 0, "refresh_calls": 0, "refresh_sec": 0.0, "home_bytes": 0}
+
+
+class _Codes:
+    __slots__ = ("key", "holder", "ws", "shape")
+
+    def __init__(self, key, holder, ws, shape):
+        self.key, self.holder, self.ws, self.shape = key, holder, ws, shape
+
+
+def _bump_codes_turn(*_a, **_k) -> None:
+    _CODES_TURN[0] += 1
+
+
+def _codes_key(mod: nn.Module):
+    w = mod.weight
+    return (_CODES_TURN[0], w.data_ptr(), w._version, w.dtype, tuple(w.shape),
+            FROZEN_FUSED[0])
+
+
+def _streamed_codes(mod: nn.Module):
+    """(wq, ws, wq_t) as views into the streamed holder buffer."""
+    c = mod._f8codes
+    w = mod.weight
+    # The wrapper only streams holders whose key was fresh at forward start;
+    # re-check at use (also covers the recompute, inside backward).
+    if c.key != _codes_key(mod):
+        raise RuntimeError(f"stale frozen fp8 codes streamed (#204): key {c.key} "
+                           f"vs now {_codes_key(mod)}")
+    if w.device.type != "cpu":
+        raise RuntimeError("frozen fp8 codes streamed while the weight is on "
+                           f"{w.device} too (#204)")
+    M, N = c.shape
+    flat = c.holder.data.view(-1).view(torch.uint8)
+    wq = flat[:M * N].view(E4M3).view(M, N)
+    wq_t = flat[M * N:2 * M * N].view(E4M3).view(N, M)
+    FP8_STATS["codes_hits"] += 1
+    return wq, c.ws, wq_t
+
+
+def frozen_codes_enabled(model: nn.Module) -> bool:
+    return (FROZEN_CODES[0] and not _REFERENCE_MODE[0]
+            and getattr(model, "_offload_pool", None) is not None
+            and torch.is_autocast_enabled("cuda")
+            and torch.get_autocast_dtype("cuda") == torch.bfloat16)
+
+
+def _codes_candidates(model: nn.Module):
+    """fp8-enabled Linears of the frozen, offloaded layer blocks."""
+    from .ternary import TernaryLinear
+    pool, act = model._offload_pool, model._offload_active_names
+    for i, blk in enumerate(model.blocks):
+        if f"blocks.{i}" in act:
+            continue
+        for m in blk.modules():
+            if not (isinstance(m, (FP8Linear, TernaryLinear)) and m.use_fp8):
+                continue
+            w = m.weight
+            if (w.requires_grad or w.dim() != 2 or w.element_size() != 2
+                    or id(w) not in pool._cpu_home or w.device.type != "cpu"
+                    or (isinstance(m, TernaryLinear) and m._frozen_codes is not None)):
+                continue
+            yield m
+
+
+@torch.no_grad()
+def refresh_frozen_codes(model: nn.Module) -> dict:
+    """Make every frozen layer's codes fresh; return {id(weight): holder}.
+
+    Called at the start of each training forward with offload. A stale module
+    (first use in a turn, or its weight changed) gets its codes recomputed by
+    the SAME per-use route (``_fp8_weight``'s uncached branch) on a temporary
+    GPU copy of its weight, then copied into its host holder. Everything else
+    is a key comparison.
+    """
+    pool = model._offload_pool
+    dev = pool.device
+    cands = list(_codes_candidates(model))
+    stale = [m for m in cands if m._f8codes is None or m._f8codes.key != _codes_key(m)]
+    if stale:
+        import time
+        t0 = time.perf_counter()
+        # Nothing may stay resident (or in flight) with old holder bytes.
+        pool.evict_all()
+        for m in stale:
+            w = m.weight
+            home = w.data
+            M, N = w.shape
+            w.data = home.to(dev)
+            try:
+                saved, m._f8codes = m._f8codes, None
+                wq, ws, wq_t = _fp8_weight(m)
+            finally:
+                w.data = home
+            packed = torch.empty((M, N), dtype=home.dtype, device=dev)
+            pf = packed.view(-1).view(torch.uint8)
+            pf[:M * N].copy_(wq.view(-1).view(torch.uint8))
+            pf[M * N:].copy_(wq_t.reshape(-1).view(torch.uint8))
+            if saved is not None and saved.shape == (M, N) and saved.holder.dtype == home.dtype:
+                holder = saved.holder
+                assert holder.device.type == "cpu", "holder resident during refresh"
+                holder.data.copy_(packed)          # in place: same host buffer
+            else:
+                holder = nn.Parameter(packed.to("cpu"), requires_grad=False)
+                pool.register_cpu_home([holder], force=True)
+                CODES_STATS["home_bytes"] += holder.numel() * holder.element_size()
+            m._f8codes = _Codes(None, holder, ws, (M, N))
+            m._f8codes.key = _codes_key(m)
+            CODES_STATS["refreshed"] += 1
+        torch.cuda.synchronize(dev)
+        CODES_STATS["refresh_calls"] += 1
+        CODES_STATS["refresh_sec"] += time.perf_counter() - t0
+    return {id(m.weight): m._f8codes.holder for m in cands}
 
 
 def fp8_active(mod: nn.Module, x: torch.Tensor) -> bool:
@@ -526,6 +675,7 @@ class FP8Linear(nn.Linear):
     use_fp8 = False
     fp8_weight_cache = False
     _f8cache = None
+    _f8codes = None
 
     def forward(self, x):
         if fp8_active(self, x):
@@ -538,6 +688,7 @@ class FP8Linear(nn.Linear):
 
     def _load_from_state_dict(self, *args, **kwargs):
         self._f8cache = None
+        self._f8codes = None
         return super()._load_from_state_dict(*args, **kwargs)
 
 
@@ -556,10 +707,13 @@ def enable_fp8_linear(model: nn.Module, exempt: tuple[str, ...] = DEFAULT_EXEMPT
     ``(enabled, skipped_for_shape)``.
     """
     from .ternary import TernaryLinear, _ensure_step_hooks
+    from hvn.core.block_coordinate import register_activate_callback
     if not fp8_supported():
         raise RuntimeError("--fp8-linear needs CUDA FP8 tensor cores (sm_89+) and Triton")
     if weight_cache:
         _ensure_step_hooks()
+    # #204: every BCD switch expires every frozen weight's fp8 codes.
+    register_activate_callback(_bump_codes_turn)
     enabled, skipped = [], []
     for name, mod in model.named_modules():
         if not (type(mod) is nn.Linear or isinstance(mod, (FP8Linear, TernaryLinear))):
