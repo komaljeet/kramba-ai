@@ -1,0 +1,40 @@
+falsifiability: {'turns': 28, 'heldout_min_at_t100': 27, 'late30_drop_ge_half_early30': 18}
+28 complete turns
+d_end    interp_rmse    median RMSE linear=2.079 exp=1.988 power=0.4139 stretched=0.4269 | wins linear=0 exp=0 power=21 stretched=7 | ratio-to-linear linear=1.00 exp=1.01 power=0.25 stretched=0.26
+d_end    forecast_rmse  median RMSE linear=9.078 exp=8.149 power=2.741 stretched=3.223 | wins linear=1 exp=0 power=23 stretched=4 | ratio-to-linear linear=1.00 exp=1.01 power=0.31 stretched=0.50
+d_start  interp_rmse    median RMSE linear=2.051 exp=0.09858 power=0.5241 stretched=0.1122 | wins linear=0 exp=13 power=0 stretched=15 | ratio-to-linear linear=1.00 exp=0.06 power=0.34 stretched=0.06
+d_start  forecast_rmse  median RMSE linear=8.893 exp=0.5979 power=3.648 stretched=0.4824 | wins linear=0 exp=11 power=4 stretched=13 | ratio-to-linear linear=1.00 exp=0.11 power=0.47 stretched=0.09
+heldout  interp_rmse    median RMSE linear=0.001525 exp=0.001453 power=0.001429 stretched=0.001295 | wins linear=5 exp=4 power=8 stretched=11 | ratio-to-linear linear=1.00 exp=1.00 power=0.89 stretched=0.90
+heldout  forecast_rmse  median RMSE linear=0.004402 exp=0.00618 power=0.004966 stretched=0.004673 | wins linear=12 exp=4 power=2 stretched=10 | ratio-to-linear linear=1.00 exp=1.00 power=1.27 stretched=1.08
+val      interp_rmse    median RMSE linear=0.002047 exp=0.001814 power=0.001551 stretched=0.001585 | wins linear=4 exp=4 power=10 stretched=10 | ratio-to-linear linear=1.00 exp=1.00 power=0.96 stretched=0.90
+val      forecast_rmse  median RMSE linear=0.006512 exp=0.007707 power=0.005377 stretched=0.00624 | wins linear=9 exp=4 power=6 stretched=9 | ratio-to-linear linear=1.00 exp=1.00 power=0.99 stretched=0.95
+
+turn blk rot  lr_mean  drop0-100 drop0-30 drop70-100 min_t tau_ho  tau_dst beta  straight cos5
+   0   0   0 9.90e-03    1.3956   0.1733    0.5759   100 10000.0 10000.0  2.03    0.965  0.99
+   1   1   0 1.98e-02    1.5206   1.0375    0.1524   100    24.6   140.1  1.23    0.562  0.81
+   2   2   0 1.97e-02    0.1350   0.0732    0.0295   100    49.7   123.7  1.11    0.502  0.77
+   3   3   0 1.94e-02    0.0718   0.0315    0.0132   100    78.4   109.3  1.11    0.494  0.77
+   4   4   0 1.90e-02    0.0339   0.0133    0.0089   100   447.0   109.3  1.11    0.487  0.76
+   5   5   0 1.86e-02    0.0253   0.0058    0.0074   100 10000.0   113.9  1.11    0.490  0.77
+   6   6   0 1.80e-02    0.0947   0.0293    0.0313   100 10000.0   109.3  1.11    0.490  0.76
+   7   0   1 1.73e-02    1.1164   0.7968    0.0863   100    22.6    88.8  0.91    0.919  0.98
+   8   1   1 1.65e-02    0.1427   0.0809    0.0180   100    63.8   118.7  1.00    0.473  0.75
+   9   2   1 1.56e-02    0.0561   0.0232    0.0231   100 10000.0   118.7  1.00    0.480  0.76
+  10   3   1 1.47e-02    0.0341   0.0145    0.0033   100    54.0   109.3  1.00    0.470  0.75
+  11   4   1 1.37e-02    0.0213   0.0148    0.0074   100    27.8   104.8  1.00    0.465  0.74
+  12   5   1 1.26e-02    0.0158   0.0043    0.0045   100 10000.0   104.8  1.00    0.478  0.76
+  13   6   1 1.16e-02    0.0278   0.0117    0.0047   100   104.8   100.6  1.00    0.468  0.74
+  14   0   2 1.04e-02    0.1168   0.0565    0.0246   100    75.2   123.7  0.91    0.924  0.98
+  15   1   2 9.34e-03    0.0352   0.0099    0.0144   100 10000.0   100.6  1.00    0.454  0.74
+  16   2   2 8.24e-03    0.0304   0.0169    0.0091   100   411.4   104.8  1.00    0.470  0.75
+  17   3   2 7.16e-03    0.0251   0.0086    0.0063   100 10000.0    92.6  1.00    0.467  0.75
+  18   4   2 6.11e-03    0.0120   0.0045    0.0059   100 10000.0    88.8  1.00    0.463  0.74
+  19   5   2 5.11e-03    0.0109   0.0012    0.0040   100 10000.0    85.2  1.00    0.475  0.75
+  20   6   2 4.17e-03    0.0132   0.0051    0.0020   100    85.2    88.8  1.00    0.468  0.74
+  21   0   3 3.30e-03    0.0379   0.0159    0.0090   100   123.7   104.8  0.91    0.918  0.97
+  22   1   3 2.52e-03    0.0096  -0.0028    0.0066   100 10000.0    81.7  1.00    0.456  0.74
+  23   2   3 1.83e-03    0.0113   0.0040    0.0043   100 10000.0    75.2  1.00    0.474  0.75
+  24   3   3 1.24e-03    0.0073   0.0021    0.0029   100 10000.0    72.2  1.00    0.470  0.74
+  25   4   3 7.56e-04    0.0031   0.0010    0.0009   100 10000.0    69.3  1.00    0.473  0.74
+  26   5   3 3.90e-04    0.0015   0.0003    0.0005   100 10000.0    58.7  1.00    0.480  0.75
+  27   6   3 1.44e-04    0.0003   0.0001    0.0000    80    69.3    42.1  1.11    0.475  0.74

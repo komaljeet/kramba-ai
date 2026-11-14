@@ -150,6 +150,13 @@ def main(run_dir):
                      "drop_total": r["heldout_drop_total"], "drop_70_100": r["heldout_drop_70_100"],
                      "drop_0_30": r["heldout_drop_0_30"], "min_t": r["heldout_min_t"],
                      "straightness": r["straightness"], "cos5_mean": r["cos5_mean"]})
+    # Pre-stated "no useful law" test for held-out loss (issue #205)
+    summ["falsifiability"] = {
+        "turns": len(per),
+        "heldout_min_at_t100": sum(1 for r in per if r["heldout_min_t"] == 100),
+        "late30_drop_ge_half_early30": sum(
+            1 for r in per if r["heldout_drop_70_100"] >= 0.5 * r["heldout_drop_0_30"])}
+    print("falsifiability:", summ["falsifiability"])
     json.dump({"summary": summ, "per_turn": per, "rates": taus},
               open(os.path.join(run_dir, "fits.json"), "w"), indent=1)
     with open(os.path.join(run_dir, "fits_per_turn.csv"), "w", newline="") as fh:
@@ -161,6 +168,8 @@ def main(run_dir):
 
     print(f"{len(per)} complete turns")
     for q, s in summ.items():
+        if q == "falsifiability":
+            continue
         for mode, v in s.items():
             print(f"{q:8s} {mode:14s} median RMSE " +
                   " ".join(f"{n}={v['median_rmse'][n]:.4g}" for n in FORMS) +

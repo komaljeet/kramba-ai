@@ -167,6 +167,11 @@
      "stretched": 0.9547209367608237
     }
    }
+  },
+  "falsifiability": {
+   "turns": 28,
+   "heldout_min_at_t100": 27,
+   "late30_drop_ge_half_early30": 18
   }
  },
  "per_turn": [
