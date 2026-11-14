@@ -5,6 +5,81 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Why frozen layers are ~70% of the 1B k4 step: mostly inherent, ~7% waste found (2026-11-14, #203)
+
+**One line: a frozen DeltaNet layer costs 69 ms per micro-batch when it sits after the active
+block (forward 19.6 + recompute 15.5 + input-only backward 34.3) and 19.6 ms before it. The
+GEMMs run at 100% of this card's measured fp8/bf16 peak, the elementwise and quantize kernels
+at its memory bandwidth, the GPU never waits on the weight stream, and no weight-gradient work
+is done. The cost is the sequential scan (43% of a frozen-after layer) plus BCD's checkpoint
+recompute. Three measured wastes add up to about 0.9 s/step (~7%); none is bit-identical AND
+a few lines, so nothing was changed.**
+
+Method (`scripts/frozen_layer_203.py`, `scripts/analyze_frozen_layer_203.py`,
+`results/frozen_layer_203/`): the trainer's own 1B layer (d 2048, 64 heads, seq 4096, batch 1,
+ternary + fp8 + the `--fast` stack, bf16 weights streamed by the real offload pool, checkpointed,
+deterministic), 6 layers, 2 per BCD block, timed with CUDA events at block boundaries and cut
+into phases in a profiler trace by marker kernels. Anchor, stated before running: it must
+reproduce the #202 production per-layer times or it is not measuring production. It does, per
+step of 8 micro-batches: frozen forward 0.157 s (production 0.156), frozen-after recompute +
+backward 0.398 s (0.400), active layer 0.535 s (0.534), first active layer 0.522 s (0.522).
+
+Peak on this card (`scripts/peak_gpu_203.py`): fp8 GEMM 48 TFLOPs, bf16 24.6, memory 170-187
+GB/s, pinned PCIe 13.4 GB/s.
+
+### Seconds per frozen layer per step (8 micro-batches)
+
+| phase | total | scan | fp8 GEMM | bf16 GEMM | quantize (weight / input) | elementwise + norm | GPU idle | vs bound |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| forward | 0.157 | 0.046 | 0.050 | 0.012 | 0.008 / 0.010 | 0.029 | 0.002 | 72% |
+| recompute | 0.124 | 0.046 | 0.033 | 0.012 | 0.006 / 0.005 | 0.022 | 0.001 | 66% |
+| backward, input grad only | 0.274 | 0.149 | 0.050 | 0.011 | 0.002 / 0.010 | 0.051 | 0.001 | 58% |
+| **frozen after the active block** | **0.555** | **0.241** | 0.133 | 0.035 | 0.040 | 0.102 | 0.004 | 64% |
+| frozen before the active block | 0.156 | 0.046 | 0.050 | 0.012 | 0.017 | 0.028 | 0.002 | 72% |
+| active layer, recompute + backward with weight grads | 0.540 | 0.195 | 0.152 | 0.036 | 0.022 | 0.133 | 0.003 | |
+
+"vs bound" = time if every GEMM ran at the measured peak, every other kernel at its own
+bandwidth bound (they already do), and the scan at the bandwidth bound of its inputs and
+outputs, divided by the measured time. The whole gap is the scan: its forward runs at 11% of
+its memory bound, its backward (checkpoint pass 4.7 ms + adjoint 13.9 ms per micro-batch) at 23%.
+It is a serial loop over 4096 tokens per head; at 64 heads, doubling the programs (N 64 -> 128)
+costs 1.7x the time for the backward and forward (`scripts/scan_occupancy_203.py`), so splitting
+it over more programs would buy at most ~15%.
+
+Frozen vs active: recompute + backward is 26% cheaper frozen (49.8 vs 67.6 ms per micro-batch).
+The active layer's extra 17.5 ms is the weight-grad GEMMs (9.4 ms) and fp32 grad casts and
+accumulation (7.4 ms). The dX GEMMs and the scan backward are the same in both.
+
+### The cheap hypotheses
+
+| hypothesis | verdict | number |
+|---|---|---|
+| (a) scan backward dominates | **yes** | 18.6 of 34.3 ms of the frozen backward; all scan passes 30.1 of 69.4 ms of a frozen-after layer (43%) |
+| (b) frozen backward does unneeded work | no | 0/18 frozen params require grad; 7 fp8 + 2 bf16 GEMMs in backward = exactly the 9 dX products; conv / norm weight grads skipped; only a 7 us read-norm reduction runs |
+| (c) recompute redoes cacheable quantization | yes, small | weight quantize 0.94 ms per forward, 0.91 per recompute; activation quantize in the recompute 0.62 ms (only avoidable by keeping activations) |
+| (d) weight-stream waits stall | no | GPU idle 0.28 / 0.10 / 0.12 ms in forward / recompute / backward (<1%); a larger offload cache moved the layer time <1% (partial check: the forward still streams) |
+| (e) launch / elementwise overhead | launch no; elementwise is real bytes | 184 kernels per frozen-after layer, GPU idle <1%; elementwise 12.8 ms per micro-batch but each kernel at 85-100% of bandwidth (RMSNorm 170 GB/s, residual add 160, GELU 170, sigmoid 196) |
+
+### Top 3 savings, measured per layer, projected per step
+
+Per-step numbers use the turn-averaged counts at k4: 11.0 frozen-after and 7.9 frozen-before
+DeltaNet layers, ~3 active.
+
+| saving | measured | per step | bit-identical? |
+|---|---|---:|---|
+| 1. the recompute's scan forward also writes the backward's state checkpoints; drop `_mk_ckpt_kernel_s` | 4.7 ms pass removed, +0.1 ms on the forward (`scripts/scan_fwd_ckpt_203.py`) | ~0.49 s (4%) | no: states differ by up to 3.6e-7 (the two existing kernels already disagree at that level); 268 MB checkpoint lives longer, VRAM not measured |
+| 2. fp8 codes of frozen weights made once per BCD turn, not per use | quantize kernels 0.94 ms per forward, 0.91 per recompute | ~0.22 s (1.8%) | yes by construction (weights and scale fixed for the turn); costs host RAM for the codes |
+| 3. bias in the fp8 GEMM epilogue instead of a separate add | 0.74 ms per forward, 0.59 per recompute (`scripts/bias_epilogue_203.py`) | ~0.20 s (1.7%) | no: 25% of outputs move one bf16 ulp |
+
+Verdict: the 70% is mostly the price of BCD (every frozen layer after the active block runs
+forward, recompute and an input-grad backward) times a serial scan that cannot use the tensor
+cores. Not waste in the GEMMs, the copies, the launches or the grad bookkeeping. About 0.9 s/step
+of real waste exists, and the largest piece is the scan's duplicate checkpoint pass.
+
+Not measured: the full-step effect of any saving (projections only); VRAM of saving 1; host RAM
+of saving 2; the two attention layers (0.167 / 0.544 s, not analysed); quality effect of the
+non-bit-identical savings.
+
 ## 1B k4 step: 12.60 -> 12.10 s (-3.9%) at the same VRAM, same numbers bit for bit (2026-11-14, #202)
 
 **One line: three changes make the 1B k4 pretrain step 0.50 s faster (12.60 -> 12.10 s, -3.9%)
