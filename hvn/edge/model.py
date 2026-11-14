@@ -513,7 +513,12 @@ class EdgeHVN(nn.Module):
                        and getattr(self, "_offload_bwd_prefetch", True)) else None)
             # #202: the last N layers of the active block run without
             # checkpointing (their forward is not recomputed in backward).
-            n_keep = int(getattr(self, "_active_no_ckpt", 0) or 0)
+            # An int applies to every block; a dict maps the active block's
+            # member set to its own N (layer blocks differ in VRAM headroom).
+            n_keep = getattr(self, "_active_no_ckpt", 0) or 0
+            if isinstance(n_keep, dict):
+                n_keep = n_keep.get(self._offload_active_names, 0)
+            n_keep = int(n_keep)
             act = [f"blocks.{i}" for i in range(len(self.blocks))
                    if f"blocks.{i}" in self._offload_active_names]
             self._no_ckpt_names = frozenset(act[-n_keep:]) if n_keep > 0 else frozenset()

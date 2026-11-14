@@ -26,6 +26,9 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+# Before any CUDA work: pandas/pyarrow after CUDA init crashes this venv
+# (see tests/conftest.py).
+from train_edge_conversational import _parse_active_no_ckpt  # noqa: E402
 from hvn.core.block_coordinate import BlockCoordinateScheduler  # noqa: E402
 from hvn.edge.model import EdgeHVN  # noqa: E402
 
@@ -34,6 +37,7 @@ L, V, GA = 6, 64, 2
 
 
 def _run(n_keep, steps=8):
+    """n_keep: int, or a list with one N per layer block (resolved like the trainer)."""
     torch.manual_seed(0)
     m = EdgeHVN(vocab_size=V, d_model=32, num_layers=L, n_heads=4, use_deltanet=True,
                 chunk_size=8, dropout=0.0, grad_checkpoint=True).cuda()
@@ -41,7 +45,10 @@ def _run(n_keep, steps=8):
     sched = BlockCoordinateScheduler(m, opt, steps_per_block=2, offload_inactive_weights=True,
                                      device=torch.device("cuda"), offload_prefetch=True,
                                      partition="balanced", layers_per_block=3)
-    m._active_no_ckpt = n_keep
+    if isinstance(n_keep, list):
+        m._active_no_ckpt = _parse_active_no_ckpt(",".join(map(str, n_keep)), sched._block_members)
+    else:
+        m._active_no_ckpt = n_keep
     calls = {i: 0 for i in range(L)}
     for i, blk in enumerate(m.blocks):
         blk.register_forward_pre_hook(lambda mod, inp, i=i: calls.__setitem__(i, calls[i] + 1))
@@ -67,10 +74,11 @@ def _run(n_keep, steps=8):
 
 
 @cuda_only
-@pytest.mark.parametrize("n_keep", [1, 3])
+@pytest.mark.parametrize("n_keep", [1, 3, [2, 1]])
 def test_no_ckpt_bit_identical_and_recompute_gone(n_keep):
     l0, g0, c0 = _run(0)
     l1, g1, c1 = _run(n_keep)
+    per_block = n_keep if isinstance(n_keep, list) else None
     assert len(l0) == len(l1) and all(torch.equal(a, b) for a, b in zip(l0, l1)), "loss moved"
     for s, (a, b) in enumerate(zip(g0, g1)):
         assert len(a) == len(b) > 0, f"step {s}: no active gradients to compare"
@@ -82,7 +90,8 @@ def test_no_ckpt_bit_identical_and_recompute_gone(n_keep):
         if not act:
             continue
         layer_turns += 1
-        kept = act[-n_keep:]
+        k = per_block[act[0] // 3] if per_block else n_keep     # 3 layers per block
+        kept = act[-k:]
         for i in act:
             assert calls0[i] == 2 * GA, f"checkpointed active layer {i}: {calls0[i]} calls"
             want = GA if i in kept else 2 * GA
@@ -99,3 +108,15 @@ def test_equality_check_sees_one_ulp():
     flat = x.view(-1)
     flat[0] = torch.nextafter(flat[0], flat[0] + 1)
     assert not torch.equal(g0[0][0], x)
+
+
+def test_parse_active_no_ckpt():
+    members = [("token_embedding",), ("blocks.0", "blocks.1"),
+               ("blocks.2", "blocks.3", "final_norm", "decoder")]
+    assert _parse_active_no_ckpt("0", members) == 0
+    assert _parse_active_no_ckpt("2", members) == 2
+    assert _parse_active_no_ckpt(None, members) == 0
+    d = _parse_active_no_ckpt("1,3", members)
+    assert d == {frozenset(members[1]): 1, frozenset(members[2]): 3}
+    with pytest.raises(ValueError):
+        _parse_active_no_ckpt("1,2,3", members)

@@ -3114,6 +3114,21 @@ def load_hybrid_trunk_into_model(
 
 
 @torch.no_grad()
+def _parse_active_no_ckpt(spec, block_members):
+    """``--active-no-ckpt-layers`` (#202): ``"N"`` for every BCD block, or one
+    comma-separated N per block that holds layers, in order (the embedding
+    block has none). Returns an int, or {frozenset(members): N} for the list
+    form, which is what EdgeHVN looks the active block up by."""
+    parts = [s for s in str(spec or 0).split(",") if s.strip()]
+    if len(parts) <= 1:
+        return int(parts[0]) if parts else 0
+    layer_blocks = [m for m in block_members if any(n.startswith("blocks.") for n in m)]
+    if len(parts) != len(layer_blocks):
+        raise ValueError(f"--active-no-ckpt-layers has {len(parts)} values but the BCD "
+                         f"layout has {len(layer_blocks)} blocks with layers")
+    return {frozenset(m): int(v) for m, v in zip(layer_blocks, parts)}
+
+
 def evaluate(model, val_loader, device, max_batches: int = 100,
              precision: str = "bf16", chunked_loss: int = 0):
     """Held-out validation: mean loss overall + per-source.
@@ -3316,10 +3331,12 @@ def train(
             # #202: the last N layers of the active block keep their
             # activations (no checkpoint recompute). Trades ~0.3 GB per layer
             # at 1B for ~0.14 s per layer per step.
-            n_keep = int(config.get("active_no_ckpt_layers", 0) or 0)
+            n_keep = _parse_active_no_ckpt(config.get("active_no_ckpt_layers", 0),
+                                           bcd_scheduler._block_members)
             model._active_no_ckpt = n_keep
             if n_keep:
-                print(f"  Active block: last {n_keep} layer(s) not checkpointed (#202)")
+                print(f"  Active block: last layer(s) not checkpointed (#202): "
+                      f"{config.get('active_no_ckpt_layers')} per layer block")
 
     # --- Restore optimizer + BCD cycle position (Issue #112) ---
     # Without this, every restart of a long run threw away Muon/AdamW momentum AND
@@ -4131,12 +4148,13 @@ def main():
                              "alone first, tail merged into the last group). Default: "
                              "off, the 'balanced' packing, which is about 2 layers per "
                              "block at 1B. Needs --bcd-partition balanced. (#194)")
-    parser.add_argument("--active-no-ckpt-layers", type=int, default=0,
+    parser.add_argument("--active-no-ckpt-layers", default="0",
                         help="With --offload: the last N layers of the active BCD block "
                              "keep their activations instead of being recomputed in "
                              "backward. Bit-identical. 1B k4: N=1 is -0.12 s/step and "
                              "+5%% peak allocated (peak reserved 82.4 -> 82.5%%); N=2 fails "
-                             "the 85%% VRAM guard (86.6%%). Default 0. (#202)")
+                             "the 85%% VRAM guard (86.6%%). A comma list gives one N per "
+                             "layer block, in order. Default 0. (#202)")
     parser.add_argument("--bcd-partition", choices=["layer", "balanced"], default=None,
                         help="How --block-coordinate splits the model. 'balanced' "
                              "(default): pack consecutive layers into groups no larger "
