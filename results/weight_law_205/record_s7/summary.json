@@ -1,0 +1,176 @@
+{
+ "args": {
+  "mode": "fixed",
+  "spb": 100,
+  "steps": 2800,
+  "init_seed": 7,
+  "data_seed": 7,
+  "record": true,
+  "val_every": 10,
+  "heldout_every": 100,
+  "rule_json": null,
+  "data_dir": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai\\data_cache",
+  "out": "results/weight_law_205/record_s7"
+ },
+ "hashes": {
+  "heldout": "4b7e0a5dd5d1e1be78282a07311d5dfa517f13eb1c54ec2f4c4be225a93cca2a",
+  "val": "e30aa8bfd8cbd22a8d3a32b8b3ecd124a4656165e9db1e7747b9c206d47d3385",
+  "train_window": "185f07376dd01d4852eafb8b465a03c0ec117f8c91c597926d4ec53f8ba6af04"
+ },
+ "known_answer_step0": true,
+ "step0_heldout": 10.914026200771332,
+ "heldout_traj": [
+  {
+   "step": 0,
+   "heldout": 10.914026200771332
+  },
+  {
+   "step": 100,
+   "heldout": 9.518393993377686
+  },
+  {
+   "step": 200,
+   "heldout": 7.99781858921051
+  },
+  {
+   "step": 300,
+   "heldout": 7.862827837467194
+  },
+  {
+   "step": 400,
+   "heldout": 7.791062951087952
+  },
+  {
+   "step": 500,
+   "heldout": 7.757121354341507
+  },
+  {
+   "step": 600,
+   "heldout": 7.731827080249786
+  },
+  {
+   "step": 700,
+   "heldout": 7.637148886919022
+  },
+  {
+   "step": 800,
+   "heldout": 6.520733743906021
+  },
+  {
+   "step": 900,
+   "heldout": 6.378059983253479
+  },
+  {
+   "step": 1000,
+   "heldout": 6.3219737112522125
+  },
+  {
+   "step": 1100,
+   "heldout": 6.2879131734371185
+  },
+  {
+   "step": 1200,
+   "heldout": 6.266618937253952
+  },
+  {
+   "step": 1300,
+   "heldout": 6.250844657421112
+  },
+  {
+   "step": 1400,
+   "heldout": 6.222996711730957
+  },
+  {
+   "step": 1500,
+   "heldout": 6.106173247098923
+  },
+  {
+   "step": 1600,
+   "heldout": 6.071002632379532
+  },
+  {
+   "step": 1700,
+   "heldout": 6.040583282709122
+  },
+  {
+   "step": 1800,
+   "heldout": 6.015434116125107
+  },
+  {
+   "step": 1900,
+   "heldout": 6.003447085618973
+  },
+  {
+   "step": 2000,
+   "heldout": 5.992572367191315
+  },
+  {
+   "step": 2100,
+   "heldout": 5.979407072067261
+  },
+  {
+   "step": 2200,
+   "heldout": 5.9414602518081665
+  },
+  {
+   "step": 2300,
+   "heldout": 5.931879848241806
+  },
+  {
+   "step": 2400,
+   "heldout": 5.920616894960403
+  },
+  {
+   "step": 2500,
+   "heldout": 5.9133061170578
+  },
+  {
+   "step": 2600,
+   "heldout": 5.910211771726608
+  },
+  {
+   "step": 2700,
+   "heldout": 5.908731788396835
+  },
+  {
+   "step": 2800,
+   "heldout": 5.90842393040657
+  }
+ ],
+ "final_heldout": 5.90842393040657,
+ "turn_lengths": [
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100
+ ],
+ "mean_turn_len_completed": 100.0,
+ "n_turns": 28,
+ "rule": null,
+ "wall_min": 15.062714664141337,
+ "peak_alloc_gib": 2.9280872344970703
+}
