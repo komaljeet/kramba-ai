@@ -5,13 +5,14 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
-## Weight streaming is not a stall at 1B k4: 0.06 s of a 12.7 s step; shorter BCD turns (50/25/10 steps) in flight (2026-11-13, #200)
+## Weight streaming is not a stall at 1B k4: 0.06 s of a 12.7 s step; 50 steps per BCD turn is slightly worse than 100, 25 and 10 not run (2026-11-14, #200)
 
 **One line: at 1B k4 production settings, the GPU waits on weight copies for 0.056 s per step
 on average (0.44% of the step). 13-32 GB cross PCIe per step at 12.7 GB/s, but the copies run
 next to compute and finish early. Doubling the copy work changes nothing. One block switch
-costs 0.2-0.35 s, so 10x more switches add well under 1% to a run. The 50/25/10 steps-per-turn
-runs are in flight.**
+costs 0.2-0.35 s, so 10x more switches add well under 1% to a run. At 50 steps per turn the held-out
+loss is 0.027 nats worse than at 100 (step 2800), so shorter turns were not pursued; 25 and 10 were
+stopped on purpose, and 200 was not run.**
 
 ### A. Is the PCIe weight stream a stall? No (measured)
 
@@ -64,7 +65,29 @@ bias stays on the CPU (`hvn/edge/model.py` `_offload_wrap_plain("final_norm+deco
 [self.final_norm], ...)`). With prefetch on, the prefetch of the tail fetches the decoder too, so
 production is not affected. The control above uses backward-prefetch-off for this reason.
 
-### B. Switch cost and 50 / 25 / 10 steps per turn (in flight)
+### B. Switch cost and steps per turn: 50 is slightly worse than 100; 25, 10 and 200 not run
+
+**Result (measured, 2800 steps each, same seed, batches, schedule and held-out set):** k4 at 50
+steps per turn against k4 at 100 (`scripts/analyze_bcd_spb_200.py`). Gap = 50-step minus 100-step
+held-out loss, positive = 50 steps worse.
+
+| step | 50 steps/turn | 100 steps/turn | gap (nats) | ppl ratio |
+|---:|---:|---:|---:|---:|
+| 2100 | 5.0576 | 5.0308 | +0.027 | 1.03x |
+| 2600 | 4.9376 | 4.8991 | +0.039 | 1.04x |
+| 2800 | 4.9076 | 4.8807 | +0.027 | 1.03x |
+
+- By the rule below: WORSE (above 0.012 at 2800, positive at 2100 and 2600). The size is small, about
+  3% in perplexity, and the gap jumps up to 0.1 between neighbouring steps mid-run. One seed per
+  setting, so a small cost, not a settled one.
+- Step time: 50-step turns match 100-step turns within 0.16%. Switches are not a speed cost.
+- VRAM: 83.5% in training, 83.3% in eval, same as 100 steps.
+- Stopped on purpose: k4s25 was killed at step 821 (about 3 h in) and k4s10 never started,
+  because 50 was already worse than 100 and 20 more GPU hours were judged not worth it. 200 steps
+  per turn (the other direction) was also not run; that was the maintainer's call (10 h).
+- Not tested: shorter turns with `retain_optimizer_state`, longer turns, more than one seed.
+- Everything below this line was written before the results, at launch.
+
 
 **Cost of one switch (measured three ways):** `_activate` alone 0.30 s (synchronized, 168M-param
 block; 0.16-0.18 s into the smaller embedding block). First step of a turn minus the turn's
@@ -102,7 +125,7 @@ every step; held-out sha matches #197; peak reserved 83.5% (blocks 0-3), eval 83
 sha matches, peak reserved 83.5% (blocks 0-3), eval 83.3% and 49-51 s. Per-block step medians
 equal k4@100's within 0.16% (16.25 / 16.11 / 14.50 / 12.79 / 11.18 / 9.51 / 7.83 s); switch
 overhead 0.19 s median over 5 switches. So each arm takes about what k4@100 took, ~10.2 h
-wall. **ETA: k4s50 ~03:30 Sat 14 Nov, k4s25 ~13:45 Sat, k4s10 ~00:00 Sun 15 Nov.**
+wall. (Those ETAs are void: the sweep was stopped, see Result above.)
 Early held-out gaps (k4s50 1.15 nats better at step 100, 0.68 worse at 300) only reflect which
 blocks have trained so far in the first rotation; they say nothing yet.
 
