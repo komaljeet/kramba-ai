@@ -307,6 +307,14 @@ Since 2026-09-29 blocks default to `--bcd-partition balanced` (consecutive layer
 to the vocab table's size: same peak memory, each layer trains ~3-4x as often; ppl 228 vs
 317 in the 8-layer A/B). Since #164 `--offload` uses `balanced` too; before that it silently
 fell back to `layer`.
+Since #201 (2026-11-14) the balanced partition defaults to **4 layers per block**
+(`--bcd-layers-per-block 4`): at 1B that is 7 blocks (embedding alone, then 6 groups of 4,
+tail merged into the last) instead of 13. It was 0.446 nats better on held-out loss at step
+2800 (4.881 vs 5.327), with 6.8% slower steps and peak reserved 83.3% (#194). Per-step and
+per-cycle timings in this doc measured before that are for the 13-block layout.
+`--bcd-layers-per-block 0` restores the old packing (about 2 layers per block); a checkpoint
+saved before #201 must resume with it, and resuming under a different layout stops with an
+error that names the flag.
 
 `--active-no-ckpt-layers N` (#202, with `--offload`): the last N layers of the active block
 keep their activations instead of being recomputed in backward. Bit-identical. At 1B k4,

@@ -145,6 +145,44 @@ at its first eval; reproduced with all #202 changes off (`results/step_speed_202
 **How to use:** nothing for changes 1 and 3. For change 2 add `--active-no-ckpt-layers 1` to
 the 1B k4 command (12.10 s/step). The list form needs one value per layer block (6 at k4).
 
+## 4 layers per BCD block is now the default: 7 blocks at 1B, peak reserved 82.6% (2026-11-14, #201)
+
+**One line: `train_edge_conversational.py` now trains 4 layers per BCD block under the
+balanced partition. At 1B that is 7 blocks instead of 13. `--bcd-layers-per-block 0`
+gives back the old layout.**
+
+Why: the #194 A/B. 4 layers per block was 0.446 nats better on held-out loss at step 2800
+(4.881 vs 5.327), with 6.8% slower steps (12.60 vs 11.80 s). 5 layers broke the 85% guard.
+
+What changed:
+- No flag + `--bcd-partition balanced` (the default) = 4 layers per block.
+- `--bcd-layers-per-block 0` = the old budget packing (about 2 layers per block, 13 blocks at 1B).
+- `--bcd-partition layer` still works. It refuses only an explicit layers-per-block value.
+- The run banner now says the layout, e.g. `7 blocks (balanced partition, 4 layers per block)`.
+- The saved BCD state now records the block names. Resuming under a different layout stops
+  with an error that names the flag. A checkpoint saved before #201 with the old default
+  needs `--bcd-layers-per-block 0`.
+
+Measured on the real entrypoint (`scripts/profile_bcd_memory.py`, production 1B flags, no
+layers-per-block flag, grad-accum 8, 2 steps per block, 16 steps):
+- Banner: 7 blocks, 4 layers per block. The 7 blocks were embedding alone, five groups of 4,
+  and blocks 20-23 with the tail.
+- Peak reserved: 69.7% on the first embedding step, 82.5-82.6% on every step after, on every
+  block. Under the 85% guard. No allocator retries.
+- Grad bytes equal active params x grad size on every step, so the probe counted the right thing.
+- Step time: 17.4 s on the embedding block down to 7.8 s on the last block.
+- Resume check: the same 7-block checkpoint relaunched with `--bcd-layers-per-block 0`
+  (13 blocks) stopped at startup, exit 1, with `ValueError: BCD state was saved with a
+  different block layout (7 blocks ...) than this run (13 blocks ...)` and the flag to use.
+
+Tests (CPU): `tests/test_bcd_default_layers_201.py` (15) and the #194, BCD, offload and
+resume files: 120 passed, 21 skipped (need CUDA). With the old `block_coordinate.py` put
+back, 7 of the 15 new tests fail.
+
+Not changed: the per-step and per-cycle timings in README, HF_BLOG_POST and docs/training.md
+(13.294 s/step cycle average, 17.6 s first steps) were measured on the 13-block layout.
+The blog's launch command now gives 7 blocks.
+
 ## Weight streaming is not a stall at 1B k4: 0.06 s of a 12.7 s step; 50 steps per BCD turn is slightly worse than 100, 25 and 10 not run (2026-11-14, #200)
 
 **One line: at 1B k4 production settings, the GPU waits on weight copies for 0.056 s per step
