@@ -5,6 +5,83 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B k4 step 12.08 -> 11.79 s (-2.4%): frozen weights' fp8 codes made once per turn, same numbers bit for bit (2026-11-14, #204)
+
+**One line: a BCD-frozen weight is no longer quantized to fp8 on every use. Its codes are
+made once per BCD turn, kept in host RAM, and streamed instead of its bf16 weight. The step
+is 0.29 s faster (12.085 -> 11.792 s, three repeats each), loss, active-block gradients and
+held-out loss are bit-identical at all 7 block positions, and peak VRAM drops 0.2 points. The
+cost is 1.70 GB more host RAM: the lowest free system RAM seen during a run went from 3.0 GB
+to 1.0 GB on this 15.3 GB machine. On by default; `--no-frozen-fp8-codes` turns it off.**
+
+Where the codes live, decided by numbers: on the GPU they would be 1 byte per weight for every
+frozen-after layer (~0.7 GB with block 0 active, twice that with the transposed copy), against ~0.15 GB left under the 85% guard. Not
+possible. In host RAM they go in a "holder" tensor with the same shape and dtype as the
+bf16-parked weight (codes, then the transposed codes: 2 bytes per weight, as before). The
+offload pool streams the holder in place of the weight, so PCIe bytes and pool buffers are
+unchanged and the weight itself stays on the CPU (any code path that reads it instead of the
+codes fails loudly). Streaming only the codes (half the bytes) would need a transpose on the
+GPU per recompute; not tried, the copies are already hidden (#203).
+
+Staleness guard: codes are used only if their key matches the BCD turn (every switch expires
+all codes), the weight's storage pointer and version counter, and the quantizer route. The
+active block never uses codes (its weight needs grad, which takes the per-step cache first).
+
+Method: `scripts/profile_step_202.py` (now with `--no-frozen-codes` and host RAM per step),
+#202 shipped settings (`--active-no-ckpt-layers 1`), 3 steps per turn, step time = mean of
+turn steps 2-3 averaged over the 7 positions; base and codes runs interleaved.
+`scripts/analyze_frozen_codes_204.py`, `results/frozen_codes_204/`.
+
+| run | embedding | 0-3 | 4-7 | 8-11 | 12-15 | 16-19 | 20-23+tail | mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| base, run 1 | 16.06 | 15.45 | 13.84 | 12.16 | 10.56 | 8.91 | 7.61 | 12.083 |
+| base, run 2 | 16.07 | 15.44 | 13.85 | 12.16 | 10.56 | 8.91 | 7.60 | 12.084 |
+| base, run 3 | 16.06 | 15.45 | 13.86 | 12.17 | 10.57 | 8.91 | 7.60 | 12.088 |
+| codes, run 1 | 15.62 | 15.09 | 13.54 | 11.88 | 10.31 | 8.69 | 7.42 | 11.793 |
+| codes, run 2 | 15.63 | 15.09 | 13.52 | 11.88 | 10.30 | 8.69 | 7.42 | 11.789 |
+| codes, run 3 | 15.62 | 15.09 | 13.53 | 11.89 | 10.31 | 8.69 | 7.42 | 11.794 |
+
+The three baselines agree within 0.005 s on the mean (the #202 shipped number was 12.10 s).
+The saving is larger than #203's 0.22 s projection: it also drops the once-per-step scale
+pass of every frozen weight and the weight-quantize launches.
+
+| | base | codes |
+|---|---:|---:|
+| peak reserved, training (worst turn) | 82.3% | 82.0% |
+| peak reserved, held-out eval after every step | 83.9% | 83.7% |
+| codes in host RAM | 0 | 1.70 GB |
+| process working set, max | 4.7 GB | 6.8 GB |
+| process private commit, max | 11.5 GB | 15.3 GB |
+| free system RAM, lowest seen | 3.0 GB | 1.0 GB |
+| codes refresh at a block switch | - | 0.34 s (0.65 s on the first step) |
+| first step of a turn (carries the switch) | 12.35 s | 12.41 s |
+
+Switch cost: 0.34 s once per turn, so 0.003 s/step at the default 100 steps per turn.
+
+Same numbers, and the check could fail:
+- sha256 of every micro-batch's per-token loss and of the active block's gradients at
+  `optimizer.step`, 14 steps (2 per block position, LR non-zero from step 2): base vs codes
+  equal 14/14 and 14/14. The base hashes also equal the #202 hash files 14/14.
+- Falsifier: the hidden-state gradient of micro-batch 0 scaled by (1 + 2^-20): gradient hash
+  differs 14/14, loss hash 12/14.
+- Held-out loss after each of 14 steps: equal 14/14. Codes were really used: 25,232 codes
+  reads in the codes run, 0 in the base run.
+- `tests/test_frozen_fp8_codes.py` (small model, two full BCD rotations, Muon, offload):
+  trajectory, parameters and offload-aware eval bit-identical to per-use quantize, with
+  must-fail partners that do fail: codes never remade; a frozen weight changed through
+  `p.data` between turns with the per-turn expiry removed; a frozen weight changed in place
+  within a turn with the version counter removed from the key. The active block never reads
+  codes.
+
+Risk: host RAM. With 1.0 GB free left at the low point, other programs on this PC (or a
+longer run whose RAM grows) could push Windows into paging, which would show up as slower
+steps, not wrong numbers. Step times were steady across all three runs, so no paging here.
+If RAM gets tight, `--no-frozen-fp8-codes` gives back the 1.7 GB for 0.29 s/step.
+
+Not measured: a long run (hours) with the codes on; host RAM with other programs running;
+the full-step time with the `1,1,2,2,3,3` no-ckpt list; streaming codes only (half the
+bytes, half the RAM).
+
 ## Why frozen layers are ~70% of the 1B k4 step: mostly inherent, ~7% waste found (2026-11-14, #203)
 
 **One line: a frozen DeltaNet layer costs 69 ms per micro-batch when it sits after the active

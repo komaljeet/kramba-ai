@@ -99,8 +99,10 @@ def main():
     def host_mem():
         """Process working set / private commit and system available RAM, bytes."""
         pmc = _PMC(); pmc.cb = ctypes.sizeof(_PMC)
-        ctypes.windll.psapi.GetProcessMemoryInfo(
-            ctypes.windll.kernel32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb)
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.K32GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+        assert k32.K32GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb)
         ms = _MSE(); ms.dwLength = ctypes.sizeof(_MSE)
         ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
         return {"ws": pmc.WorkingSetSize, "peak_ws": pmc.PeakWorkingSetSize,
