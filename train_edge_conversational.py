@@ -2553,6 +2553,30 @@ def resolve_bcd_partition(partition: str | None, offload: bool) -> str:
     return "balanced"
 
 
+# #201: 4 layers per BCD block is the default under the balanced partition. At 1B
+# (24 layers -> 7 blocks) it beat the old budget packing (about 2 layers per block,
+# 13 blocks) by 0.446 nats held-out at step 2800, 6.8% slower steps, peak reserved
+# 83.3% (#194); 5 layers per block broke the 85% guard.
+BCD_DEFAULT_LAYERS_PER_BLOCK = 4
+
+
+def resolve_bcd_layers_per_block(layers_per_block: int | None,
+                                 partition: str) -> int | None:
+    """--bcd-layers-per-block after defaults (#201).
+
+    None (flag not given): 4 under 'balanced', None under 'layer' -- so the
+    per-layer partition still refuses the option only when it is passed
+    explicitly. 0 stays 0 and means the pre-#201 budget packing (embedding-sized
+    groups); the scheduler is given `value or None`. Idempotent, so train() can
+    re-apply it to a config main() has already resolved.
+    """
+    if layers_per_block is None:
+        return BCD_DEFAULT_LAYERS_PER_BLOCK if partition == "balanced" else None
+    if layers_per_block < 0:
+        raise ValueError(f"--bcd-layers-per-block must be >= 0, got {layers_per_block}")
+    return layers_per_block
+
+
 # Issue #182: the most of the card the audit's throwaway copies may push peak
 # VRAM to. Same 90% margin as #178/#180: real spills were measured at ~94%
 # reserved on this card, and on WDDM going past the card does not reliably
@@ -3283,6 +3307,7 @@ def train(
         # 4.00 GB" figure in docs/ was produced by bench harnesses that enabled
         # this; the training script itself had no path to it until now.
         offload = bool(config.get("offload", False))
+        _bcd_partition = resolve_bcd_partition(config.get("bcd_partition"), offload)
         bcd_scheduler = BlockCoordinateScheduler(
             model, optimizer,
             steps_per_block=config.get("bcd_steps_per_block", 100),
@@ -3296,8 +3321,10 @@ def train(
             # do not re-enable it without re-reading that commit.
             offload_prefetch=offload,
             offload_cache_blocks=config.get("offload_cache_blocks", 1),
-            partition=resolve_bcd_partition(config.get("bcd_partition"), offload),
-            layers_per_block=config.get("bcd_layers_per_block"),
+            partition=_bcd_partition,
+            # #201: default 4 under balanced; 0 = the old budget packing.
+            layers_per_block=resolve_bcd_layers_per_block(
+                config.get("bcd_layers_per_block"), _bcd_partition) or None,
             # #169: on resume, activate the SAVED block first. Otherwise the
             # constructor's first _activate parks it in bf16 (block 0 active)
             # and the later load_state_dict only casts it back to fp32 -- the
@@ -3306,8 +3333,12 @@ def train(
             initial_active_idx=(resume_state.get("bcd_state_dict") or {}).get("active_idx")
             if resume_state else None,
         )
+        _layout = ("1 layer per block" if bcd_scheduler.partition == "layer" else
+                   f"{bcd_scheduler.layers_per_block} layers per block"
+                   if bcd_scheduler.layers_per_block else
+                   "budget packing (--bcd-layers-per-block 0)")
         print(f"  Block-coordinate-descent: {bcd_scheduler.num_blocks} blocks "
-              f"({bcd_scheduler.partition} partition), "
+              f"({bcd_scheduler.partition} partition, {_layout}), "
               f"{bcd_scheduler.steps_per_block} steps/block, "
               f"active={bcd_scheduler.active_block_name!r}")
         if offload:
@@ -4122,8 +4153,11 @@ def main():
     parser.add_argument("--bcd-layers-per-block", type=int, default=None,
                         help="Pack exactly this many layers per BCD block (embedding "
                              "alone first, tail merged into the last group). Default: "
-                             "off, the 'balanced' packing, which is about 2 layers per "
-                             "block at 1B. Needs --bcd-partition balanced. (#194)")
+                             "4 under --bcd-partition balanced (7 blocks at 1B; #201). "
+                             "0 = the pre-#201 budget packing, groups no bigger than "
+                             "the embedding table (about 2 layers per block, 13 blocks "
+                             "at 1B): pass 0 to resume a run saved before #201. Not "
+                             "allowed with --bcd-partition layer. (#194, #201)")
     parser.add_argument("--bcd-partition", choices=["layer", "balanced"], default=None,
                         help="How --block-coordinate splits the model. 'balanced' "
                              "(default): pack consecutive layers into groups no larger "
@@ -4267,6 +4301,13 @@ def main():
                   "recompute to bring them back).")
     if args.bcd_partition is None:
         args.bcd_partition = resolve_bcd_partition(None, args.offload)
+    # #201: default 4 layers per block under balanced. An explicit value under
+    # --bcd-partition layer is kept, so the scheduler still refuses it loudly.
+    try:
+        args.bcd_layers_per_block = resolve_bcd_layers_per_block(
+            args.bcd_layers_per_block, args.bcd_partition)
+    except ValueError as e:
+        parser.error(str(e))
 
     # --- Issue #86: expand the --fast meta-flag into the recommended stack ---
     # One switch instead of five flags. Any lever the user passed explicitly on

@@ -50,13 +50,28 @@ def test_exact_layer_count_embedding_alone_tail_merged(k):
     assert sorted(ids) == sorted(id(p) for p in m.parameters())
 
 
-def test_default_is_unchanged_without_the_option():
+def test_library_default_is_the_budget_packing():
+    # The SCHEDULER's default is still the budget packing. The trainer's default
+    # of 4 (#201) comes from resolve_bcd_layers_per_block; its "0" reaches this.
+    from train_edge_conversational import resolve_bcd_layers_per_block
     m = _model(7)
     opt = torch.optim.AdamW(m.parameters(), lr=1e-2)
     a = BlockCoordinateScheduler(m, opt, steps_per_block=1, partition="balanced")
-    b = BlockCoordinateScheduler(m, opt, steps_per_block=1, partition="balanced",
-                                 layers_per_block=None)
+    b = BlockCoordinateScheduler(
+        m, opt, steps_per_block=1, partition="balanced",
+        layers_per_block=resolve_bcd_layers_per_block(0, "balanced") or None)
     assert [n for n, _ in a.blocks] == [n for n, _ in b.blocks]
+    assert a.layers_per_block is None
+    assert a._budget_block_names == [n for n, _ in a.blocks]
+
+
+def test_trainer_default_is_4_layers():
+    # #201 (was "default unchanged" under #194).
+    from train_edge_conversational import resolve_bcd_layers_per_block
+    m = _model(7)
+    s = _sched(m, resolve_bcd_layers_per_block(None, "balanced"))
+    counts = [sum(n.startswith("blocks.") for n in g) for g in s._block_members[1:]]
+    assert counts == [4, 3], counts
 
 
 def test_every_layer_of_a_group_trains_over_a_rotation():
