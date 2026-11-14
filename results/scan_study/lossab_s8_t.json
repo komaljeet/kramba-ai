@@ -1,0 +1,215 @@
+{
+  "config": {
+    "arms": [
+      "bcd_k2",
+      "full"
+    ],
+    "baseline": null,
+    "steps": 2000,
+    "steps_per_block": 100,
+    "warmup_steps": 100,
+    "eval_every": 250,
+    "batch_size": 4,
+    "seq_len": 512,
+    "d_model": 512,
+    "num_layers": 12,
+    "attn_layers": [
+      3,
+      9
+    ],
+    "n_heads": 16,
+    "muon_lr": 0.02,
+    "aux_lr": 0.0003,
+    "weight_decay": 0.01,
+    "probe_batches": 16,
+    "data_dir": "C:/Users/komal/Documents/Codes/kramba-ai/data_cache",
+    "seed": 8,
+    "tokenizer": "gpt2",
+    "out": "results/scan_study/lossab_s8_t.json",
+    "scan_kernel": "t",
+    "vocab_size": 50257
+  },
+  "forward_to_diff": 0.0,
+  "arms": {
+    "bcd_k2": {
+      "arm": "bcd_k2",
+      "partition": "balanced",
+      "local": false,
+      "lookahead": null,
+      "blocks": [
+        [
+          "token_embedding",
+          25731584
+        ],
+        [
+          "blocks.0+blocks.1",
+          5271584
+        ],
+        [
+          "blocks.2+blocks.3",
+          5259792
+        ],
+        [
+          "blocks.4+blocks.5",
+          5271584
+        ],
+        [
+          "blocks.6+blocks.7",
+          5271584
+        ],
+        [
+          "blocks.8+blocks.9",
+          5259792
+        ],
+        [
+          "blocks.10+blocks.11+final_norm+decoder",
+          5322865
+        ]
+      ],
+      "final_heldout_loss": 5.701617181301117,
+      "final_ppl": 299.35111476044807,
+      "train_sec": 189.5318672657013,
+      "median_step_sec_by_block": {
+        "token_embedding": 0.11268758773803711,
+        "blocks.0+blocks.1": 0.10318970680236816,
+        "blocks.2+blocks.3": 0.09572410583496094,
+        "blocks.4+blocks.5": 0.09384870529174805,
+        "blocks.6+blocks.7": 0.08853912353515625,
+        "blocks.8+blocks.9": 0.08134865760803223,
+        "blocks.10+blocks.11+final_norm+decoder": 0.08083629608154297
+      },
+      "steps_by_block": {
+        "token_embedding": 300,
+        "blocks.0+blocks.1": 300,
+        "blocks.2+blocks.3": 300,
+        "blocks.4+blocks.5": 300,
+        "blocks.6+blocks.7": 300,
+        "blocks.8+blocks.9": 300,
+        "blocks.10+blocks.11+final_norm+decoder": 200
+      },
+      "copy": {
+        "first_half": 0.0,
+        "repeat": 0.0
+      },
+      "peak_allocated_gib": 2.465028762817383,
+      "unmoved_params": [],
+      "trajectory": [
+        {
+          "step": 0,
+          "train_sec": 0.0,
+          "heldout_loss": 10.913154006004333
+        },
+        {
+          "step": 250,
+          "train_sec": 26.491546630859375,
+          "heldout_loss": 7.504200130701065
+        },
+        {
+          "step": 500,
+          "train_sec": 49.62228059768677,
+          "heldout_loss": 7.3307406306266785
+        },
+        {
+          "step": 750,
+          "train_sec": 71.592524766922,
+          "heldout_loss": 6.408083409070969
+        },
+        {
+          "step": 1000,
+          "train_sec": 97.18434023857117,
+          "heldout_loss": 5.978841871023178
+        },
+        {
+          "step": 1250,
+          "train_sec": 119.53585171699524,
+          "heldout_loss": 5.90259912610054
+        },
+        {
+          "step": 1500,
+          "train_sec": 143.06681728363037,
+          "heldout_loss": 5.759886413812637
+        },
+        {
+          "step": 1750,
+          "train_sec": 167.7675654888153,
+          "heldout_loss": 5.70985472202301
+        },
+        {
+          "step": 2000,
+          "train_sec": 189.5318672657013,
+          "heldout_loss": 5.701617181301117
+        }
+      ]
+    },
+    "full": {
+      "arm": "full",
+      "partition": null,
+      "local": false,
+      "lookahead": null,
+      "blocks": [],
+      "final_heldout_loss": 4.74992835521698,
+      "final_ppl": 115.57600381284071,
+      "train_sec": 455.1141002178192,
+      "median_step_sec_by_block": {
+        "all": 0.22669577598571777
+      },
+      "steps_by_block": {
+        "all": 2000
+      },
+      "copy": {
+        "first_half": 0.0,
+        "repeat": 0.0
+      },
+      "peak_allocated_gib": 2.1981496810913086,
+      "unmoved_params": [],
+      "trajectory": [
+        {
+          "step": 0,
+          "train_sec": 0.0,
+          "heldout_loss": 10.913154006004333
+        },
+        {
+          "step": 250,
+          "train_sec": 56.92535138130188,
+          "heldout_loss": 5.746905893087387
+        },
+        {
+          "step": 500,
+          "train_sec": 113.74565196037292,
+          "heldout_loss": 5.390705972909927
+        },
+        {
+          "step": 750,
+          "train_sec": 171.18136930465698,
+          "heldout_loss": 5.201055198907852
+        },
+        {
+          "step": 1000,
+          "train_sec": 227.98081374168396,
+          "heldout_loss": 5.059700235724449
+        },
+        {
+          "step": 1250,
+          "train_sec": 284.8003022670746,
+          "heldout_loss": 4.91840136051178
+        },
+        {
+          "step": 1500,
+          "train_sec": 341.5600121021271,
+          "heldout_loss": 4.8300746232271194
+        },
+        {
+          "step": 1750,
+          "train_sec": 398.3895456790924,
+          "heldout_loss": 4.776080951094627
+        },
+        {
+          "step": 2000,
+          "train_sec": 455.1141002178192,
+          "heldout_loss": 4.74992835521698
+        }
+      ]
+    }
+  },
+  "verdict": []
+}

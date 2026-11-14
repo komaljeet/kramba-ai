@@ -1,0 +1,80 @@
+[ab] scan kernel v1
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.0, 'OpenAssistant': 0.0, 'WikiText-103': 0.0, 'FineWeb-Edu': 1.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:/Users/komal/Documents/Codes/kramba-ai/data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:/Users/komal/Documents/Codes/kramba-ai/data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 144,853,865  |  windows/source: [252205, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 144853865
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+[ab] known-answer: forward_to(last layer) vs model(x) max |diff| 0.000e+00
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'bcd_k2' ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,539,200 params; AdamW aux lr=0.0003 / 25,849,585 params)
+[ab]     block token_embedding                                                          25.73M
+[ab]     block blocks.0+blocks.1                                                         5.27M
+[ab]     block blocks.2+blocks.3                                                         5.26M
+[ab]     block blocks.4+blocks.5                                                         5.27M
+[ab]     block blocks.6+blocks.7                                                         5.27M
+[ab]     block blocks.8+blocks.9                                                         5.26M
+[ab]     block blocks.10+blocks.11+final_norm+decoder                                    5.32M
+[ab]   step   250  held-out 7.50143  train 0.5 min
+[ab]   step   500  held-out 7.32650  train 0.9 min
+[ab]   step   750  held-out 6.40211  train 1.3 min
+[ab]   step  1000  held-out 5.98367  train 1.7 min
+[ab]   step  1250  held-out 5.90403  train 2.1 min
+[ab]   step  1500  held-out 5.76282  train 2.5 min
+[ab]   step  1750  held-out 5.71221  train 3.0 min
+[ab]   step  2000  held-out 5.70372  train 3.3 min
+[ab]   copy acc first-half 0.000 repeat 0.000; train 3.3 min; unmoved 0
+[ab]   median step   121.1 ms    300 steps  token_embedding
+[ab]   median step   111.6 ms    300 steps  blocks.0+blocks.1
+[ab]   median step   102.4 ms    300 steps  blocks.2+blocks.3
+[ab]   median step    99.7 ms    300 steps  blocks.4+blocks.5
+[ab]   median step    92.5 ms    300 steps  blocks.6+blocks.7
+[ab]   median step    83.4 ms    300 steps  blocks.8+blocks.9
+[ab]   median step    82.1 ms    200 steps  blocks.10+blocks.11+final_norm+decoder
+[ab] triton+megakernel scan on 10 DeltaNet blocks
+
+[ab] === arm 'full' ===
+[ab]     Muon (muon_lr=0.02 on 102 matrices / 31,539,200 params; AdamW aux lr=0.0003 / 25,849,585 params)
+[ab]   step   250  held-out 5.74097  train 1.0 min
+[ab]   step   500  held-out 5.38831  train 2.0 min
+[ab]   step   750  held-out 5.19963  train 3.0 min
+[ab]   step  1000  held-out 5.06106  train 4.0 min
+[ab]   step  1250  held-out 4.91788  train 5.0 min
+[ab]   step  1500  held-out 4.82977  train 6.0 min
+[ab]   step  1750  held-out 4.77349  train 6.9 min
+[ab]   step  2000  held-out 4.74805  train 7.9 min
+[ab]   copy acc first-half 0.000 repeat 0.000; train 7.9 min; unmoved 0
+[ab]   median step   237.1 ms   2000 steps  all
+[ab] scan t stats {'fused_ckpt': 0, 'separate_ckpt': 0} (kernel v1)
+
+[ab] ================ local-loss BCD ================
+[ab] arm                   held-out      ppl    copy  train min    GiB
+[ab] bcd_k2                  5.7037    300.0   0.000        3.3   2.47
+[ab] full                    4.7480    115.4   0.000        7.9   2.20
+[ab] wrote results/scan_study/lossab_s8_v1.json

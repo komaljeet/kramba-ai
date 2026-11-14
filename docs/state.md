@@ -5,6 +5,91 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## DeltaNet scan at 1B shapes: 1B k4 step 11.80 -> 11.29 s with the same bits (default), 10.08 s with `--scan-kernel t` (-14.6%, opt-in) (2026-11-15, #206)
+
+**One line: the scan was not limited by latency, memory or too few programs. It was limited by
+the SM's instruction rate: each step's reductions over d_k ran as cross-lane shuffle trees and
+cross-warp shared-memory round trips. Two fixes, both measured on the real 1B step (3 alternating
+repeats each). (1) Launch widths only (forward 1 warp, checkpoint pass 8): same bits, on by
+default, step 11.797 -> 11.285 s (-0.51 s). (2) `--scan-kernel t`: state held transposed so those
+reductions are in-thread adds, checkpoint pass fused into the checkpoint recompute, backward
+1 warp: step 10.076 s (-1.72 s, about 44% of the ~3.9 s of scan per step). (2) is not
+bit-identical. Its error vs an fp64 reference equals the current kernels'. In a d512 loss A/B its
+held-out loss is within the run-to-run noise of the current kernels. It ships behind a flag,
+default off. Chunked (fla KDA) is slower than (2) and 10^4x less accurate here. Peak VRAM
+unchanged (83.7% with eval).**
+
+Method: `scripts/scan_study_206.py` (step 1: per-kernel CUDA events, regs/occupancy from the
+compiled kernels, SM clock, N sweep, num_warps x num_stages sweep with bit-equality),
+`scripts/scan_kernels_206.py` + `scripts/scan_study2_206.py` (layout variants, fp64 reference),
+`scripts/scan_fla_206.py` (fla 0.5.1 `chunk_kda`, already in the venv, NOT added as a dependency),
+`scripts/profile_step_202.py` (1B k4, `--active-no-ckpt-layers 1`, 3 steps per turn, mean of
+turn steps 2-3 over 7 positions), `scripts/ab_local_loss.py` (d512 stand-in, `--scan-kernel`),
+`scripts/analyze_scan_study_206.py`, `results/scan_study/`. Shapes: batch 1, 64 heads, d_head 32,
+seq 4096 (N = 64 sequences). Card: RTX 4050 Laptop, 20 SMs, SM clock 2.36-2.57 GHz under load.
+No Nsight Compute on this PC; occupancy is computed from register counts, not profiled.
+
+### Why only 11-23% of the memory bound (step 1)
+
+| hypothesis (refuter written first) | result | verdict |
+|---|---|---|
+| H1 per-program latency (refuted if time at N=20 > 1.5x N=1) | forward 1.31 ms at N=1, 3.22 at N=20, 5.71 at N=64 | refuted at N=64: ~1 program per SM already fills it |
+| H2 SM issue-bound at N=64 (refuted if N=128 < 1.3x N=64) | forward 1.69x, backward 1.72x, checkpoint 1.30x | confirmed (forward, backward) |
+| H3 memory (refuted if < 50% of 170-187 GB/s) | forward ~21 GB/s | refuted |
+
+Production forward: 40 regs, 4 warps, 128 programs, 2 bar.sync per step. Backward: 93 regs,
+5 blocks/SM (42% occupancy), 28 bar.sync in the loop. A forward step costs ~3500 SM cycles at
+N=64. num_stages had no effect (no pipelined loads).
+
+### Per kernel, ms per call at the 1B shape
+
+| kernel | main | v1 warps (same bits) | t |
+|---|---:|---:|---:|
+| forward | 5.71 | 4.30 (1 warp) | 3.53 (BV 8, 2 warps) |
+| checkpoint pass | 4.66 | 3.62 (8 warps) | 2.59 alone; 0 in the recompute (fused) |
+| recompute forward + checkpoints | 10.37 | 7.92 | 4.04 |
+| backward adjoint | 13.84 | 13.84 (2 warps: 9.59, bits move) | 7.67 (1 warp) |
+| frozen-after layer, per micro-batch | ~30 | ~26 | ~15 |
+| fla `chunk_kda` forward / fwd+bwd | | | 4.82 / 16.9 |
+
+Splitting d_v over more programs (2 or 4 per head, partial sums) was slower: 9.0 and 15.8 ms
+for the backward vs 7.67. That matches #203's "doubling programs costs 1.7x".
+
+### Numbers
+
+| check | result |
+|---|---|
+| v1 warps vs main, 1B, 14 steps, sha256 of loss + active grads | 14/14 equal; held-out after each step equal 14/14 |
+| falsifier (hidden-state grad x (1+2^-20)) | grads differ 14/14 (the hash can see a change) |
+| t vs main, 1B hashes | 0/14 equal; held-out after 14 steps max diff 1.4e-3 |
+| rel error vs fp64 (N=8, S=4096, fp32 in): main / t | o 1.16e-7 / 1.16e-7, dq 1.16e-7 / 1.18e-7, dk 1.36e-7 / 1.32e-7, dv 1.28e-7 / 1.46e-7, dalpha 1.61e-7 / 1.57e-7, dbeta 1.48e-7 / 1.63e-7 |
+| same, falsifier (beta x (1+2^-10)) | ~1e-3 (the metric can see an error) |
+| fla KDA rel error vs fp64, bf16 / fp32 inputs | 4e-3 / 1.4e-3 |
+| t vs main, bf16 grads at 1B shape | ~1e-4 of elements differ by one bf16 ulp |
+
+d512 loss A/B (12 layers, 2000 steps, final held-out on 16 fixed probes, t minus v1):
+
+| | seed 7 | seed 8 | v1 same-seed repeat |
+|---|---:|---:|---:|
+| bcd_k2 | +0.0002 | -0.0021 | -0.0021 |
+| full (checkpointed, fused path ran 20,000 times) | -0.0042 | +0.0019 | +0.0003 |
+
+Mean t - v1 is -0.001 nats over the four. The v1 kernels themselves move 0.002 nats between two
+runs of the same seed. No sign of a bias either way. At d512 t is 5-6% faster per step.
+
+Step time at 1B (s, 7 positions, mean of turn steps 2-3):
+
+| run | emb | 0-3 | 4-7 | 8-11 | 12-15 | 16-19 | 20-23+tail | mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| main x3 | 15.63 | 15.09 | 13.53 | 11.89 | 10.32 | 8.69 | 7.41 | 11.797 (spread 0.013) |
+| v1 warps x3 | 14.94 | 14.44 | 12.95 | 11.36 | 9.87 | 8.32 | 7.11 | 11.285 (spread 0.005) |
+| t x3 | 13.11 | 12.61 | 11.44 | 10.09 | 8.92 | 7.67 | 6.70 | 10.076 (spread 0.008) |
+
+Not measured: own chunked WY kernel at chunk 16/32 (only fla's chunk 64 was timed; it lost);
+t at d_head other than 16/32/64 in unit tests, or at seq lengths other than 512/4096; a long run
+(hours) with t; loss A/B at 1B or longer than 2000 steps at d512; the backward at 2 warps under
+v1 (faster but bits move; t supersedes it); Nsight-level stall reasons.
+
 ## Early BCD block switching from a fitted law: weights follow a law, held-out loss does not; the rule does not beat plain shorter turns (2026-11-14, #205)
 
 **One line: STAND-IN, not 1B (d512, 24 layers, 4 layers per block + embedding alone, 7 blocks,
