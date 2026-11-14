@@ -5,6 +5,58 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Early BCD block switching from a fitted law: weights follow a law, held-out loss does not; the rule does not beat plain shorter turns (2026-11-14, #205)
+
+**One line: STAND-IN, not 1B (d512, 24 layers, 4 layers per block + embedding alone, 7 blocks,
+2800 steps). The active block's weights move by a clean saturating-exponential law (time constant
+~100 steps). The held-out loss inside a turn does not follow any law better than a straight line,
+and it is still falling at step 100 in 27 of 28 turns. A pre-registered early-switch rule (fit an
+exponential to an 8-batch val loss, switch once its rate drops below 1/4) averaged 5.911 held-out
+over 3 seeds, vs 5.909 for plain 50-step turns and 5.910 for 100-step turns. Its seed spread is
+0.024 nats, 12-17x the fixed arms', so it is a coin flip, not a gain. Verdict: no.**
+
+Method (`scripts/exp_weight_law_205.py`, `scripts/analyze_weight_law_205.py`,
+`scripts/compare_weight_law_ab_205.py`, `scripts/run_weight_law_ab_205.sh`,
+`results/weight_law_205/`): the #198 harness model, data, Muon, warmup 100 + cosine over 2800
+steps, seed-7 data window. Step-0 held-out equals the #198 run's (10.914026201), so same probes
+and init. Held-out = the 16 #198 probe batches; the rule reads 8 OTHER val batches; both sets
+and the train window are sha-checked identical in all 10 runs. Init seeds 7, 8, 9.
+
+Step 1-2 (record run, 100 steps/turn, weights every 5 steps, held-out every 10):
+
+| quantity in a turn | best form | error on hidden points vs linear | forecast t>50 from t<=50 vs linear |
+|---|---|---:|---:|
+| distance from turn start | exp / stretched exp | 0.06x | 0.09-0.11x |
+| distance to turn-end weights | power law | 0.25x | 0.31x |
+| held-out loss | none clearly | 0.89-0.90x | 1.00-1.27x (linear wins 12/28) |
+
+- Weight time constant: 100-140 steps in rotation 1, 42-105 by rotation 4 (falls with the LR).
+  Layer blocks move half-straight (displacement/path 0.47, 5-step delta cosine 0.75, same as
+  #126's 0.47); the embedding moves almost straight (0.92).
+- Held-out is lowest at t=100 in 27/28 turns; in 18/28 the last 30 steps drop at least half as
+  much as the first 30. By the test stated before running, that is "no useful law" for loss.
+
+Step 4 (pre-registered rule, issue comment before any rule run; C = round(B's seed-7 mean) = 50):
+
+| seed | A fixed 100 | B rule | C fixed 50 | B - C |
+|---|---:|---:|---:|---:|
+| 7 | 5.9104 | 5.9390 (55 turns, mean 50.0) | 5.9078 | +0.031 |
+| 8 | 5.9077 | 5.9001 (59 turns, mean 47.8) | 5.9080 | -0.008 |
+| 9 | 5.9115 | 5.8941 (47 turns, mean 58.9) | 5.9103 | -0.016 |
+| mean (sd) | 5.9099 (0.0020) | 5.9110 (0.0244) | 5.9087 (0.0014) | +0.002 |
+
+- Noise: same seed rerun 0.0019 apart (attention backward is not deterministic in this harness,
+  see the #196 entry); seed spread of the fixed arms 0.0014-0.0020.
+- The rule mostly fires at its 30-step minimum, from fits on 4 noisy points. How it splits steps
+  across blocks is close to random: seed 7 gave blocks 0-3 only 240 of 2800 steps (30 per turn
+  every time), the worst run.
+- Steps saved: none at equal steps. "Step at which an arm reaches A's final loss" is noise here
+  (the cosine curve is flat at the end, so 0.002 nats moves it by hundreds of steps).
+- Unlike #200 at 1B (50 steps/turn +0.027 worse), on this stand-in 50 and 100 are equal.
+
+Not measured: 1B; longer runs; any other rule (only the one pre-registered rule was run); a rule
+using the weight law (its time constant ~100 steps would rarely switch before 100 anyway).
+
 ## 1B k4 step 12.08 -> 11.79 s (-2.4%): frozen weights' fp8 codes made once per turn, same numbers bit for bit (2026-11-14, #204)
 
 **One line: a BCD-frozen weight is no longer quantized to fp8 on every use. Its codes are
