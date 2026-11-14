@@ -3313,6 +3313,13 @@ def train(
         if offload:
             print(f"  CPU weight offload: ON (bf16 parked, prefetch on, "
                   f"cache={config.get('offload_cache_blocks', 1)} blocks)")
+            # #202: the last N layers of the active block keep their
+            # activations (no checkpoint recompute). Trades ~0.3 GB per layer
+            # at 1B for ~0.14 s per layer per step.
+            n_keep = int(config.get("active_no_ckpt_layers", 0) or 0)
+            model._active_no_ckpt = n_keep
+            if n_keep:
+                print(f"  Active block: last {n_keep} layer(s) not checkpointed (#202)")
 
     # --- Restore optimizer + BCD cycle position (Issue #112) ---
     # Without this, every restart of a long run threw away Muon/AdamW momentum AND
@@ -4124,6 +4131,12 @@ def main():
                              "alone first, tail merged into the last group). Default: "
                              "off, the 'balanced' packing, which is about 2 layers per "
                              "block at 1B. Needs --bcd-partition balanced. (#194)")
+    parser.add_argument("--active-no-ckpt-layers", type=int, default=0,
+                        help="With --offload: the last N layers of the active BCD block "
+                             "keep their activations instead of being recomputed in "
+                             "backward. Bit-identical. 1B k4: N=1 is -0.12 s/step and "
+                             "+5%% peak allocated (peak reserved 82.4 -> 82.5%%); N=2 fails "
+                             "the 85%% VRAM guard (86.6%%). Default 0. (#202)")
     parser.add_argument("--bcd-partition", choices=["layer", "balanced"], default=None,
                         help="How --block-coordinate splits the model. 'balanced' "
                              "(default): pack consecutive layers into groups no larger "
@@ -4588,6 +4601,7 @@ def main():
     config["bcd_steps_per_block"] = args.bcd_steps_per_block
     config["bcd_partition"] = args.bcd_partition
     config["bcd_layers_per_block"] = args.bcd_layers_per_block
+    config["active_no_ckpt_layers"] = args.active_no_ckpt_layers
     config["log_every_steps"] = max(1, args.log_every)
     # --- Issue #163 ---
     config["offload"] = args.offload

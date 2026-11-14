@@ -375,6 +375,10 @@ class EdgeHVN(nn.Module):
         # the kwargs entirely when unset, so the unpacked path is unchanged.
         _kw = {} if doc_ids is None else {"doc_ids": doc_ids}
         if name in self._offload_active_names:
+            if name in self._no_ckpt_names:
+                # #202: keep this active layer's activations instead of
+                # recomputing its forward in backward. Same ops, same order.
+                return block(x_in, position_ids=position_ids, **_kw)
             if doc_ids is None:
                 return checkpoint(block, x_in, position_ids, use_reentrant=False)
 
@@ -507,6 +511,12 @@ class EdgeHVN(nn.Module):
             self._offload_recompute_order = (
                 [] if (getattr(self, "_offload_prefetch", True)
                        and getattr(self, "_offload_bwd_prefetch", True)) else None)
+            # #202: the last N layers of the active block run without
+            # checkpointing (their forward is not recomputed in backward).
+            n_keep = int(getattr(self, "_active_no_ckpt", 0) or 0)
+            act = [f"blocks.{i}" for i in range(len(self.blocks))
+                   if f"blocks.{i}" in self._offload_active_names]
+            self._no_ckpt_names = frozenset(act[-n_keep:]) if n_keep > 0 else frozenset()
             x = self._offload_wrap_plain(
                 "token_embedding", [self.token_embedding],
                 lambda: self.token_embedding(input_ids),
