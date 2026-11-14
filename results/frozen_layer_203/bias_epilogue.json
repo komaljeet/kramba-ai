@@ -1,0 +1,24 @@
+{
+ "gate_proj": {
+  "separate_ms": 0.919425277709961,
+  "epilogue_ms": 0.7487078094482422,
+  "frac_elems_differ": 0.25354599952697754,
+  "max_abs_diff": 4.0,
+  "saving_ms": 0.17071746826171874
+ },
+ "ffn0": {
+  "separate_ms": 1.8587852478027345,
+  "epilogue_ms": 1.4411981201171875,
+  "frac_elems_differ": 0.2527313828468323,
+  "max_abs_diff": 4.0,
+  "saving_ms": 0.41758712768554695
+ },
+ "ffn3": {
+  "separate_ms": 1.5423283386230469,
+  "epilogue_ms": 1.3940940856933595,
+  "frac_elems_differ": 0.24740755558013916,
+  "max_abs_diff": 8.0,
+  "saving_ms": 0.1482342529296874
+ },
+ "total_saving_ms_per_forward": 0.7365388488769531
+}
