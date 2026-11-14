@@ -5,6 +5,146 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B k4 step: 12.60 -> 12.10 s (-3.9%) at the same VRAM, same numbers bit for bit (2026-11-14, #202)
+
+**One line: three changes make the 1B k4 pretrain step 0.50 s faster (12.60 -> 12.10 s, -3.9%)
+with peak VRAM unchanged. Loss and the active block's gradients are bit-identical to before at
+all 7 block positions. Two of the changes are always on; the third is a flag,
+`--active-no-ckpt-layers 1`. With `--active-no-ckpt-layers 1,1,2,2,3,3` the step is 12.00 s
+(-4.7%), but peak reserved goes 82.3% -> 84.0%, leaving 1% to the 85% guard.**
+
+Method (`scripts/profile_step_202.py`, `scripts/analyze_step_202.py`, `results/step_speed_202/`):
+the real trainer at the #194/#200 k4 settings (fp8, offload, chunked loss 512, grad_accum 8,
+seed 0, deterministic), 3 steps per block so every block position is visited. Step time =
+mean of steps 2-3 of each turn (step 1 carries the switch), averaged over the 7 positions.
+Phases come from CUDA events at block, loss-slice, backward and optimizer boundaries.
+
+### A. Where the 12.6 s went (before any change)
+
+| part of the step | seconds | % of step |
+|---|---:|---:|
+| backward through the frozen layers after the active block (recompute + backward) | 5.02 | 39.8% |
+| forward of the frozen layers after the active block | 1.94 | 15.3% |
+| active block: recompute + backward | 1.85 | 14.7% |
+| forward of the frozen layers before the active block | 1.38 | 10.9% |
+| loss: slice recompute + backward | 0.96 | 7.6% |
+| active block forward | 0.53 | 4.2% |
+| optimizer (Muon) | 0.46 | 3.6% |
+| loss forward | 0.38 | 3.0% |
+| embedding (incl. the `blocks.0` load miss from #200) | 0.06 | 0.5% |
+| everything else (clip, glue, data) | 0.03 | 0.3% |
+
+By kernel type (GPU time, all streams): Triton scan 3.9 s, fp8 GEMM 2.7 s, bf16 GEMM 2.3 s,
+elementwise 1.8 s, weight copies 1.7 s (side stream, hidden, #200), fp8 + ternary quantize
+0.9 s, softmax 0.1 s. The forward/backward through frozen layers is the cost of block
+coordinate descent itself; nothing below touches it.
+
+### B. The changes
+
+| change | expected before building | measured | bit-identical | peak reserved | verdict |
+|---|---|---:|---|---:|---|
+| 1. loss: gradient of each slice computed in the forward, no logits recompute | -0.26 s (0.36 s on 5 of 7 turns) | **-0.258 s** (-2.0%) | yes | 82.4% (same) | shipped, always on |
+| 2. active block's last N layers not checkpointed, N=1 | audit: -0.32 s, +0.65 GiB (for the whole block) | **-0.117 s** (-0.9%) | yes | 82.5% | shipped as a flag, default off |
+| 2b. same, per block `1,1,2,2,3,3` | ~-0.12 s more | -0.100 s more | yes | **84.0%** | in the flag; thin margin |
+| 3. frozen ternary weight -> fp8 codes in one pass | -0.3 to -0.4 s (bandwidth estimate) | **-0.119 s** (-1.0%) | yes | 82.3% | shipped, always on |
+
+1. **Loss.** Each 512-position slice ran its vocab projection twice (forward, then again in
+   backward to rebuild the logits). Now the forward also computes the slice's hidden-state
+   gradient (same autograd ops, upstream gradient 1) and keeps only that, 4 MB a slice.
+   Backward multiplies it by the real per-token gradient. Exact because that gradient is
+   1/(4096 x 8), a power of two. Not used on the embedding turn (trainable decoder weight) or
+   the tail turn (trainable bias: its gradient sums rows, so it cannot be scaled after the
+   fact); those keep the old path. Doing the tail too would add 0.05 s, under the bar.
+2. **Active block without recompute.** Keeping all 4 active layers' activations spills: peak
+   over 100%, a 93 s step. One layer is about 0.3 GB (+5% allocated) and fits in the
+   allocator's slack: reserved 82.4 -> 82.5%. Two layers on every turn: 86.6% at blocks 0-3
+   (fails); three: 96%. The later blocks have more room, hence the per-block list. Saving per
+   kept layer: one layer forward per micro-batch, 0.12-0.14 s per step.
+3. **Frozen weights.** A frozen ternary weight is quantized on every use (forward and
+   recompute, 8 micro-batches): ternary kernel, bf16 temporary, amax pass, cast pass. A
+   ternary weight holds only 0 and +-scale, so its fp8 amax is known without a pass, and one
+   kernel can go from the latent weight to fp8 codes and their transposed copy. The estimate
+   was 3x too high: the old route moved fewer bytes than assumed. The saving scales with the
+   number of frozen layer uses per step (embedding turn -0.15 s, tail turn -0.07 s), as
+   predicted, so it is the change and not noise.
+
+Audit ideas checked against the code: "ternary re-quantization per micro-batch" was already
+fixed for active weights (per-step cache); for frozen weights it cannot be cached (they are
+streamed in per use), so change 3 makes each use cheaper instead. "Chunk slicing copies" do
+not exist at batch 1: the slices are views. Nothing to do.
+
+### C. Step time per block position (seconds)
+
+| run | embedding | 0-3 | 4-7 | 8-11 | 12-15 | 16-19 | 20-23+tail | mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline, run 1 | 16.25 | 16.10 | 14.55 | 12.80 | 11.17 | 9.50 | 7.82 | 12.600 |
+| baseline, run 2 | 16.26 | 16.12 | 14.55 | 12.79 | 11.17 | 9.50 | 7.83 | 12.602 |
+| baseline, run 3 (end of session) | 16.25 | 16.11 | 14.50 | 12.79 | 11.18 | 9.50 | 7.82 | 12.592 |
+| + loss change | 16.25 | 15.75 | 14.14 | 12.48 | 10.82 | 9.14 | 7.82 | 12.342 |
+| + no-ckpt 1 layer | 16.24 | 15.61 | 14.00 | 12.35 | 10.68 | 9.02 | 7.68 | 12.225 |
+| + frozen fp8 one pass (**shipped, with the flag at 1**) | 16.10 | 15.46 | 13.87 | 12.21 | 10.57 | 8.91 | 7.61 | **12.104** |
+| + no-ckpt list 1,1,2,2,3,3 | 16.06 | 15.46 | 13.87 | 12.16 | 10.49 | 8.64 | 7.35 | 12.004 |
+
+The three baselines agree within 0.01 s on the mean and 0.06 s at any position. The no-ckpt-1
+run was repeated through the trainer flag: 12.223 s.
+
+### D. Same numbers, and the check could have failed
+
+- sha256 of every micro-batch's per-token loss and of the active block's gradients at
+  `optimizer.step`, 14 steps (2 per block position, LR non-zero from step 2).
+- Baseline run twice: equal at all 14 steps (the run is deterministic).
+- Each change against the baseline: equal at all 14 steps, for the loss change alone, + no-ckpt
+  1, + frozen fp8, and for the 1,1,2,2,3,3 list.
+- Falsifier that works: the gradient reaching the hidden states of micro-batch 0 scaled by
+  (1 + 2^-20), far below bf16 resolution. The gradient hash changed at all 14 steps, the loss
+  hash from step 3. So the check sees backward differences much smaller than a real bug.
+- Falsifier that did not: one ulp on one fp32 embedding weight changed the hash at only 2 of
+  14 steps. The bf16/fp8/ternary casts round it away. Not a hole in the check: the gradients
+  really were equal.
+- Held-out loss after each of 14 steps (production offload-aware eval): equal to the
+  baseline's, to the last bit, for the shipped setting and for the list.
+- Unit tests: `tests/test_chunked_loss.py` (bit-identical at power-of-two scale, one
+  projection per slice, a wrong per-row scale is caught), `tests/test_active_no_ckpt.py`
+  (bit-identical over 8 steps, each kept layer's forward runs once per micro-batch, not twice),
+  `tests/test_fp8_fused.py` (codes, scale and transposed copy equal at the 1B shapes, ties,
+  all-zero; the BCD+offload trajectory still equals the eager reference with the new path
+  taken).
+
+### E. VRAM (peak reserved, no extra empty_cache)
+
+| | training only | eval after every step |
+|---|---:|---:|
+| baseline | 82.4% | 84.1% |
+| shipped (flag at 1) | 82.3% | 83.9% |
+| list 1,1,2,2,3,3 | 84.0% (turns 8-23) | 84.0% |
+
+Eval here is the #194 harness's offload-aware held-out eval run after every step without its
+`empty_cache`: the worst case for fragmentation. The shipped setting is at or below the
+baseline at every turn. The list is under 85% as measured, but #200's long runs sat about 1%
+above these short runs (83.3-83.5% vs 82.4%), so with the list a long run could reach the guard.
+Use it only with the guard watched.
+
+### F. Not done
+
+- Bias add after each fp8 GEMM (gate_proj, both FFN Linears): 0.32 s of GPU time in a
+  non-vectorized kernel (broadcast operand). A bit-identical Triton add might save ~0.08 s
+  (estimate, not measured). Folding the bias into the fp8 GEMM's epilogue would save more
+  (~0.3 s) but rounds once instead of twice, so it is not bit-identical and needs a held-out
+  A/B. Next candidate.
+- Prefetching `blocks.0` before the embedding (0.05 s) and the loss change on the tail turn
+  (0.05 s): under the 0.5% bar.
+- What is left (profile of the shipped setting, 12.10 s): forward and backward through the
+  frozen layers 70% of the step, the active block 16%, the loss 9%, Muon 4%. All of it is needed work.
+
+**Found on the way, not fixed:** the trainer's own `--val-every` eval crashes with `--offload`
+(`evaluate()` runs the model in eval mode, which skips the offload loads, and hits a
+CPU-parked weight: "weight is on cpu"). The #194/#197/#200 runs used the harness's
+offload-aware eval, so their numbers are fine. A plain run with `--offload --val-every` crashes
+at its first eval; reproduced with all #202 changes off (`results/step_speed_202/valevery_base.log`).
+
+**How to use:** nothing for changes 1 and 3. For change 2 add `--active-no-ckpt-layers 1` to
+the 1B k4 command (12.10 s/step). The list form needs one value per layer block (6 at k4).
+
 ## Weight streaming is not a stall at 1B k4: 0.06 s of a 12.7 s step; 50 steps per BCD turn is slightly worse than 100, 25 and 10 not run (2026-11-14, #200)
 
 **One line: at 1B k4 production settings, the GPU waits on weight copies for 0.056 s per step

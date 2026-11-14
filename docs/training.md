@@ -308,6 +308,12 @@ to the vocab table's size: same peak memory, each layer trains ~3-4x as often; p
 317 in the 8-layer A/B). Since #164 `--offload` uses `balanced` too; before that it silently
 fell back to `layer`.
 
+`--active-no-ckpt-layers N` (#202, with `--offload`): the last N layers of the active block
+keep their activations instead of being recomputed in backward. Bit-identical. At 1B k4,
+N=1 is -0.12 s/step (12.10 s with the other #202 changes) at unchanged peak VRAM; N=2 on
+every block fails the 85% guard (86.6%). A comma list gives one N per layer block:
+`1,1,2,2,3,3` is 12.00 s at 84.0% peak reserved (thin margin). Default 0.
+
 **Measured on this card** (`scripts/bench_block_coordinate_vram.py`, isolated subprocesses,
 `results/bcd_vram.json`):
 
