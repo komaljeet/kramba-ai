@@ -1317,12 +1317,15 @@ class BlockCoordinateScheduler:
                 f"resume with --bcd-partition {saved}")
         if (len(sd["order"]) != len(self.blocks)
                 or (saved_names is not None and list(saved_names) != names)):
+            def _lpb(v):
+                return "budget packing" if v is None else f"{v} layers per block"
+            saved_lpb = (_lpb(sd["layers_per_block"]) if "layers_per_block" in sd
+                         else "layout not recorded (pre-#201)")
             raise ValueError(
                 f"BCD state was saved with a different block layout "
-                f"({len(sd['order'])} blocks, layers_per_block="
-                f"{sd.get('layers_per_block', 'not recorded')}) than this run "
-                f"({len(self.blocks)} blocks, layers_per_block="
-                f"{self.layers_per_block}). {LAYOUT_RESUME_HINT}")
+                f"({len(sd['order'])} blocks, {saved_lpb}) than this run "
+                f"({len(self.blocks)} blocks, {_lpb(self.layers_per_block)}). "
+                f"{LAYOUT_RESUME_HINT}")
         if (saved_names is None and self.partition == "balanced"
                 and self._budget_block_names is not None
                 and self._budget_block_names != names
