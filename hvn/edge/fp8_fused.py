@@ -81,7 +81,11 @@ DEFAULT_EXEMPT = ("alpha_proj", "beta_proj", "decoder")
 
 #: Call counters. Python ints, cheap; tests use them to prove the path ran.
 FP8_STATS = {"fwd": 0, "bwd": 0, "w_hits": 0, "w_misses": 0, "fallback_rows": 0,
-             "x_hits": 0, "skipped": 0}
+             "x_hits": 0, "skipped": 0, "frozen_fused": 0}
+
+#: #202 switch for A/B measurement: False sends BCD-frozen ternary weights back
+#: through the old ternary-then-fp8 route (same bits, slower).
+FROZEN_FUSED = [True]
 
 #: Test hook: route every fp8 module through the eager reference (feasibility
 #: branch semantics, no fused kernels, no weight cache) instead.
@@ -203,6 +207,50 @@ if _HAS_TRITON:
             # `1.0 / s` is likewise s.reciprocal() * 1.0 == div_rn(1, s).
             tl.store(inv_ptr, tl.div_rn(one, s))
 
+    @triton.jit
+    def _ternary_fp8_kernel(w_ptr, scale_ptr, out_ptr, out_t_ptr, flag_ptr, inv_ptr, M, N,
+                            MAXV: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr):
+        """fp8 codes of a per-tensor TERNARY weight, straight from the latent weight.
+
+        Same arithmetic, element by element, as ``_quantize_kernel``
+        (ternary_fused.py) followed by ``_amax_kernel`` + ``_cast_kernel``, in one
+        pass. A ternary weight holds only 0 and +-bf16(scale), so its amax is
+        bf16(scale) whenever any code is non-zero, and the scale needs no
+        reduction pass. ``flag`` records whether any code is non-zero; ``inv``
+        gets the dequant scale for both cases (amax = bf16(scale), amax = 0), and
+        the caller picks one -- the all-zero case only changes the scale, every
+        code is 0 either way.
+        """
+        pid_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        rm = pid_m * BM + tl.arange(0, BM)
+        rn = pid_n * BN + tl.arange(0, BN)
+        mask = (rm[:, None] < M) & (rn[None, :] < N)
+        w = tl.load(w_ptr + rm[:, None] * N + rn[None, :], mask=mask, other=0.0).to(tl.float32)
+        scale = tl.load(scale_ptr).to(tl.float32)
+        # _quantize_kernel, verbatim: code, clamp, rescale, canonical +0.
+        q = tl.extra.cuda.libdevice.rint(tl.div_rn(w, scale))
+        q = tl.minimum(tl.maximum(q, -1.0), 1.0)
+        t = q * scale
+        t = t + 0.0
+        # ... stored as bf16 (the weight the fp8 quantizer reads) ...
+        v = t.to(tl.bfloat16).to(tl.float32)
+        # ... and _cast_kernel with amax = bf16(scale).
+        one = tl.full([], 1.0, tl.float32)
+        amax = scale.to(tl.bfloat16).to(tl.float32)
+        amax = tl.maximum(amax, 1e-12, propagate_nan=tl.PropagateNan.ALL)
+        s = tl.div_rn(one, amax) * MAXV
+        q8 = tl.clamp(v * s, -MAXV, MAXV, propagate_nan=tl.PropagateNan.ALL)
+        q8 = q8.to(out_ptr.dtype.element_ty)
+        tl.store(out_ptr + rm[:, None] * N + rn[None, :], q8, mask=mask)
+        tl.store(out_t_ptr + rn[None, :] * M + rm[:, None], q8, mask=mask)
+        nz = tl.max(tl.max(((q != 0.0) & mask).to(tl.int32), axis=1), axis=0)
+        tl.atomic_max(flag_ptr, nz)
+        if (pid_m == 0) & (pid_n == 0):
+            tl.store(inv_ptr, tl.div_rn(one, s))
+            s0 = tl.div_rn(one, tl.full([], 1e-12, tl.float32)) * MAXV
+            tl.store(inv_ptr + 1, tl.div_rn(one, s0))
+
 
 def fp8_quantize(t: torch.Tensor, dtype, transpose: bool = False):
     """Fused per-tensor fp8 quantize of ``bf16(t)`` for a 2-D ``t``.
@@ -239,6 +287,30 @@ def fp8_quantize(t: torch.Tensor, dtype, transpose: bool = False):
         t, amax, out, out_t, inv, M, N, MAXV=_FP8_MAX[dtype],
         WRITE_T=transpose, BM=BM, BN=BN)
     return out, inv, (out_t if transpose else None)
+
+
+def ternary_fp8_frozen(w: torch.Tensor, scale: torch.Tensor):
+    """``fp8_quantize(ternary(w, scale).to(bf16), E4M3, transpose=True)`` in one pass (#202).
+
+    For a BCD-frozen per-tensor TernaryLinear weight, which is quantized on
+    every use (forward and checkpoint recompute, every micro-batch): the old
+    route writes the bf16 ternary weight, reads it for the amax, reads it again
+    for the cast. Here the latent weight is read once and the fp8 codes and
+    their transposed copy are written directly; no bf16 temporary. Bit-identical
+    codes and scale (tests/test_fp8_fused.py). CUDA + Triton only.
+    """
+    assert w.dim() == 2 and w.is_contiguous() and w.is_cuda, (w.shape, w.stride())
+    M, N = w.shape
+    out = torch.empty((M, N), device=w.device, dtype=E4M3)
+    out_t = torch.empty((N, M), device=w.device, dtype=E4M3)
+    flag = torch.zeros((), device=w.device, dtype=torch.int32)
+    inv = torch.empty(2, device=w.device, dtype=torch.float32)
+    BM, BN = 64, 64
+    _ternary_fp8_kernel[(triton.cdiv(M, BM), triton.cdiv(N, BN))](
+        w, scale, out, out_t, flag, inv, M, N, MAXV=_FP8_MAX[E4M3], BM=BM, BN=BN)
+    # All codes zero (all-zero weight): the reference's amax is 0, clamped to
+    # 1e-12. Only the scale differs; every code is 0 either way.
+    return out, torch.where(flag > 0, inv[0], inv[1]), out_t
 
 
 #: One-entry cache of the last activation quantized by ``_FP8Linear`` (#195):
@@ -365,6 +437,23 @@ def _bf16_weight(mod: nn.Module) -> torch.Tensor:
     return mod.weight.to(torch.bfloat16)
 
 
+def _frozen_ternary_scale(mod: nn.Module):
+    """The per-step ternary scale if ``_bf16_weight(mod)`` would be the fused
+    frozen-weight quantize (``TernaryLinear._quantize_raw``'s fused branch with
+    the #199 frozen scale), else None. Mirrors those conditions exactly, so
+    every other case keeps the old route."""
+    from . import ternary as T
+    if not (_HAS_TRITON and isinstance(mod, T.TernaryLinear)):
+        return None
+    w = mod.weight
+    if (mod._frozen_codes is not None or w.requires_grad or not w.is_cuda
+            or not (T._USE_FUSED_TERNARY or mod.use_fused)
+            or mod.group_size != T.GROUP_PER_TENSOR or not mod.use_step_cache
+            or w.dim() != 2 or not w.is_contiguous()):
+        return None
+    return mod._frozen_step_scale(w)
+
+
 def _fp8_weight(mod: nn.Module):
     """(wq, ws, wq_t) for ``mod``, from the per-step cache when trainable."""
     from . import ternary as T
@@ -377,7 +466,12 @@ def _fp8_weight(mod: nn.Module):
             FP8_STATS["w_hits"] += 1
             return c[1]
     with torch.no_grad():
-        wq, ws, wq_t = fp8_quantize(_bf16_weight(mod), E4M3, transpose=True)
+        scale = None if cacheable or not FROZEN_FUSED[0] else _frozen_ternary_scale(mod)
+        if scale is not None:
+            wq, ws, wq_t = ternary_fp8_frozen(w, scale)
+            FP8_STATS["frozen_fused"] += 1
+        else:
+            wq, ws, wq_t = fp8_quantize(_bf16_weight(mod), E4M3, transpose=True)
     if cacheable:
         mod._f8cache = (key, (wq, ws, wq_t))
         T._STEP_LIVE.add(mod)

@@ -316,6 +316,12 @@ per-cycle timings in this doc measured before that are for the 13-block layout.
 saved before #201 must resume with it, and resuming under a different layout stops with an
 error that names the flag.
 
+`--active-no-ckpt-layers N` (#202, with `--offload`): the last N layers of the active block
+keep their activations instead of being recomputed in backward. Bit-identical. At 1B k4,
+N=1 is -0.12 s/step (12.10 s with the other #202 changes) at unchanged peak VRAM; N=2 on
+every block fails the 85% guard (86.6%). A comma list gives one N per layer block:
+`1,1,2,2,3,3` is 12.00 s at 84.0% peak reserved (thin margin). Default 0.
+
 **Measured on this card** (`scripts/bench_block_coordinate_vram.py`, isolated subprocesses,
 `results/bcd_vram.json`):
 
