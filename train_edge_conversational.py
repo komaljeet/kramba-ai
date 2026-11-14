@@ -4024,6 +4024,17 @@ def main():
                              "CUDA kernel instead of the six-op eager chain (fp32 inputs "
                              "only). ulp-level, not bit-identical. On under --fast; "
                              "--no-fused-rmsnorm opts out.")
+    parser.add_argument("--scan-kernel", choices=["v1", "t"], default="v1",
+                        help="#206: DeltaNet scan kernels on the strided-IO path. v1 = the "
+                             "existing kernels. t = transposed-layout kernels with the "
+                             "checkpoint pass fused into the recompute forward: ~2x faster "
+                             "scan at d_head 32, but NOT bit-identical (fp32 rounding-level "
+                             "differences). Default v1.")
+    parser.add_argument("--scan-v1-warps", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="#206: v1 scan at d_head 32 launches the forward with 1 warp and "
+                             "the checkpoint pass with 8 (measured faster, same bits). "
+                             "--no-scan-v1-warps restores Triton's default 4.")
     parser.add_argument("--megakernel-scan", action="store_true",
                         help="Route the DeltaNet scan through the Design B fused "
                              "blockwise-recompute backward (#96) when --triton-scan is on: "
@@ -4409,6 +4420,16 @@ def main():
         # #204: frozen offloaded weights stream fp8 codes made once per turn.
         import hvn.edge.fp8_fused as _f8
         _f8.FROZEN_CODES[0] = bool(args.frozen_fp8_codes)
+
+    # #206: scan kernel choice (module-level, read at every scan call).
+    try:
+        import hvn.core.deltanet_triton as _dt
+        _dt.SCAN_KERNEL[0] = args.scan_kernel
+        if not args.scan_v1_warps:
+            _dt.SCAN_V1_WARPS.update(fwd=None, ckpt=None)
+        print(f"[scan] kernel {args.scan_kernel}, v1 tuned warps {args.scan_v1_warps}")
+    except ImportError:
+        pass
 
     # --- Issue #93/#120: parse --pretrain-mix 'slim,oasst,wiki,fineweb_edu' -> float tuple (or None) ---
     if args.pretrain_mix is not None:
