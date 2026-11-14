@@ -388,3 +388,103 @@ def test_fast_head_leaves_model_vocab_and_checkpoint_untouched():
     assert m.decoder.decoder.weight.shape[0] == 50257
     assert m.decoder.decoder.weight is m.token_embedding.weight, "tie broken"
     assert m.decoder.decoder.weight.dtype == torch.float32
+
+
+# ---------------------------------------------------------------------------
+# #202: the slice's hidden-state gradient computed in the forward, so backward
+# does not recompute the logits (one vocab GEMM + one softmax less per slice).
+# ---------------------------------------------------------------------------
+
+def _gif_run(dec, hid, y, gif, weights=None, chunk=256, accum=8):
+    """Trainer-shaped loss: per-token mean / grad_accum, or a weighted sum."""
+    import hvn.edge.chunked_loss as cl
+    h = hid.clone().requires_grad_(True)
+    with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        tok = cl.chunked_cross_entropy(h, y, dec, chunk=chunk, grad_in_forward=gif)
+        loss = tok.mean() / accum if weights is None else (tok * weights).sum()
+    loss.backward()
+    return tok.detach(), h.grad
+
+
+def _frozen_head(V_, D_):
+    dec = _head(V_, D_)
+    dec.decoder.bias.requires_grad_(False)
+    with torch.no_grad():       # a non-zero bias, so a dropped bias would show
+        dec.decoder.bias.normal_(0, 0.5)
+    return dec
+
+
+def _count_slices(monkeypatch):
+    import hvn.edge.chunked_loss as cl
+    n = [0]
+    orig = cl._slice_loss_padded
+
+    def counted(*a):
+        n[0] += 1
+        return orig(*a)
+    monkeypatch.setattr(cl, "_slice_loss_padded", counted)
+    return n
+
+
+@_cuda
+@pytest.mark.parametrize("D_,V_", [(128, 50257), (2048, 50257)])
+def test_grad_in_forward_bit_identical_at_power_of_two_scale(D_, V_, monkeypatch):
+    """Production shape of the upstream gradient: 1 / (B*S*accum), a power of
+    two. Loss AND hidden gradient must be bit-identical to the checkpointed
+    slice, and the logits must be projected once per slice, not twice."""
+    dec = _frozen_head(V_, D_)
+    hid, y = _head_inputs(V_, D_, S_=1024, B_=1)
+    n = _count_slices(monkeypatch)
+    t0, g0 = _gif_run(dec, hid, y, gif=False)
+    assert n[0] == 2 * 4, f"old path: expected forward + recompute of 4 slices, got {n[0]}"
+    n[0] = 0
+    t1, g1 = _gif_run(dec, hid, y, gif=True)
+    assert n[0] == 4, f"new path recomputed the logits ({n[0]} projections for 4 slices)"
+    assert g0.abs().sum() > 0 and torch.isfinite(g1).all()
+    assert torch.equal(t0, t1), "per-token loss changed"
+    assert torch.equal(g0, g1), f"hidden grad max |d| {(g0 - g1).abs().max().item():.3e}"
+
+
+@_cuda
+def test_grad_in_forward_per_row_weights_close_and_check_can_fail(monkeypatch):
+    """Per-token weights that are not powers of two: not bit-identical. The
+    scale is applied after the bf16 cast of the logit gradient instead of
+    before, so each element gets one bf16 rounding either way (measured: 3.7e-3
+    relative between the paths). Gate: the new path is no further from an fp32
+    reference than the old one, within 10% (measured: old 3.36e-3, new 2.99e-3).
+    And the anti-vacuity half: a variant that applies the MEAN upstream gradient
+    instead of each row's own must fail, so the row-wise scaling is really what
+    the bit-identity test above checks."""
+    import hvn.edge.chunked_loss as cl
+    dec = _frozen_head(50257, 128)
+    hid, y = _head_inputs(50257, 128, S_=1024, B_=1)
+    w = torch.rand(1024, device="cuda") * 3
+    _, g0 = _gif_run(dec, hid, y, gif=False, weights=w)
+    _, g1 = _gif_run(dec, hid, y, gif=True, weights=w)
+    h = hid.clone().requires_grad_(True)
+    ref = F.cross_entropy(F.linear(h[0], dec.decoder.weight, dec.decoder.bias), y[0],
+                          reduction="none")                     # fp32 reference
+    (ref * w).sum().backward()
+    e0 = ((g0 - h.grad).norm() / h.grad.norm()).item()
+    e1 = ((g1 - h.grad).norm() / h.grad.norm()).item()
+    assert e0 > 0 and e1 <= 1.1 * e0, f"old {e0:.3e} vs new {e1:.3e} from fp32"
+
+    def bad_backward(ctx, g):
+        (dh,) = ctx.saved_tensors
+        return (dh * g.mean()).to(dh.dtype), None, None, None, None
+    monkeypatch.setattr(cl._SliceLossGradInForward, "backward", staticmethod(bad_backward))
+    _, gb = _gif_run(dec, hid, y, gif=True, weights=w)
+    assert not torch.equal(g0, gb) and (g0 - gb).norm() / g0.norm() > 1e-2,         "a wrong per-row scale was not detected -- the comparison is vacuous"
+
+
+@_cuda
+def test_grad_in_forward_not_used_with_trainable_bias_or_weight(monkeypatch):
+    """A trainable bias sums its gradient over rows, so it cannot be scaled
+    afterwards; a trainable weight disables the fast head. Both must keep the
+    checkpointed slice (2 projections per slice)."""
+    dec = _head(50257, 128)                     # bias trainable
+    hid, y = _head_inputs(50257, 128, S_=1024, B_=1)
+    n = _count_slices(monkeypatch)
+    _gif_run(dec, hid, y, gif=True)
+    assert n[0] == 8, f"trainable bias took the grad-in-forward path ({n[0]})"
+    assert dec.decoder.bias.grad is not None and dec.decoder.bias.grad.abs().sum() > 0

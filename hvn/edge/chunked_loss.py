@@ -118,6 +118,51 @@ def _slice_loss_padded(hidden_slice: torch.Tensor, target_slice: torch.Tensor,
     )
 
 
+class _SliceLossGradInForward(torch.autograd.Function):
+    """`_slice_loss_padded`, with its backward done in the forward (#202).
+
+    The checkpointed slice runs the vocab projection twice per micro-batch:
+    once in forward, once again in backward to rebuild the logits that the
+    loss gradient needs. Here the forward computes the loss AND, right away,
+    the gradient of the loss with respect to the slice's hidden states (and
+    using the very same autograd ops, for an upstream gradient of 1 per token.
+    Only that gradient is kept (``[B, chunk, d]``, 4 MB per slice at 512 x
+    2048), never the logits. Backward multiplies it, row by row, by the real
+    upstream gradient. That removes one [chunk x d] @ [d x vocab] GEMM and one
+    softmax per slice.
+
+    Exactness: every op between a row's upstream gradient and that row's hidden
+    gradient (NLL and log-softmax backward in fp32, the bf16 cast, the GEMM
+    with fp32 accumulation, the cast back) scales exactly by a power of two,
+    barring underflow below fp32's smallest normal. The trainer's upstream
+    gradient is ``1 / (B * S * grad_accum)``, a power of two in production
+    (4096 x 8), so the result is bit-identical to the checkpointed path there
+    (the #202 hash check; tests/test_chunked_loss.py). With a non-power-of-two
+    scale it is not bit-identical: the scale lands after the bf16 cast of the
+    logit gradient instead of before it, so each element still gets exactly one
+    bf16 rounding, at a different point (3.7e-3 relative between the two paths;
+    from an fp32 reference: old 3.4e-3, new 3.0e-3).
+
+    Only for a frozen bias (or none): a trainable bias's gradient sums the rows,
+    so a per-row upstream gradient cannot be applied after the fact. That case
+    keeps the checkpointed path.
+    """
+
+    @staticmethod
+    def forward(ctx, h, t, weight_pad, bias, vocab):
+        with torch.enable_grad():
+            hl = h.detach().requires_grad_(True)
+            loss = _slice_loss_padded(hl, t, weight_pad, bias, vocab)
+            (dh,) = torch.autograd.grad(loss, (hl,), torch.ones_like(loss))
+        ctx.save_for_backward(dh)
+        return loss.detach()
+
+    @staticmethod
+    def backward(ctx, g):
+        (dh,) = ctx.saved_tensors
+        return (dh * g.view(*dh.shape[:-1], 1)).to(dh.dtype), None, None, None, None
+
+
 def _fast_head(hidden: torch.Tensor, decoder: nn.Module):
     """Return ``(weight_pad, bias, vocab)`` for the pre-cast padded loss head, or
     None when the plain per-slice path must be used.
@@ -174,7 +219,8 @@ def _fast_head(hidden: torch.Tensor, decoder: nn.Module):
 def chunked_cross_entropy(hidden: torch.Tensor, targets: torch.Tensor,
                           decoder: nn.Module, chunk: int = DEFAULT_CHUNK,
                           use_checkpoint: bool = True,
-                          fast_head: bool = True) -> torch.Tensor:
+                          fast_head: bool = True,
+                          grad_in_forward: bool = True) -> torch.Tensor:
     """Per-token cross-entropy over ``hidden``, computed ``chunk`` positions at a time.
 
     Parameters
@@ -190,6 +236,10 @@ def chunked_cross_entropy(hidden: torch.Tensor, targets: torch.Tensor,
     fast_head : under 16-bit CUDA autocast with a frozen plain-Linear decoder,
         cast the weight once and pad the vocab (see `_fast_head`). False forces
         the per-slice path -- used by the tests and for A/B measurement.
+    grad_in_forward : on the fast-head path with no trainable bias, compute each
+        slice's hidden-state gradient in the forward instead of recomputing the
+        logits in backward (`_SliceLossGradInForward`, #202). False keeps the
+        checkpointed slice -- used by the tests and for A/B measurement.
 
     Returns
     -------
@@ -218,7 +268,11 @@ def chunked_cross_entropy(hidden: torch.Tensor, targets: torch.Tensor,
         h = hidden[:, start:end]
         t = targets[:, start:end]
         if use_checkpoint and torch.is_grad_enabled() and hidden.requires_grad:
-            piece = checkpoint(fn, h, t, *extra, use_reentrant=False)
+            if grad_in_forward and fast is not None and not (
+                    fast[1] is not None and fast[1].requires_grad):
+                piece = _SliceLossGradInForward.apply(h, t, *extra)
+            else:
+                piece = checkpoint(fn, h, t, *extra, use_reentrant=False)
         else:
             piece = fn(h, t, *extra)
         out.append(piece)
