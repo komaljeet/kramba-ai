@@ -1,0 +1,13 @@
+{"after_step": 4, "to": "blocks.0+blocks.1+blocks.2+blocks.3", "activate_sec": 0.1502848000091035, "mode": "sync"}
+{"after_step": 8, "to": "blocks.4+blocks.5+blocks.6+blocks.7", "activate_sec": 0.3027099000173621, "mode": "sync"}
+{"after_step": 12, "to": "blocks.8+blocks.9+blocks.10+blocks.11", "activate_sec": 0.31524230001377873, "mode": "sync"}
+{"after_step": 16, "to": "blocks.12+blocks.13+blocks.14+blocks.15", "activate_sec": 0.29409450001548976, "mode": "sync"}
+{"after_step": 20, "to": "blocks.16+blocks.17+blocks.18+blocks.19", "activate_sec": 0.29569150001043454, "mode": "sync"}
+{"after_step": 24, "to": "blocks.20+blocks.21+blocks.22+blocks.23+final_norm+decoder", "activate_sec": 0.29173749999608845, "mode": "sync"}
+{"after_step": 28, "to": "token_embedding", "activate_sec": 0.17672320001292974, "mode": "slow"}
+{"after_step": 32, "to": "blocks.0+blocks.1+blocks.2+blocks.3", "activate_sec": 0.16081470000790432, "mode": "slow"}
+{"after_step": 36, "to": "blocks.4+blocks.5+blocks.6+blocks.7", "activate_sec": 0.3111628000042401, "mode": "slow"}
+{"after_step": 40, "to": "blocks.8+blocks.9+blocks.10+blocks.11", "activate_sec": 0.2968199999886565, "mode": "slow"}
+{"after_step": 44, "to": "blocks.12+blocks.13+blocks.14+blocks.15", "activate_sec": 0.299342299986165, "mode": "slow"}
+{"after_step": 48, "to": "blocks.16+blocks.17+blocks.18+blocks.19", "activate_sec": 0.3204830000177026, "mode": "slow"}
+{"after_step": 52, "to": "blocks.20+blocks.21+blocks.22+blocks.23+final_norm+decoder", "activate_sec": 0.30246509998687543, "mode": "slow"}

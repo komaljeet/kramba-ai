@@ -5,6 +5,137 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Weight streaming is not a stall at 1B k4: 0.06 s of a 12.7 s step; 50 steps per BCD turn is slightly worse than 100, 25 and 10 not run (2026-11-14, #200)
+
+**One line: at 1B k4 production settings, the GPU waits on weight copies for 0.056 s per step
+on average (0.44% of the step). 13-32 GB cross PCIe per step at 12.7 GB/s, but the copies run
+next to compute and finish early. Doubling the copy work changes nothing. One block switch
+costs 0.2-0.35 s, so 10x more switches add well under 1% to a run. At 50 steps per turn the held-out
+loss is 0.027 nats worse than at 100 (step 2800), so shorter turns were not pursued; 25 and 10 were
+stopped on purpose, and 200 was not run.**
+
+### A. Is the PCIe weight stream a stall? No (measured)
+
+Method (`scripts/exp_bcd_stall_200.py`, `scripts/analyze_bcd_stall_200.py`,
+`results/bcd_stall_200/`): the real trainer with the #194 k4 settings (grad_accum 8, fp8,
+balanced, seed 0, deterministic), 4 steps per block so every block position is visited. In each
+turn, step 2 is timed without the profiler and steps 3-4 are profiled (CUDA only). From the GPU
+timeline of each profiled step:
+
+- stall = host-to-device copies ON the compute stream + compute-stream idle time that ends
+  within 2 ms of a side-stream copy finishing (the compute was waiting for that copy).
+- idle other = compute-stream idle not explained by a copy (Python, kernel launches, host work).
+
+| active block | step (no profiler) | GPU busy | stall | stall % | idle other | GB per step | GB/s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| token_embedding | 16.23 s | 16.21 s | 0.068 s | 0.41% | 0.137 s | 32.3 | 12.8 |
+| blocks 0-3 | 16.16 s | 16.10 s | 0.001 s | 0.01% | 0.129 s | 26.9 | 12.8 |
+| blocks 4-7 | 14.51 s | 14.41 s | 0.068 s | 0.47% | 0.123 s | 24.3 | 12.7 |
+| blocks 8-11 | 12.80 s | 12.79 s | 0.061 s | 0.47% | 0.113 s | 21.6 | 12.7 |
+| blocks 12-15 | 11.17 s | 11.09 s | 0.063 s | 0.56% | 0.106 s | 18.9 | 12.8 |
+| blocks 16-19 | 9.50 s | 9.46 s | 0.068 s | 0.71% | 0.088 s | 16.2 | 12.7 |
+| blocks 20-23 + tail | 7.83 s | 7.75 s | 0.064 s | 0.81% | 0.081 s | 13.5 | 12.7 |
+| **mean** | 12.60 s | | **0.056 s** | **0.44%** | 0.111 s | 22.0 | 12.7 |
+
+- Unprofiled step times match the #194 k4@100 run's per-block medians within 0.1%
+  (16.24 / 16.10 / 14.48 / 12.79 / 11.16 / 9.50 / 7.82 s). Profiling adds 0.0-0.2 s.
+- The copies take 1.1-2.5 s per step on the side stream, all hidden behind 7.8-16.2 s of compute.
+- Almost the whole stall is one thing: `blocks.0` is never prefetched (the embedding segment
+  issues no prefetch), so whenever it is frozen its forward load is a synchronous copy, once per
+  micro-batch: 8 x 84 MB = 0.67 GB, 0.06 s per step. With blocks 0-3 active the stall is 0.001 s.
+- Peak reserved 82.4% in every mode.
+
+**Positive control 1 (can the number see a stall?).** Backward-recompute prefetch turned off,
+so every recompute load is a synchronous copy on the compute stream. Step time rose 0.25-1.60 s
+depending on the block, and the stall number rose by 85-100% of that rise at every block
+(e.g. blocks 8-11: step +0.750 s, stall +0.753 s). Last block: +0.009 s, as expected (nothing
+after it to recompute). The measurement does see a stall when one exists.
+
+**Positive control 2 (how much slack?).** Every prefetch copies its own size again before its
+ready-event, so the side stream moves 2x the bytes (26-64 GB per step). Step time moved
+-0.02 to +0.17 s and the stall +0.000-0.017 s. The copies have at least 2x headroom.
+
+**Fix: none shipped.** The only fixable part is the `blocks.0` miss (prefetch it before the
+embedding forward), worth at most 0.06 s per step (0.5%). Below the "real share" bar, so not
+prototyped. A bigger LRU cache would not help: nothing is waiting on copies.
+
+**Found on the way, not fixed:** with `offload_prefetch=False` (never used by the trainer) and
+`--chunked-loss`, training crashes: the tail segment loads only `final_norm`, and the decoder
+bias stays on the CPU (`hvn/edge/model.py` `_offload_wrap_plain("final_norm+decoder",
+[self.final_norm], ...)`). With prefetch on, the prefetch of the tail fetches the decoder too, so
+production is not affected. The control above uses backward-prefetch-off for this reason.
+
+### B. Switch cost and steps per turn: 50 is slightly worse than 100; 25, 10 and 200 not run
+
+**Result (measured, 2800 steps each, same seed, batches, schedule and held-out set):** k4 at 50
+steps per turn against k4 at 100 (`scripts/analyze_bcd_spb_200.py`). Gap = 50-step minus 100-step
+held-out loss, positive = 50 steps worse.
+
+| step | 50 steps/turn | 100 steps/turn | gap (nats) | ppl ratio |
+|---:|---:|---:|---:|---:|
+| 2100 | 5.0576 | 5.0308 | +0.027 | 1.03x |
+| 2600 | 4.9376 | 4.8991 | +0.039 | 1.04x |
+| 2800 | 4.9076 | 4.8807 | +0.027 | 1.03x |
+
+- By the rule below: WORSE (above 0.012 at 2800, positive at 2100 and 2600). The size is small, about
+  3% in perplexity, and the gap jumps up to 0.1 between neighbouring steps mid-run. One seed per
+  setting, so a small cost, not a settled one.
+- Step time: 50-step turns match 100-step turns within 0.16%. Switches are not a speed cost.
+- VRAM: 83.5% in training, 83.3% in eval, same as 100 steps.
+- Stopped on purpose: k4s25 was killed at step 821 (about 3 h in) and k4s10 never started,
+  because 50 was already worse than 100 and 20 more GPU hours were judged not worth it. 200 steps
+  per turn (the other direction) was also not run; that was the maintainer's call (10 h).
+- Not tested: shorter turns with `retain_optimizer_state`, longer turns, more than one seed.
+- Everything below this line was written before the results, at launch.
+
+
+**Cost of one switch (measured three ways):** `_activate` alone 0.30 s (synchronized, 168M-param
+block; 0.16-0.18 s into the smaller embedding block). First step of a turn minus the turn's
+median: 0.178 s over 26 switches in the #194 k4@100 run, 0.344 s over 5 switches in the
+10-step smoke. Upper figure 0.35 s x 279 switches at 10 steps/turn = 1.6 min in a ~10 h run,
+under 0.3% of the step time. So the slowdown gate (+25%) is nowhere near.
+
+**Arms:** k4 with `--bcd-steps-per-block` 50, 25, 10 (rotations 350 / 175 / 70 steps), 2800
+steps each, run in that order. Everything else identical to the #194 k4@100 run, which is the
+comparison arm and is NOT rerun (its logs are read from `results/bcd_blocksize_194/`): same
+harness `scripts/exp_bcd_blocksize_194.py`, seed 0, deterministic, warmup 500, cosine to 0 at
+2800, held-out 64 windows every 100 steps (sha-checked), checkpoint every 700 steps (a whole
+number of rotations for all three).
+
+**Reading rule, set before any result:** gap = arm minus k4@100 held-out loss. An arm is WORSE
+if the gap is above 0.012 nats (2x the #197 floor) at step 2800 and positive at 2100 and 2600;
+BETTER if the gap is below -0.012 at 2800 and negative at 2100 and 2600; otherwise cannot tell.
+Also reported: equal training time and mean step per arm (switches included).
+
+**Production deletes optimizer state at every switch.** The trainer does not pass
+`retain_optimizer_state`, so with 10-step turns Muon momentum and the AdamW moments restart
+every 10 steps. The arms keep production behaviour (they must match k4@100). The #151 note says
+retention helped at 5 steps per block and did nothing at 100, so shorter turns may pay a cost
+that retention would remove. Not tested here.
+
+**Pre-run checks (measured, `results/bcd_spb_200/smoke/`, 10 steps per turn, one rotation,
+full LR, every turn fingerprinted):** 7 blocks; every turn exactly 10 steps in the right order;
+418/418 params changed over the rotation; 0 frozen params changed; optimizer held 0 entries at
+every turn start and state for every active param at every turn end, all finite; lr > 0 at
+every step; held-out sha matches #197; peak reserved 83.5% (blocks 0-3), eval 83.0%
+(k4@100: 83.3% / 83.4%).
+
+**Status at launch:** k4s50 launched 2026-11-13 17:22. First 304 steps healthy: every turn
+50 steps, block order right, no NaN, step-1 held-out 11.23550 (equal to k4@100, same init),
+sha matches, peak reserved 83.5% (blocks 0-3), eval 83.3% and 49-51 s. Per-block step medians
+equal k4@100's within 0.16% (16.25 / 16.11 / 14.50 / 12.79 / 11.18 / 9.51 / 7.83 s); switch
+overhead 0.19 s median over 5 switches. So each arm takes about what k4@100 took, ~10.2 h
+wall. (Those ETAs are void: the sweep was stopped, see Result above.)
+Early held-out gaps (k4s50 1.15 nats better at step 100, 0.68 worse at 300) only reflect which
+blocks have trained so far in the first rotation; they say nothing yet.
+
+Launch / resume (same command; an arm already at step 2800 is skipped, the trainer resumes from
+`ckpt_<tag>`):
+`powershell -NoProfile -Command "Start-Process -WindowStyle Hidden -WorkingDirectory 'C:\Users\komal\Documents\Codes\kramba-ai-wt200' -FilePath 'C:\Program Files\Git\bin\bash.exe' -ArgumentList 'results/bcd_spb_200/run_200.sh'"`.
+Status: `results/bcd_spb_200/run_200.status` (`RUN_200_DONE` or `RUN_200_FAILED`). Logs:
+`results/bcd_spb_200/log_<tag>.a<attempt>.log`, tags `k4s50`, `k4s25`, `k4s10`. Analysis:
+`python scripts/analyze_bcd_spb_200.py`.
+
 ## VRAM spill starts at about 91-92% of the card; a 90% guard leaves only 60-110 MiB (2026-11-13, #194)
 
 **One line: on this 6 GB RTX 4050 (Windows, desktop idle at 129 MiB), training is clean up to
