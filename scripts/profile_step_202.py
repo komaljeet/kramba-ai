@@ -60,6 +60,8 @@ def main():
                     help="frozen ternary weights: old ternary-then-fp8 route")
     ap.add_argument("--loss-recompute", action="store_true",
                     help="chunked loss: old checkpointed slices (grad_in_forward=False)")
+    ap.add_argument("--no-frozen-codes", action="store_true",
+                    help="#204 off: frozen weights quantized to fp8 on every use")
     a = ap.parse_args()
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     sys.path.insert(0, REPO); sys.path.insert(0, os.path.join(REPO, "scripts"))
@@ -75,6 +77,37 @@ def main():
     assert os.path.abspath(bc.__file__).startswith(REPO), bc.__file__
     F8.FROZEN_FUSED[0] = not a.no_frozen_fused
     print(f"[s202] frozen fused fp8 quantize: {F8.FROZEN_FUSED[0]}", flush=True)
+    print(f"[s202] frozen fp8 codes once per turn (#204): {not a.no_frozen_codes}", flush=True)
+
+    import ctypes
+    from ctypes import wintypes
+
+    class _PMC(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+            (n, ctypes.c_size_t) for n in (
+                "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage",
+                "PrivateUsage")]
+
+    class _MSE(ctypes.Structure):
+        _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD)] + [
+            (n, ctypes.c_ulonglong) for n in (
+                "ullTotalPhys", "ullAvailPhys", "ullTotalPageFile", "ullAvailPageFile",
+                "ullTotalVirtual", "ullAvailVirtual", "ullAvailExtendedVirtual")]
+
+    def host_mem():
+        """Process working set / private commit and system available RAM, bytes."""
+        pmc = _PMC(); pmc.cb = ctypes.sizeof(_PMC)
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.K32GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+        assert k32.K32GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb)
+        ms = _MSE(); ms.dwLength = ctypes.sizeof(_MSE)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
+        return {"ws": pmc.WorkingSetSize, "peak_ws": pmc.PeakWorkingSetSize,
+                "private": pmc.PrivateUsage, "sys_avail": ms.ullAvailPhys,
+                "sys_total": ms.ullTotalPhys}
 
     nb = 7
     total = nb * a.spb * a.rotations
@@ -280,6 +313,13 @@ def main():
                "total_mem": torch.cuda.get_device_properties(0).total_memory}
         if S["eval_peak"] is not None:
             row["eval_peak_res"] = S["eval_peak"]; S["eval_peak"] = None
+        row["host"] = host_mem()
+        cs = dict(F8.CODES_STATS)
+        prev = S.get("codes_prev") or {k: 0 for k in cs}
+        row["codes"] = {k: cs[k] - prev[k] for k in cs}
+        row["codes_home_bytes"] = cs["home_bytes"]
+        row["codes_hits"] = F8.FP8_STATS["codes_hits"]
+        S["codes_prev"] = cs
         if a.heldout_every and n % a.heldout_every == 0:
             # As the trainer does right after optimizer.step(): zero_grad(set_to_none).
             for q in MODEL[0].parameters():
@@ -291,6 +331,7 @@ def main():
             row["heldout"] = sum(per) / len(per)
             row["heldout_sec"] = time.perf_counter() - t0
             row["heldout_peak_res"] = torch.cuda.max_memory_reserved()
+            row["host_after_eval"] = host_mem()
         if a.hash:
             row["loss_sha"] = S["loss_h"].hexdigest(); S["loss_h"] = hashlib.sha256()
             row["grad_sha"], row["grad_n"], row["grad_nz"] = GRAD_H["h"], GRAD_H["n"], GRAD_H["nz"]
@@ -305,6 +346,7 @@ def main():
         rows.write(json.dumps(row) + "\n"); rows.flush()
         print(f"[s202] step {n} {s.active_block_name[:16]} pos {row['pos_in_turn']} "
               f"{sec:.3f}s gpu {row['gpu_sum']:.3f}s peak {row['peak_res'] / row['total_mem']:.1%}"
+              f" ws {row['host']['ws'] / 2**30:.2f}G refresh {row['codes']['refresh_sec']:.2f}s"
               + (f" grad {row['grad_sha'][:12]} loss {row['loss_sha'][:12]}" if a.hash else ""),
               flush=True)
         S["n"] = n
@@ -330,7 +372,8 @@ def main():
         "--save-every-steps", "100000",
         "--checkpoint-dir", os.path.join(os.environ.get("S202_CKPT", os.path.dirname(os.path.abspath(a.out))), "ckpt_s202"),
         "--data-dir", os.path.join(MAIN, "data_cache"), "--seed", "0",
-        "--deterministic"] + (a.extra.split() if a.extra else [])
+        "--deterministic"] + (["--no-frozen-fp8-codes"] if a.no_frozen_codes else []) + (
+        a.extra.split() if a.extra else [])
     T.main()
 
 

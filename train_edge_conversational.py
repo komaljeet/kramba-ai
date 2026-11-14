@@ -4012,6 +4012,12 @@ def main():
                              "fused Triton quantizer). alpha/beta gates and the vocab "
                              "head stay bf16; eval stays bf16. Needs --precision bf16. "
                              "Default OFF, not part of --fast.")
+    parser.add_argument("--frozen-fp8-codes", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="#204, with --fp8-linear --offload: a BCD-frozen weight's fp8 "
+                             "codes are made once per BCD turn, kept in host RAM and "
+                             "streamed instead of its bf16 weight, not re-quantized on "
+                             "every use. Bit-identical. --no-frozen-fp8-codes opts out.")
     parser.add_argument("--fused-rmsnorm", action=argparse.BooleanOptionalAction,
                         default=False,
                         help="Run each block's pre-norm RMSNorm as F.rms_norm's single "
@@ -4400,6 +4406,9 @@ def main():
             parser.error("--fp8-linear needs --precision bf16")
         if args.compile:
             parser.error("--fp8-linear is not supported with --compile")
+        # #204: frozen offloaded weights stream fp8 codes made once per turn.
+        import hvn.edge.fp8_fused as _f8
+        _f8.FROZEN_CODES[0] = bool(args.frozen_fp8_codes)
 
     # --- Issue #93/#120: parse --pretrain-mix 'slim,oasst,wiki,fineweb_edu' -> float tuple (or None) ---
     if args.pretrain_mix is not None:

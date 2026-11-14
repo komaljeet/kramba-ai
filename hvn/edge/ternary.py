@@ -296,6 +296,7 @@ class TernaryLinear(nn.Module):
     _scache = None
     _fscale = None
     _f8cache = None
+    _f8codes = None        # #204 frozen fp8 codes (hvn/edge/fp8_fused.py)
 
     def __init__(self, in_features: int, out_features: int, bias: bool = False,
                  group_size: int = GROUP_PER_TENSOR, *,
@@ -475,6 +476,7 @@ class TernaryLinear(nn.Module):
         self._scache = None
         self._fscale = None
         self._f8cache = None
+        self._f8codes = None
         return super()._load_from_state_dict(*args, **kwargs)
 
     def freeze(self) -> None:

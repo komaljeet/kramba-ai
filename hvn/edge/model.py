@@ -319,6 +319,17 @@ class EdgeHVN(nn.Module):
             self._offload_pool.evict(name)
         return out
 
+    def _offload_params(self, block: nn.Module) -> list:
+        """What the offload pool streams for a frozen layer block: its
+        parameters, except that a weight with fresh frozen fp8 codes (#204) is
+        replaced by its codes holder (same shape and dtype, so the same pool
+        buffers). The weight itself then stays on the CPU."""
+        params = list(block.parameters())
+        subs = getattr(self, "_f8codes_subs", None)
+        if subs:
+            params = [subs.get(id(p), p) for p in params]
+        return params
+
     def _offload_wrap_checkpointed(self, name: str, block: nn.Module, x_in, position_ids,
                                    doc_ids=None):
         """Offload wrapper for a checkpointed LAYER block (Issue #101).
@@ -387,7 +398,7 @@ class EdgeHVN(nn.Module):
             return checkpoint(_active_forward, x_in, position_ids, use_reentrant=False)
 
         pool = self._offload_pool
-        params = list(block.parameters())
+        params = self._offload_params(block)
 
         # Backward recompute prefetch (2026-10-12). Backward recomputes the
         # offloaded blocks in REVERSE forward order, so when block i's
@@ -522,6 +533,11 @@ class EdgeHVN(nn.Module):
             act = [f"blocks.{i}" for i in range(len(self.blocks))
                    if f"blocks.{i}" in self._offload_active_names]
             self._no_ckpt_names = frozenset(act[-n_keep:]) if n_keep > 0 else frozenset()
+            # #204: frozen layers' fp8 codes, made once per BCD turn, streamed
+            # in place of their bf16 weights.
+            from .fp8_fused import frozen_codes_enabled, refresh_frozen_codes
+            self._f8codes_subs = (refresh_frozen_codes(self)
+                                  if frozen_codes_enabled(self) else None)
             x = self._offload_wrap_plain(
                 "token_embedding", [self.token_embedding],
                 lambda: self.token_embedding(input_ids),
@@ -564,7 +580,7 @@ class EdgeHVN(nn.Module):
                     if getattr(self, "_offload_prefetch", True):
                         if i + 1 < len(self.blocks):
                             next_name = f"blocks.{i + 1}"
-                            next_params = list(self.blocks[i + 1].parameters())
+                            next_params = self._offload_params(self.blocks[i + 1])
                         else:
                             next_name = "final_norm+decoder"
                             next_params = list(self.final_norm.parameters()) + list(self.decoder.parameters())
