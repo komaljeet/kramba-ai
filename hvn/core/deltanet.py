@@ -57,6 +57,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .hvn_block import RMSNorm, SwiGLU
+from . import fused_norm_residual as _fnr
 
 try:
     # Fused Triton scan (#83). Optional — falls back to the eager scans if
@@ -825,7 +826,16 @@ class DeltaNetBlock(nn.Module):
         H, d = self.n_heads, self.d_head
         N = B * H
 
-        x_norm = self.norm(x)
+        # #208 (opt-in, --fused-norm-residual): x's two gradients (norm branch and
+        # residual) are summed inside the norm's backward kernel instead of by an
+        # extra autograd add. x_link is x; the residual sum below must use it.
+        x_link = x
+        if (_fnr.ENABLED[0] and torch.is_grad_enabled() and type(self.norm) is RMSNorm
+                and self.norm.use_fused and not self.norm._forward_hooks
+                and not self.norm._forward_pre_hooks and _fnr.available(x, self.norm.weight)):
+            x_norm, x_link = _fnr.norm_residual(x, self.norm.weight, self.norm.eps)
+        else:
+            x_norm = self.norm(x)
         xc = self._causal_conv(x_norm, doc_ids=doc_ids)
         q, k, v, alpha, beta, gate = self._project(xc)
 
@@ -934,15 +944,15 @@ class DeltaNetBlock(nn.Module):
             # RNG order is unchanged too.
             y3, b3 = fused
             deflected = self.dropout(deflected)
-            out = _fb().add3_bias(x, deflected, y3, b3)
+            out = _fb().add3_bias(x_link, deflected, y3, b3)
         else:
             ffn_out = self.ffn(x_norm)
             deflected = self.dropout(deflected)   # after ffn: same RNG order as before
             if (self._fast_flag("use_fused_residual") and _fused_residual_add3 is not None
                     and _fused_residual_add3_available(x, deflected, ffn_out)):
-                out = _fused_residual_add3(x, deflected, ffn_out)
+                out = _fused_residual_add3(x_link, deflected, ffn_out)
             else:
-                out = x + deflected + ffn_out
+                out = x_link + deflected + ffn_out
 
         if return_state:
             state = {"S": S_final}

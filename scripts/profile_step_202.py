@@ -45,6 +45,10 @@ def main():
     ap.add_argument("--perturb-grad", type=float, default=0.0,
                     help="falsifier: scale the gradient reaching the hidden states of the "
                          "first micro-batch of every step by (1 + this), e.g. 2**-20")
+    ap.add_argument("--profile-ops", action="store_true",
+                    help="#208: with --profile, also record CPU ops (shapes) and write, per "
+                         "profiled step, GPU time grouped by autograd node and by aten op + "
+                         "input shapes ('ops' in the row)")
     ap.add_argument("--trace-dir", default=None)
     ap.add_argument("--val-every", type=int, default=100000000)
     ap.add_argument("--heldout-every", type=int, default=0,
@@ -272,7 +276,12 @@ def main():
         pos = S["n"] % a.spb
         if a.profile and pos == a.spb - 1:
             from torch.profiler import profile, ProfilerActivity
-            p = profile(activities=[ProfilerActivity.CUDA]); p.__enter__(); S["prof"] = p
+            if a.profile_ops:
+                p = profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                            record_shapes=True)
+            else:
+                p = profile(activities=[ProfilerActivity.CUDA])
+            p.__enter__(); S["prof"] = p
         if a.perturb_ulp and S["n"] == 0:
             s = SCHED[0]
             p0 = [p for p in dict(s.blocks)[s.active_block_name] if p.is_cuda][0]
@@ -314,6 +323,9 @@ def main():
         if S["eval_peak"] is not None:
             row["eval_peak_res"] = S["eval_peak"]; S["eval_peak"] = None
         row["host"] = host_mem()
+        _fnr = sys.modules.get("hvn.core.fused_norm_residual")
+        if _fnr is not None:
+            row["fnr"] = dict(_fnr.STATS)        # #208: fused norm-residual call counts
         cs = dict(F8.CODES_STATS)
         prev = S.get("codes_prev") or {k: 0 for k in cs}
         row["codes"] = {k: cs[k] - prev[k] for k in cs}
@@ -343,6 +355,21 @@ def main():
                 if ev.device_type == torch.autograd.DeviceType.CUDA:
                     kt[ev.name] = kt.get(ev.name, 0.0) + ev.device_time / 1e6
             row["kernels"] = dict(sorted(kt.items(), key=lambda kv: -kv[1])[:150])
+            if a.profile_ops:
+                # GPU time of the kernels each CPU op launched (self = its own
+                # launches, total = including child ops). Autograd nodes show up as
+                # "autograd::engine::evaluate_function: <Node>".
+                node, op = {}, {}
+                for ev in p.key_averages(group_by_input_shape=True):
+                    if ev.device_type != torch.autograd.DeviceType.CPU:
+                        continue
+                    if ev.key.startswith("autograd::engine::evaluate_function"):
+                        node[ev.key.split(": ", 1)[-1]] = node.get(ev.key.split(": ", 1)[-1], 0.0) + ev.device_time_total / 1e6
+                    elif ev.self_device_time_total > 0 and ev.key.startswith("aten::"):
+                        k = f"{ev.key} {ev.input_shapes}"
+                        op[k] = op.get(k, 0.0) + ev.self_device_time_total / 1e6
+                row["ops"] = {"nodes": dict(sorted(node.items(), key=lambda kv: -kv[1])[:80]),
+                              "aten": dict(sorted(op.items(), key=lambda kv: -kv[1])[:150])}
         rows.write(json.dumps(row) + "\n"); rows.flush()
         print(f"[s202] step {n} {s.active_block_name[:16]} pos {row['pos_in_turn']} "
               f"{sec:.3f}s gpu {row['gpu_sum']:.3f}s peak {row['peak_res'] / row['total_mem']:.1%}"
