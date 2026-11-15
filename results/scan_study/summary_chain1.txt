@@ -1,0 +1,28 @@
+﻿== step time (s): 7 block positions, mean of turn steps 2-3
+time_base1    15.63  15.09  13.53  11.89  10.32   8.68   7.41 | mean 11.792 | peak 82.0%
+time_v11      14.94  14.42  12.95  11.35   9.87   8.33   7.11 | mean 11.283 | peak 82.0%
+time_t1       13.11  12.61  11.43  10.08   8.92   7.67   6.70 | mean 10.073 | peak 82.0%
+time_base2    15.63  15.09  13.52  11.89  10.31   8.69   7.41 | mean 11.793 | peak 82.0%
+time_v12      14.95  14.44  12.95  11.36   9.86   8.32   7.12 | mean 11.287 | peak 82.0%
+time_t2       13.12  12.62  11.45  10.09   8.92   7.67   6.70 | mean 10.081 | peak 82.0%
+time_base3    15.62  15.09  13.55  11.94  10.32   8.70   7.42 | mean 11.805 | peak 82.0%
+time_v13      14.94  14.45  12.95  11.36   9.87   8.32   7.11 | mean 11.285 | peak 82.0%
+time_t3       13.10  12.60  11.44  10.09   8.92   7.67   6.69 | mean 10.074 | peak 82.0%
+base  mean of repeats 11.797  spread 0.013  (3 runs)
+v1    mean of repeats 11.285  spread 0.005  (3 runs)
+t     mean of repeats 10.076  spread 0.008  (3 runs)
+
+== identity (sha256 of per-token loss and active-block grads per step)
+base vs hash_v1: grad equal 14/14, loss equal 14/14
+base vs hash_v1_falsify: grad equal 0/14, loss equal 2/14
+base vs hash_t: grad equal 0/14, loss equal 0/14
+base vs #204 hash_codes: grad equal 14/14, loss equal 14/14
+
+== VRAM with held-out eval after every step (peak reserved, share of card)
+evalv_base  train 81.9% 83.7% 83.7% 83.7% 83.7% 83.7% 83.7% | eval 81.9% 83.7% 83.7% 83.7% 83.7% 83.7% 83.7%
+evalv_v1    train 81.9% 83.7% 83.7% 83.7% 83.7% 83.7% 83.7% | eval 81.9% 83.7% 83.7% 83.7% 83.7% 83.7% 83.7%
+evalv_t     train 81.9% 83.7% 83.7% 83.7% 83.7% 83.7% 83.7% | eval 81.9% 83.7% 83.7% 83.7% 83.7% 83.7% 83.7%
+held-out loss base vs v1: equal 14/14, max |diff| 0.00e+00
+held-out loss base vs t: equal 1/14, max |diff| 1.36e-03
+
+== d512 loss A/B (ab_local_loss, final held-out, 16 fixed probe batches)

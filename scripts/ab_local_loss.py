@@ -304,7 +304,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--tokenizer", default="gpt2")
     p.add_argument("--out", default="results/local_loss/ab.json")
+    p.add_argument("--scan-kernel", choices=["v1", "t"], default="v1",
+                   help="#206: DeltaNet scan kernels (hvn.core.deltanet_triton.SCAN_KERNEL)")
     args = p.parse_args(argv)
+    import hvn.core.deltanet_triton as _dt
+    _dt.SCAN_KERNEL[0] = args.scan_kernel
+    print(f"[ab] scan kernel {args.scan_kernel}", flush=True)
 
     # Import BEFORE touching CUDA (pyarrow after CUDA init aborts natively).
     import train_edge_conversational as tec
@@ -351,6 +356,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump({"config": vars(args), "forward_to_diff": diff, "arms": results},
                       fh, indent=2)
+    print(f"[ab] scan t stats {_dt.SCAN_T_STATS} (kernel {_dt.SCAN_KERNEL[0]})", flush=True)
 
     print("\n[ab] ================ local-loss BCD ================")
     print(f"[ab] {'arm':<20}{'held-out':>10}{'ppl':>9}{'copy':>8}{'train min':>11}{'GiB':>7}")

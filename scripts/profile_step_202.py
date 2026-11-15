@@ -375,6 +375,9 @@ def main():
         "--deterministic"] + (["--no-frozen-fp8-codes"] if a.no_frozen_codes else []) + (
         a.extra.split() if a.extra else [])
     T.main()
+    import hvn.core.deltanet_triton as DT
+    print(f"[s202] scan kernel {DT.SCAN_KERNEL[0]} v1 warps {DT.SCAN_V1_WARPS} "
+          f"t stats {DT.SCAN_T_STATS}", flush=True)
 
 
 if __name__ == "__main__":

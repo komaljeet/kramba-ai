@@ -1,0 +1,46 @@
+﻿== step time (s): 7 block positions, mean of turn steps 2-3
+time_base1    15.63  15.09  13.53  11.89  10.32   8.68   7.41 | mean 11.792 | peak 82.0%
+time_v11      14.94  14.42  12.95  11.35   9.87   8.33   7.11 | mean 11.283 | peak 82.0%
+time_t1       13.11  12.61  11.43  10.08   8.92   7.67   6.70 | mean 10.073 | peak 82.0%
+time_base2    15.63  15.09  13.52  11.89  10.31   8.69   7.41 | mean 11.793 | peak 82.0%
+time_v12      14.95  14.44  12.95  11.36   9.86   8.32   7.12 | mean 11.287 | peak 82.0%
+time_t2       13.12  12.62  11.45  10.09   8.92   7.67   6.70 | mean 10.081 | peak 82.0%
+time_base3    15.62  15.09  13.55  11.94  10.32   8.70   7.42 | mean 11.805 | peak 82.0%
+time_v13      14.94  14.45  12.95  11.36   9.87   8.32   7.11 | mean 11.285 | peak 82.0%
+time_t3       13.10  12.60  11.44  10.09   8.92   7.67   6.69 | mean 10.074 | peak 82.0%
+base  mean of repeats 11.797  spread 0.013  (3 runs)
+v1    mean of repeats 11.285  spread 0.005  (3 runs)
+t     mean of repeats 10.076  spread 0.008  (3 runs)
+
+== identity (sha256 of per-token loss and active-block grads per step)
+base vs hash_v1: grad equal 14/14, loss equal 14/14
+base vs hash_v1_falsify: grad equal 0/14, loss equal 2/14
+base vs hash_t: grad equal 0/14, loss equal 0/14
+base vs #204 hash_codes: grad equal 14/14, loss equal 14/14
+
+== VRAM with held-out eval after every step (peak reserved, share of card)
+evalv_base  train 81.9% 83.7% 83.7% 83.7% 83.7% 83.7% 83.7% | eval 81.9% 83.7% 83.7% 83.7% 83.7% 83.7% 83.7%
+evalv_v1    train 81.9% 83.7% 83.7% 83.7% 83.7% 83.7% 83.7% | eval 81.9% 83.7% 83.7% 83.7% 83.7% 83.7% 83.7%
+evalv_t     train 81.9% 83.7% 83.7% 83.7% 83.7% 83.7% 83.7% | eval 81.9% 83.7% 83.7% 83.7% 83.7% 83.7% 83.7%
+held-out loss base vs v1: equal 14/14, max |diff| 0.00e+00
+held-out loss base vs t: equal 1/14, max |diff| 1.36e-03
+
+== d512 loss A/B (ab_local_loss, final held-out, 16 fixed probe batches)
+lossab_s7_t            bcd_k2  final 6.11631 | median step 94 ms | train 191 s | curve 7.7069 7.5603 6.7319 6.3527 6.2983 6.1676 6.1255 6.1163
+lossab_s7_t            full    final 5.19983 | median step 226 ms | train 454 s | curve 6.1513 5.8006 5.5885 5.4770 5.3625 5.2777 5.2227 5.1998
+lossab_s7_v1           bcd_k2  final 6.11611 | median step 100 ms | train 201 s | curve 7.7082 7.5628 6.7353 6.3520 6.2983 6.1674 6.1245 6.1161
+lossab_s7_v1           full    final 5.20404 | median step 237 ms | train 475 s | curve 6.1350 5.8027 5.5969 5.4812 5.3698 5.2802 5.2257 5.2040
+lossab_s7_v1_repeat    bcd_k2  final 6.11398 | median step 100 ms | train 201 s | curve 7.7076 7.5613 6.7335 6.3536 6.2981 6.1663 6.1216 6.1140
+lossab_s7_v1_repeat    full    final 5.20432 | median step 237 ms | train 476 s | curve 6.1359 5.8089 5.5912 5.4789 5.3682 5.2814 5.2273 5.2043
+lossab_s8_t            bcd_k2  final 5.70162 | median step 94 ms | train 190 s | curve 7.5042 7.3307 6.4081 5.9788 5.9026 5.7599 5.7099 5.7016
+lossab_s8_t            full    final 4.74993 | median step 227 ms | train 455 s | curve 5.7469 5.3907 5.2011 5.0597 4.9184 4.8301 4.7761 4.7499
+lossab_s8_v1           bcd_k2  final 5.70372 | median step 100 ms | train 201 s | curve 7.5014 7.3265 6.4021 5.9837 5.9040 5.7628 5.7122 5.7037
+lossab_s8_v1           full    final 4.74805 | median step 237 ms | train 476 s | curve 5.7410 5.3883 5.1996 5.0611 4.9179 4.8298 4.7735 4.7480
+t - v1, s7 bcd_k2 : final +0.00020 | max |diff| over curve 0.00344
+t - v1, s7 full   : final -0.00421 | max |diff| over curve 0.01634
+t - v1, s8 bcd_k2 : final -0.00210 | max |diff| over curve 0.00598
+t - v1, s8 full   : final +0.00188 | max |diff| over curve 0.00594
+v1 same-seed repeat, s7 bcd_k2 : final diff -0.00213
+v1 seed 7 vs seed 8, bcd_k2 : final diff -0.41240
+v1 same-seed repeat, s7 full   : final diff +0.00028
+v1 seed 7 vs seed 8, full   : final diff -0.45600
