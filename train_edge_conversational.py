@@ -4031,12 +4031,12 @@ def main():
                              "add = the 2-D add kernel only; off = the old separate add. "
                              "All bit-identical.")
     parser.add_argument("--fused-bias-amax", action=argparse.BooleanOptionalAction,
-                        default=True,
+                        default=False,
                         help="#207, with --fp8-bias fused: the fused kernels also compute "
                              "the fp8 amax of the tensors they write that feed an fp8 GEMM "
                              "next (GELU output; gradients into gate_proj, ffn[0], ffn[3], "
                              "out_proj), so the quantizer skips its amax pass. Same bits. "
-                             "--no-fused-bias-amax opts out.")
+                             "Opt-in: measured -0.040 s/step at 1B k4, under the 0.05 s bar.")
     parser.add_argument("--scan-kernel", choices=["v1", "t"], default="v1",
                         help="#206: DeltaNet scan kernels on the strided-IO path. v1 = the "
                              "existing kernels. t = transposed-layout kernels with the "

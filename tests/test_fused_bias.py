@@ -172,6 +172,15 @@ def test_add3_bias_must_fail_rounded_toward_zero():
 # ---------------------------------------------------------------------------
 # amax hints: the producer's amax replaces fp8_quantize's own pass.
 # ---------------------------------------------------------------------------
+@pytest.fixture
+def hints_on():
+    """amax hints are opt-in (--fused-bias-amax); these tests turn them on."""
+    prev = FB.AMAX_HINTS[0]
+    FB.AMAX_HINTS[0] = True
+    yield
+    FB.AMAX_HINTS[0] = prev
+
+
 def _quant_both(t, dtype):
     """fp8_quantize(t) with the hint (if any) and with it removed: (hinted, plain)."""
     hinted = F8.fp8_quantize(t, dtype, transpose=True)     # a taken hint is removed
@@ -209,7 +218,7 @@ def _amax_producers():
 
 
 @cuda_only
-def test_amax_hints_give_the_same_codes_and_are_used():
+def test_amax_hints_give_the_same_codes_and_are_used(hints_on):
     for name, t, dt in _amax_producers():
         hits = FB.STATS["amax_hits"]
         hinted, plain = _quant_both(t, dt)
@@ -218,7 +227,7 @@ def test_amax_hints_give_the_same_codes_and_are_used():
 
 
 @cuda_only
-def test_amax_hint_must_fail_partners():
+def test_amax_hint_must_fail_partners(hints_on):
     """A hint is refused after an in-place write (version bump), and a wrong
     amax would be visible in the codes, so the equality above is not vacuous."""
     FB.clear_amax_hints()
@@ -279,12 +288,13 @@ def _block_run(mode, seed=0):
 def test_block_modes_bit_identical_and_paths_ran():
     o0, x0, p0, m0 = _block_run("off")
     assert sum(m0.values()) == 0, m0
+    prev = FB.AMAX_HINTS[0]
     for mode in ("add", "fused", "fused-nohint"):
         FB.AMAX_HINTS[0] = mode != "fused-nohint"
         try:
             o, xg, pg, moved = _block_run(mode.split("-")[0])
         finally:
-            FB.AMAX_HINTS[0] = True
+            FB.AMAX_HINTS[0] = prev
         if mode == "add":
             assert moved["bias"] == 3 and moved["silu"] == moved["gelu"] == moved["add3"] == 0, moved
         else:
@@ -347,11 +357,17 @@ def _trajectory(mode, steps=6):
 @fp8_only
 def test_bcd_offload_trajectory_bit_identical():
     l0, g0, m0, _ = _trajectory("off")
-    for mode in ("add", "fused"):
-        l1, g1, m1, skipped = _trajectory(mode)
+    prev = FB.AMAX_HINTS[0]
+    for mode in ("add", "fused", "fused+hints"):
+        FB.AMAX_HINTS[0] = mode == "fused+hints"
+        try:
+            l1, g1, m1, skipped = _trajectory(mode.split("+")[0])
+        finally:
+            FB.AMAX_HINTS[0] = prev
         assert sum(m1.values()) > 0, f"{mode}: fused path never ran"
-        if mode == "fused":
+        if mode != "add":
             assert m1["gelu"] > 0 and m1["add3"] > 0 and m1["silu"] > 0, m1
+            assert (m1["amax_hits"] > 0) == (mode == "fused+hints"), m1
         assert len(l0) == len(l1) and all(torch.equal(a, b) for a, b in zip(l0, l1)), mode
         for s, (a, b) in enumerate(zip(g0, g1)):
             assert len(a) == len(b) > 0, f"step {s}: no active gradients"

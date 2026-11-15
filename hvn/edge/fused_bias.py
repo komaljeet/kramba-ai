@@ -233,8 +233,10 @@ def gelu_tables(device):
 # tensor must have its data pointer, element count, dtype and version counter
 # (any in-place write bumps it). Anything else misses and the normal amax runs.
 # ---------------------------------------------------------------------------
-#: ``--fused-bias-amax`` (default on); False measures/uses the fusions without hints.
-AMAX_HINTS = [True]
+#: ``--fused-bias-amax`` (opt-in, default OFF). Same bits, but measured at only
+#: -0.040 s/step at 1B k4 (11.095 -> 11.055 s, 3 + 6 repeats), under #207's
+#: 0.05 s bar, so it is not on by default.
+AMAX_HINTS = [False]
 _HINTS = []                      # [(weakref, ptr, numel, dtype, version, amax)]
 _MAX_HINTS = 4
 

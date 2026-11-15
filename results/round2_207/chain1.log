@@ -9,3 +9,6 @@ exit 0 Sun, Nov 15, 2026 10:03:54 AM
 === hash_A3_falsify Sun, Nov 15, 2026 10:03:54 AM
 exit 0 Sun, Nov 15, 2026 10:07:02 AM
 === time_A0_1 Sun, Nov 15, 2026 10:07:02 AM
+exit 127 Sun, Nov 15, 2026 10:07:11 AM
+=== time_A1_1 Sun, Nov 15, 2026 10:07:11 AM
+chain1 stopped by hand at 10:07 after its hash runs (time_A0_1 killed, time_A1_1 killed 10:09; both partial files deleted)
