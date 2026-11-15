@@ -4043,6 +4043,12 @@ def main():
                              "checkpoint pass fused into the recompute forward: ~2x faster "
                              "scan at d_head 32, but NOT bit-identical (fp32 rounding-level "
                              "differences). Default v1.")
+    parser.add_argument("--fused-norm-residual", action=argparse.BooleanOptionalAction,
+                        default=False,
+                        help="#208: in DeltaNet blocks, add the residual gradient inside the "
+                             "RMSNorm backward kernel instead of a separate autograd add "
+                             "(hvn/core/fused_norm_residual.py). Forward unchanged; backward "
+                             "NOT bit-identical (own reduction order). Default off.")
     parser.add_argument("--scan-v1-warps", action=argparse.BooleanOptionalAction,
                         default=True,
                         help="#206: v1 scan at d_head 32 launches the forward with 1 warp and "
@@ -4448,6 +4454,11 @@ def main():
         print(f"[scan] kernel {args.scan_kernel}, v1 tuned warps {args.scan_v1_warps}")
     except ImportError:
         pass
+    # #208: residual gradient folded into the RMSNorm backward (opt-in).
+    import hvn.core.fused_norm_residual as _fnr
+    _fnr.ENABLED[0] = bool(args.fused_norm_residual)
+    if args.fused_norm_residual:
+        print("[#208] fused norm-residual backward ON")
 
     # --- Issue #93/#120: parse --pretrain-mix 'slim,oasst,wiki,fineweb_edu' -> float tuple (or None) ---
     if args.pretrain_mix is not None:

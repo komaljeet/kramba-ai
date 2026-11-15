@@ -1,0 +1,61 @@
+== step time
+time_def_1.jsonl            14.66  14.22  12.71  11.14   9.68   8.15   6.96 | mean 11.075 | peak 82.3%
+time_def_2.jsonl            14.71  14.20  12.77  11.16   9.68   8.15   6.95 | mean 11.089 | peak 82.3%
+time_def_3.jsonl            14.70  14.18  12.74  11.14   9.68   8.16   6.96 | mean 11.081 | peak 82.3%
+  time_def_: mean of 3 = 11.082, spread 0.014
+time_t_1.jsonl              12.88  12.38  11.24   9.89   8.74   7.51   6.55 | mean 9.885 | peak 82.3%
+time_t_2.jsonl              12.88  12.37  11.24   9.88   8.73   7.51   6.54 | mean 9.877 | peak 82.3%
+time_t_3.jsonl              12.88  12.39  11.23   9.88   8.73   7.50   6.54 | mean 9.879 | peak 82.3%
+  time_t_: mean of 3 = 9.880, spread 0.008
+time_def2_1.jsonl           14.70  14.21  12.77  11.14   9.69   8.16   6.98 | mean 11.090 | peak 82.3%
+time_def2_2.jsonl           14.70  14.21  12.76  11.15   9.67   8.16   6.96 | mean 11.089 | peak 82.3%
+time_def2_3.jsonl           14.71  14.19  12.74  11.16   9.69   8.16   6.96 | mean 11.088 | peak 82.3%
+  time_def2_: mean of 3 = 11.089, spread 0.002
+time_fnr_1.jsonl            14.63  14.12  12.72  11.10   9.63   8.13   6.94 | mean 11.039 | peak 82.3%
+time_fnr_2.jsonl            14.63  14.11  12.68  11.12   9.65   8.14   6.94 | mean 11.039 | peak 82.3%
+time_fnr_3.jsonl            14.63  14.11  12.70  11.09   9.64   8.14   6.95 | mean 11.036 | peak 82.3%
+  time_fnr_: mean of 3 = 11.038, spread 0.004
+time_t2_1.jsonl             12.85  12.38  11.21   9.88   8.73   7.51   6.54 | mean 9.873 | peak 82.3%
+time_t2_2.jsonl             12.88  12.39  11.23   9.88   8.72   7.50   6.54 | mean 9.879 | peak 82.3%
+time_t2_3.jsonl             12.88  12.39  11.23   9.87   8.71   7.51   6.55 | mean 9.876 | peak 82.3%
+  time_t2_: mean of 3 = 9.876, spread 0.006
+time_tfnr_1.jsonl           12.79  12.32  11.21   9.83   8.69   7.48   6.53 | mean 9.836 | peak 82.3%
+time_tfnr_2.jsonl           12.80  12.30  11.20   9.84   8.69   7.48   6.53 | mean 9.835 | peak 82.3%
+time_tfnr_3.jsonl           12.80  12.30  11.21   9.83   8.68   7.48   6.53 | mean 9.834 | peak 82.3%
+  time_tfnr_: mean of 3 = 9.835, spread 0.001
+
+== held-out A/B
+held-out NLL (64 fixed windows) per eval step
+arm                            1        70       140   eval peak   train peak
+def_s0                  11.23556   8.02395   7.09500      84.5%      84.5%
+def_s1                  11.22262   8.02133   7.09222      84.5%      84.5%
+fnr_s0                  11.23556   8.02732   7.09558      84.5%      84.5%
+fnr_s1                  11.22262   8.01903   7.09145      84.5%      84.5%
+t_s0                    11.23558   8.02893   7.09793      84.5%      84.5%
+t_s1                    11.22262   8.01879   7.08968      84.5%      84.5%
+tbroken_s0              11.23558   7.80884   7.06467      84.5%      84.5%
+distinct held-out target sha: 1 (must be 1)
+
+final step 140:
+  def            seeds ['0', '1'] mean 7.09361 spread 0.00278
+  fnr            seeds ['0', '1'] mean 7.09351 spread 0.00413
+  t              seeds ['0', '1'] mean 7.09381 spread 0.00826
+  tbroken        seeds ['0'] mean 7.06467 spread 0.00000
+  fnr - def: mean diff -0.00010 | paired per seed +0.00058 -0.00077 | default seed spread 0.00278 -> WITHIN spread
+  t - def: mean diff +0.00020 | paired per seed +0.00293 -0.00254 | default seed spread 0.00278 -> WITHIN spread
+  tbroken - def: mean diff -0.02894 | paired per seed -0.03033 | default seed spread 0.00278 -> OUTSIDE spread
+  per-window fnr_s0 - def_s0: mean +0.00058, sem 0.00112
+  per-window fnr_s1 - def_s1: mean -0.00077, sem 0.00108
+  per-window t_s0 - def_s0: mean +0.00293, sem 0.00126
+  per-window t_s1 - def_s1: mean -0.00254, sem 0.00118
+  per-window tbroken_s0 - def_s0: mean -0.03033, sem 0.00237
+
+== chunked scan bench
+{'chunk': 32, 'bv': 32, 'variant': 'nosolve', 'F_ms': 7.353126525878906}
+accuracy {'c16_real': 1.4803135423278599e-07, 'c16_nosolve': 0.19802470074617592, 'c32_real': 1.6329467297678578e-07, 'c32_nosolve': 0.23064031866750667, 'v1': 1.1623553528355924e-07, 't': 1.1592159731815318e-07}
+projection {'v1': {'bound_saving_s_per_step_nosolve': 1.3019452410016739, 'bound_saving_s_per_step_real': 0.8948655953543527, 'scan_s_per_step_now': 3.590192771693638}, 't': {'bound_saving_s_per_step_nosolve': -0.14524908316476037, 'bound_saving_s_per_step_real': -0.5523287288120814, 'scan_s_per_step_now': 2.142998447527204}}
+
+== norm-residual bench
+active {'default_ms': 1.4985830688476562, 'fused_ms': 0.7448159790039063, 'dx_rel_diff': 6.681906228322987e-08, 'saving_ms': 0.75376708984375}
+frozen {'default_ms': 1.1334451293945313, 'fused_ms': 0.7322611236572265, 'dx_rel_diff': 6.681906228322987e-08, 'saving_ms': 0.40118400573730484}
+projected saving s/step 0.05666459342041017

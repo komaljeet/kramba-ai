@@ -5,6 +5,112 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B k4 step 11.08 -> 9.88 s (-10.8%) with `--scan-kernel t`, held-out loss unchanged at 1B; residual-grad fold -0.05 s; chunked scan dead (2026-11-15, #208)
+
+**One line: `--scan-kernel t` passes every check and is recommended as a future default;
+nothing was made default. (1) `--scan-kernel t` (#206): step 11.082 -> 9.880 s (-1.20 s). In a 1B
+held-out loss A/B (2 seeds, 140 steps, two full passes over the 7 BCD blocks) it lands
++0.0002 nats from the defaults, inside the defaults' own seed spread (0.0028). (2) New
+`--fused-norm-residual`: the residual gradient is added inside the RMSNorm backward kernel
+instead of by a separate autograd add: 11.089 -> 11.038 s (-0.051 s), held-out -0.0001 from
+the defaults. Both together: 9.835 s (-1.247 s); on top of `t` the fold saves only 0.041 s, under the 0.05 s bar. A chunked scan (chunk 16/32) cannot win: even
+a lower bound that skips its triangular solve is 1.6x slower than `t`'s forward. A
+deliberately broken scan backward (zero gradients) moved held-out loss by -0.030, 10x the
+seed spread, so the A/B can see a scan bug, but note it moved DOWN (see below).**
+
+Method: `scripts/profile_step_202.py` (1B k4, 3 steps per turn, mean of turn steps 2-3 over the
+7 block positions, arms alternated, 3 repeats each), `scripts/ab_heldout_208.py` (held-out A/B),
+`scripts/scan_chunk_208.py`, `scripts/bench_norm_res_208.py`, `scripts/analyze_round3_208.py`,
+`scripts/scan_study2_206.py` (fp64), `results/round3_208/` (chains 1-5). Code:
+`hvn/core/fused_norm_residual.py`, `hvn/core/deltanet.py`, trainer flag `--fused-norm-residual`.
+About 4.7 h of GPU.
+
+| change | expected (s/step) | measured (s/step) | fp64 error vs current | held-out A/B (mean of 2 seeds, step 140) | VRAM peak | verdict |
+|---|---:|---:|---|---|---:|---|
+| `--scan-kernel t` | -1.21 (#206) | **-1.202** (11.082 -> 9.880; spreads 0.014 / 0.008) | same size: o 1.16e-7 vs 1.16e-7, grads 1.18-1.63e-7 vs 1.16-1.61e-7 | 7.09381 vs 7.09361 (+0.0002) | 82.3% timing / 84.5% A/B incl. eval | within spread: recommend as default (maintainer call) |
+| chunked scan, chunk 16 / 32 | needs >= 0.05 | not built: forward alone 6.70 / 12.60 ms vs t 3.56 | 1.5e-7 / 1.6e-7 (forward) | not run | - | dead |
+| `--fused-norm-residual` | -0.057 (kernel bench) | **-0.051** (11.089 -> 11.038; spreads 0.002 / 0.004) | dx 3.17e-8 vs ATen 3.18e-8; dw 1.31e-7 vs 1.06e-7 | 7.09351 vs 7.09361 (-0.0001) | 82.3% / 84.5% | passes alone; on top of `t` only -0.041 (under the bar): stays opt-in |
+| t + fused-norm-residual | -1.25 (sum) | **9.835** (t alone 9.876 in the same chain: fold adds -0.041; spreads 0.006 / 0.001) | - | not run as a pair | 82.3% | see below |
+
+### Held-out loss A/B at 1B (the decision test)
+
+Same `PROD_ARGV` k4 run as production (fp8, offload, Muon, grad_accum 8, `--deterministic`),
+except: 10 steps per block instead of 100, 140 steps (2 full passes over the 7 blocks), warmup
+14, cosine to 0 at 140. 4 runs at 100 steps per block would be ~17 h, over the 6 h budget.
+Seed = model init; data order pinned (shuffle seed 0) in every run; 64 fixed held-out windows
+(262,144 tokens, token-disjoint FineWeb-Edu split), one target sha across all runs.
+
+| arm | step 1 | step 70 | step 140 |
+|---|---:|---:|---:|
+| default, seed 0 | 11.23556 | 8.02395 | 7.09500 |
+| default, seed 1 | 11.22262 | 8.02133 | 7.09222 |
+| t, seed 0 | 11.23558 | 8.02893 | 7.09793 |
+| t, seed 1 | 11.22262 | 8.01879 | 7.08968 |
+| fused-norm-residual, seed 0 | 11.23556 | 8.02732 | 7.09558 |
+| fused-norm-residual, seed 1 | 11.22262 | 8.01903 | 7.09145 |
+| falsifier: t with zero scan gradients, seed 0 | 11.23558 | 7.80884 | 7.06467 |
+
+Decision rule (fixed before the runs): recommend as a future default only if the arm's mean is
+within the defaults' seed spread (|7.09500 - 7.09222| = 0.00278).
+- t - default: +0.00020 (paired per seed +0.0029, -0.0025; per-window sem ~0.0012). Within.
+- fused-norm-residual - default: -0.00010 (paired +0.0006, -0.0008). Within.
+- falsifier - default: -0.0303 (per-window sem 0.0024, 12 sem). Outside: flagged. Its broken
+  backward ran 15,840 times.
+
+Read this carefully: the broken arm is BETTER on held-out at 140 steps. Zeroing the scan's input
+gradients freezes the DeltaNet q/k/v/decay projections, and this early that helps the loss. So
+this short A/B can see a scan change but cannot say which direction is "harm"; it only bounds
+how far each flag moves the loss. Both flags move it 10x less than the falsifier and less than
+the seed spread. A cost that only shows after many 100-step turns is outside what it can see.
+
+### Chunked scan, chunk 16 and 32 (measured, not built)
+
+`scripts/scan_chunk_208.py`, real per-layer shape (64 heads, d_head 32, seq 4096). Current
+kernels through the production autograd path: forward only (frozen-before layer) v1 4.70 ms,
+t 3.56 ms; checkpointed forward + backward v1 29.1 ms, t 17.0 ms. The repo's chunk-parallel
+forward (#96 Design A), inputs pre-staged in its favour:
+
+| chunk | BV 8 | BV 16 | BV 32 | BV 32, solve skipped (lower bound) |
+|---|---:|---:|---:|---:|
+| 16 | 14.47 | 10.02 | 6.70 | 5.69 |
+| 32 | 24.01 | 15.76 | 12.60 | 7.35 |
+
+A chunked layer needs 2 forwards + a backward no cheaper than a forward, so with the bound
+5.69 ms the best possible saving vs `t` is -0.15 s per step (a loss). Against v1 it could only
+win if the chunked backward were as fast as its forward (fla's measured 2.5x, #206), and `t`
+already takes that saving. Falsifier for the bench: the real chunked output matches fp64
+(1.5e-7), the solve-skipped one does not (0.20), so the solve really ran and was really skipped.
+
+### Leftover autograd costs (profiled, one built)
+
+`prof_ops.jsonl` (CPU + CUDA profile with shapes, last step of each turn): the fp32 `add_` on
+[1, 4096, 2048] is 0.225 s per step. It is autograd summing x's two gradients in each DeltaNet
+block (residual path + RMSNorm path). `--fused-norm-residual` routes the residual through the
+norm Function (`x_link`), so one kernel writes `norm_bwd + g`: 1.50 -> 0.74 ms per active-layer
+backward, 1.13 -> 0.73 ms per frozen one (kernel bench), -0.051 s measured on the step. Other
+items: `copy_ [4096, 2048]` 0.35 s (activation casts; split between the fp8 Linear's
+`dx.to(fp32)` and others, not attributed further), `aten::add [1, 4096, 2048]` 0.12 s (x_norm's
+two gradients, conv + FFN), AccumulateGrad 0.07 s. `copy_ [2048, 2048]` 1.0 s is the offload
+weight streaming (copy engine, overlapped, #200), not compute. Not chased.
+
+Checks, and that they could fail:
+- `tests/test_fused_norm_residual.py` (7): forward == `F.rms_norm` bit for bit; dx/dw error vs
+  fp64 within 4x ATen's; block and checkpointed block grads match the default path to 1e-5 with
+  the fused backward counted and the residual attached; BCD + offload + no-ckpt trajectory; flag
+  default off. Must-fail partners that do fail: residual dropped, weight off by 2^-10, residual
+  link detached.
+- 1B runs: fused backward ran 2,376 times per timing run and 15,840 per A/B run, residual
+  attached every time (`bwd_no_res` 0). t: fused checkpoint 14,880 times per A/B run.
+
+Projected full run (925,000 steps, measured step x steps): defaults 11.082 s -> 118.6 days;
+`--scan-kernel t` 9.880 s -> 105.8 days; both flags 9.835 s -> 105.3 days (-13.3 days vs defaults).
+
+Not measured: a long run (hours or 100-step turns) with either flag; loss A/B past 140 steps or
+with more than 2 seeds; the two flags together in a loss A/B; the cast copies' exact sources;
+fp32 `dx` straight from the fp8 dW/dX GEMMs (would drop a cast); bf16 gradient accumulation.
+Chain 3's first launch lost its fnr runs to an argparse quirk (`--extra "--flag"`), relaunched;
+see `run_chain3.sh`.
+
 ## 1B k4 step 11.29 -> 11.10 s (-1.7%) with the same bits: fp8 bias folded into the next op; no-ckpt 1 is now the default (2026-11-15, #207)
 
 **One line: two bit-identical changes are now on by default. (1) `--active-no-ckpt-layers 1`
