@@ -5,6 +5,106 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B k4 step 11.29 -> 11.10 s (-1.7%) with the same bits: fp8 bias folded into the next op; no-ckpt 1 is now the default (2026-11-15, #207)
+
+**One line: two bit-identical changes are now on by default. (1) `--active-no-ckpt-layers 1`
+is the trainer default (0 opts out): 11.400 -> 11.288 s per step. (2) The bias add after each
+fp8 GEMM is folded into the op that reads it (SiLU gate, GELU, residual sum): 11.288 ->
+11.095 s. Together 11.400 -> 11.095 s (-2.7%) against the old trainer defaults, and 11.285 ->
+11.095 s (-1.7%) against #206's number. Loss, active-block gradients and held-out loss equal
+14/14. Peak VRAM 82.3% with held-out eval at every turn (was 83.7%). The card is not
+throttled in any way software can fix. Batching Muon is not faster. A faster stand-alone
+bias-add kernel and amax-in-producer were built and measured, and both missed the 0.05 s bar.**
+
+Method: `scripts/profile_step_202.py` (1B k4, 3 steps per turn, mean of turn steps 2-3 over
+the 7 positions), arms interleaved A0, A1, A2, A3, A4 per repeat. `scripts/analyze_round2_207.py`,
+`scripts/bench_fused_bias_207.py`, `scripts/muon_batch_207.py`, `scripts/clock_ceiling_207.py`,
+`results/round2_207/` (chains 0-4). Code: `hvn/edge/fused_bias.py`, `fp8_fused.py`
+(`fp8_linear_parts`), `hvn/core/deltanet.py`.
+
+| step | change | expected | measured (s/step) | same bits | kept |
+|---|---|---:|---:|---|---|
+| 1 | no-ckpt 1 default (A0 -> A1) | -0.117 (#202) | **-0.112** (11.400 -> 11.288) | 14/14 | yes, default |
+| 2 | 2-D Triton bias add + skip the add on skipped GEMMs (A1 -> A2) | -0.08 (#202) | -0.011 (11.277) | 14/14 | under bar; its kernel stays inside (3) |
+| 3a | bias folded into SiLU / GELU / residual (A2 -> A3) | -0.19 (kernel bench) | **-0.182** (11.095) | 14/14 | yes, default (`--fp8-bias fused`) |
+| 3b | + fused kernels hand their amax to the fp8 quantizer (A3 -> A4) | -0.08 to -0.11 | -0.040 (11.055) | 14/14 | no: opt-in `--fused-bias-amax` |
+| 5 | Muon NS batched over same-shape matrices | ~0 | +0.028 (slower) | 2048x2048 and FFN yes, 64x2048 no | no |
+
+Step time per position (s), mean of repeats:
+
+| arm | emb | 0-3 | 4-7 | 8-11 | 12-15 | 16-19 | 20-23+tail | mean | repeats, spread |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| A0 no-ckpt 0, bias off | 14.97 | 14.56 | 13.08 | 11.49 | 10.00 | 8.45 | 7.25 | 11.400 | 2 clean (see below) |
+| A1 bias off (= main + flag) | 14.96 | 14.43 | 12.95 | 11.36 | 9.87 | 8.32 | 7.12 | 11.288 | 3, 0.004 |
+| A2 add kernel | 14.94 | 14.41 | 12.97 | 11.34 | 9.85 | 8.32 | 7.10 | 11.277 | 3, 0.010 |
+| **A3 fused (shipped)** | 14.72 | 14.20 | 12.77 | 11.16 | 9.69 | 8.16 | 6.96 | **11.095** | 3, 0.013 |
+| A4 fused + amax | 14.67 | 14.15 | 12.73 | 11.12 | 9.65 | 8.14 | 6.95 | 11.055 | 6, 0.009 |
+
+A0 repeat 2 had one stall: the embedding turn's steps 2-3 took 19.9 and 38.1 s (GPU time
+too), the other six positions matched repeats 1 and 3 to 0.01 s. Its mean was 13.409; the A0
+row uses repeats 1 and 3. Cause not found. It is a baseline arm, not shipped.
+
+Why step 2 missed: the eager bias add was not slow. At the real shapes it runs at 165 GB/s
+(0.20 ms for 4096x2048), the same as the Triton kernel. #202's "slow broadcast kernel" was
+just bytes. The saving comes from not writing and re-reading `y + b`: per DeltaNet layer
+forward, gate 0.39 -> 0.21 ms, GELU 0.80 -> 0.43 ms, residual 0.81 -> 0.61 ms
+(`bench_fused_bias.json`).
+
+How it stays bit-identical:
+- Each kernel rounds `y + b` to bf16 in registers, exactly as the separate add did, then
+  applies the consumer. SiLU is computed (libdevice `expf`, IEEE divide): equal to ATen for
+  all 65,536 bf16 inputs, forward and backward.
+- GELU could not be computed: Triton's libdevice `erff` differs from the one PyTorch is built
+  with in the last bit for 11 bf16 inputs (all below -3). So GELU is a 65,536-entry table made
+  by ATen's own `F.gelu`. The backward factor `cdf + x*pdf` is a second table (fp32, ATen's
+  `gelu_backward` with dy = 1), times dy. Checked over every bf16 x and 20 scales of dy.
+- Bias gradient: `grad.sum_to_size(b.shape)` on the 2-D gradient, the reduction autograd does
+  for a broadcast add.
+
+Checks, and that they could fail:
+- 1B, sha256 of per-token loss and active-block gradients at each of 14 steps (13 with lr > 0):
+  A0, A2, A3, A4 and the shipped defaults all equal A1 14/14. A1 equals #206's `hash_v1` 14/14.
+- Falsifier (hidden-state gradient x (1 + 2^-20)) on A3 and A4: gradient hash 0/14 equal,
+  loss 2/14.
+- Held-out loss after each of 14 steps: shipped defaults = A4 = A1 = #206, 14/14, to the last bit.
+- `tests/test_fused_bias.py` (18 tests): every bf16 value through each kernel, 1B shapes,
+  forward and backward; the DeltaNet block in off / add / fused modes, with call counters
+  showing the fused path ran; a BCD + offload + checkpoint trajectory over three turns. Must-fail
+  partners that do fail: `y + b` rounded toward zero instead of to nearest; GELU tables one ulp
+  off; a stale amax hint (in-place write) is refused; a doubled amax changes the codes.
+- `tests/test_active_no_ckpt.py`: the trainer's default parses to 1 and `0` to 0.
+
+VRAM (peak reserved, share of the card):
+
+| | training, worst turn | held-out eval after every step |
+|---|---:|---:|
+| A1 (main + flag) | 82.0% | 83.7% |
+| A4 | 82.3% | 82.3% |
+| shipped defaults | 82.3% | 82.3% |
+
+#200's long runs sat about 1% above these short runs, so the shipped setting projects to about
+83-84%, under the 85% guard. Not measured on a long run.
+
+Throttling (step 4, `smi_time_main.csv`, 948 busy samples at 250 ms during a real k4 run):
+SM clock median 2535 MHz (p10 2520, min 2445), memory 8001 MHz, power median 74 W of the 80 W
+limit, temperature 54-75 C. `sw_power_cap` was flagged in 30% of samples, but the SM clock
+median was 2535 MHz with and without the flag. No thermal or hardware slowdown flags. A light
+load (39 W, 48 C) runs at 2565 MHz, so the step runs at most ~1.2% below this card's real
+ceiling. The listed max of 3105 MHz is not reached even at 39 W. Nothing to change without the
+power limit, which was not touched.
+
+Muon (step 5, `muon_batch.json`, real active-block shapes): batching the 24 2048x2048 matrices
+gives the same bits but takes 0.322 s vs 0.298 s; FFN shapes same bits and also slower; 64x2048
+(beta) is not bit-identical. The loop already runs at ~84% of the card's bf16 peak.
+
+Other items in the profile (`prof_main.jsonl`, GPU s/step): fp32 adds 0.28 (autograd gradient
+accumulation), bf16 and fp32 cast copies 0.15 + 0.15, bf16 adds 0.18. No single bit-identical
+change of 0.05 s or more was found in them; not chased.
+
+Not measured: a long run (hours) with the new defaults; VRAM on a long run; why A0 repeat 2
+stalled; hint hit rates inside the 1B run (only in the unit tests); any of the profile's
+remaining small items.
+
 ## DeltaNet scan at 1B shapes: 1B k4 step 11.80 -> 11.29 s with the same bits (default), 10.08 s with `--scan-kernel t` (-14.6%, opt-in) (2026-11-15, #206)
 
 **One line: the scan was not limited by latency, memory or too few programs. It was limited by

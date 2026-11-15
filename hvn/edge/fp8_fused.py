@@ -275,13 +275,18 @@ def fp8_quantize(t: torch.Tensor, dtype, transpose: bool = False):
         return q, inv, (q_t if transpose else None)
     t = t.contiguous()
     M, N = t.shape
-    amax = torch.zeros((), device=t.device, dtype=torch.float32)
+    # #207: the kernel that wrote t may already have its amax (same bytes, same
+    # exact max); otherwise one pass over t computes it.
+    from .fused_bias import take_amax_hint
+    amax = take_amax_hint(t)
     inv = torch.empty((), device=t.device, dtype=torch.float32)
     out = torch.empty((M, N), device=t.device, dtype=dtype)
     out_t = torch.empty((N, M), device=t.device, dtype=dtype) if transpose else out
     n = t.numel()
     BLOCK = 4096
-    _amax_kernel[(triton.cdiv(n, BLOCK),)](t, amax, n, BLOCK=BLOCK)
+    if amax is None:
+        amax = torch.zeros((), device=t.device, dtype=torch.float32)
+        _amax_kernel[(triton.cdiv(n, BLOCK),)](t, amax, n, BLOCK=BLOCK)
     BM, BN = 64, 64
     _cast_kernel[(triton.cdiv(M, BM), triton.cdiv(N, BN))](
         t, amax, out, out_t, inv, M, N, MAXV=_FP8_MAX[dtype],
@@ -648,20 +653,68 @@ def fp8_active(mod: nn.Module, x: torch.Tensor) -> bool:
     return True
 
 
-def fp8_module_forward(mod: nn.Module, x: torch.Tensor) -> torch.Tensor:
-    if _REFERENCE_MODE[0]:
-        return fp8_linear_reference(x, _bf16_weight(mod), mod.bias)
-    lead, K = x.shape[:-1], x.shape[-1]
+def _fp8_gemm(mod: nn.Module, x: torch.Tensor):
+    """``x @ W.T`` as a bf16 [rows, O] tensor, no bias; and whether the GEMM was
+    skipped (output unread, #195: the tensor is then uninitialised)."""
+    K = x.shape[-1]
     wq, ws, wq_t = _fp8_weight(mod)
     x2 = x.reshape(-1, K)
     fn = _FP8Linear
-    if id(mod) in _SKIP_IDS[0] and not mod.weight.requires_grad:
+    skipped = id(mod) in _SKIP_IDS[0] and not mod.weight.requires_grad
+    if skipped:
         fn = _FP8LinearOutputUnread
     with torch.autocast("cuda", enabled=False):
         y = fn.apply(x2, mod.weight, wq, ws, wq_t)
-    if mod.bias is not None:
-        y = y + mod.bias.to(torch.bfloat16)
-    return y.reshape(*lead, wq.shape[0])
+    return y, skipped
+
+
+def fp8_module_forward(mod: nn.Module, x: torch.Tensor) -> torch.Tensor:
+    if _REFERENCE_MODE[0]:
+        return fp8_linear_reference(x, _bf16_weight(mod), mod.bias)
+    from . import fused_bias as FB
+    lead = x.shape[:-1]
+    y, skipped = _fp8_gemm(mod, x)
+    if mod.bias is not None and not (skipped and FB.MODE[0] != "off"):
+        # #207: a skipped GEMM's output is uninitialised and unread, so its
+        # bias add is dead work too (the add saves nothing for backward).
+        b = mod.bias.to(torch.bfloat16)
+        if FB.MODE[0] != "off" and FB.available(y, b):
+            y = FB.bias_add(y, b)
+        else:
+            y = y + b
+    return y.reshape(*lead, y.shape[-1])
+
+
+def fp8_parts_ok(mod: nn.Module, x: torch.Tensor) -> bool:
+    """Would :func:`fp8_linear_parts` return parts for ``mod(x)``? No side effects."""
+    from . import fused_bias as FB
+    from .ternary import TernaryLinear
+    return not (FB.MODE[0] != "fused" or _REFERENCE_MODE[0] or mod.bias is None
+                or not isinstance(mod, (FP8Linear, TernaryLinear))
+                or mod._forward_hooks or mod._forward_pre_hooks
+                or nn.modules.module._global_forward_hooks
+                or nn.modules.module._global_forward_pre_hooks
+                or not (mod.training or torch.is_grad_enabled())
+                or not fp8_active(mod, x))
+
+
+def fp8_linear_parts(mod: nn.Module, x: torch.Tensor):
+    """For a caller that fuses the bias into its next op (#207, ``fused_bias``):
+    ``(y, b)`` = the fp8 GEMM output [rows, O] without bias and the bf16 bias, or
+    None if ``mod(x)`` would not take the plain fp8 path (then call ``mod(x)``).
+
+    Exactly the work ``mod(x)`` does minus the bias add: same GEMM, same weight
+    route, same autograd handles, and ``b`` is the same ``bias.to(bf16)`` node.
+    Modules with forward hooks are refused, since calling this bypasses them.
+    """
+    if not fp8_parts_ok(mod, x):
+        return None
+    from . import fused_bias as FB
+    y, _ = _fp8_gemm(mod, x)
+    b = mod.bias.to(torch.bfloat16)
+    if not FB.available(y, b):
+        raise RuntimeError(f"fp8 GEMM output not fusable: {y.shape} {y.dtype} {b.shape} {b.dtype}")
+    return y, b
 
 
 class FP8Linear(nn.Linear):

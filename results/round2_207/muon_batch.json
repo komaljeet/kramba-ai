@@ -1,0 +1,38 @@
+{
+ "(2048, 2048)": {
+  "n": 24,
+  "equal": 24,
+  "max_abs_diff": 0.0,
+  "falsifier_equal": false,
+  "loop_s": 0.2982121999957599,
+  "batched_s": 0.32150660001207143
+ },
+ "(4096, 2048)": {
+  "n": 4,
+  "equal": 4,
+  "max_abs_diff": 0.0,
+  "falsifier_equal": false,
+  "loop_s": 0.08783469995250925,
+  "batched_s": 0.09059439995326102
+ },
+ "(2048, 4096)": {
+  "n": 4,
+  "equal": 4,
+  "max_abs_diff": 0.0,
+  "falsifier_equal": false,
+  "loop_s": 0.08330489997752011,
+  "batched_s": 0.08599269995465875
+ },
+ "(64, 2048)": {
+  "n": 4,
+  "equal": 0,
+  "max_abs_diff": 0.0048828125,
+  "falsifier_equal": false,
+  "loop_s": 0.0026111999759450555,
+  "batched_s": 0.000791400030720979
+ },
+ "total": {
+  "loop_s": 0.4719629999017343,
+  "batched_s": 0.4988850999507122
+ }
+}

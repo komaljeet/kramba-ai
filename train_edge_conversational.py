@@ -4024,6 +4024,19 @@ def main():
                              "CUDA kernel instead of the six-op eager chain (fp32 inputs "
                              "only). ulp-level, not bit-identical. On under --fast; "
                              "--no-fused-rmsnorm opts out.")
+    parser.add_argument("--fp8-bias", choices=["off", "add", "fused"], default="fused",
+                        help="#207, with --fp8-linear: how the bias after each fp8 GEMM is "
+                             "added. fused = folded into the next op in DeltaNet blocks "
+                             "(SiLU gate, GELU, residual sum), a 2-D add kernel elsewhere; "
+                             "add = the 2-D add kernel only; off = the old separate add. "
+                             "All bit-identical.")
+    parser.add_argument("--fused-bias-amax", action=argparse.BooleanOptionalAction,
+                        default=False,
+                        help="#207, with --fp8-bias fused: the fused kernels also compute "
+                             "the fp8 amax of the tensors they write that feed an fp8 GEMM "
+                             "next (GELU output; gradients into gate_proj, ffn[0], ffn[3], "
+                             "out_proj), so the quantizer skips its amax pass. Same bits. "
+                             "Opt-in: measured -0.040 s/step at 1B k4, under the 0.05 s bar.")
     parser.add_argument("--scan-kernel", choices=["v1", "t"], default="v1",
                         help="#206: DeltaNet scan kernels on the strided-IO path. v1 = the "
                              "existing kernels. t = transposed-layout kernels with the "
@@ -4199,13 +4212,14 @@ def main():
                              "the embedding table (about 2 layers per block, 13 blocks "
                              "at 1B): pass 0 to resume a run saved before #201. Not "
                              "allowed with --bcd-partition layer. (#194, #201)")
-    parser.add_argument("--active-no-ckpt-layers", default="0",
+    parser.add_argument("--active-no-ckpt-layers", default="1",
                         help="With --offload: the last N layers of the active BCD block "
                              "keep their activations instead of being recomputed in "
                              "backward. Bit-identical. 1B k4: N=1 is -0.12 s/step and "
                              "+5%% peak allocated (peak reserved 82.4 -> 82.5%%); N=2 fails "
                              "the 85%% VRAM guard (86.6%%). A comma list gives one N per "
-                             "layer block, in order. Default 0. (#202)")
+                             "layer block, in order. Default 1 since #207; 0 opts out "
+                             "(the pre-#207 behaviour). (#202, #207)")
     parser.add_argument("--bcd-partition", choices=["layer", "balanced"], default=None,
                         help="How --block-coordinate splits the model. 'balanced' "
                              "(default): pack consecutive layers into groups no larger "
@@ -4420,6 +4434,10 @@ def main():
         # #204: frozen offloaded weights stream fp8 codes made once per turn.
         import hvn.edge.fp8_fused as _f8
         _f8.FROZEN_CODES[0] = bool(args.frozen_fp8_codes)
+        # #207: bias add after the fp8 GEMMs.
+        import hvn.edge.fused_bias as _fb
+        _fb.set_mode(args.fp8_bias)
+        _fb.AMAX_HINTS[0] = bool(args.fused_bias_amax)
 
     # #206: scan kernel choice (module-level, read at every scan call).
     try:
