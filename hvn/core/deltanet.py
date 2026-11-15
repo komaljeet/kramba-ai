@@ -111,6 +111,28 @@ except Exception:  # pragma: no cover
     _fused_causal_conv_dtype = None
 
 
+# #207: fp8 Linear outputs with the bias folded into the next op. hvn.edge
+# imports hvn.core, so these are resolved lazily (no import cycle). Modules
+# that are not fp8 Linears on the fp8 path get None / False.
+def _fb():
+    from ..edge import fused_bias
+    return fused_bias
+
+
+def _fp8_parts(mod, x):
+    if not getattr(mod, "use_fp8", False):
+        return None
+    from ..edge.fp8_fused import fp8_linear_parts
+    return fp8_linear_parts(mod, x)
+
+
+def _fp8_parts_eligible(mod, x) -> bool:
+    if not getattr(mod, "use_fp8", False):
+        return False
+    from ..edge.fp8_fused import fp8_parts_ok
+    return fp8_parts_ok(mod, x)
+
+
 # Floor for the intra-chunk cumulative decay ``P`` in the chunked scan (Issue
 # #44).  Keys/queries are L2-normalized (|·| ≤ 1), so ``1/P`` reaches at most
 # ``1/_P_FLOOR = 1e16`` — well inside fp32's ~3.4e38 range even after summing
@@ -360,6 +382,40 @@ class DeltaNetBlock(nn.Module):
             mods.append(self.ffn[3])
         return mods
 
+    def _fp8_ffn_parts(self, x: torch.Tensor, x_norm: torch.Tensor):
+        """#207: the plain GELU FFN with its biases fused (hvn/edge/fused_bias.py).
+
+        Returns None (caller runs ``self.ffn``) unless the FFN is the plain
+        ``Linear -> GELU -> Dropout -> Linear -> Dropout(p=0)`` with fp8 Linears
+        and the residual is the fp32 fused-residual path. Otherwise returns
+        ``(y3, b3)``: the last Linear's GEMM output and bf16 bias, for
+        ``add3_bias``. Same ops, same order, same bits as ``self.ffn(x_norm)``
+        followed by the fused residual.
+        """
+        ffn = self.ffn
+        if not (isinstance(ffn, nn.Sequential) and len(ffn) == 5
+                and type(ffn[1]) is nn.GELU and ffn[1].approximate == "none"
+                and isinstance(ffn[2], nn.Dropout) and isinstance(ffn[4], nn.Dropout)
+                and ffn[4].p == 0
+                and not (ffn._forward_hooks or ffn._forward_pre_hooks
+                         or ffn[1]._forward_hooks or ffn[1]._forward_pre_hooks
+                         or ffn[2]._forward_hooks or ffn[2]._forward_pre_hooks
+                         or ffn[4]._forward_hooks or ffn[4]._forward_pre_hooks)
+                and self._fast_flag("use_fused_residual") and _fused_residual_add3 is not None
+                and x.dtype == torch.float32 and x.is_contiguous()):
+            return None
+        p0 = _fp8_parts(ffn[0], x_norm)
+        if p0 is None:
+            return None
+        p_probe = _fp8_parts_eligible(ffn[3], x_norm)
+        if not p_probe:
+            raise RuntimeError("#207: ffn[0] takes the fused fp8 path but ffn[3] would not")
+        h = _fb().bias_gelu(*p0).view(*x_norm.shape[:-1], -1)
+        h = ffn[2](h)
+        p3 = _fp8_parts(ffn[3], h)
+        assert p3 is not None
+        return p3
+
     # ------------------------------------------------------------------
     # Shared projection / gating helpers
     # ------------------------------------------------------------------
@@ -448,7 +504,12 @@ class DeltaNetBlock(nn.Module):
 
         gate = None
         if self.use_output_gate:
-            gate = F.silu(self.gate_proj(xc))  # [B, S, D]
+            parts = _fp8_parts(self.gate_proj, xc)
+            if parts is not None:
+                # #207: F.silu(y + bias) in one pass, same bits.
+                gate = _fb().bias_silu(*parts).view(B, S, -1)
+            else:
+                gate = F.silu(self.gate_proj(xc))  # [B, S, D]
 
         return q, k, v, alpha, beta, gate
 
@@ -866,13 +927,22 @@ class DeltaNetBlock(nn.Module):
             o = o * gate                            # output gate (lever 3)
 
         deflected = self.out_proj(o)
-        ffn_out = self.ffn(x_norm)
-        deflected = self.dropout(deflected)   # after ffn: same RNG order as before
-        if (self._fast_flag("use_fused_residual") and _fused_residual_add3 is not None
-                and _fused_residual_add3_available(x, deflected, ffn_out)):
-            out = _fused_residual_add3(x, deflected, ffn_out)
+        fused = self._fp8_ffn_parts(x, x_norm)
+        if fused is not None:
+            # #207: GELU(y0 + b0) in one pass, and the FFN's last bias folded
+            # into the residual sum. Dropout is p=0 here (checked), so the
+            # RNG order is unchanged too.
+            y3, b3 = fused
+            deflected = self.dropout(deflected)
+            out = _fb().add3_bias(x, deflected, y3, b3)
         else:
-            out = x + deflected + ffn_out
+            ffn_out = self.ffn(x_norm)
+            deflected = self.dropout(deflected)   # after ffn: same RNG order as before
+            if (self._fast_flag("use_fused_residual") and _fused_residual_add3 is not None
+                    and _fused_residual_add3_available(x, deflected, ffn_out)):
+                out = _fused_residual_add3(x, deflected, ffn_out)
+            else:
+                out = x + deflected + ffn_out
 
         if return_state:
             state = {"S": S_final}

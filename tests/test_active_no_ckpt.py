@@ -110,6 +110,36 @@ def test_equality_check_sees_one_ulp():
     assert not torch.equal(g0[0][0], x)
 
 
+import argparse  # noqa: E402
+_ORIG_PARSE_ARGS = argparse.ArgumentParser.parse_args
+
+
+def _trainer_args(monkeypatch, argv):
+    """The trainer's parsed args for ``argv``, without running it."""
+    import train_edge_conversational as T
+    got = {}
+
+    def stop(self, *a, **k):
+        got["ns"] = _ORIG_PARSE_ARGS(self, *a, **k)
+        raise SystemExit(0)
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", stop)
+    monkeypatch.setattr(sys, "argv", ["train_edge_conversational.py"] + argv)
+    with pytest.raises(SystemExit):
+        T.main()
+    return got["ns"]
+
+
+def test_default_is_one_layer_and_zero_opts_out(monkeypatch):
+    """#207: the trainer keeps the active block's last layer by default; 0 still
+    restores the all-checkpointed behaviour. The two cases must parse to
+    different values, or this test could not see a reverted default."""
+    members = [("token_embedding",), ("blocks.0", "blocks.1")]
+    d = _trainer_args(monkeypatch, []).active_no_ckpt_layers
+    off = _trainer_args(monkeypatch, ["--active-no-ckpt-layers", "0"]).active_no_ckpt_layers
+    assert _parse_active_no_ckpt(d, members) == 1
+    assert _parse_active_no_ckpt(off, members) == 0
+
+
 def test_parse_active_no_ckpt():
     members = [("token_embedding",), ("blocks.0", "blocks.1"),
                ("blocks.2", "blocks.3", "final_norm", "decoder")]
