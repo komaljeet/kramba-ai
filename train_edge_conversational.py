@@ -3239,6 +3239,23 @@ def evaluate(model, val_loader, device, max_batches: int = 100,
     return overall, per_src
 
 
+def bcd_step(bcd_scheduler, empty_cache_on_switch: bool, device) -> bool:
+    """Advance the BCD cycle once (one optimizer step). Returns True on a switch.
+
+    #211, ``--bcd-switch-empty-cache``: on a switch, hand the caching allocator's
+    unused blocks back to the driver. On Windows/WDDM a CUDA allocation made while
+    the card is at its video-memory budget can be placed in host RAM, and the
+    caching allocator then reuses that block every step, so the slowdown lasts
+    until the block is freed -- in this trainer, never. Emptying the cache at each
+    switch bounds such a slowdown to one turn. It moves memory, not math: same
+    kernels in the same order, same bits.
+    """
+    switched = bcd_scheduler.step()
+    if switched and empty_cache_on_switch and device.type == "cuda":
+        torch.cuda.empty_cache()
+    return switched
+
+
 def train(
     model: EdgeHVN,
     dataloader: DataLoader,
@@ -3676,7 +3693,7 @@ def train(
             # Issue #99: advance the block-coordinate cycle (may switch the
             # active block + clear the outgoing block's optimizer state).
             if bcd_scheduler is not None:
-                bcd_scheduler.step()
+                bcd_step(bcd_scheduler, config.get("bcd_switch_empty_cache", False), device)
 
             # torch.profiler step boundary (only active under --profile)
             if _PROF is not None:
@@ -4152,6 +4169,13 @@ def main():
                              "rule). Windows/WDDM does NOT raise on overflow -- "
                              "it spills to host RAM and runs 4-15x slower while "
                              "looking healthy. 0 disables the check.")
+    parser.add_argument("--bcd-switch-empty-cache", action=argparse.BooleanOptionalAction,
+                        default=False,
+                        help="#211: release the CUDA caching allocator's unused blocks "
+                             "(torch.cuda.empty_cache) at every BCD block switch, so "
+                             "any of them that WDDM placed in host RAM are handed back "
+                             "instead of being reused for the rest of the run. Memory "
+                             "placement only: same kernels, same bits.")
     parser.add_argument("--log-every", type=int, default=50,
                         help="Optimizer steps between console/CSV log rows "
                              "(default 50, previously hardcoded). Each row's "
@@ -4727,6 +4751,7 @@ def main():
     config["keep_checkpoints"] = args.keep_checkpoints
     config["milestone_every"] = args.milestone_every
     config["max_vram_pct"] = args.max_vram_pct
+    config["bcd_switch_empty_cache"] = bool(args.bcd_switch_empty_cache)
     if args.save_every_steps is not None:
         config["save_every_steps"] = args.save_every_steps
     config["dynamic_lr"] = args.dynamic_lr
