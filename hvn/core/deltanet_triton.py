@@ -1116,7 +1116,8 @@ SCAN_V1_WARPS = {"fwd": 1, "ckpt": 8}
 #           into the checkpoint-recompute forward, and the backward runs 1 warp.
 #           Same recurrence, different summation order: NOT bit-identical to "v1"
 #           (relative difference ~1e-7 fp32; bf16 grads differ in ~1e-4 of elements
-#           by one ulp). Opt-in (`--scan-kernel t`).
+#           by one ulp). The TRAINER default since #210 (`--scan-kernel v1` opts out);
+#           this module default stays "v1" so library callers keep the old bits.
 SCAN_KERNEL = ["v1"]
 SCAN_T_STATS = {"fused_ckpt": 0, "separate_ckpt": 0}
 
