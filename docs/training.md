@@ -333,6 +333,14 @@ N=1 is -0.12 s/step (12.10 s with the other #202 changes) at unchanged peak VRAM
 every block fails the 85% guard (86.6%). A comma list gives one N per layer block:
 `1,1,2,2,3,3` is 12.00 s at 84.0% peak reserved (thin margin). Default 0.
 
+`--scan-kernel` (#206, default `t` since #210): which DeltaNet scan kernels the strided-IO
+path runs. `t` keeps the state transposed and fuses the checkpoint pass into the recompute
+forward. At 1B k4 (#210 re-time, 3 alternating repeats, all 7 block positions) the default
+step is **9.890 s** vs **11.097 s** with `--scan-kernel v1` (spreads 0.019 / 0.010), peak reserved
+82.3% in both. Not bit-identical to `v1` (fp32 rounding-level; same fp64 error, #208); held-out loss
+over 1800 steps x 2 seeds was 5.21862 (t) vs 5.21976 (v1), lower at all 18 turn ends (#209).
+`--scan-kernel v1` is the opt-out: use it to continue or reproduce a run started before #210.
+
 **Measured on this card** (`scripts/bench_block_coordinate_vram.py`, isolated subprocesses,
 `results/bcd_vram.json`):
 

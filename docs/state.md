@@ -88,6 +88,104 @@ Flag off 9.898 s, on 9.910 s: +0.012 s/step (without --hash runs).
 
 Not measured: what took VRAM during #209; whether the fallback policy setting changes any of
 this; the fix in a run longer than 14 turns; a v1 run under the active squeeze.
+## `--scan-kernel t` is the training default: 1B k4 step 11.097 -> 9.890 s (2026-11-16, #210)
+
+**One line: the trainer now runs the `t` scan kernels unless told `--scan-kernel v1`. Re-timed
+at 1B k4: 9.890 s/step by default vs 11.097 s with the v1 opt-out, peak reserved 82.3% in both.
+Basis: #208 (-1.20 s, same fp64 error) and #209 (1800 steps x 2 seeds, held-out 5.21862 vs
+5.21976, lower at all 18 turn ends). Library default (`hvn.core.deltanet_triton.SCAN_KERNEL`)
+stays `v1`; only the trainer flag changed.**
+
+Method: `scripts/profile_step_202.py` (1B k4 production settings, 3 steps per turn, mean of turn
+steps 2-3 over the 7 block positions, arms alternated, 3 repeats each),
+`results/scan_default_210/` (`run_timing.sh`, `time_*.jsonl`, logs). Each run's log prints the
+kernel it used (`[scan] kernel t` with no flag, `[scan] kernel v1` with the opt-out).
+
+| arm | repeat 1 | repeat 2 | repeat 3 | mean | spread | peak reserved |
+|---|---:|---:|---:|---:|---:|---:|
+| default (now `t`) | 9.899 | 9.880 | 9.890 | **9.890** | 0.019 | 82.3% |
+| `--scan-kernel v1` | 11.094 | 11.094 | 11.103 | **11.097** | 0.010 | 82.3% |
+
+The task asked to confirm "~10.3 s": that figure is the #209 whole-run average (10.317 s/step,
+including the slow first step of each process). The per-turn metric used by #202-#208 is the
+one above; it matches #208's 9.880 s.
+Projected full run (925,000 steps x step): default 9.890 s -> 105.9 days; v1 11.097 s -> 118.8 days.
+
+Tests (`tests/test_scan_default_210.py`): the real parser (`build_arg_parser()`, split out of
+`main()`) defaults to `t`; `--scan-kernel v1` parses to `v1`; an unknown name is refused. A
+real checkpointed `DeltaNetBlock` at d_head 32, set up by `apply_scan_kernel_args()` exactly as
+`main()` does, raises `SCAN_T_STATS["fused_ckpt"]` and calls only the t autograd Function.
+Must-fail partner: the same block under `--scan-kernel v1` leaves `fused_ckpt` unchanged and
+calls only the v1 Function. Flipping the parser default back to `v1` fails 2 of the 5 tests
+(checked). The first draft of the test built the block without `use_triton_scan`, so neither
+kernel ran; both tests failed on it (the partner because no v1 call was counted), which is the
+point of counting calls rather than only asserting fused_ckpt stays 0.
+
+Resume note: a checkpoint saved before #210 resumes under `t` unless `--scan-kernel v1` is
+passed. Same model, rounding-level different bits from then on.
+## `--scan-kernel t` at the real turn length (100 steps per block, 1800 steps): not worse, slightly lower loss; -1.42 s/step (2026-11-16, #209)
+
+**One line: over 18 full-length turns at 1B k4, `--scan-kernel t` ends with held-out loss
+0.0012 LOWER than the defaults (mean of 2 seeds: 5.21862 vs 5.21976), and lower at all 18
+turn ends. It is not worse. The fixed rule ("within the default's own seed spread") is NOT
+met, but only because t is better by more than that spread, which shrank to 0.00045 by the
+end. Step time 11.74 -> 10.32 s (-1.42 s, -12%). Nothing was made default; maintainer call.**
+
+Method: `scripts/ab_heldout_209.py` (the #208 harness + auto-resume, `--stop-at`, wall time),
+`scripts/analyze_long_ab_209.py`, chain `results/long_ab_209/run_chain.sh`, results in
+`results/long_ab_209/` (`summary.txt`, `ab/`). About 23.6 h of GPU for the 4 main runs.
+
+Setup: the `PROD_ARGV` k4 production run (fp8, offload, Muon, grad_accum 8, `--deterministic`),
+100 steps per BCD block (the real recipe), 1800 steps = 18 turns (blocks 0-3 seen 3 times,
+4-6 twice), warmup 180, cosine to 0 at 1800. Asked for 2000 steps; cut to 1800 before launch
+because the #208 per-block step times put 4 x 2000 steps at ~25.2 h of the 26 h budget. Seed =
+model init only; data order pinned (shuffle seed 0); 64 fixed held-out windows after step 1
+and every turn end (one target sha in all runs). Order def s0, t s0, def s1, t s1. No run
+crashed or resumed. Resume was checked first: an 8-step run stopped at step 5 and resumed from
+its step-4 checkpoint matched a straight run bit for bit (train loss steps 5-8, held-out at 5, 8).
+
+| arm | seed | final held-out (step 1800) | mean of last 5 turn ends | s/step (mean, whole run) | wall | peak VRAM train / eval |
+|---|---:|---:|---:|---:|---:|---:|
+| default (v1) | 0 | 5.21954 | 5.26733 | 11.728 | 6.13 h | 84.8% / 84.8% |
+| `--scan-kernel t` | 0 | 5.21900 | 5.26660 | 10.317 | 5.40 h | 84.8% / 84.8% |
+| default (v1) | 1 | 5.21999 | 5.26718 | 11.748 | 6.14 h | 84.8% / 84.8% |
+| `--scan-kernel t` | 1 | 5.21824 | 5.26604 | 10.324 | 5.39 h | 84.8% / 84.8% |
+
+- Default seed spread: 0.00045 (final), 0.00016 (last-5 mean). t seed spread: 0.00076, 0.00056.
+- t - default: final -0.00115 (per seed -0.00054, -0.00175); last-5 mean -0.00093
+  (-0.00073, -0.00113). Per-window paired at step 1800: -0.00054 +- 0.00151 sem (s0),
+  -0.00175 +- 0.00139 (s1), so each seed alone is inside window noise.
+- Curve: both arms fall the same way (8.88 at turn 1, 6.50 at 3, 5.71 at 8, 5.39 at 12,
+  5.22 at 18; the big drop at step 800 is the second visit to the embedding block). t sits
+  0.0001-0.003 below the default at every turn end from 100 to 1800 (18 of 18). The seed
+  spread starts at 0.047 (step 100) and shrinks to ~0.001 by step 1200: the seeds converge
+  faster than the arms separate, which is why a 0.001 gap ends up "outside the spread".
+- Peak VRAM per turn is the same as #208: 84.8% max (blocks 4-7 turn), under the 85% guard.
+  Eval peak = train peak.
+- Step time per block (median over both seeds, s): embedding 15.0 -> 13.1, blocks 0-3
+  14.21 -> 12.40, 4-7 12.74 -> 11.24, 8-11 11.16 -> 9.89, 12-15 9.68 -> 8.73, 16-19 8.16 -> 7.51,
+  20-23 6.95 -> 6.54. The 1800-step mean is higher than the #208 7-block mean (11.08 / 9.88)
+  only because the slow early blocks get 3 turns and the fast late ones 2.
+
+Open, not explained: in the DEFAULT arm 3 of 6 embedding turns ran slower for the whole
+turn (def s0 turn 15: 16.97 s; def s1 turns 8 and 15: 16.42, 15.95; normal 14.95). Flat for
+the 100 steps, GPU at full clocks and 97% busy, nothing else on the GPU. The t arm never
+did it (13.09-13.14 in all 6). It adds ~0.1 s to the default's whole-run mean, so the clean
+saving is ~1.31 s (per-block medians: 11.24 -> 9.91 mean over the 7 blocks). Needs a debugger pass.
+
+Not measured: 2000 steps (cut to 1800); more than 2 seeds; any run longer than ~2.6 passes;
+downstream/probe quality; whether t's consistent ~0.001 edge is "better" or just "different"
+(the #208 zero-gradient falsifier also LOWERED loss, so lower is not proof of correct).
+
+Falsifier (fits in budget, re-run): `--scan-kernel t` with the scan backward returning ZERO
+gradients (49,600 broken backward calls), seed 0, 300 steps of the same 1800-step schedule.
+Held-out vs def s0: step 100 -0.896, step 200 -0.095, step 300 -0.104, against a default seed
+spread of 0.047 / 0.015 / 0.013. So this harness flags a scan-gradient bug at 8x the spread
+within 3 turns. As in #208 it flags it in the DOWN direction: killing the scan's gradient makes
+held-out loss fall faster early (the embedding turn most of all). That is why "t is 0.001 lower"
+is reported as "not worse", not as "better": a lower number here does not prove a correct
+gradient. t's fp64 error is the same as v1's (#208), and its gap is ~100x smaller than the
+falsifier's. Why the zero-gradient run learns faster early is itself unexplained and worth a look.
 
 ## 1B k4 step 11.08 -> 9.88 s (-10.8%) with `--scan-kernel t`, held-out loss unchanged at 1B; residual-grad fold -0.05 s; chunked scan dead (2026-11-15, #208)
 
