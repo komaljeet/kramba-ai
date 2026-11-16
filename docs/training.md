@@ -214,7 +214,7 @@ CPU/NVMe offload (not wired).
 > `--bcd-switch-empty-cache` empties the cache at each BCD switch: the same run recovered at
 > the next switch. Same bits (step hashes equal); cost +0.012 s/step (9.898 -> 9.910 s at 1B k4),
 > peak reserved 82.3% -> 83.8% (the cache is rebuilt each turn).
-> Opt-in. See docs/state.md (#211).
+> On by default since #212; `--no-bcd-switch-empty-cache` turns it off. See docs/state.md (#211, #212).
 
 ### Head count at 1B: `head_dim` 32 is the default, and the old default was the WORST case (2026-08-30)
 

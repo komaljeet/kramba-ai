@@ -5,6 +5,24 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## `--bcd-switch-empty-cache` is now ON by default; `--no-bcd-switch-empty-cache` turns it off (2026-11-17, #212)
+
+**One line: every BCD run now empties the CUDA cache at each block switch, so a WDDM spill
+(the #211 slow turns) lasts at most one turn instead of the rest of the run. No new
+measurement: the cost is the #211 number, +0.012 s/step at 1B k4 (9.898 -> 9.910 s), peak
+reserved 82.3% -> 83.8% (still under the 85% abort), same bits.**
+
+- Change: the flag's parser default is `True`. The old `--bcd-switch-empty-cache` still parses
+  (now a no-op), and `--no-bcd-switch-empty-cache` is the opt-out. The `train()` fallback for a
+  config without the key is also `True`. The startup banner now prints
+  `Empty CUDA cache at each BCD switch: ON/OFF` under the BCD line, so a log shows which ran.
+- Non-BCD runs are unaffected: the call only happens on a block switch.
+- Tests: `tests/test_bcd_switch_empty_cache_211.py`. The default parses to on, the opt-out to
+  off. With the DEFAULT parsed args (turned into the flag the way `main()` does) the cache is
+  emptied once per switch and reserved drops by >= 64 MiB each time; with the opt-out there is
+  no call and no drop. Must-fail partner: setting the parser default back to `False` made the
+  default-parse test and the default-release test fail (2 failed, 4 passed); restored after.
+
 ## Slow embedding turns in #209 = WDDM moved part of the trainer's GPU memory to host RAM; our cache kept it there. `--bcd-switch-empty-cache` (opt-in) recovers at the next switch (2026-11-16, #211)
 
 **One line: the 1-2 s/step slow turns were not our math. Part of the trainer's GPU memory sat in
