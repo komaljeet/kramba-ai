@@ -5,6 +5,42 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## `--scan-kernel t` is the training default: 1B k4 step 11.097 -> 9.890 s (2026-11-16, #210)
+
+**One line: the trainer now runs the `t` scan kernels unless told `--scan-kernel v1`. Re-timed
+at 1B k4: 9.890 s/step by default vs 11.097 s with the v1 opt-out, peak reserved 82.3% in both.
+Basis: #208 (-1.20 s, same fp64 error) and #209 (1800 steps x 2 seeds, held-out 5.21862 vs
+5.21976, lower at all 18 turn ends). Library default (`hvn.core.deltanet_triton.SCAN_KERNEL`)
+stays `v1`; only the trainer flag changed.**
+
+Method: `scripts/profile_step_202.py` (1B k4 production settings, 3 steps per turn, mean of turn
+steps 2-3 over the 7 block positions, arms alternated, 3 repeats each),
+`results/scan_default_210/` (`run_timing.sh`, `time_*.jsonl`, logs). Each run's log prints the
+kernel it used (`[scan] kernel t` with no flag, `[scan] kernel v1` with the opt-out).
+
+| arm | repeat 1 | repeat 2 | repeat 3 | mean | spread | peak reserved |
+|---|---:|---:|---:|---:|---:|---:|
+| default (now `t`) | 9.899 | 9.880 | 9.890 | **9.890** | 0.019 | 82.3% |
+| `--scan-kernel v1` | 11.094 | 11.094 | 11.103 | **11.097** | 0.010 | 82.3% |
+
+The task asked to confirm "~10.3 s": that figure is the #209 whole-run average (10.317 s/step,
+including the slow first step of each process). The per-turn metric used by #202-#208 is the
+one above; it matches #208's 9.880 s.
+Projected full run (925,000 steps x step): default 9.890 s -> 105.9 days; v1 11.097 s -> 118.8 days.
+
+Tests (`tests/test_scan_default_210.py`): the real parser (`build_arg_parser()`, split out of
+`main()`) defaults to `t`; `--scan-kernel v1` parses to `v1`; an unknown name is refused. A
+real checkpointed `DeltaNetBlock` at d_head 32, set up by `apply_scan_kernel_args()` exactly as
+`main()` does, raises `SCAN_T_STATS["fused_ckpt"]` and calls only the t autograd Function.
+Must-fail partner: the same block under `--scan-kernel v1` leaves `fused_ckpt` unchanged and
+calls only the v1 Function. Flipping the parser default back to `v1` fails 2 of the 5 tests
+(checked). The first draft of the test built the block without `use_triton_scan`, so neither
+kernel ran; both tests failed on it (the partner because no v1 call was counted), which is the
+point of counting calls rather than only asserting fused_ckpt stays 0.
+
+Resume note: a checkpoint saved before #210 resumes under `t` unless `--scan-kernel v1` is
+passed. Same model, rounding-level different bits from then on.
+
 ## 1B k4 step 11.08 -> 9.88 s (-10.8%) with `--scan-kernel t`, held-out loss unchanged at 1B; residual-grad fold -0.05 s; chunked scan dead (2026-11-15, #208)
 
 **One line: `--scan-kernel t` passes every check and is recommended as a future default;

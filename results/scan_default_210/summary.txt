@@ -1,0 +1,8 @@
+time_def_1.jsonl            12.93  12.41  11.25   9.90   8.74   7.52   6.56 | mean 9.899 | peak 82.3%
+time_def_2.jsonl            12.88  12.38  11.22   9.88   8.74   7.51   6.55 | mean 9.880 | peak 82.3%
+time_def_3.jsonl            12.89  12.38  11.25   9.89   8.75   7.52   6.55 | mean 9.890 | peak 82.3%
+  time_def_: mean of 3 = 9.890, spread 0.019
+time_v1_1.jsonl             14.73  14.20  12.76  11.16   9.68   8.17   6.96 | mean 11.094 | peak 82.3%
+time_v1_2.jsonl             14.72  14.19  12.78  11.15   9.69   8.15   6.96 | mean 11.094 | peak 82.3%
+time_v1_3.jsonl             14.73  14.21  12.79  11.17   9.70   8.16   6.97 | mean 11.103 | peak 82.3%
+  time_v1_: mean of 3 = 11.097, spread 0.010
