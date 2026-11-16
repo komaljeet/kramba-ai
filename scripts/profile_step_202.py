@@ -313,7 +313,7 @@ def main():
         for (lab, e0), (_, e1) in zip(EV[:-1], EV[1:]):
             ph[lab] = ph.get(lab, 0.0) + e0.elapsed_time(e1) / 1000.0
         EV.clear()
-        row = {"step": n, "sec": sec, "block": s.active_block_name,
+        row = {"step": n, "sec": sec, "wall": time.time(), "drv_free": torch.cuda.mem_get_info()[0], "res_now": torch.cuda.memory_reserved(), "block": s.active_block_name,
                "pos_in_turn": (n - 1) % a.spb + 1, "phases": ph,
                "gpu_sum": sum(ph.values()),
                "lr": [g["lr"] for g in opt.param_groups],

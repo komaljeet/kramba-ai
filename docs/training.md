@@ -205,6 +205,17 @@ CPU/NVMe offload (not wired).
 > alive. On Linux the same configs hard-OOM. Treat `peak < 6 GiB` as the envelope, not "it
 > didn't crash"; the >6 GiB rows in the JSON record true allocator demand (for #70).
 
+> **It also happens below 6 GiB, and then it stays (#211, 2026-11-16).** The 1B k4 trainer
+> holds ~5.05-5.2 GiB and `cudaMemGetInfo` reports 0 free for most turns: it runs at the
+> driver's limit. If anything else then needs VRAM, WDDM moves part of the trainer's memory to
+> host RAM, and because the caching allocator reuses those blocks every step, the slowdown
+> lasts until they are freed -- in the trainer, never. Measured: 900 MiB taken by another
+> process for 200 s made the rest of a 14-turn run 2.0-2.5x slower after it was gone.
+> `--bcd-switch-empty-cache` empties the cache at each BCD switch: the same run recovered at
+> the next switch. Same bits (step hashes equal); cost +0.012 s/step (9.898 -> 9.910 s at 1B k4),
+> peak reserved 82.3% -> 83.8% (the cache is rebuilt each turn).
+> Opt-in. See docs/state.md (#211).
+
 ### Head count at 1B: `head_dim` 32 is the default, and the old default was the WORST case (2026-08-30)
 
 **One line: at d_model 2048 the scan's cost is linear in `head_dim`, so `--n-heads 64`
