@@ -3839,7 +3839,23 @@ def train(
 # Main Entry Point
 # ---------------------------------------------------------------------------
 
-def main():
+def apply_scan_kernel_args(args):
+    """#206/#210: set the module-level DeltaNet scan kernel from the parsed args.
+    The module default (hvn.core.deltanet_triton.SCAN_KERNEL) stays "v1" for
+    library callers; the trainer default is "t" (#210)."""
+    try:
+        import hvn.core.deltanet_triton as _dt
+    except ImportError:
+        return
+    _dt.SCAN_KERNEL[0] = args.scan_kernel
+    if not args.scan_v1_warps:
+        _dt.SCAN_V1_WARPS.update(fwd=None, ckpt=None)
+    print(f"[scan] kernel {args.scan_kernel}, v1 tuned warps {args.scan_v1_warps}")
+
+
+def build_arg_parser():
+    """The trainer's argument parser (split out of main() so tests can parse
+    the real defaults, #210)."""
     parser = argparse.ArgumentParser(
         description="EdgeHVN Conversational Training Pipeline (Issue #72)"
     )
@@ -4037,12 +4053,15 @@ def main():
                              "next (GELU output; gradients into gate_proj, ffn[0], ffn[3], "
                              "out_proj), so the quantizer skips its amax pass. Same bits. "
                              "Opt-in: measured -0.040 s/step at 1B k4, under the 0.05 s bar.")
-    parser.add_argument("--scan-kernel", choices=["v1", "t"], default="v1",
-                        help="#206: DeltaNet scan kernels on the strided-IO path. v1 = the "
-                             "existing kernels. t = transposed-layout kernels with the "
-                             "checkpoint pass fused into the recompute forward: ~2x faster "
-                             "scan at d_head 32, but NOT bit-identical (fp32 rounding-level "
-                             "differences). Default v1.")
+    parser.add_argument("--scan-kernel", choices=["t", "v1"], default="t",
+                        help="DeltaNet scan kernels on the strided-IO path. t (DEFAULT "
+                             "since #210) = transposed-layout kernels with the checkpoint "
+                             "pass fused into the recompute forward (#206): ~2x faster scan "
+                             "at d_head 32, -1.2 s/step at 1B k4, held-out loss same as v1 "
+                             "over 1800 steps x 2 seeds (#209). Not bit-identical to v1 "
+                             "(fp32 rounding-level differences, same fp64 error). "
+                             "v1 = the old kernels (opt-out; use it to reproduce runs "
+                             "made before #210).")
     parser.add_argument("--fused-norm-residual", action=argparse.BooleanOptionalAction,
                         default=False,
                         help="#208: in DeltaNet blocks, add the residual gradient inside the "
@@ -4342,6 +4361,11 @@ def main():
                              "needs the bare fp32 default. Any lever passed explicitly "
                              "overrides the preset (e.g. --fast --precision fp32). "
                              "Triton scan is skipped under --arch transformer.")
+    return parser
+
+
+def main():
+    parser = build_arg_parser()
     args = parser.parse_args()
 
     # --- Issue #163: validate the offload couplings BEFORE anything expensive ---
@@ -4445,15 +4469,8 @@ def main():
         _fb.set_mode(args.fp8_bias)
         _fb.AMAX_HINTS[0] = bool(args.fused_bias_amax)
 
-    # #206: scan kernel choice (module-level, read at every scan call).
-    try:
-        import hvn.core.deltanet_triton as _dt
-        _dt.SCAN_KERNEL[0] = args.scan_kernel
-        if not args.scan_v1_warps:
-            _dt.SCAN_V1_WARPS.update(fwd=None, ckpt=None)
-        print(f"[scan] kernel {args.scan_kernel}, v1 tuned warps {args.scan_v1_warps}")
-    except ImportError:
-        pass
+    # #206/#210: scan kernel choice (module-level, read at every scan call).
+    apply_scan_kernel_args(args)
     # #208: residual gradient folded into the RMSNorm backward (opt-in).
     import hvn.core.fused_norm_residual as _fnr
     _fnr.ENABLED[0] = bool(args.fused_norm_residual)
