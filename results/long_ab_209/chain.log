@@ -1,0 +1,16 @@
+gpu idle (132 MiB) Sun, Nov 15, 2026  6:18:13 PM
+=== def_s0 attempt 0 Sun, Nov 15, 2026  6:18:13 PM -> results/long_ab_209/ab_def_s0.log
+exit 0 last step 1800 Mon, Nov 16, 2026 12:27:27 AM
+gpu idle (133 MiB) Mon, Nov 16, 2026 12:27:27 AM
+=== t_s0 attempt 0 Mon, Nov 16, 2026 12:27:27 AM -> results/long_ab_209/ab_t_s0.log
+exit 0 last step 1800 Mon, Nov 16, 2026  5:53:01 AM
+gpu idle (130 MiB) Mon, Nov 16, 2026  5:53:01 AM
+=== def_s1 attempt 0 Mon, Nov 16, 2026  5:53:01 AM -> results/long_ab_209/ab_def_s1.log
+exit 0 last step 1800 Mon, Nov 16, 2026 12:02:46 PM
+gpu idle (108 MiB) Mon, Nov 16, 2026 12:02:46 PM
+=== t_s1 attempt 0 Mon, Nov 16, 2026 12:02:46 PM -> results/long_ab_209/ab_t_s1.log
+exit 0 last step 1800 Mon, Nov 16, 2026  5:27:35 PM
+gpu idle (86 MiB) Mon, Nov 16, 2026  5:27:35 PM
+=== tbroken_s0 attempt 0 Mon, Nov 16, 2026  5:27:35 PM -> results/long_ab_209/ab_tbroken_s0.log
+exit 0 last step 300 Mon, Nov 16, 2026  6:32:50 PM
+=== chain done Mon, Nov 16, 2026  6:32:50 PM

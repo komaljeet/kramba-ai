@@ -90,7 +90,10 @@ if all(t in M and M[t][0] is not None for t in ("def_s0", "def_s1", "t_s0", "t_s
               f" -> {'WITHIN' if abs(diff) <= spread else 'OUTSIDE'} the default seed spread")
     ok = all(abs((M['t_s0'][i] + M['t_s1'][i]) / 2 - (M['def_s0'][i] + M['def_s1'][i]) / 2)
              <= abs(M['def_s0'][i] - M['def_s1'][i]) for i in (1, 2))
-    print(f"VERDICT (fixed rule): {'PASS -- t within the default seed spread on both' if ok else 'FAIL'}")
+    lower = all((M['t_s0'][i] + M['t_s1'][i]) < (M['def_s0'][i] + M['def_s1'][i]) for i in (1, 2))
+    print(f"VERDICT (fixed rule): {'PASS -- t within the default seed spread on both' if ok else 'NOT MET'}"
+          + ("" if ok else (" -- t is LOWER (better) than the default by more than its spread"
+                            if lower else " -- t is WORSE than the default by more than its spread")))
     for s in ("0", "1"):
         a, b = ev[f"t_s{s}"], ev[f"def_s{s}"]
         last = M[f"t_s{s}"][0]
