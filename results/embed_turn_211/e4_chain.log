@@ -1,0 +1,9 @@
+=== e4_off_1 gpu used 85 MiB Mon, Nov 16, 2026 10:29:43 PM
+exit 0 Mon, Nov 16, 2026 10:37:08 PM
+=== e4_on_1 gpu used 86 MiB Mon, Nov 16, 2026 10:37:13 PM
+exit 0 Mon, Nov 16, 2026 10:44:40 PM
+=== e4_off_2 gpu used 86 MiB Mon, Nov 16, 2026 10:44:45 PM
+exit 0 Mon, Nov 16, 2026 10:52:11 PM
+=== e4_on_2 gpu used 86 MiB Mon, Nov 16, 2026 10:52:16 PM
+exit 0 Mon, Nov 16, 2026 10:59:43 PM
+=== e4 done Mon, Nov 16, 2026 10:59:48 PM

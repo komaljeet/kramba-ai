@@ -5,6 +5,90 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Slow embedding turns in #209 = WDDM moved part of the trainer's GPU memory to host RAM; our cache kept it there. `--bcd-switch-empty-cache` (opt-in) recovers at the next switch (2026-11-16, #211)
+
+**One line: the 1-2 s/step slow turns were not our math. Part of the trainer's GPU memory sat in
+host RAM (WDDM), and the CUDA caching allocator kept reusing it, so the whole turn was slow. The
+trainer runs at the driver's memory limit (`cudaMemGetInfo` free = 0 in most turns), so any
+extra VRAM demand can do this. Reproduced on demand: 900 MiB taken by another process for 200 s
+left the rest of a 14-turn run 2.0-2.5x slower after that process was gone. With the new opt-in
+`--bcd-switch-empty-cache` the same run was back to normal from the next switch. Same bits;
+cost +0.012 s/step; peak reserved 82.3% -> 83.8%. What took VRAM during #209 is not known (no counters were logged then).
+`t` was not immune: under the same squeeze a t run went 2.1x slower. In #209 it was not hit.**
+
+### What the #209 data already showed
+- Slow turns: def_s0 turn 15 (16.97 s), def_s1 turns 8 (16.42) and 15 (15.95); normal 14.93-14.95.
+  Turn 1 never slow (4/4); t never slow (0/6). Each slow turn is slow at a FIXED level for all
+  100 steps (p10-p90 within 0.1 s), and starts at the turn boundary.
+- Same memory in slow and normal turns: peak reserved 5150-5152 MiB in every v1 repeat embedding
+  turn. t held 4528 MiB in the same turns (624 MiB less).
+- The eval right after a slow turn was slow too (147 s and 111.5 s vs 47 s normal): the whole GPU
+  was slow, not one op. The harness empties the cache after each eval, and the next turn was
+  normal again.
+- t runs had slow evals too (74.8 s at step 1200, 58.3 s at 600): the pressure came during t
+  runs as well, but t's training turns stayed normal.
+- #200 (older code; its harness emptied the cache only at evals, every 100 steps): the
+  embedding turns that started without an emptied cache were slow (+0.9 to +1.1 s), with
+  reserved 6.1-6.6 GiB, above the card; the ones right after an eval were +0.0 to +0.3 s.
+- No relevant System event log entries at the slow-turn times.
+
+### Measurements (all 1B k4 production settings, `results/embed_turn_211/`)
+Monitor: `scripts/gpu_mem_monitor_211.ps1` (Windows counters every 5 s: per-process GPU
+dedicated / shared memory, host available RAM, hard page faults).
+
+| test | what it could show | result |
+|---|---|---|
+| host-RAM squeeze, 4000 MiB held and touched (host free 211-256 MiB), v1 | host paging causes it | no: embedding turn -0.13 s, all turns within 0.13 s |
+| idle 900 MiB VRAM taken by another process, v1 | outside VRAM use causes it | WDDM pushed the idle process out instead; trainer +0.1 s |
+| same 900 MiB, t | t is immune | no: trainer lost ~380 MiB of dedicated memory (shared 222 -> 606 MiB), 9.90 -> 21.26 s/step mean, blocks.0 turn 36 s |
+| #209 harness, 10 steps/turn, v1, nothing else running (2 repeat embedding turns) | our code alone triggers it | no: 14.95 / 14.96 s, shared memory flat at 222 MiB |
+| 900 MiB (kept in use) for the first 200 s, t, no fix | it ends by itself | no: turns 3-14 at 2.0-2.5x (blocks.4 27.8 vs 11.75 s) long after the 900 MiB was gone |
+| same, with `--bcd-switch-empty-cache` | the fix ends it | yes: blocks.4 11.22 s from the first full turn after; 2nd rotation within 0.05 s of normal |
+
+The driver's free memory (`torch.cuda.mem_get_info`) logged per step: 0 MiB in the embedding,
+blocks.0 and blocks.4 turns of every run, in both the production pattern and the #209 pattern.
+
+### The fix: `--bcd-switch-empty-cache` (opt-in)
+`train_edge_conversational.bcd_step()` empties the CUDA cache when a BCD switch happens. Blocks
+that WDDM put in host RAM are freed, and the next allocations come back in VRAM if there is
+room. Memory placement only.
+- Bits: `profile_step_202.py --hash` (sha of every micro-batch loss and the active block's
+  gradients, 42 steps, 14 turns), flag on vs off: all equal. The hash's one-ulp falsifier is
+  #202's (`--perturb-ulp`).
+- Cost with nothing else on the GPU (2 rotations, 14 turns per run, mean of turn steps 2-3):
+
+| run | 14-turn mean s/step | peak reserved |
+|---|---:|---:|
+| e4_off_1 | 9.898 | 82.3% |
+| e4_on_1 | 9.909 | 83.8% |
+| e4_off_2 | 9.898 | 82.3% |
+| e4_on_2 | 9.911 | 83.8% |
+| e3_base (off, --hash) | 10.391 | 82.3% |
+| e3_fix_nob (on, --hash) | 10.403 | 83.8% |
+
+Flag off 9.898 s, on 9.910 s: +0.012 s/step (without --hash runs).
+
+  Peak reserved goes UP with the flag, 82.3% -> 83.8%: the cache is rebuilt each turn and one
+  turn (blocks.4) lands about 100 MiB higher. Still under the 85% guard, but less margin.
+- Tests: `tests/test_bcd_switch_empty_cache_211.py` -- same losses and gradients (torch.equal)
+  with and without the flag over 8 steps / 4 switches; with the flag, empty_cache runs once per
+  switch and a freed 64 MiB cached block is released at each switch. Must-fail partner: without
+  the flag, no call and no release. One-ulp sensitivity of the equality check. Flag off by
+  default, parses on.
+
+### What this means for other turns and the 925,000-step run
+- Any turn can be hit: under the squeeze every turn slowed (up to 3x), not just the embedding.
+- The real run is MORE exposed than #209: the trainer never empties the cache, so one squeeze
+  (a browser on the NVIDIA GPU, a game, a video call) slows every turn after it until restart.
+  Recommended for the long run: `--bcd-switch-empty-cache` (bounds a hit to one turn).
+- Outside the repo (not applied): keep other apps off the NVIDIA GPU during runs (Windows
+  Settings > Graphics: browsers and Phone Link on the power-saving GPU); optionally NVIDIA
+  Control Panel "CUDA - Sysmem Fallback Policy: Prefer No Sysmem Fallback" for python.exe
+  (not measured here).
+
+Not measured: what took VRAM during #209; whether the fallback policy setting changes any of
+this; the fix in a run longer than 14 turns; a v1 run under the active squeeze.
+
 ## 1B k4 step 11.08 -> 9.88 s (-10.8%) with `--scan-kernel t`, held-out loss unchanged at 1B; residual-grad fold -0.05 s; chunked scan dead (2026-11-15, #208)
 
 **One line: `--scan-kernel t` passes every check and is recommended as a future default;

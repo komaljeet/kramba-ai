@@ -1,0 +1,161 @@
+#211 summary (scripts/analyze_embed_turn_211.py, scripts/analyze_recovery_211.py)
+
+== e1_v1_base  (mean over 7 positions: 11.112 s)
+  token_embedding   14.85 s  (d +0.00: fwd +0.00 loss +0.00 bwd +0.00 opt +0.00 other +0.00)  res 5042 alloc 3786 MiB  host avail 639 MiB
+  blocks.0          14.25 s  (d +0.00: fwd +0.00 loss +0.00 bwd +0.00 opt +0.00 other +0.00)  res 5054 alloc 4739 MiB  host avail 1873 MiB
+  blocks.4          12.73 s  (d +0.00: fwd +0.00 loss +0.00 bwd +0.00 opt +0.00 other +0.00)  res 5054 alloc 4617 MiB  host avail 1483 MiB
+  blocks.8          11.15 s  (d +0.00: fwd +0.00 loss +0.00 bwd +0.00 opt +0.00 other +0.00)  res 5054 alloc 4483 MiB  host avail 1367 MiB
+  blocks.12          9.70 s  (d +0.00: fwd +0.00 loss +0.00 bwd +0.00 opt +0.00 other +0.00)  res 5054 alloc 4355 MiB  host avail 1377 MiB
+  blocks.16          8.15 s  (d +0.00: fwd +0.00 loss +0.00 bwd +0.00 opt +0.00 other +0.00)  res 5054 alloc 4233 MiB  host avail 1299 MiB
+  blocks.20          6.96 s  (d +0.00: fwd +0.00 loss +0.00 bwd +0.00 opt +0.00 other +0.00)  res 5054 alloc 4035 MiB  host avail 1246 MiB
+== e1_v1_vram900  (mean over 7 positions: 11.203 s)
+  token_embedding   14.94 s  (d +0.09: fwd +0.04 loss -0.00 bwd +0.04 opt +0.00 other +0.00)  res 5042 alloc 3786 MiB  host avail 979 MiB
+  blocks.0          14.36 s  (d +0.10: fwd -0.03 loss +0.00 bwd +0.13 opt +0.00 other -0.00)  res 5054 alloc 4739 MiB  host avail 835 MiB
+  blocks.4          12.90 s  (d +0.16: fwd +0.06 loss +0.00 bwd +0.10 opt +0.00 other -0.00)  res 5054 alloc 4617 MiB  host avail 681 MiB
+  blocks.8          11.27 s  (d +0.13: fwd +0.03 loss +0.01 bwd +0.09 opt +0.00 other -0.00)  res 5054 alloc 4483 MiB  host avail 493 MiB
+  blocks.12          9.75 s  (d +0.05: fwd +0.01 loss +0.00 bwd +0.03 opt +0.00 other -0.00)  res 5054 alloc 4355 MiB  host avail 473 MiB
+  blocks.16          8.21 s  (d +0.06: fwd +0.04 loss +0.00 bwd +0.02 opt +0.00 other -0.00)  res 5054 alloc 4233 MiB  host avail 545 MiB
+  blocks.20          7.00 s  (d +0.04: fwd +0.03 loss +0.01 bwd +0.00 opt +0.00 other +0.00)  res 5054 alloc 4035 MiB  host avail 473 MiB
+== e1_v1_host4000  (mean over 7 positions: 11.107 s)
+  token_embedding   14.72 s  (d -0.13: fwd -0.02 loss -0.00 bwd -0.11 opt +0.00 other +0.00)  res 5042 alloc 3786 MiB  host avail 256 MiB
+  blocks.0          14.20 s  (d -0.06: fwd -0.06 loss -0.00 bwd +0.00 opt +0.00 other +0.00)  res 5054 alloc 4739 MiB  host avail 211 MiB
+  blocks.4          12.85 s  (d +0.12: fwd +0.12 loss +0.00 bwd -0.00 opt -0.00 other -0.00)  res 5054 alloc 4617 MiB  host avail 769 MiB
+  blocks.8          11.17 s  (d +0.02: fwd +0.01 loss +0.00 bwd +0.01 opt +0.00 other +0.00)  res 5054 alloc 4483 MiB  host avail 628 MiB
+  blocks.12          9.68 s  (d -0.02: fwd -0.01 loss -0.00 bwd -0.01 opt -0.00 other +0.00)  res 5054 alloc 4355 MiB  host avail 635 MiB
+  blocks.16          8.16 s  (d +0.01: fwd +0.01 loss +0.00 bwd +0.00 opt +0.00 other -0.00)  res 5054 alloc 4233 MiB  host avail 447 MiB
+  blocks.20          6.96 s  (d +0.01: fwd +0.00 loss +0.00 bwd +0.00 opt +0.00 other +0.00)  res 5054 alloc 4035 MiB  host avail 699 MiB
+sed: -e expression #1, char 81: unknown option to `s'
+Exception ignored while flushing sys.stdout:
+OSError: [Errno 22] Invalid argument
+
+== e3_base
+  turn  1 token_embedding   13.21 s  trainer ded   5163 shared   222 MiB  drv_free     0
+  turn  2 blocks.0          12.92 s  trainer ded   5175 shared   222 MiB  drv_free     0
+  turn  3 blocks.4          11.75 s  trainer ded   5175 shared   222 MiB  drv_free     0
+  turn  4 blocks.8          10.43 s  trainer ded   5175 shared   222 MiB  drv_free     0
+  turn  5 blocks.12          9.25 s  trainer ded   5175 shared   222 MiB  drv_free     0
+  turn  6 blocks.16          8.03 s  trainer ded   5175 shared   222 MiB  drv_free     0
+  turn  7 blocks.20          7.04 s  trainer ded   5175 shared   222 MiB  drv_free     0
+  turn  8 token_embedding   13.27 s  trainer ded   5175 shared   222 MiB  drv_free     0
+  turn  9 blocks.0          12.94 s  trainer ded   5175 shared   222 MiB  drv_free     0
+  turn 10 blocks.4          11.78 s  trainer ded   5175 shared   222 MiB  drv_free     0
+  turn 11 blocks.8          10.44 s  trainer ded   5175 shared   222 MiB  drv_free     0
+  turn 12 blocks.12          9.27 s  trainer ded   5175 shared   222 MiB  drv_free     0
+  turn 13 blocks.16          8.08 s  trainer ded   5175 shared   222 MiB  drv_free     0
+  turn 14 blocks.20          7.05 s  trainer ded   5175 shared   222 MiB  drv_free     0
+== e3_fix_nob
+  turn  1 token_embedding   13.20 s  trainer ded   5163 shared   222 MiB  drv_free     0
+  turn  2 blocks.0          12.92 s  trainer ded   5171 shared   222 MiB  drv_free     0
+  turn  3 blocks.4          11.87 s  trainer ded   5271 shared   222 MiB  drv_free     0
+  turn  4 blocks.8          10.41 s  trainer ded   5149 shared   222 MiB  drv_free     4
+  turn  5 blocks.12          9.28 s  trainer ded   4971 shared   222 MiB  drv_free   182
+  turn  6 blocks.16          8.02 s  trainer ded   4843 shared   222 MiB  drv_free   310
+  turn  7 blocks.20          7.04 s  trainer ded   4637 shared   222 MiB  drv_free   516
+  turn  8 token_embedding   13.27 s  trainer ded   5235 shared   222 MiB  drv_free     0
+  turn  9 blocks.0          12.95 s  trainer ded   5171 shared   222 MiB  drv_free     0
+  turn 10 blocks.4          11.88 s  trainer ded   5271 shared   222 MiB  drv_free     0
+  turn 11 blocks.8          10.42 s  trainer ded   5149 shared   222 MiB  drv_free     4
+  turn 12 blocks.12          9.26 s  trainer ded   4971 shared   222 MiB  drv_free   182
+  turn 13 blocks.16          8.09 s  trainer ded   4843 shared   222 MiB  drv_free   310
+  turn 14 blocks.20          7.03 s  trainer ded   4637 shared   222 MiB  drv_free   516
+== e3_nofix  (ballast log present)
+  turn  1 token_embedding   71.59 s  trainer ded   4795 shared   272 MiB  drv_free     0
+  turn  2 blocks.0          32.67 s  trainer ded   5127 shared   272 MiB  drv_free     0
+  turn  3 blocks.4          27.83 s  trainer ded   5127 shared   272 MiB  drv_free     0
+  turn  4 blocks.8          23.71 s  trainer ded   5127 shared   272 MiB  drv_free     0
+  turn  5 blocks.12         18.86 s  trainer ded   5127 shared   272 MiB  drv_free     0
+  turn  6 blocks.16         13.95 s  trainer ded   5127 shared   272 MiB  drv_free     0
+  turn  7 blocks.20         10.23 s  trainer ded   5127 shared   272 MiB  drv_free     0
+  turn  8 token_embedding   33.23 s  trainer ded   5127 shared   272 MiB  drv_free     0
+  turn  9 blocks.0          32.67 s  trainer ded   5127 shared   272 MiB  drv_free     0
+  turn 10 blocks.4          27.84 s  trainer ded   5127 shared   272 MiB  drv_free     0
+  turn 11 blocks.8          23.71 s  trainer ded   5127 shared   272 MiB  drv_free     0
+  turn 12 blocks.12         18.87 s  trainer ded   5127 shared   272 MiB  drv_free     0
+  turn 13 blocks.16         13.99 s  trainer ded   5127 shared   272 MiB  drv_free     0
+  turn 14 blocks.20         10.22 s  trainer ded   5127 shared   272 MiB  drv_free     0
+== e3_fix  (ballast log present)
+  turn  1 token_embedding   72.45 s  trainer ded   4795 shared   272 MiB  drv_free     0
+  turn  2 blocks.0          17.75 s  trainer ded   5008 shared   258 MiB  drv_free     0
+  turn  3 blocks.4          11.22 s  trainer ded   5271 shared   222 MiB  drv_free     0
+  turn  4 blocks.8           9.88 s  trainer ded   5149 shared   222 MiB  drv_free     4
+  turn  5 blocks.12          8.72 s  trainer ded   4971 shared   222 MiB  drv_free   182
+  turn  6 blocks.16          7.50 s  trainer ded   4515 shared   222 MiB  drv_free   310
+  turn  7 blocks.20          6.54 s  trainer ded   4637 shared   222 MiB  drv_free   516
+  turn  8 token_embedding   12.96 s  trainer ded   5235 shared   222 MiB  drv_free     0
+  turn  9 blocks.0          12.39 s  trainer ded   5171 shared   222 MiB  drv_free     0
+  turn 10 blocks.4          11.34 s  trainer ded   5271 shared   222 MiB  drv_free     0
+  turn 11 blocks.8           9.90 s  trainer ded   5149 shared   222 MiB  drv_free     4
+  turn 12 blocks.12          8.74 s  trainer ded   4643 shared   222 MiB  drv_free   182
+  turn 13 blocks.16          7.56 s  trainer ded   4515 shared   222 MiB  drv_free   310
+  turn 14 blocks.20          6.56 s  trainer ded   4342 shared   222 MiB  drv_free   516
+== e4_off_1
+  turn  1 token_embedding   12.88 s  trainer ded   5165 shared   222 MiB  drv_free     0
+  turn  2 blocks.0          12.42 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  3 blocks.4          11.23 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  4 blocks.8           9.88 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  5 blocks.12          8.72 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  6 blocks.16          7.52 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  7 blocks.20          6.55 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  8 token_embedding   12.98 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  9 blocks.0          12.41 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn 10 blocks.4          11.25 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn 11 blocks.8           9.91 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn 12 blocks.12          8.75 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn 13 blocks.16          7.54 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn 14 blocks.20          6.55 s  trainer ded   5177 shared   222 MiB  drv_free     0
+== e4_on_1
+  turn  1 token_embedding   12.87 s  trainer ded   5165 shared   222 MiB  drv_free     0
+  turn  2 blocks.0          12.38 s  trainer ded   5171 shared   222 MiB  drv_free     0
+  turn  3 blocks.4          11.32 s  trainer ded   5271 shared   222 MiB  drv_free     0
+  turn  4 blocks.8           9.89 s  trainer ded   5149 shared   222 MiB  drv_free     4
+  turn  5 blocks.12          8.72 s  trainer ded   4643 shared   222 MiB  drv_free   182
+  turn  6 blocks.16          7.52 s  trainer ded   4515 shared   222 MiB  drv_free   310
+  turn  7 blocks.20          6.55 s  trainer ded   4309 shared   222 MiB  drv_free   516
+  turn  8 token_embedding   12.97 s  trainer ded   5235 shared   222 MiB  drv_free     0
+  turn  9 blocks.0          12.41 s  trainer ded   5171 shared   222 MiB  drv_free     0
+  turn 10 blocks.4          11.38 s  trainer ded   4943 shared   222 MiB  drv_free     0
+  turn 11 blocks.8           9.89 s  trainer ded   5149 shared   222 MiB  drv_free     4
+  turn 12 blocks.12          8.75 s  trainer ded   4971 shared   222 MiB  drv_free   182
+  turn 13 blocks.16          7.54 s  trainer ded   4843 shared   222 MiB  drv_free   310
+  turn 14 blocks.20          6.55 s  trainer ded   4308 shared   222 MiB  drv_free   516
+== e4_off_2
+  turn  1 token_embedding   12.89 s  trainer ded   5165 shared   222 MiB  drv_free     0
+  turn  2 blocks.0          12.39 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  3 blocks.4          11.24 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  4 blocks.8           9.89 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  5 blocks.12          8.72 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  6 blocks.16          7.52 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  7 blocks.20          6.55 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  8 token_embedding   12.98 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn  9 blocks.0          12.41 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn 10 blocks.4          11.24 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn 11 blocks.8           9.90 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn 12 blocks.12          8.74 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn 13 blocks.16          7.54 s  trainer ded   5177 shared   222 MiB  drv_free     0
+  turn 14 blocks.20          6.55 s  trainer ded   5177 shared   222 MiB  drv_free     0
+== e4_on_2
+  turn  1 token_embedding   12.88 s  trainer ded   5165 shared   222 MiB  drv_free     0
+  turn  2 blocks.0          12.40 s  trainer ded   5171 shared   222 MiB  drv_free     0
+  turn  3 blocks.4          11.34 s  trainer ded   5271 shared   222 MiB  drv_free     0
+  turn  4 blocks.8           9.90 s  trainer ded   5149 shared   222 MiB  drv_free     4
+  turn  5 blocks.12          8.73 s  trainer ded   4971 shared   222 MiB  drv_free   182
+  turn  6 blocks.16          7.51 s  trainer ded   4515 shared   222 MiB  drv_free   310
+  turn  7 blocks.20          6.55 s  trainer ded   4637 shared   222 MiB  drv_free   516
+  turn  8 token_embedding   12.96 s  trainer ded   5235 shared   222 MiB  drv_free     0
+  turn  9 blocks.0          12.41 s  trainer ded   5171 shared   222 MiB  drv_free     0
+  turn 10 blocks.4          11.34 s  trainer ded   5271 shared   222 MiB  drv_free     0
+  turn 11 blocks.8           9.90 s  trainer ded   5149 shared   222 MiB  drv_free     4
+  turn 12 blocks.12          8.74 s  trainer ded   4643 shared   222 MiB  drv_free   182
+  turn 13 blocks.16          7.54 s  trainer ded   4515 shared   222 MiB  drv_free   310
+  turn 14 blocks.20          6.55 s  trainer ded   3981 shared   222 MiB  drv_free   516
+
+| run | 14-turn mean s/step | peak reserved |
+|---|---:|---:|
+| e4_off_1 | 9.898 | 82.3% |
+| e4_on_1 | 9.909 | 83.8% |
+| e4_off_2 | 9.898 | 82.3% |
+| e4_on_2 | 9.911 | 83.8% |
+| e3_base (off, --hash) | 10.391 | 82.3% |
+| e3_fix_nob (on, --hash) | 10.403 | 83.8% |
+
+Flag off 9.898 s, on 9.910 s: +0.012 s/step (without --hash runs).
