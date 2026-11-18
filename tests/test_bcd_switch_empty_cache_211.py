@@ -10,7 +10,12 @@ Claims and the test for each:
   switch and a freed 64 MiB block cached before each switch is gone right after
   it (reserved drops by >= 64 MiB). Must-fail partner: without the flag the same
   counters show no call and no drop, so the release check is not vacuous.
-* The flag is off by default and parses on.
+* #212: the flag is ON by default; --no-bcd-switch-empty-cache turns it off and
+  the old --bcd-switch-empty-cache still parses on.
+* #212: the DEFAULT parsed args, turned into the flag the way main() does, really
+  empty the cache at each switch; the opt-out's parsed args do not. Must-fail
+  partner: flipping the parser default back to False makes the default test fail
+  (checked by hand when #212 landed).
 """
 import argparse
 import os
@@ -123,6 +128,31 @@ def _trainer_args(monkeypatch, argv):
     return got["ns"]
 
 
-def test_flag_off_by_default_and_parses_on(monkeypatch):
-    assert _trainer_args(monkeypatch, []).bcd_switch_empty_cache is False
+def test_flag_on_by_default_opt_out_parses_off(monkeypatch):
+    assert _trainer_args(monkeypatch, []).bcd_switch_empty_cache is True
     assert _trainer_args(monkeypatch, ["--bcd-switch-empty-cache"]).bcd_switch_empty_cache is True
+    assert _trainer_args(monkeypatch,
+                         ["--no-bcd-switch-empty-cache"]).bcd_switch_empty_cache is False
+
+
+def _flag_as_main_sets_it(argv):
+    """The value main() stores in config["bcd_switch_empty_cache"] for these argv."""
+    return bool(T.build_arg_parser().parse_args(argv).bcd_switch_empty_cache)
+
+
+@cuda_only
+def test_default_args_empty_cache_at_each_switch(monkeypatch):
+    """#212: with NO flag given, the switch really releases the cache."""
+    _, _, d, n = _run(_flag_as_main_sets_it([]), monkeypatch)
+    assert len(d) >= 3, "too few switches for the release check to mean anything"
+    assert n == len(d), (n, len(d))
+    assert all(x >= 64 * 2**20 for x in d), f"default did not release at a switch: {d}"
+
+
+@cuda_only
+def test_opt_out_args_do_not_empty_cache(monkeypatch):
+    """#212: --no-bcd-switch-empty-cache really turns the release off."""
+    _, _, d, n = _run(_flag_as_main_sets_it(["--no-bcd-switch-empty-cache"]), monkeypatch)
+    assert len(d) >= 3
+    assert n == 0
+    assert all(x <= 0 for x in d), d

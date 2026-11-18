@@ -3373,6 +3373,8 @@ def train(
               f"({bcd_scheduler.partition} partition, {_layout}), "
               f"{bcd_scheduler.steps_per_block} steps/block, "
               f"active={bcd_scheduler.active_block_name!r}")
+        print(f"  Empty CUDA cache at each BCD switch: "
+              f"{'ON' if config.get('bcd_switch_empty_cache', True) else 'OFF'} (#211/#212)")
         if offload:
             print(f"  CPU weight offload: ON (bf16 parked, prefetch on, "
                   f"cache={config.get('offload_cache_blocks', 1)} blocks)")
@@ -3693,7 +3695,7 @@ def train(
             # Issue #99: advance the block-coordinate cycle (may switch the
             # active block + clear the outgoing block's optimizer state).
             if bcd_scheduler is not None:
-                bcd_step(bcd_scheduler, config.get("bcd_switch_empty_cache", False), device)
+                bcd_step(bcd_scheduler, config.get("bcd_switch_empty_cache", True), device)
 
             # torch.profiler step boundary (only active under --profile)
             if _PROF is not None:
@@ -4189,12 +4191,14 @@ def build_arg_parser():
                              "it spills to host RAM and runs 4-15x slower while "
                              "looking healthy. 0 disables the check.")
     parser.add_argument("--bcd-switch-empty-cache", action=argparse.BooleanOptionalAction,
-                        default=False,
-                        help="#211: release the CUDA caching allocator's unused blocks "
-                             "(torch.cuda.empty_cache) at every BCD block switch, so "
-                             "any of them that WDDM placed in host RAM are handed back "
+                        default=True,
+                        help="#211/#212: release the CUDA caching allocator's unused "
+                             "blocks (torch.cuda.empty_cache) at every BCD block switch, "
+                             "so any of them that WDDM placed in host RAM are handed back "
                              "instead of being reused for the rest of the run. Memory "
-                             "placement only: same kernels, same bits.")
+                             "placement only: same kernels, same bits. ON by default "
+                             "(#212; cost +0.012 s/step, peak reserved +1.5 pts at 1B "
+                             "k4); --no-bcd-switch-empty-cache turns it off.")
     parser.add_argument("--log-every", type=int, default=50,
                         help="Optimizer steps between console/CSV log rows "
                              "(default 50, previously hardcoded). Each row's "
