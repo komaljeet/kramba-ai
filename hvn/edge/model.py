@@ -449,6 +449,103 @@ class EdgeHVN(nn.Module):
             pool.evict(name)  # no call #2 coming -- free the slot now
         return out
 
+    def _forward_offload_inference(self, input_ids, position_ids, blk_kw, return_hidden):
+        """Forward with BCD weight offload outside training (#213).
+
+        The training branch of ``forward`` streams frozen blocks only when
+        ``self.training and torch.is_grad_enabled()``. Any other forward on an
+        offloaded model -- the trainer's ``--val-every`` eval, which runs in
+        ``eval()`` mode -- fell through to the plain path and called the frozen
+        layers with their weights still parked on the CPU: ``Expected all
+        tensors to be on the same device, but got weight is on cpu`` (measured,
+        1B k4, origin/main 4611a2f).
+
+        This streams each frozen segment through the offload pool, one at a
+        time: load, compute, evict, then prefetch the next one -- the order the
+        training forward uses for a block with no recompute coming. It is the
+        same walk as the #209 held-out harness (scripts/ab_heldout_209.py:
+        ``seg``), so the eval reports the same per-window losses.
+
+        - The real (bf16-parked) weights are streamed, not the frozen fp8 codes
+          (#204): eval runs under ``no_grad``, where fp8 is off.
+        - A frozen TernaryLinear's inference cache (``_wcache``, #131) is
+          dropped right after its segment runs. It is a GPU copy of the weight
+          the pool is about to evict; keeping it would rebuild the whole model
+          on the card across one eval window (~2 GB at 1B). Values are the same
+          either way (the cache is a bit-identical shortcut).
+        - Nothing stays resident afterwards: the pool is as the eval found it
+          (everything evicted), so the next training step loads from the same
+          CPU homes it would have anyway.
+
+        Gradients cannot flow through this path (a frozen segment's buffer is
+        reused as soon as it is evicted), so it refuses to run with grad on.
+        """
+        if torch.is_grad_enabled():
+            raise RuntimeError(
+                "An offloaded EdgeHVN (BCD --offload) runs outside training only "
+                "under torch.no_grad(): its frozen layers are streamed from host "
+                "RAM and evicted right after use, so no backward can reach them. "
+                "Wrap the call in torch.no_grad() (the trainer's evaluate() does).")
+        if self.shared_block is not None:
+            raise NotImplementedError("offloaded inference does not support shared_weights")
+        pool = self._offload_pool
+        act = self._offload_active_names
+        prefetch = getattr(self, "_offload_prefetch", True)
+
+        def _drop_caches(modules):
+            for m in modules:
+                for sub in m.modules():
+                    inv = getattr(sub, "invalidate_cache", None)
+                    if callable(inv):
+                        inv()
+
+        def _seg(name, modules, fn):
+            if name in act:
+                return fn()
+            params = [p for m in modules for p in m.parameters()]
+            if not pool._offloadable(params):
+                return fn()
+            pool.load(name, params)
+            out = fn()
+            _drop_caches(modules)
+            pool.evict(name)
+            return out
+
+        x = _seg("token_embedding", [self.token_embedding],
+                 lambda: self.token_embedding(input_ids))
+        n = len(self.blocks)
+        for i, block in enumerate(self.blocks):
+            x = _seg(f"blocks.{i}", [block],
+                     lambda b=block, h=x: b(h, position_ids=position_ids, **blk_kw))
+            if prefetch:
+                if i + 1 < n:
+                    nxt, nxt_params = f"blocks.{i + 1}", list(self.blocks[i + 1].parameters())
+                else:
+                    nxt = "final_norm+decoder"
+                    nxt_params = list(self.final_norm.parameters()) + list(self.decoder.parameters())
+                if nxt not in act:
+                    pool.prefetch(nxt, nxt_params)
+        if return_hidden:
+            # The caller projects with self.decoder next (the chunked loss), so
+            # the tail -- final_norm AND the decoder (its bias, or an untied
+            # weight) -- has to stay resident past this return. The caller
+            # releases it with release_offload_tail(); the trainer's evaluate()
+            # does, after each batch's loss.
+            name = "final_norm+decoder"
+            tail = list(self.final_norm.parameters()) + list(self.decoder.parameters())
+            if name not in act and pool._offloadable(tail):
+                pool.load(name, tail)
+            return self.final_norm(x)
+        return _seg("final_norm+decoder", [self.final_norm, self.decoder],
+                    lambda: self.decoder(self.final_norm(x)))
+
+    def release_offload_tail(self) -> None:
+        """Evict the tail a ``return_hidden`` offloaded inference forward left
+        resident (#213). No-op without offload, or when the tail is active."""
+        pool = getattr(self, "_offload_pool", None)
+        if pool is not None and getattr(self, "_offload_active_names", None) is not None:
+            pool.evict("final_norm+decoder")
+
     def forward(self, input_ids: torch.Tensor, position_ids: Optional[torch.Tensor] = None,
                 doc_ids: Optional[torch.Tensor] = None,
                 return_hidden: bool = False) -> torch.Tensor:
@@ -490,6 +587,11 @@ class EdgeHVN(nn.Module):
 
         offload = (getattr(self, "_offload_active_names", None) is not None
                    and self.training and torch.is_grad_enabled())
+        if (not offload and getattr(self, "_offload_active_names", None) is not None
+                and getattr(self, "_offload_pool", None) is not None):
+            # #213: eval / no_grad forward of an offloaded model.
+            return self._forward_offload_inference(input_ids, position_ids, blk_kw,
+                                                   return_hidden)
         if offload and not self.grad_checkpoint:
             raise RuntimeError(
                 "weight offload (Issue #101) requires grad_checkpoint=True -- "

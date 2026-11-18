@@ -1,0 +1,18 @@
+identical steps: 16/16
+step  1 token_embedding          off 82.6% on 82.6% (+0.0%) sec 14.62/14.64
+step  2 token_embedding          off 82.6% on 82.6% (+0.0%) sec 13.38/13.39 | eval after: 37.7s peak 46.5% active blocks.0+blocks.1+bl
+step  3 blocks.0+blocks.1+blocks off 76.7% on 76.4% (-0.4%) sec 13.49/13.46
+step  4 blocks.0+blocks.1+blocks off 83.3% on 87.1% (+3.8%) sec 13.00/13.01 | eval after: 38.2s peak 46.6% active blocks.4+blocks.5+bl
+step  5 blocks.4+blocks.5+blocks off 74.2% on 73.8% (-0.4%) sec 12.33/12.30
+step  6 blocks.4+blocks.5+blocks off 84.9% on 84.5% (-0.4%) sec 11.75/11.77 | eval after: 38.2s peak 46.5% active blocks.8+blocks.9+bl
+step  7 blocks.8+blocks.9+blocks off 71.4% on 72.4% (+1.0%) sec 11.03/10.96
+step  8 blocks.8+blocks.9+blocks off 82.9% on 83.1% (+0.2%) sec 10.41/10.45 | eval after: 38.2s peak 46.5% active blocks.12+blocks.13+
+step  9 blocks.12+blocks.13+bloc off 69.3% on 69.8% (+0.5%) sec 9.84/9.81
+step 10 blocks.12+blocks.13+bloc off 80.0% on 80.5% (+0.5%) sec 9.25/9.26 | eval after: 38.2s peak 44.9% active blocks.16+blocks.17+
+step 11 blocks.16+blocks.17+bloc off 67.2% on 67.2% (-0.1%) sec 8.62/8.69
+step 12 blocks.16+blocks.17+bloc off 76.3% on 78.7% (+2.4%) sec 8.01/8.11 | eval after: 38.2s peak 43.1% active blocks.20+blocks.21+
+step 13 blocks.20+blocks.21+bloc off 63.8% on 64.5% (+0.7%) sec 7.56/7.61
+step 14 blocks.20+blocks.21+bloc off 74.6% on 75.2% (+0.7%) sec 7.01/7.05 | eval after: 38.5s peak 24.4% active token_embedding
+step 15 token_embedding          off 84.2% on 83.8% (-0.4%) sec 13.99/14.17
+step 16 token_embedding          off 84.2% on 83.8% (-0.4%) sec 13.47/13.76 | eval after: 37.7s peak 46.6% active blocks.0+blocks.1+bl
+max on-step peak 87.1%; max eval peak 46.6%
