@@ -26,25 +26,26 @@ re-measuring.
 
 ## Before / after — same hardware, one week of real fixes (2026-08 → 2026-10)
 
-| | August 2026 | October 2026 (now) |
-|---|---|---|
-| 1B step time | 21.81 s/step | **13.294 s/step** (-39%) |
-| Throughput | 1,579 tok/s | **2,464 tok/s** |
-| **BCD's own quality cost** | **~4× worse perplexity** than full training (one block trains at a time, naive partition) | **~1.6× worse perplexity** (balanced block partitioning, issue #164) |
-| 1B pretrain time | ~375 days | **~142-227 days**, depending on how the BCD quality cost above is counted |
-| Offload correctness | silent weight-corruption bug, undetected for 76 days | found, fixed, validated end-to-end |
-| Peak VRAM at 1.11B | 4.51 GB | **5.24 GB** (81.4% of the card) — up, not down; this week's fused kernels/caches add some transient buffers even while speeding things up |
+| | August 2026 | October 2026 | November 2026 (now) |
+|---|---|---|---|
+| 1B step time | 21.81 s/step | 13.294 s/step (-39%, old 13-block layout) | **9.890 s/step** (-55%; 7 blocks of 4 layers, `--scan-kernel t`) |
+| Throughput | 1,579 tok/s | 2,464 tok/s | **~3,310 tok/s** |
+| **BCD's own quality cost** | **~4× worse perplexity** than full training (one block trains at a time, naive partition) | ~1.6× worse perplexity (balanced block partitioning, one small test, issue #164) | **not measured at 1B.** #198 showed the 1.6× does not carry over to the 1B layout; a matched test (#214) is running |
+| 1B pretrain time | ~375 days | ~142-227 days | **~106 days of compute** for 925,000 steps (30 tokens per body param). No quality-adjusted figure until the BCD cost is measured |
+| Offload correctness | silent weight-corruption bug, undetected for 76 days | found, fixed, validated end-to-end | same |
+| Peak VRAM at 1.11B | 4.51 GB | 5.24 GB (81.4% of the card) | **82-85% of the card** (83.8% with the cache emptied at each block switch, the default; 84.9% max with held-out eval on) |
 
 The BCD row is a real cut in how much worse the memory-saving training mode is compared to
 training the full model at once — not a speed change. See [`docs/state.md`](docs/state.md)
 for the full trail.
 
-**13.294 s/step is a full-BCD-cycle average, not every step.** Per block it ranges from
-**18.9 s/step** (the `token_embedding` block, slowest, trained first) down to **7.5 s/step**
-(the last block). A fresh launch starts on the slowest block, so the first ~100 steps really do
-run at ~19 s/step (~1,720 tok/s) — that's expected, not a regression. It steps down at each
-block switch and averages out to 13.294 s/step over a full ~1,300-step cycle (~4.8 hours).
-Compare a short run's own number against the `token_embedding` row, not the cycle mean.
+**9.890 s/step is an average over the 7 BCD blocks, not every step.** Per block it ranges from
+**~12.8 s/step** (the `token_embedding` block, slowest, trained first) down to **~6.5 s/step**
+(the last block) (#213 re-time). A fresh launch starts on the slowest block, and its very first
+step takes ~35 s. That's expected, not a regression. Compare a short run's own number against
+the `token_embedding` block, not the mean. A real run also pays for each turn's slower first
+step and any held-out evals: #209's 1,800-step runs averaged 10.32 s/step.
+(The old 13-block figures: 18.9 down to 7.5 s/step, 13.294 s/step cycle average.)
 
 **Correction (2026-10-11):** the CPU weight-offload path used by the 1.11B run below had a bug
 from 2026-07-26 to 2026-10-10 that could swap weights between same-shaped matrices during
@@ -117,7 +118,7 @@ Triton scan and megakernel, and the fixes that make them work together.
 | chunked cross-entropy saves **1436 MB at 48M** | measured 2026-08-17 |
 | **not cheaper to train** — a transformer is 1.41× faster per step | measured; the win is at inference only |
 | the 1B step runs at **close to hardware limits** — matmuls hit 100.6% of the card's own measured GEMM ceiling | measured 2026-08-31 |
-| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 — **stale**: current measured step is 13.294 s/step (~142-227 days depending on BCD quality framing, see the reality check below), from five more real speed levers landed 2026-10-12/17 |
+| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 — **stale**: current measured step is 9.890 s/step (~106 days of compute for 925,000 steps, 2026-11-16, see the reality check below) |
 | **1.11B fits and runs in 4.51 GB with 5-technique stack** (BCD + offload + ternary + grad checkpoint + chunked loss) | VRAM measured 2026-09-19, 1350 steps — **but see the correction above: this run used an offload path with a weight-corruption bug (fixed 2026-10-10), so the loss curve from this run needs re-verifying, the VRAM figure does not** |
 | **tied embeddings + offload + BCD + chunked_loss fit without OOM** (previously OOM, fixed by pinning + chunked loss) | measured 2026-09-26, 79% VRAM (4.85 GB of 6 GB) at 1.11B fp32 — "composes" here means *fits*; whether it trains *correctly* at this combination and scale was never checked before 2026-10-10, and is only confirmed at small scale since |
 
@@ -145,25 +146,23 @@ parameters — so cost grows with the **square** of model size.
 
 The memory engineering got a 6B model to run forward and backward on this card at
 ~1 GB peak. **That is not the same as being able to train it.** 6B is still out of reach here.
-1B, with `--block-coordinate --offload`, is real but slow: at the current measured
-**13.294 s/step** (2,464 tok/s) cycle average — see the per-block spread note above, a fresh
-launch's first ~100 steps run at ~19 s/step, not 13.294 — hitting this project's
-30-tokens-per-body-param convention
-takes **~142 days** accepting BCD's own ~1.6× quality cost as measured, or **~227 days**
-if you want BCD's output to actually match full-training quality instead (that's the
-multiplier's actual direction — the shorter number is the one with the quality cost baked
-in, not the other way around). **With `--fp8-linear` (confirmed 7.81% faster, see below) this
-is now ~132 / ~211 days** — 142/227 is the bf16-only number. This was **375 days at a smaller,
-un-fixed config as of 2026-08-31**; five real speed levers and a from-scratch BCD-quality fix
-(balanced block
-partitioning, cutting BCD's quality cost from ~4× to ~1.6×) landed since, measured together,
-not assumed additive. See [`docs/state.md`](docs/state.md) for the full trail.
+1B, with `--block-coordinate --offload`, is real but slow. At the current measured
+**9.890 s/step** (default 1B k4 settings, 2026-11-16), this project's
+30-tokens-per-body-param budget is 925,000 steps of 8 × 4096 tokens: **~106 days of
+compute**. Before the latest round (#207-#210) it was 11.285 s/step, ~121 days. In October,
+on the old 13-block layout, the figure was ~132-211 days; the upper end multiplied by a 1.6×
+BCD quality cost that #198 later showed does not carry over to the 1B layout. The quality cost
+at 1B is **not measured yet**, so there is no honest quality-adjusted day count today. This
+was **375 days at a smaller, un-fixed config as of 2026-08-31**. See
+[`docs/state.md`](docs/state.md) for the full trail.
 
-**A fused FP8 matmul path (`--fp8-linear`, v1.2.0) is now confirmed 7.81% faster** over a
-real full 13-block BCD cycle (first measured at 6.14% on one block; the full-cycle run that
-confirmed it ran into an unrelated host-RAM resume bug partway through, fixed, then finished
-cleanly — see [`docs/state.md`](docs/state.md)). **142-227 days is now ~132-211 days — this
-is the current, confirmed number.**
+**What made it faster this round (all measured, 1B k4):** the frozen weights' fp8 codes made
+once per turn, tuned scan launch widths, the fp8 bias add folded into the next op (all
+same bits), and the transposed scan kernel `--scan-kernel t` (-1.2 s/step; not same bits, but
+the same fp64 error, and held-out loss over 1,800 steps was not worse: 5.21862 vs 5.21976, 2
+seeds each). A fresh speed hunt (#213) found no further same-bits change worth 0.2 s/step or
+more. Still unmeasured: whether `t`'s rounding matters over 925,000 steps, and fp8 vs bf16 at
+full length.
 
 Everything smaller than 1B fits and trains *without* BCD/offload at all, measured directly
 on current code: **270M in ~19.3 days with dropout off (~20.1 with), 300M in ~32 days**
@@ -221,6 +220,12 @@ instead. Tracked in [issue #162](https://gitlab.com/komalbarun/kramba-ai/-/issue
 
 **Nothing prints until step 50.** A short run looks hung when it's fine. Watch
 `training_log.csv`, which flushes every row.
+
+**Other apps on the NVIDIA GPU can make a 1B run 2-2.5× slower, and it stays slow.** The 1B
+run sits at the driver's memory limit. On Windows, if anything else needs VRAM, WDDM moves part
+of the trainer's memory to system RAM, and the CUDA cache keeps reusing those slow blocks. Since
+#212 the trainer empties the cache at each block switch (`--no-bcd-switch-empty-cache` turns it
+off), so a hit lasts one turn. Keep browsers and other GPU apps off the NVIDIA GPU anyway.
 
 ## Documentation
 
