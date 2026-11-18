@@ -216,6 +216,38 @@ CPU/NVMe offload (not wired).
 > peak reserved 82.3% -> 83.8% (the cache is rebuilt each turn).
 > On by default since #212; `--no-bcd-switch-empty-cache` turns it off. See docs/state.md (#211, #212).
 
+### Held-out eval in the 1B BCD `--offload` recipe: `--val-every` works since #213 (2026-11-18)
+
+**One line: add `--val-fraction 0.001 --val-every 500 --val-batches 64` to the 1B k4 command and
+the trainer scores the same 64 held-out windows as the #208/#209 harness, bit for bit. One eval
+takes 38.2 s; at `--val-every 500` that is +0.08 s per step (0.7%), at 100 it is +0.38 s (3.7%).
+Training is unchanged (loss, gradient and RNG hashes equal at all 7 block positions) and peak
+VRAM is unchanged at every step (equal to an eval-off run at all 16 steps measured).**
+
+- Defaults are unchanged. `--val-every` defaults to the checkpoint interval
+  (`--save-every-steps`, 500). No eval runs at all unless `--val-fraction` > 0 (default 0).
+  `--val-batches` (new, default 100 = the old fixed cap) sets how many held-out batches one eval
+  scores; at `--batch-size 1` a batch is one window, so 64 matches the #209 harness.
+- Memory: the eval leaves nothing allocated but re-lays-out the CUDA cache. Right after a block
+  switch (where the cache was just emptied) the trainer empties it again after the eval, so the
+  next turn starts exactly as it would without one; mid-turn it leaves the cache alone (emptying
+  there made the next step rebuild around the optimizer state and peak 97.0%). Measured: eval
+  every 2 steps (at each switch, 16 steps) and eval after EVERY step (14 steps): each step's peak
+  reserved equal to the eval-off run, max 84.9%.
+- Set `--val-fraction` at launch. It holds windows out of the TRAINING split, so adding it to a
+  run that started without it changes the data that run trains on (not measured here).
+- Eval peak: at most what the training step before it already held (82.6% after the first step,
+  26-47% right after a switch, 64-77% mid-turn). The eval allocates nothing that stays.
+- Before #213 the eval crashed under `--offload` (`weight is on cpu`): eval mode skipped the
+  offload streaming. See docs/state.md (#213) for the cause, the tests and the falsifiers.
+
+Example (the #209 1B k4 command plus eval):
+
+```
+... --offload --bcd-layers-per-block 4 --grad-accum 8 --bcd-steps-per-block 100 \
+    --val-fraction 0.001 --val-every 500 --val-batches 64
+```
+
 ### Head count at 1B: `head_dim` 32 is the default, and the old default was the WORST case (2026-08-30)
 
 **One line: at d_model 2048 the scan's cost is linear in `head_dim`, so `--n-heads 64`

@@ -5,6 +5,109 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## The trainer's `--val-every` eval now works under BCD `--offload`, and reports the #209 harness number bit for bit (2026-11-18, #213)
+
+**One line: the in-trainer held-out eval crashed on every 1B `--offload` run (`weight is on
+cpu`). Fixed. On the real 1B k4 run it scores the same 64 windows as the #209 harness with
+64/64 per-window losses bit-equal, takes 38.2 s per eval, and changes nothing about training:
+loss, gradient and RNG hashes identical at all 7 block positions, and every step's peak VRAM
+equal to an eval-off run (max 84.9%). Cost: +0.08 s/step at `--val-every 500` (0.7%), +0.38
+s/step at 100 (3.7%).**
+
+### Cause (measured, not read)
+- Repro on origin/main 4611a2f: 1B k4 PROD command, `--max-steps 3 --val-fraction 0.001
+  --val-every 1`. Step 1 trains, then `evaluate()` dies in `hvn/core/hvn_block.py` rms_norm of
+  `blocks.0`: `Expected all tensors to be on the same device, but got weight is on cpu`.
+- Why: `evaluate()` calls `model.eval()`. `EdgeHVN.forward` streams CPU-parked frozen layers only
+  when `self.training and torch.is_grad_enabled()`, so in eval mode it took the plain path and
+  ran frozen layers whose weights live in host RAM. The #209 harness worked because it does its
+  own walk: `pool.load(segment)`, run it, `pool.evict(segment)`, for every non-active segment.
+- Two smaller bugs in the same function, found on the way:
+  - No `torch.no_grad()`. Eval built an autograd graph, took the chunked loss's grad-carrying
+    path, and ran fp8 Linears in fp8 (the docs say eval is bf16). This is why
+    `tests/test_checkpoint_crash_safety.py::test_evaluate_chunked_never_builds_full_logits`
+    failed on main (the "chunked" eval kept 330 MB, more than one full logit tensor). It passes
+    now. So yes, that known failure was this eval path.
+  - `iter(val_loader)` draws a worker base seed from the global CPU RNG even with
+    `num_workers=0`. Every eval moved the RNG the run (and its #174 checkpoints) carries. On a
+    dropout model through the real `train()` this changed the final weights (new CPU test fails
+    on main).
+
+### Fix
+- `EdgeHVN._forward_offload_inference` (hvn/edge/model.py): any forward of an offloaded model
+  outside training streams each frozen segment through the pool: load, run, evict, prefetch the
+  next (the training forward's order for a block with no recompute coming). It streams the real
+  bf16 weights (not the #204 fp8 codes) and drops a frozen TernaryLinear's #131 inference cache
+  right after use (that cache is a GPU copy of the weight being evicted; kept, it rebuilds ~2 GB
+  of the model on the card during one eval; this is what the #209 harness did). With
+  `return_hidden` the tail stays resident for the caller's projection;
+  `release_offload_tail()` evicts it. With grad enabled it refuses with a clear message.
+- `evaluate()`: runs under `torch.no_grad()` and `torch.random.fork_rng`; calls
+  `release_offload_tail()` after each batch's loss. New `--val-batches N` (default 100, the old
+  fixed cap); 64 at batch size 1 = the harness's 64 windows.
+- Memory: after an eval that ran right after a BCD switch (the switch had just emptied the
+  cache, #212 default), the trainer empties it again; mid-turn it does not. Both halves measured:
+  - no empty at all: eval at each switch, the turn's 2nd step peaked 87.1% (eval off 83.3%), and
+    at the 6th turn 78.7% (76.3%). The eval left nothing allocated (allocated bytes and pool
+    buffers equal before/after), so this was cache layout, not a leak.
+  - empty after every eval: the step after a mid-turn eval peaked 97.0% (eval off 82.6%).
+  - the rule above: equal to eval off at every step, both with eval at each switch (16 steps)
+    and eval after every step (14 steps).
+- Defaults unchanged: `--val-every` default is still the checkpoint interval
+  (`--save-every-steps`, 500), and no eval runs unless `--val-fraction` > 0 (default 0).
+
+### Measured on the real 1B k4 run (scripts/eval_offload_213.py, results/eval_offload_213/)
+PROD_ARGV + `--grad-accum 8 --bcd-layers-per-block 4 --deterministic`, `--bcd-steps-per-block 2`
+so 14 steps visit all 7 block positions twice, `--warmup-steps 0` and a 2800-step schedule so
+every step runs at the full LR (Muon 0.02).
+- Same number as the harness: after step 14, trainer eval and the #209 walk on the same 64
+  windows at the same state: 64/64 per-window losses bit-equal (max|d| 0). Means 9.225389
+  (trainer, fp32 GPU sum) vs 9.225388 (harness, Python float sum). Harness walk: 48.4 s.
+- Training unchanged: eval after EVERY step vs eval off, 14/14 steps identical sha256 of
+  per-micro-batch losses, active-block gradients (all nonzero) and CPU+CUDA RNG state. Also 16/16
+  with eval at each switch.
+- Falsifier (eval with the RNG restore disabled, plus +1e-3 on one optimizer-state element after
+  each eval): RNG hash differs from step 2, loss and gradient hashes from step 3. So the check
+  sees both kinds of side effect. (This arm ran on the build that emptied the cache after every
+  eval; that changes memory only.)
+- Eval time: 38.2 s per eval (37.6-38.6, 14 evals, 64 windows). The step after an eval is
+  +0.03 s slower on average. Per-step cost: 0.38 s at `--val-every 100` (3.7% of the 10.4 s mean
+  step in this run), 0.076 s at 500 (0.7%). Derived from these numbers, not from a 500-step run.
+- Peak reserved during an eval (reset at eval start): 82.6% after the first step (the training
+  cache it reuses), 26-47% right after a switch, 64-77% mid-turn. Never above the step before it.
+- Peak reserved per position, eval every step (= eval off, each): token_embedding 82.6/82.6,
+  blocks 0-3 76.7/83.3, 4-7 74.2/84.9, 8-11 71.4/82.9, 12-15 69.3/80.0, 16-19 67.2/76.3, 20-23
+  63.8/74.6 (1st/2nd step of the turn); 2nd token_embedding turn 84.2/84.2 (16-step run).
+
+### Tests (tests/test_trainer_eval_offload.py, 14 tests, each with a partner that can fail)
+- `test_offloaded_eval_runs_and_matches_harness_and_resident_copy`: per-window losses equal the
+  harness walk and a plain GPU-resident copy of the same weights, bit for bit. Fails on main with
+  the same `weight is on cpu` crash. Partner `test_resident_copy_check_can_fail` (one frozen
+  weight x1.01 in the copy breaks equality).
+- `test_eval_leaves_weights_parked_and_pool_empty`, `test_offloaded_forward_with_grad_on_refuses_clearly`.
+- Real `train()` on a tiny offloaded model with dropout: `test_eval_every_step_leaves_training_bits_unchanged`,
+  with `test_runs_are_not_vacuous` (all 6 blocks x 2 steps, LR > 0, nonzero grads),
+  `test_determinism_control` (eval-off twice), and falsifiers
+  `test_hash_catches_eval_that_moves_the_rng` and `test_hash_catches_eval_that_touches_optimizer_state`.
+- `test_cache_emptied_after_eval_only_at_a_switch`: flipping the condition makes it fail (checked).
+- CPU, real `train()`: `test_cpu_eval_every_step_leaves_weights_unchanged` fails on main (RNG);
+  partner `test_cpu_check_can_fail`; `test_cpu_resume_with_eval_on_matches_uninterrupted` (kill
+  inside step 8, resume from step 5, bit-identical end).
+- `test_defaults_unchanged`.
+- On origin/main code: 8 failed + 3 errors of the then-13 tests (the crash, the RNG test, the
+  defaults test); with the fix all pass.
+- Full suite (tests/, minus test_issue33.py which does not load), same machine, back to back:
+  origin/main 14 failed + 6 errors; this branch 13 failed + 6 errors, the same set minus
+  `test_evaluate_chunked_never_builds_full_logits`. No new failure. The new GPU tests set
+  `max_vram_pct: 0`: the trainer's 85% guard reads the process-wide peak, which earlier tests
+  in a full run had already raised (first full run tripped it).
+
+### Not measured
+- A real 100- or 500-step run with eval on (cost is derived from 38.2 s per eval).
+- Eval with `--no-bcd-switch-empty-cache` (then nothing is emptied after an eval).
+- A resume of the 1B run with eval on (resume is tested on the CPU toy only).
+- Batch size above 1 for the val loader, and models without tied embeddings under offload.
+
 ## `--bcd-switch-empty-cache` is now ON by default; `--no-bcd-switch-empty-cache` turns it off (2026-11-17, #212)
 
 **One line: every BCD run now empties the CUDA cache at each block switch, so a WDDM spill

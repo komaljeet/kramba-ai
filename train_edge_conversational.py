@@ -3181,6 +3181,22 @@ def evaluate(model, val_loader, device, max_batches: int = 100,
     """
     if val_loader is None:
         return None
+    # #213: no_grad, and the RNG put back afterwards.
+    #   no_grad   eval builds no autograd graph (before this, the active block's
+    #             activations were kept per batch and the chunked loss took its
+    #             grad-carrying path), fp8 Linears run bf16 as the docs say eval
+    #             does, and an offloaded (BCD --offload) model can stream its
+    #             frozen layers at all -- EdgeHVN._forward_offload_inference.
+    #   fork_rng  iter(val_loader) draws a worker base seed from the global CPU
+    #             RNG even with num_workers=0, so an eval used to move the RNG
+    #             the training run (and its checkpoints, #174) carries.
+    devices = [device] if getattr(device, "type", str(device)) == "cuda" else []
+    with torch.no_grad(), torch.random.fork_rng(devices=devices):
+        return _evaluate_impl(model, val_loader, device, max_batches,
+                              precision, chunked_loss)
+
+
+def _evaluate_impl(model, val_loader, device, max_batches, precision, chunked_loss):
     was_training = model.training
     model.eval()
     crit = nn.CrossEntropyLoss(reduction="none")
@@ -3210,6 +3226,12 @@ def evaluate(model, val_loader, device, max_batches: int = 100,
                 tok_loss = chunked_cross_entropy(
                     hidden, y, getattr(model, "_orig_mod", model).decoder,
                     chunk=chunked_loss, use_checkpoint=False)
+                # #213: an offloaded model keeps its tail resident for the
+                # projection above; hand it back now.
+                _release = getattr(getattr(model, "_orig_mod", model),
+                                   "release_offload_tail", None)
+                if _release is not None:
+                    _release()
             else:
                 logits = model(x)
                 tok_loss = crit(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
@@ -3694,8 +3716,11 @@ def train(
 
             # Issue #99: advance the block-coordinate cycle (may switch the
             # active block + clear the outgoing block's optimizer state).
+            _switch_emptied = False
             if bcd_scheduler is not None:
-                bcd_step(bcd_scheduler, config.get("bcd_switch_empty_cache", True), device)
+                _switch_emptied = (
+                    bcd_step(bcd_scheduler, config.get("bcd_switch_empty_cache", True), device)
+                    and config.get("bcd_switch_empty_cache", True))
 
             # torch.profiler step boundary (only active under --profile)
             if _PROF is not None:
@@ -3764,12 +3789,29 @@ def train(
 
             # Held-out validation eval (A/B primary metric)
             if val_writer is not None and global_step % val_every == 0:
+                _v_t0 = time.time()
                 v_overall, v_src = evaluate(model, val_loader, device,
+                                             max_batches=config.get("val_batches", 100),
                                              precision=precision,
                                              chunked_loss=chunked_loss_size)
+                # #213, measured at 1B k4 --offload. The eval leaves nothing
+                # allocated, but it re-lays-out the caching allocator's blocks.
+                # - Right after a BCD switch the cache had just been emptied
+                #   (--bcd-switch-empty-cache, default on): empty it again, so
+                #   the next turn starts from exactly the state it would have
+                #   without the eval. Without this, the turn's 2nd step peaked
+                #   87.1% (eval off: 83.3%).
+                # - Mid-turn: do NOT empty it. Emptying there made the next step
+                #   rebuild its cache around the live optimizer state and peak
+                #   97.0% (eval off: 82.6%). Left alone, it reuses its own cache:
+                #   with this rule, eval after EVERY step gave the same peak as
+                #   eval off at all 14 steps. Memory only, either way: same bits.
+                if _switch_emptied and device.type == "cuda":
+                    torch.cuda.empty_cache()
                 v_ppl = math.exp(min(v_overall, 20))
                 print(f"    ↳ VAL step {global_step}: loss {v_overall:.4f} | ppl {v_ppl:.2f} | "
-                      f"Slim {v_src[0]:.4f}  OA {v_src[1]:.4f}  Wiki {v_src[2]:.4f}", flush=True)
+                      f"Slim {v_src[0]:.4f}  OA {v_src[1]:.4f}  Wiki {v_src[2]:.4f}"
+                      f" | {time.time() - _v_t0:.1f}s", flush=True)
                 val_writer.writerow([
                     global_step, f"{v_overall:.6f}", f"{v_ppl:.4f}",
                     f"{v_src[0]:.6f}", f"{v_src[1]:.6f}", f"{v_src[2]:.6f}",
@@ -4010,7 +4052,19 @@ def build_arg_parser():
                         help="Fraction of each source's unique windows held out as a "
                              "token-disjoint validation set (e.g. 0.02). 0 disables.")
     parser.add_argument("--val-every", type=int, default=None,
-                        help="Run held-out val eval every N steps (default: checkpoint interval).")
+                        help="Run held-out val eval every N steps (default: checkpoint "
+                             "interval, --save-every-steps, 500). Needs --val-fraction > 0; "
+                             "with the default 0 there is no val split and no eval. Works "
+                             "under --offload (#213): frozen layers are streamed through "
+                             "the offload pool. Measured at 1B k4 --offload: 38 s per "
+                             "eval of 64 windows (--val-batches 64), +0.08 s/step at "
+                             "--val-every 500; training bits and peak VRAM unchanged "
+                             "(docs/training.md).")
+    parser.add_argument("--val-batches", type=int, default=100,
+                        help="Held-out batches per eval (default 100, the old fixed "
+                             "cap). At --batch-size 1 a batch is one window; "
+                             "--val-batches 64 scores the same 64 windows as the "
+                             "#208/#209 held-out harness.")
     parser.add_argument("--precision", type=str, default="fp32",
                         choices=["fp32", "fp16", "bf16"],
                         help="Mixed-precision training mode (Issue #80). "
@@ -4779,6 +4833,7 @@ def main():
     config["dynamic_lr_log"] = args.dynamic_lr_log
     if args.val_every is not None:
         config["val_every_steps"] = args.val_every
+    config["val_batches"] = max(1, args.val_batches)
     if args.warmup_steps is not None:
         config["warmup_steps"] = max(0, args.warmup_steps)
         print(f"  warmup override:   {config['warmup_steps']} steps (--warmup-steps; "
