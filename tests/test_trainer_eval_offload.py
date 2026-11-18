@@ -100,7 +100,10 @@ def _gpu_config(tmp, val_every):
             "optimizer": "muon", "muon_lr": 0.02, "precision": "bf16",
             "chunked_loss": 16, "block_coordinate": True, "offload": True,
             "bcd_partition": "layer", "bcd_steps_per_block": SPB,
-            "val_every_steps": val_every, "val_batches": 4}
+            "val_every_steps": val_every, "val_batches": 4,
+            # The trainer's 85% spill guard reads the process-wide peak, which
+            # earlier tests in a full run have already raised; a toy needs none.
+            "max_vram_pct": 0}
 
 
 def _offloaded(steps):

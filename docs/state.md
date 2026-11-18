@@ -96,6 +96,11 @@ every step runs at the full LR (Muon 0.02).
 - `test_defaults_unchanged`.
 - On origin/main code: 8 failed + 3 errors of the then-13 tests (the crash, the RNG test, the
   defaults test); with the fix all pass.
+- Full suite (tests/, minus test_issue33.py which does not load), same machine, back to back:
+  origin/main 14 failed + 6 errors; this branch 13 failed + 6 errors, the same set minus
+  `test_evaluate_chunked_never_builds_full_logits`. No new failure. The new GPU tests set
+  `max_vram_pct: 0`: the trainer's 85% guard reads the process-wide peak, which earlier tests
+  in a full run had already raised (first full run tripped it).
 
 ### Not measured
 - A real 100- or 500-step run with eval on (cost is derived from 38.2 s per eval).
