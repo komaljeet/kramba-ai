@@ -5,6 +5,94 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Speed round #207-#213 in one place: the default 1B k4 step is 9.89 s (~106 days for 925,000 steps), close to its floor; what is still unmeasured (2026-11-18, #215)
+
+**One line: on main today the default 1B k4 step is 9.890 s (#210 re-time; the #213 speed hunt
+re-timed it at 9.865 s). That is ~106 days for 925,000 steps at 8 x 4096 tokens. Before this
+round (#206 number) it was 11.285 s, ~121 days. The speed hunt found no code change worth
+0.2 s/step or more that keeps the same bits. What is left needs a loss A/B first. This entry
+only collects numbers already recorded in the entries below and in the results folders named.
+Nothing new was run for it.**
+
+Step history at 1B k4 (7 BCD blocks, 4 layers per block). Metric: mean of turn steps 2-3 over
+the 7 block positions (`scripts/profile_step_202.py`). Days = 925,000 x step.
+
+| date | issue | change | step (s) | same bits | days |
+|---|---|---|---:|---|---:|
+| 2026-11-14 | #202 | first k4 round | 12.60 -> 12.10 | yes | 134.9 -> 129.5 |
+| 2026-11-14 | #204 | frozen weights' fp8 codes made once per turn | 12.08 -> 11.79 | yes | 126.2 |
+| 2026-11-15 | #206 | scan launch widths | 11.797 -> 11.285 | yes | 120.8 |
+| 2026-11-15 | #207 | no-ckpt 1 default, fp8 bias folded into the next op | 11.285 -> 11.095 | yes | 118.8 |
+| 2026-11-16 | #210 | `--scan-kernel t` made the trainer default | 11.097 -> 9.890 | no (rounding level) | 105.9 |
+| 2026-11-17 | #213 | re-time of main 2845f80, no change | 9.865 (9.863 / 9.866) | - | 105.6 |
+
+- The 13-block numbers in older docs (13.294 s, 12.335 s with fp8, 132-211 days) are for the
+  old layout and older code. They are stale.
+- A whole run is a bit slower than this metric. #209's `t` runs averaged 10.32 s/step over 1800
+  steps. That includes each turn's slower first step (0.028 s/step averaged over the run,
+  `results/speed_hunt_213/long209_reanalysis.txt`), a held-out eval at every turn end, and 3
+  visits to the slow early blocks against 2 for the fast late ones.
+
+What each issue did (details in the entries below):
+- #207 (merged): bit-identical round 2. `--active-no-ckpt-layers 1` is the default, and the
+  bias add after each fp8 GEMM is folded into the op that reads it (`hvn/edge/fused_bias.py`,
+  `fp8_fused.py`, `hvn/core/deltanet.py`). Hashes equal 14/14.
+- #208/#209: `--scan-kernel t` keeps the scan state transposed, folds the checkpoint pass into
+  the recompute and runs the backward on 1 warp. It saves ~1.2 s/step. Its fp64 error is the
+  same as v1's. It is NOT bit-identical. Held-out loss at 1B over 1800 steps (2 seeds each):
+  5.21862 (t) vs 5.21976 (v1), lower at all 18 turn ends. So: not worse. The seed spread is tiny
+  (0.00045 at the end) because the seed only sets model init; the data order is pinned.
+- #208: `--fused-norm-residual` is opt-in. -0.051 s alone, only -0.041 s on top of `t`.
+- #210: `t` is the trainer default; `--scan-kernel v1` opts out. The library default
+  (`hvn.core.deltanet_triton.SCAN_KERNEL`) stays `v1`.
+- #211/#212: the slow embedding turns in #209 were Windows WDDM moving part of the trainer's
+  GPU memory to host RAM. The CUDA caching allocator kept reusing those slow blocks, so whole
+  turns ran 2.0-2.5x slower. `--bcd-switch-empty-cache` empties the cache at each BCD switch,
+  so a hit lasts at most one turn. On by default since #212; `--no-bcd-switch-empty-cache` opts
+  out. Cost +0.012 s/step, peak reserved 82.3% -> 83.8%.
+- #213 (!268, merged): in-trainer eval under `--offload` crashed. Fixed with
+  `EdgeHVN._forward_offload_inference`; `evaluate()` runs under `no_grad` and restores the RNG;
+  `--val-batches` (default 100). The eval matches the #209 harness bit for bit (64/64 windows),
+  takes ~38.2 s, costs +0.38 s/step at `--val-every 100` and +0.08 s/step at 500. Peak VRAM
+  max 84.9%, same as eval off. Training hashes are identical with eval on vs off (14/14 steps),
+  and the falsifier flips the hash. Use `--val-every 500`. Eval is off unless `--val-fraction`
+  is above 0.
+
+### #213 speed hunt: where the 9.87 s goes and what is left (`results/speed_hunt_213/`, local, not committed)
+Same harness, main 2845f80, all 7 positions.
+
+- Per position (s): 12.85, 12.37, 11.22, 9.87, 8.71, 7.49, 6.54 (embedding first). Peak 82.3%.
+- Share of the step (mean of 7 positions, `phases_default.txt`): backward with recompute 5.13 s
+  (52%), forward through the layers 3.05 s (31%), optimizer 0.46 s (4.6%), loss forward, glue
+  and loss recompute ~1.08 s (~11%), the rest under 1% each.
+- Dropping `--deterministic`: 9.869 s. No gain.
+- `--active-no-ckpt-layers 1,1,2,2,3,3`: 9.773 s (-0.09 s), peak 82.4% in this harness (no
+  eval). #202 measured this list at 84.0% peak, a thin margin under the 85% guard. It is
+  bit-identical, so it needs no loss A/B, but it saves under 0.1 s.
+- Muon with 3 Newton-Schulz steps instead of 5: `Muon.step` 0.514 -> 0.330 s alone
+  (`muon_ns.json`). Its output differs from the 5-step result by 64% (relative, synthetic
+  spectrum). Needs a loss A/B before use.
+- `alpha_proj` in fp8: a candidate. Not measured.
+- Held-out eval walked layer-major (each segment loaded once per 8 windows) vs window-major:
+  37.1 vs 45.6 s, bit-equal (3 of 3).
+- Verdict: no bit-identical change of 0.2 s/step or more found. The big parts are the
+  recompute and the frozen-layer forward, which #203 already found mostly inherent.
+
+### Still unmeasured
+- BCD quality cost at 1B and at full run length (a matched-size test, #214, is running; not
+  reported here).
+- Whether `t`'s rounding matters over 925,000 steps (tested to 1800).
+- fp8 vs bf16 at full length (#197 saw no cost at 180 steps).
+- A copy_ cost in the profile that is not yet attributed to any one cause.
+- A real long run with eval on (the eval cost above is derived from 38.2 s per eval).
+
+### Known failing tests on main
+- `tests/test_fused_norm_residual.py::test_bcd_offload_trajectory_close_and_path_ran` fails
+  depending on test order. Reported by the #213 work; not re-run for this entry.
+- `tests/test_issue33.py` does not load (IndentationError).
+- `tests/test_checkpoint_crash_safety.py::test_evaluate_chunked_never_builds_full_logits` was
+  fixed by !268.
+
 ## The trainer's `--val-every` eval now works under BCD `--offload`, and reports the #209 harness number bit for bit (2026-11-18, #213)
 
 **One line: the in-trainer held-out eval crashed on every 1B `--offload` run (`weight is on
