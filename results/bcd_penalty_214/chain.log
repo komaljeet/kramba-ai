@@ -1,0 +1,17 @@
+gpu idle (87 MiB) Wed, Nov 18, 2026  1:35:01 PM
+=== bcd100_s0 attempt 0 Wed, Nov 18, 2026  1:35:02 PM -> results/bcd_penalty_214/ab_bcd100_s0.log
+exit 0 last step 4000 Wed, Nov 18, 2026  6:12:35 PM
+gpu idle (104 MiB) Wed, Nov 18, 2026  6:12:36 PM
+=== full_s0 attempt 0 Wed, Nov 18, 2026  6:12:36 PM -> results/bcd_penalty_214/ab_full_s0.log
+exit 0 last step 4000 Thu, Nov 19, 2026  1:42:40 AM
+gpu idle (103 MiB) Thu, Nov 19, 2026  1:42:40 AM
+=== bcd100_s1 attempt 0 Thu, Nov 19, 2026  1:42:40 AM -> results/bcd_penalty_214/ab_bcd100_s1.log
+exit 0 last step 500 Thu, Nov 19, 2026  2:22:36 AM
+gpu idle (93 MiB) Thu, Nov 19, 2026  2:22:37 AM
+=== full_s1 attempt 0 Thu, Nov 19, 2026  2:22:37 AM -> results/bcd_penalty_214/ab_full_s1.log
+exit 0 last step 500 Thu, Nov 19, 2026  3:20:12 AM
+gpu idle (100 MiB) Thu, Nov 19, 2026  3:20:12 AM
+=== bcd200_s0 attempt 0 Thu, Nov 19, 2026  3:20:12 AM -> results/bcd_penalty_214/ab_bcd200_s0.log
+exit 0 last step 2000 Thu, Nov 19, 2026  5:49:09 AM
+=== bcd50 SKIPPED (cap) Thu, Nov 19, 2026  5:49:09 AM
+=== chain done Thu, Nov 19, 2026  5:49:09 AM
