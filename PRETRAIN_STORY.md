@@ -30,16 +30,18 @@ they appear.
 
 Here's the honest before-and-after, same laptop, from August 2026 to now:
 
-| | August 2026 | Now |
-|---|---|---|
-| Time for one training step | 21.81 seconds | **12.335 seconds** (-43%) |
-| Tokens processed per second | 1,579 | **2,656** |
-| Projected time for a full pretrain | about 375 days | **about 132-211 days** |
-| Peak memory used | 4.51 GB of 6 GB | **5.24 GB of 6 GB** |
+| | August 2026 | October 2026 | Now (November 2026) |
+|---|---|---|---|
+| Time for one training step | 21.81 seconds | 12.335 seconds | **9.89 seconds** (-55%) |
+| Tokens processed per second | 1,579 | 2,656 | **about 3,310** |
+| Projected time for a full pretrain | about 375 days | about 132-211 days | **about 106 days of compute** |
+| Peak memory used | 4.51 GB of 6 GB | 5.24 GB of 6 GB | **82-85% of the card** |
 
-That "132-211 days" range, not a single number, is itself an honest admission: the cheap
-way of fitting the model (described next) costs some quality, and the range is "if you
-accept that cost" versus "if you insist on matching full-quality training instead."
+In October I gave a range, "132-211 days". The top of that range assumed the cheap way of
+fitting the model (described next) costs a fixed 1.6x in quality. A later test showed that
+number does not hold for the 1B setup, so I dropped it. The real quality cost at 1B is not
+measured yet. 106 days is how long the computing takes, not a promise about how good the
+result will be.
 
 ## Why a laptop GPU can't just "fit" a model this size
 
@@ -89,6 +91,10 @@ vocabulary table and ended up way bigger than the others, which wasted memory th
 have gone to training more of the model live at once. Fixing that split brought the cost
 down from about 4x to about 1.6x. It's still a real cost, not a free lunch, and I'd rather say that
 plainly than let anyone think this is a trick with no tradeoff.
+
+Update (November): that 1.6x came from one small test. A later test with more blocks found
+a bigger cost that was still growing at the end of the run. So I no longer quote 1.6x for
+the 1B model. The real cost at 1B is being measured now, and I won't guess it here.
 
 ## Idea two: shrink the weights themselves
 
@@ -156,6 +162,39 @@ part of why the step time came down by more than 40% since August.
 The lesson I keep re-learning: "I think there's nothing left to speed up" has been wrong
 multiple times in a row now. I try to say it a lot less confidently these days.
 
+## November: one more speed round, and what it doesn't prove
+
+First a change that made steps slower on purpose. The model now trains 4 layers per block,
+so a 1B model has 7 blocks instead of 13. That learned clearly better in a test (lower loss
+on text it never trained on), for about 7% slower steps.
+
+Then, on that setup, a run of small measured changes took one step from 12.6 seconds to
+**9.89 seconds**. Most of them give the exact same numbers as before, bit for bit, so they
+can't hurt the model. The biggest one doesn't: a rewritten version of the recurrent
+calculation saves about 1.2 seconds a step, but rounds slightly differently. Its error against
+an exact reference is the same size as the old version's, and in a 1,800-step test on the
+real 1B model (two runs each) its loss on unseen text was not worse. "Not worse over 1,800
+steps" is all I'm claiming. Nobody knows yet if those tiny rounding differences add up over a
+full run of 925,000 steps.
+
+The strangest find was a Windows one. Some stretches of training ran two to two and a half
+times slower for no visible reason. The cause: the training run fills the card right up to
+the driver's limit. When any other program wanted a bit of graphics memory, Windows quietly
+moved part of the training run's memory into ordinary RAM, which is much slower. PyTorch keeps
+reused memory in a cache, so it kept using those slow pieces, and the slowdown never went
+away. The fix is to empty that cache each time training moves to the next block, so a hit
+lasts one block at most. It costs about 0.01 seconds a step.
+
+One more fix: the trainer can now check its loss on held-out text during a 1B run (before,
+that crashed). Checking every 500 steps costs less than 1%.
+
+After all that, a fresh profile found nothing left worth even 0.2 seconds a step that keeps
+the numbers identical. The next ideas change the maths, so each needs a proper quality test
+first.
+
+Still not measured: the block-at-a-time quality cost at 1B, whether the new rounding matters
+over a whole run, and the lower-precision matrix maths over a whole run.
+
 ## What doesn't work (and why I'm telling you)
 
 I spent real time on things that didn't pan out, and I think that's worth being honest
@@ -194,12 +233,11 @@ is more useful than pretending it never happened.
 ## So what does this actually get you?
 
 On this laptop's 6GB graphics card, right now: a 1.1 billion parameter model trains
-cleanly, using about 5.2GB of the card's 6GB — close to full, but not spilling over. It
-processes a little over 2,600 tokens per second. A full, proper training run — enough real
-text for the model to actually learn something, not just memorize a small sample — is
-projected to take somewhere between four and a half and seven months, depending
-on whether you're willing to accept the one-block-at-a-time quality cost described above
-or insist on matching full-quality training exactly.
+cleanly, using 82-85% of the card — close to full, but not spilling over. It processes
+about 3,300 tokens per second. A full, proper training run — enough real text for the model
+to actually learn something, not just memorize a small sample — is projected to take about
+106 days of computing, roughly three and a half months. How much quality the
+one-block-at-a-time trick costs at this size is not measured yet.
 
 That's not fast. It's genuinely possible, on hardware nobody expected to be capable of it,
 which is the whole point. A stronger desktop card should be faster. Spec sheets suggest
@@ -218,15 +256,16 @@ biggest one that fits, so don't read across a row as "this size in this time":
 
 | Card's VRAM | Biggest model that fits | Rough pretrain time |
 |---|---|---|
-| **6GB** (what I have) | **~1.58B — measured** | 132-211 days for 1.1B, projected from measured speed |
+| **6GB** (what I have) | **~1.58B — measured** | about 106 days of compute for 1.1B, projected from measured speed (132-211 in October) |
 | 8GB | ~2.2B | up to 246-392 days for 1.5B |
 | 12GB | ~3.5B | up to 682-1,090 days for 2.5B |
 | 16GB | ~4.8B | rough guess: 333-532 days for 3.5B |
 | 24GB | ~7.5B | rough guess: 401-1,490 days for 5B |
 
-Two honest caveats on that table. First, "biggest model that fits" past the 6GB row is a
+Three honest caveats on that table. First, "biggest model that fits" past the 6GB row is a
 simple ratio, not a measurement — nobody's run this on an 8, 12, 16, or 24GB card yet.
-Second, the 8 and 12GB times assume that bigger card runs no faster than this laptop, so
+Second, the other rows were scaled from the October 132-211 day figure and have not been
+redone for the November numbers. Third, the 8 and 12GB times assume that bigger card runs no faster than this laptop, so
 they are upper limits. The 16 and 24GB times use published spec-sheet numbers, but they
 compare those against a calculated figure for this laptop, not a benchmark.
 
@@ -302,6 +341,12 @@ died.
 | 2026-10-23 | Trying the lowest-precision format on the recurrent calculation too | normal path: small error in a simulation | **up to 6-18x worse error right after converting, and no speed gain unless done every step — rejected** |
 | 2026-10-24 | Measuring, for real, how big a model fits with everything except block-training | assumed around 700M-1.1B from an old estimate | **measured ~340M** at 85% of the card, ~378M at 96% — the old estimate used the wrong optimizer as its stand-in |
 | 2026-10-24 | The startup double-memory check, again | looked like the real training loop failing | same underlying bug as the July one, just the other half of it — fixed |
+| 2026-11-12 | Re-checking the block-at-a-time quality cost with more blocks (small stand-in) | 1.6x from one small test | **bigger and still growing — 1.6x no longer quoted for 1B** |
+| 2026-11-14 | Training 4 layers per block (7 blocks instead of 13) | 13 blocks | **better loss on unseen text, about 7% slower steps — new default** |
+| 2026-11-14/15 | Speedups that keep every number identical, four rounds | 12.6 seconds a step | **11.1 seconds, same numbers bit for bit** |
+| 2026-11-15/16 | A rewritten recurrent calculation that rounds slightly differently | 11.1 seconds a step | **9.89 seconds; loss on unseen text not worse over 1,800 steps — now the default** |
+| 2026-11-16/17 | Stretches of training running 2-2.5x slower on Windows | another program took graphics memory | **cause found, cache now emptied at each block switch — a hit lasts one block** |
+| 2026-11-18 | Checking held-out loss inside the 1B trainer | crashed | **fixed, same numbers as the separate check, under 1% cost every 500 steps** |
 
 A few more real rejected ideas that don't have an exact date pinned down: an earlier,
 "novel" version of the core architecture, which turned out to simply lose to the published

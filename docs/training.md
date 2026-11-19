@@ -34,6 +34,14 @@ numbers transferring across scale, let alone across hardware.
 
 ## Before / after — same hardware, one week of real fixes (2026-08 -> 2026-10)
 
+> **Current number (2026-11-18): the default 1B k4 step is 9.890 s** (`--scan-kernel t`
+> default, 7 BCD blocks of 4 layers; #210 re-time, 9.865 s in the #213 speed hunt). That is
+> ~106 days for 925,000 steps at 8 x 4096 tokens (~3,310 tok/s). Before the #207-#210 round it
+> was 11.285 s (~121 days). History at 1B k4: 12.60 -> 12.10 -> 11.79 -> 11.285 -> 11.095 ->
+> 9.890 s. The 13.294 / 12.335 s and 132-211 day figures below are for the old 13-block layout
+> and older code: stale. The BCD quality cost at 1B with today's layout is not measured (#198
+> showed the old 1.6x does not carry over). See docs/state.md (#215 roll-up).
+
 | | August 2026 | October 2026 (now) |
 |---|---|---|
 | 1B step time | 21.81 s/step | **13.294 s/step** (-39%) |
@@ -218,6 +226,8 @@ CPU/NVMe offload (not wired).
 
 ### Held-out eval in the 1B BCD `--offload` recipe: `--val-every` works since #213 (2026-11-18)
 
+**Use `--val-every 500` for a long run: 100 costs 3.7% of the step, 500 costs 0.7%.**
+
 **One line: add `--val-fraction 0.001 --val-every 500 --val-batches 64` to the 1B k4 command and
 the trainer scores the same 64 held-out windows as the #208/#209 harness, bit for bit. One eval
 takes 38.2 s; at `--val-every 500` that is +0.08 s per step (0.7%), at 100 it is +0.38 s (3.7%).
@@ -363,7 +373,9 @@ error that names the flag.
 keep their activations instead of being recomputed in backward. Bit-identical. At 1B k4,
 N=1 is -0.12 s/step (12.10 s with the other #202 changes) at unchanged peak VRAM; N=2 on
 every block fails the 85% guard (86.6%). A comma list gives one N per layer block:
-`1,1,2,2,3,3` is 12.00 s at 84.0% peak reserved (thin margin). Default 0.
+`1,1,2,2,3,3` is 12.00 s at 84.0% peak reserved (thin margin). Default 1 since #207 (`0` opts
+out). Re-timed on today's defaults (#213): the list is 9.773 s vs 9.865 s for the default, so
+it now saves only ~0.09 s.
 
 `--scan-kernel` (#206, default `t` since #210): which DeltaNet scan kernels the strided-IO
 path runs. `t` keeps the state transposed and fuses the checkpoint pass into the recompute
@@ -372,6 +384,15 @@ step is **9.890 s** vs **11.097 s** with `--scan-kernel v1` (spreads 0.019 / 0.0
 82.3% in both. Not bit-identical to `v1` (fp32 rounding-level; same fp64 error, #208); held-out loss
 over 1800 steps x 2 seeds was 5.21862 (t) vs 5.21976 (v1), lower at all 18 turn ends (#209).
 `--scan-kernel v1` is the opt-out: use it to continue or reproduce a run started before #210.
+
+`--fused-norm-residual` (#208, opt-in, default off): adds the residual gradient inside the
+RMSNorm backward kernel. -0.051 s/step alone, but only -0.041 s on top of `t`, so it stays
+off. One of its tests (`test_bcd_offload_trajectory_close_and_path_ran`) fails depending on
+test order on main.
+
+The #213 speed hunt found no same-bits change worth 0.2 s/step or more on top of these
+defaults. Muon with 3 Newton-Schulz steps (`Muon.step` 0.514 -> 0.330 s) would need a loss A/B
+first. See docs/state.md (#215).
 
 **Measured on this card** (`scripts/bench_block_coordinate_vram.py`, isolated subprocesses,
 `results/bcd_vram.json`):

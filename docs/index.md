@@ -78,6 +78,7 @@ Mamba or RWKV has ever been run.
 | flat ms/token from N=256→4096 (O(1) in time) | measured, benchmarks_speed.md |
 | beats a **matched vanilla transformer** at equal compute, 12M body | measured 2026-08-16, single seed |
 | ~30 tokens/param, not Chinchilla's 20 | measured 2026-08-16, size trend unresolved |
+| 1.11B BCD step (7 blocks of 4 layers, `--offload`) is **9.89 s**, ~106 days of compute for 925,000 steps | measured 2026-11-16 (#210); BCD quality cost at 1B not measured. Trail in state.md (#215 roll-up) |
 | 6.29 MB vs 2.46 GB of context memory at 100K tokens | **CALCULATED, never measured** |
 
 The stack — block-coordinate descent, CPU weight offload, ternary quantisation, tied
