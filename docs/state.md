@@ -5,6 +5,69 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## BCD costs ~32% higher held-out loss than full backprop at equal steps, and the gap is not closing (2026-11-19, #214)
+
+**One line: on the real trainer and production flags, at the largest size where full backprop
+fits (208.7M, d832 x 24 layers), the 1B BCD plan (7 blocks, 100 steps per block, offload) ends
+4000 steps 1.24 nats worse than full backprop (32% higher loss, perplexity x3.5). Full backprop
+reached BCD's final loss at step ~596, so BCD needed 6.7x the steps, and that multiplier grew
+all run (3.8x at step 1000). Per step BCD is 1.63x faster, so full is still ~4.2x faster in
+wall-clock to the same loss. 200 steps per block is 0.02 nats better than 100 at step 2000:
+not a lever.**
+
+### Setup (`scripts/ab_bcd_penalty_214.py`, `results/bcd_penalty_214/`)
+- #209 held-out harness, one arm per process. PROD_ARGV with `--d-model 832 --n-heads 26`
+  (head dim 32, as 1B), 24 layers, attention at 6 and 18, grad_accum 8 (32,768 tokens/step),
+  scan-kernel t, `--deterministic`. 4000-step schedule, warmup 400, cosine to 0.
+- `full`: PROD_ARGV minus `--offload` (so no BCD), plus `--grad-checkpoint`. `bcd100`/`bcd200`:
+  PROD_ARGV (BCD + offload, 4 layers per block = 7 blocks).
+- Same data order (shuffle seed pinned), same 64 held-out windows (one target sha over every
+  eval), seed = model init only.
+
+### Size: 300-500M does not fit for full backprop
+Full backprop at batch 1 x 4096, grad_accum 8, steady-state step: d768 180.8M 73.8% reserved;
+**d832 208.7M 83.4%, 6.68 s/step (used)**; d896 238.6M 91-93.5% and slowing after an eval;
+d1024 304.2M 111%, 42-70 s/step (spilling). The 2026-10-24 entry's "304M fits at 72%" does not
+hold at the steady-state step with today's stack.
+
+### Result (seed 0 pair, 4000 steps)
+
+| step | Mtok | full | BCD 100 | gap (nats) | % worse | full reaches BCD loss at | BCD needs |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1000 | 32.8 | 4.639 | 6.040 | +1.401 | 30.2% | 264 | 3.8x steps |
+| 2000 | 65.5 | 4.207 | 5.510 | +1.303 | 31.0% | 414 | 4.8x |
+| 3000 | 98.3 | 3.996 | 5.230 | +1.234 | 30.9% | 539 | 5.6x |
+| 4000 | 131.1 | 3.884 | 5.127 | +1.243 | 32.0% | 596 | 6.7x |
+
+- Gap in nats shrinks 1.40 -> 1.23 by step 2500, then stays flat. In steps it keeps growing,
+  because full's curve flattens. The steps figure uses full's 4000-step curve, so it is a lower
+  bound (a full run scheduled to end at ~600 steps would anneal and do better).
+- 6.7x is close to the 7 blocks: each block gets 1/7 of the updates, and BCD recovers almost
+  none of that from the other blocks moving.
+- Time: full 6.69 s/step, BCD 4.10 (1.63x faster per step). Full hit 5.127 in ~1.1 h; BCD took
+  4.62 h. At equal wall-clock (4.62 h) full is at ~4.09.
+- Can it see a difference? Seed spread at step 500 (seed 1 run to 500): full 0.0023, BCD
+  0.0045, against a 2.67 gap with both seeds agreeing (+2.672, +2.670). 64/64 windows worse at
+  step 4000 (sem 0.020). Every full step trained all 208.7M params; every BCD step one block
+  (27.8-41.8M).
+
+### Block length (seed 0, same 4000-step schedule)
+| step | 100/block | 200/block | 200 - 100 (paired) |
+|---:|---:|---:|---:|
+| 1000 | 6.040 | 6.623 | +0.583 |
+| 1500 | 5.678 | 5.944 | +0.266 |
+| 2000 | 5.510 | 5.490 | -0.020 (sem 0.003) |
+
+200 steps per block catches up once its rotations complete and is ahead by 0.02 at step 2000,
+1.5% of the gap to full. 50 per block was not run (16 h cap).
+
+### Cuts and limits
+- One seed per arm at 4000 steps (seed 1 only to 500); 200/block only to 2000; 50/block not
+  run. 16.2 h of GPU.
+- Not measured: the gap at 1B, at 925,000 steps, at other tokens per step. Here it did not
+  close over 4000 steps, and #198 (d512, other harness) saw it grow to 12,000 steps. Nothing
+  measured so far suggests it closes at length; how it moves at 1B is unmeasured.
+
 ## Speed round #207-#213 in one place: the default 1B k4 step is 9.89 s (~106 days for 925,000 steps), close to its floor; what is still unmeasured (2026-11-18, #215)
 
 **One line: on main today the default 1B k4 step is 9.890 s (#210 re-time; the #213 speed hunt
