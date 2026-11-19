@@ -67,6 +67,7 @@ hold at the steady-state step with today's stack.
 - Not measured: the gap at 1B, at 925,000 steps, at other tokens per step. Here it did not
   close over 4000 steps, and #198 (d512, other harness) saw it grow to 12,000 steps. Nothing
   measured so far suggests it closes at length; how it moves at 1B is unmeasured.
+
 ## Speed round #207-#213 in one place: the default 1B k4 step is 9.89 s (~106 days for 925,000 steps), close to its floor; what is still unmeasured (2026-11-18, #215)
 
 **One line: on main today the default 1B k4 step is 9.890 s (#210 re-time; the #213 speed hunt
