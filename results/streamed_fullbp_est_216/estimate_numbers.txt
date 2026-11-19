@@ -1,0 +1,38 @@
+compute, s/step (8 micro-batches)
+  forward, all 24 layers trainable                 3.19
+  re-forward inside segments (L2 only)             2.41
+  recompute + backward with weight grads          10.71
+  loss + embedding, trainable decoder              2.19
+  Muon, all 210 matrices, on GPU                   3.16
+  AdamW embedding                                  0.05
+  misc                                             0.03
+  TOTAL L2 (segment inputs parked)                21.73
+  TOTAL L1 (every layer input parked)             19.33
+  Muon per param on GPU: 3.13 ns; AdamW: 0.51 ns
+
+transfers per step, GB (L2)
+  H2D 18.59  = 3 x fp32 masters 4.04 + momentum 4.04 + segment inputs 1.61 + Adam 0.83
+  D2H 10.52  = segment inputs + masters + momentum + Adam
+  measured H2D pinned 13.06 GB/s, pageable 10.74 GB/s; D2H unmeasured
+  H2D busy at pinned rate 1.42 s = 7% of compute
+
+step time, s  (days = 925,000 x step / 86400)
+  low (L1, copies hidden)                                         19.43 s   208.0 days  1.96x BCD
+  likely (L2, copies hidden)                                      21.83 s   233.7 days  2.21x BCD
+  high (L2, all copies serial at pageable rate, +4.3% whole-run)  25.51 s   273.1 days  2.58x BCD
+  BCD k4 today                                                     9.89 s   105.9 days  1.00x BCD
+  break-even D2H rate for a 40 s step (H2D serial at pageable): 0.64 GB/s
+  full BP steps matching BCD's 925,000 (6.7x, 208M): 138,060 -> 34.9 days at likely
+
+host RAM, GB
+  rest of trainer process today (ws 5.09 - bf16 parked 2.02) 3.07
+  fp32 masters 4.04, Muon momentum fp32 4.04, AdamW fp32 0.83, segment inputs 1.61, all layer inputs 6.44
+  need L2 exact 13.59; L1 exact 18.42; L2 lean (bf16 momentum, bf16 master+SR, bf16 seg inputs) 8.74
+  available to the trainer today (ws max + lowest free) 8.33; with 0 workers +2.24 = 10.57
+  everything else on the PC 8.09; with 32 GB installed (x2 usable) available ~24.8
+
+VRAM allocated at the backward peak, GB (L2, estimate)
+  embedding + grad 0.82; current layer master/grad/momentum + fp8 copies + next in + previous out 1.09
+  segment layer inputs, 8 mb 1.07; hidden grads in+out 0.54; working set 0.3-0.6
+  total 3.83-4.13 (today 1B k4: 4.99 allocated / 5.30 reserved = 82%)
+  reserved at today's ratio 1.06: 4.06-4.38 = 63%-68% of the card
