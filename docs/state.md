@@ -5,6 +5,47 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Streamed full backprop at 1B: fast enough (~21.8 s/step, 2.2x BCD), but needs ~13.6 GB of host RAM and this laptop has ~8.3 GB free for it (2026-11-19, #216)
+
+**One line: a paper estimate, nothing run. Full backprop at 1B with every layer streamed through
+the GPU, one layer at a time, would take ~21.8 s/step (low 19.4, high 25.5) = 234 days for
+925,000 steps (208-273). That is well under the ~40 s bar (4x the 9.89 s BCD step). VRAM fits on
+paper (~3.8-4.1 GB allocated vs 4.99 today). Host RAM does not: fp32 masters + Muon momentum +
+AdamW state + checkpoints need ~13.6 GB in the trainer, and it can use ~8.3 GB today (10.6 with
+0 DataLoader workers). Worth building only after RAM is solved: 32 GB installed, or a 208M loss
+A/B showing bf16 momentum + bf16 master (stochastic rounding) + previous-step clipping cost
+nothing. If it works, the loss BCD reaches at 925,000 steps would take ~138,000 full steps,
+~35 days instead of 106 (using #214's 208M penalty; the penalty at 1B is unmeasured).**
+
+Full write-up: `results/streamed_fullbp_est_216/estimate.md`. Arithmetic:
+`scripts/estimate_streamed_fullbp_216.py` (output in `estimate_numbers.txt`).
+
+Design used: layer-major. Each layer runs all 8 micro-batches before the next, so its gradient
+finishes on the GPU and Muon updates it at once; gradients never go to host RAM. Segment inputs
+(every 4th layer) are parked in host RAM; backward re-forwards each 4-layer segment once to
+rebuild layer inputs (+2.41 s). Micro-batch-major (today's loop) was rejected: grads would have
+to leave the GPU 8 times per step (16-32 GB D2H) and live in host RAM (+4 GB).
+
+| | value | source |
+|---|---|---|
+| H2D pinned / pageable | 13.06 / 10.74 GB/s | `results/bcd_stall_200/stall_steps_ctrl.jsonl` trace (#200) |
+| D2H, duplex, CPU optimizer speed | unmeasured | - |
+| trainable layer per step (8 mb): DeltaNet fwd / recompute+bwd | 0.130 / 0.430 s | #213 per-layer table (copied into the results folder) |
+| attention layer fwd / recompute+bwd | 0.163 / 0.627 s | same |
+| Muon, all 1,009.5M matrix params, GPU | 3.16 s (3.13 ns/param) | #213 phases, 6 blocks summed |
+| compute total (fwd 3.19 + re-fwd 2.41 + bwd 10.71 + loss 2.19 + optim 3.21 + misc) | 21.73 s | arithmetic |
+| PCIe per step | H2D 18.6 GB, D2H 10.5 GB | arithmetic from sizes |
+| host RAM needed: rest 3.07 + masters 4.04 + momentum 4.04 + AdamW 0.83 + seg inputs 1.61 | 13.59 GB | arithmetic; rest from `results/frozen_codes_204/` |
+| host RAM available to the trainer | 8.33 GB (10.57 with 0 workers) | `results/frozen_codes_204/time_base*.jsonl` |
+
+- The speed verdict holds unless D2H is slower than 0.64 GB/s.
+- New code needed: fp32 host masters (frozen weights are parked in bf16 today, no master), a
+  D2H write-back path in `GPUBufferPool`, a layer-major training driver, per-layer optimizer
+  steps inside backward, a new clipping policy (global `clip_grad_norm_` cannot run before the
+  updates), save/resume of host state, tests over a sequence of steps.
+- Next, only with the maintainer's OK: one GPU check (~10-15 min) of a real 4-layer segment
+  streamed layer-major, predicted 3.41 s per segment; plus the RAM decision above.
+
 ## BCD costs ~32% higher held-out loss than full backprop at equal steps, and the gap is not closing (2026-11-19, #214)
 
 **One line: on the real trainer and production flags, at the largest size where full backprop
