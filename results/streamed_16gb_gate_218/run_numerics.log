@@ -1,0 +1,19 @@
+gpu used 93 MiB
+=== numerics_lr0.02 Thu, Nov 19, 2026 10:51:57 PM
+exit 0 Thu, Nov 19, 2026 10:59:51 PM
+[n218] final rne heldout 0.069672
+[n218] final lean_m8 heldout 0.069899
+[n218] done peak alloc 4.45 GB host ws 7.35
+gpu used 93 MiB
+=== numerics_lr0.002 Thu, Nov 19, 2026 10:59:51 PM
+exit 0 Thu, Nov 19, 2026 11:07:43 PM
+[n218] final rne heldout 0.132064
+[n218] final lean_m8 heldout 0.130437
+[n218] done peak alloc 4.45 GB host ws 7.64
+gpu used 93 MiB
+=== numerics_lr0.0005 Thu, Nov 19, 2026 11:07:43 PM
+exit 0 Thu, Nov 19, 2026 11:15:35 PM
+[n218] final rne heldout 0.166607
+[n218] final lean_m8 heldout 0.159179
+[n218] done peak alloc 4.45 GB host ws 7.35
+=== numerics done Thu, Nov 19, 2026 11:15:35 PM

@@ -1,0 +1,9 @@
+[p218] start gb=6.0 api=register avail 9.41 GB ws 0.66 commit 14.66/39.46 resp {'touch512MB_s': 0.029486100072972476, 'spawn_med_s': 0.022921300027519464, 'spawn_max_s': 0.02710000006482005}
+[p218] held 1.00 GB  chunk 17 ms  avail 8.33 ws 1.74 commit 15.79
+[p218] held 2.00 GB  chunk 22 ms  avail 7.24 ws 2.81 commit 16.93
+[p218] held 3.00 GB  chunk 21 ms  avail 6.16 ws 3.89 commit 18.14
+[p218] held 4.00 GB  chunk 22 ms  avail 5.08 ws 4.96 commit 19.36
+[p218] held 5.00 GB  chunk 23 ms  avail 4.01 ws 6.04 commit 20.58
+[p218] held 6.00 GB  chunk 23 ms  avail 2.92 ws 7.11 commit 21.80
+[p218] HELD 6.00/6.0 GB status=ok in 0.5s  avail 2.92 GB ws 7.11 commit 21.80  proof [{'chunk': 0, 'is_pinned': True, 'h2d_GBps_med': 13.26399757047359}, {'chunk': 23, 'is_pinned': True, 'h2d_GBps_med': 12.497809735543322}, {'chunk': 'pageable_ref', 'is_pinned': False, 'h2d_GBps_med': 12.906419442018587}]  resp {'touch512MB_s': 0.0330991999944672, 'spawn_med_s': 0.024297900032252073, 'spawn_max_s': 0.025069299968890846}  hold avail min 2.335993856
+[p218] freed in 0.2s avail 5.32 resp {'touch512MB_s': 0.029034400009550154, 'spawn_med_s': 0.023532100021839142, 'spawn_max_s': 0.02454160002525896}

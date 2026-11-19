@@ -1,0 +1,106 @@
+[n218] teacher targets for [0, 1, 2, 3, 99] in 6.1s
+[n218] SR check: mean bias -2.74e-06 (rel), |mean64(SR)-x| 8.785e-05 vs |RNE-x| 1.230e-04
+[n218] cast cost per layer (GPU): {'layer_matrix_params': 42074112, 'sr_ms': 7.119872093200684, 'rne_ms': 1.4776320457458496, 'int8_q_dq_ms': 12.824576377868652}
+[n218] setup muon_lr 0.02 arms ['ref', 'lean', 'rne', 'lean_m8'] muon params 168,165,376 aux 84,160 host ws 5.06 GB avail 5.68
+[n218] step-0 grad attribution {"park_bf16_only": {"grad_rel": 0.017357315006817482, "grad_cos": 0.9998493742613442, "per_layer": [0.02607930451631546, 0.013055851683020592, 0.008377616293728352, 0.011608554050326347]}, "park_fp32_repeat": {"grad_rel": 0.0, "grad_cos": 1.0000000000000002, "per_layer": [0.0, 0.0, 0.0, 0.0]}}
+[n218] s00 ref      loss 0.172326 held 0.172426    kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 6.6s
+[n218] s00 lean     loss 0.172326 held 0.172426    kept 1.0000 noise 0.103 grad_rel 1.74e-02 cum_err 0.2202 cum_kept 0.9813 cast 25.0ms t 5.3s
+[n218] s00 rne      loss 0.172326 held 0.172426    kept 0.9998 noise 0.072 grad_rel 1.74e-02 cum_err 0.2074 cum_kept 0.9811 cast 5.2ms t 4.8s
+[n218] s00 lean_m8  loss 0.172326 held 0.172426    kept 1.0000 noise 0.103 grad_rel 1.74e-02 cum_err 0.2202 cum_kept 0.9813 cast 25.6ms t 4.8s
+[n218] s01 ref      loss 0.153698                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.5s
+[n218] s01 lean     loss 0.153715                  kept 1.0000 noise 0.101 grad_rel 1.23e-01 cum_err 0.2536 cum_kept 0.9707 cast 26.2ms t 4.3s
+[n218] s01 rne      loss 0.153668                  kept 0.9998 noise 0.071 grad_rel 1.23e-01 cum_err 0.2467 cum_kept 0.9707 cast 5.3ms t 4.2s
+[n218] s01 lean_m8  loss 0.153715                  kept 1.0000 noise 0.101 grad_rel 1.23e-01 cum_err 0.2544 cum_kept 0.9706 cast 25.4ms t 4.3s
+[n218] s02 ref      loss 0.138817                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.9s
+[n218] s02 lean     loss 0.138881                  kept 1.0000 noise 0.100 grad_rel 2.27e-01 cum_err 0.2770 cum_kept 0.9633 cast 25.3ms t 4.3s
+[n218] s02 rne      loss 0.138852                  kept 0.9998 noise 0.070 grad_rel 2.25e-01 cum_err 0.2723 cum_kept 0.9633 cast 5.4ms t 4.2s
+[n218] s02 lean_m8  loss 0.138896                  kept 1.0000 noise 0.100 grad_rel 2.31e-01 cum_err 0.2789 cum_kept 0.9631 cast 25.7ms t 4.3s
+[n218] s03 ref      loss 0.126444                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.7s
+[n218] s03 lean     loss 0.126581                  kept 1.0000 noise 0.099 grad_rel 3.58e-01 cum_err 0.2966 cum_kept 0.9572 cast 25.2ms t 4.2s
+[n218] s03 rne      loss 0.126531                  kept 0.9998 noise 0.069 grad_rel 3.38e-01 cum_err 0.2932 cum_kept 0.9574 cast 5.4ms t 4.2s
+[n218] s03 lean_m8  loss 0.126595                  kept 1.0000 noise 0.099 grad_rel 3.61e-01 cum_err 0.2998 cum_kept 0.9568 cast 25.0ms t 4.2s
+[n218] s04 ref      loss 0.113361 held 0.116180    kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms refdrift 1.214e+00 t 5.1s
+[n218] s04 lean     loss 0.113453 held 0.116279    kept 1.0000 noise 0.098 grad_rel 3.50e-01 cum_err 0.3139 cum_kept 0.9518 cast 25.6ms t 4.8s
+[n218] s04 rne      loss 0.113310 held 0.116200    kept 0.9998 noise 0.069 grad_rel 3.72e-01 cum_err 0.3112 cum_kept 0.9522 cast 5.4ms t 4.8s
+[n218] s04 lean_m8  loss 0.113350 held 0.116264    kept 1.0000 noise 0.098 grad_rel 3.80e-01 cum_err 0.3184 cum_kept 0.9515 cast 26.0ms t 4.8s
+[n218] s05 ref      loss 0.104452                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.2s
+[n218] s05 lean     loss 0.104655                  kept 1.0000 noise 0.097 grad_rel 5.42e-01 cum_err 0.3292 cum_kept 0.9465 cast 25.4ms t 4.2s
+[n218] s05 rne      loss 0.104670                  kept 0.9998 noise 0.068 grad_rel 5.79e-01 cum_err 0.3270 cum_kept 0.9466 cast 5.3ms t 4.2s
+[n218] s05 lean_m8  loss 0.104660                  kept 1.0000 noise 0.097 grad_rel 5.75e-01 cum_err 0.3349 cum_kept 0.9459 cast 25.6ms t 4.2s
+[n218] s06 ref      loss 0.097853                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.4s
+[n218] s06 lean     loss 0.097858                  kept 1.0000 noise 0.096 grad_rel 6.77e-01 cum_err 0.3428 cum_kept 0.9419 cast 25.2ms t 4.2s
+[n218] s06 rne      loss 0.097889                  kept 0.9998 noise 0.068 grad_rel 6.59e-01 cum_err 0.3410 cum_kept 0.9419 cast 5.3ms t 4.2s
+[n218] s06 lean_m8  loss 0.097977                  kept 1.0000 noise 0.096 grad_rel 7.06e-01 cum_err 0.3497 cum_kept 0.9408 cast 25.2ms t 4.2s
+[n218] s07 ref      loss 0.092469                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.2s
+[n218] s07 lean     loss 0.092524                  kept 1.0000 noise 0.096 grad_rel 8.61e-01 cum_err 0.3554 cum_kept 0.9376 cast 26.0ms t 4.2s
+[n218] s07 rne      loss 0.092543                  kept 0.9998 noise 0.067 grad_rel 7.97e-01 cum_err 0.3537 cum_kept 0.9376 cast 5.3ms t 4.2s
+[n218] s07 lean_m8  loss 0.092719                  kept 1.0000 noise 0.095 grad_rel 8.83e-01 cum_err 0.3634 cum_kept 0.9361 cast 25.2ms t 4.2s
+[n218] s08 ref      loss 0.086749 held 0.090094    kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms refdrift 1.098e+00 t 5.1s
+[n218] s08 lean     loss 0.086759 held 0.090127    kept 1.0000 noise 0.095 grad_rel 9.35e-01 cum_err 0.3672 cum_kept 0.9336 cast 25.3ms t 4.8s
+[n218] s08 rne      loss 0.086588 held 0.090010    kept 0.9998 noise 0.067 grad_rel 8.84e-01 cum_err 0.3656 cum_kept 0.9338 cast 5.3ms t 4.7s
+[n218] s08 lean_m8  loss 0.086778 held 0.090151    kept 1.0000 noise 0.095 grad_rel 9.71e-01 cum_err 0.3761 cum_kept 0.9316 cast 25.1ms t 4.8s
+[n218] s09 ref      loss 0.083292                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.4s
+[n218] s09 lean     loss 0.083374                  kept 1.0000 noise 0.094 grad_rel 9.77e-01 cum_err 0.3781 cum_kept 0.9296 cast 25.3ms t 4.2s
+[n218] s09 rne      loss 0.083218                  kept 0.9998 noise 0.066 grad_rel 9.85e-01 cum_err 0.3765 cum_kept 0.9300 cast 5.3ms t 4.2s
+[n218] s09 lean_m8  loss 0.083461                  kept 1.0000 noise 0.094 grad_rel 1.05e+00 cum_err 0.3879 cum_kept 0.9271 cast 25.5ms t 4.2s
+[n218] s10 ref      loss 0.080721                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.4s
+[n218] s10 lean     loss 0.080899                  kept 1.0000 noise 0.094 grad_rel 1.15e+00 cum_err 0.3881 cum_kept 0.9254 cast 25.5ms t 4.2s
+[n218] s10 rne      loss 0.080767                  kept 0.9998 noise 0.066 grad_rel 1.10e+00 cum_err 0.3867 cum_kept 0.9262 cast 5.3ms t 4.2s
+[n218] s10 lean_m8  loss 0.080945                  kept 1.0000 noise 0.093 grad_rel 1.15e+00 cum_err 0.3991 cum_kept 0.9228 cast 25.7ms t 4.2s
+[n218] s11 ref      loss 0.078611                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.6s
+[n218] s11 lean     loss 0.078799                  kept 1.0000 noise 0.093 grad_rel 1.23e+00 cum_err 0.3976 cum_kept 0.9215 cast 25.9ms t 4.2s
+[n218] s11 rne      loss 0.078777                  kept 0.9998 noise 0.066 grad_rel 1.18e+00 cum_err 0.3963 cum_kept 0.9224 cast 5.3ms t 4.1s
+[n218] s11 lean_m8  loss 0.078844                  kept 1.0000 noise 0.093 grad_rel 1.14e+00 cum_err 0.4098 cum_kept 0.9187 cast 25.3ms t 4.2s
+[n218] s12 ref      loss 0.076517 held 0.078986    kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms refdrift 1.074e+00 t 5.0s
+[n218] s12 lean     loss 0.076618 held 0.079044    kept 1.0000 noise 0.093 grad_rel 1.21e+00 cum_err 0.4066 cum_kept 0.9178 cast 25.6ms t 4.7s
+[n218] s12 rne      loss 0.076558 held 0.078965    kept 0.9998 noise 0.065 grad_rel 1.16e+00 cum_err 0.4055 cum_kept 0.9188 cast 5.5ms t 4.7s
+[n218] s12 lean_m8  loss 0.076592 held 0.079025    kept 1.0000 noise 0.092 grad_rel 1.25e+00 cum_err 0.4198 cum_kept 0.9147 cast 25.2ms t 4.7s
+[n218] s13 ref      loss 0.075048                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.3s
+[n218] s13 lean     loss 0.075221                  kept 1.0000 noise 0.092 grad_rel 1.27e+00 cum_err 0.4155 cum_kept 0.9139 cast 25.4ms t 4.2s
+[n218] s13 rne      loss 0.075337                  kept 0.9998 noise 0.065 grad_rel 1.31e+00 cum_err 0.4141 cum_kept 0.9147 cast 5.2ms t 4.2s
+[n218] s13 lean_m8  loss 0.075485                  kept 1.0000 noise 0.092 grad_rel 1.39e+00 cum_err 0.4293 cum_kept 0.9103 cast 25.1ms t 4.2s
+[n218] s14 ref      loss 0.074145                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.4s
+[n218] s14 lean     loss 0.074204                  kept 1.0000 noise 0.092 grad_rel 1.27e+00 cum_err 0.4240 cum_kept 0.9103 cast 25.4ms t 4.2s
+[n218] s14 rne      loss 0.074233                  kept 0.9998 noise 0.065 grad_rel 1.24e+00 cum_err 0.4226 cum_kept 0.9111 cast 5.3ms t 4.1s
+[n218] s14 lean_m8  loss 0.074370                  kept 1.0000 noise 0.092 grad_rel 1.27e+00 cum_err 0.4387 cum_kept 0.9062 cast 25.2ms t 4.2s
+[n218] s15 ref      loss 0.073262                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.3s
+[n218] s15 lean     loss 0.073429                  kept 1.0000 noise 0.092 grad_rel 1.29e+00 cum_err 0.4322 cum_kept 0.9067 cast 25.1ms t 4.2s
+[n218] s15 rne      loss 0.073514                  kept 0.9998 noise 0.065 grad_rel 1.31e+00 cum_err 0.4307 cum_kept 0.9074 cast 5.3ms t 4.2s
+[n218] s15 lean_m8  loss 0.073513                  kept 1.0000 noise 0.091 grad_rel 1.33e+00 cum_err 0.4477 cum_kept 0.9022 cast 25.3ms t 4.2s
+[n218] s16 ref      loss 0.072370 held 0.074354    kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms refdrift 1.052e+00 t 5.2s
+[n218] s16 lean     loss 0.072463 held 0.074525    kept 1.0000 noise 0.092 grad_rel 1.27e+00 cum_err 0.4401 cum_kept 0.9032 cast 25.4ms t 4.8s
+[n218] s16 rne      loss 0.072529 held 0.074534    kept 0.9998 noise 0.065 grad_rel 1.33e+00 cum_err 0.4386 cum_kept 0.9039 cast 5.3ms t 4.7s
+[n218] s16 lean_m8  loss 0.072506 held 0.074553    kept 1.0000 noise 0.091 grad_rel 1.29e+00 cum_err 0.4564 cum_kept 0.8983 cast 25.3ms t 4.7s
+[n218] s17 ref      loss 0.071672                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.4s
+[n218] s17 lean     loss 0.071720                  kept 1.0000 noise 0.091 grad_rel 1.22e+00 cum_err 0.4478 cum_kept 0.8999 cast 25.7ms t 4.2s
+[n218] s17 rne      loss 0.071925                  kept 0.9998 noise 0.065 grad_rel 1.35e+00 cum_err 0.4462 cum_kept 0.9003 cast 5.3ms t 4.2s
+[n218] s17 lean_m8  loss 0.071906                  kept 1.0000 noise 0.091 grad_rel 1.32e+00 cum_err 0.4649 cum_kept 0.8945 cast 25.2ms t 4.2s
+[n218] s18 ref      loss 0.071102                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.2s
+[n218] s18 lean     loss 0.071207                  kept 1.0000 noise 0.091 grad_rel 1.21e+00 cum_err 0.4553 cum_kept 0.8965 cast 25.2ms t 4.2s
+[n218] s18 rne      loss 0.071283                  kept 0.9998 noise 0.065 grad_rel 1.35e+00 cum_err 0.4535 cum_kept 0.8970 cast 5.4ms t 4.2s
+[n218] s18 lean_m8  loss 0.071281                  kept 1.0000 noise 0.091 grad_rel 1.27e+00 cum_err 0.4732 cum_kept 0.8908 cast 25.7ms t 4.3s
+[n218] s19 ref      loss 0.070403                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.3s
+[n218] s19 lean     loss 0.070554                  kept 1.0000 noise 0.092 grad_rel 1.37e+00 cum_err 0.4625 cum_kept 0.8931 cast 26.3ms t 4.2s
+[n218] s19 rne      loss 0.070534                  kept 0.9998 noise 0.065 grad_rel 1.29e+00 cum_err 0.4607 cum_kept 0.8936 cast 5.3ms t 4.2s
+[n218] s19 lean_m8  loss 0.070651                  kept 1.0000 noise 0.091 grad_rel 1.33e+00 cum_err 0.4812 cum_kept 0.8871 cast 25.1ms t 4.2s
+[n218] s20 ref      loss 0.069589 held 0.071701    kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms refdrift 1.030e+00 t 5.0s
+[n218] s20 lean     loss 0.069651 held 0.071736    kept 1.0000 noise 0.092 grad_rel 1.27e+00 cum_err 0.4695 cum_kept 0.8899 cast 25.6ms t 4.7s
+[n218] s20 rne      loss 0.069702 held 0.071766    kept 0.9998 noise 0.065 grad_rel 1.25e+00 cum_err 0.4678 cum_kept 0.8903 cast 5.5ms t 4.7s
+[n218] s20 lean_m8  loss 0.069921 held 0.072012    kept 1.0000 noise 0.091 grad_rel 1.28e+00 cum_err 0.4890 cum_kept 0.8835 cast 25.6ms t 4.8s
+[n218] s21 ref      loss 0.068980                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.4s
+[n218] s21 lean     loss 0.069037                  kept 1.0000 noise 0.092 grad_rel 1.31e+00 cum_err 0.4764 cum_kept 0.8867 cast 25.2ms t 4.2s
+[n218] s21 rne      loss 0.069001                  kept 0.9998 noise 0.065 grad_rel 1.28e+00 cum_err 0.4747 cum_kept 0.8872 cast 5.2ms t 4.1s
+[n218] s21 lean_m8  loss 0.069319                  kept 1.0000 noise 0.091 grad_rel 1.35e+00 cum_err 0.4966 cum_kept 0.8798 cast 25.4ms t 4.2s
+[n218] s22 ref      loss 0.068410                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.5s
+[n218] s22 lean     loss 0.068569                  kept 1.0000 noise 0.092 grad_rel 1.27e+00 cum_err 0.4831 cum_kept 0.8836 cast 25.9ms t 4.2s
+[n218] s22 rne      loss 0.068572                  kept 0.9998 noise 0.065 grad_rel 1.37e+00 cum_err 0.4814 cum_kept 0.8840 cast 5.3ms t 4.2s
+[n218] s22 lean_m8  loss 0.068770                  kept 1.0000 noise 0.091 grad_rel 1.40e+00 cum_err 0.5039 cum_kept 0.8763 cast 25.4ms t 4.2s
+[n218] s23 ref      loss 0.067838                  kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 4.4s
+[n218] s23 lean     loss 0.067940                  kept 1.0000 noise 0.092 grad_rel 1.32e+00 cum_err 0.4896 cum_kept 0.8804 cast 25.9ms t 4.2s
+[n218] s23 rne      loss 0.067890                  kept 0.9998 noise 0.065 grad_rel 1.31e+00 cum_err 0.4879 cum_kept 0.8809 cast 5.3ms t 4.2s
+[n218] s23 lean_m8  loss 0.068167                  kept 1.0000 noise 0.092 grad_rel 1.43e+00 cum_err 0.5111 cum_kept 0.8727 cast 25.6ms t 4.2s
+[n218] final ref heldout 0.069594
+[n218] final lean heldout 0.069654
+[n218] final rne heldout 0.069672
+[n218] final lean_m8 heldout 0.069899
+[n218] done peak alloc 4.45 GB host ws 7.35

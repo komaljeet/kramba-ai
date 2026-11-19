@@ -1,0 +1,3 @@
+[o218] python start                       ws 0.018 GB  private 0.010 GB  sys avail 10.12
+[o218] import torch                       ws 0.526 GB  private 1.291 GB  sys avail 9.57
+[o218] CUDA context                       ws 0.661 GB  private 1.560 GB  sys avail 9.43

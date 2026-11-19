@@ -5,6 +5,52 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Streamed full backprop at 1B fits 16 GB only with a lean host state: 5.5 GB pinned + process, ~7 GB of ~8.1 available; Windows caps pinned memory at 6.75 GiB (2026-11-19, #218)
+
+**One line: the full-precision design cannot run on this laptop at all: Windows will not pin more
+than 6.75 GiB for the GPU (the WDDM shared-memory budget, half of RAM) and #217's state needs
+10.5 GB pinned. A lean state fits: bf16 masters with stochastic rounding, bf16 Muon momentum,
+5 bf16 parked group inputs = 5.54 GB pinned + 1.47 GB measured process floor = 7.0 GB vs 8.1 GB
+available at rest (1.1 GB margin; 0.5 GB short if the process stays as fat as today's trainer,
+3.07 GB). Cost ~+0.2 s on a 22.5 s step. On the real 1B group, stochastic rounding keeps 99% of
+the update where round-to-nearest keeps 23%. Proxy only: a held-out LM-loss A/B is still needed.**
+
+### Setup (`results/streamed_16gb_gate_218/`, summary.txt there)
+- Step 1: `scripts/probe_pinned_host_218.py`, one process per size, cudaHostAlloc (256 MiB and
+  1 GiB chunks) and cudaHostRegister; typeperf paging log; responsiveness probes; a 3 GiB hog run.
+  Other RAM users at the time: VS Code 2.2 GB, Claude CLI 1.1 GB, Avast ~0.6 GB, 109 stray
+  tail/grep processes 0.57 GB; no browser.
+- Step 2: `budget.py` from exact counts; `scripts/probe_process_overhead_218.py` for the floor.
+- Step 3: `scripts/bench_lean_numerics_218.py`: real layers 4-7, production stack, deterministic,
+  24 steps, Muon lr 0.02 / 0.002 / 0.0005; synthetic teacher-imitation loss with a held-out batch.
+  Arms: fp32 ref, lean (SR), round-to-nearest (falsifier), int8 momentum, fp32 control with the
+  micro-batch order reversed.
+
+### Result
+- Available RAM at rest 8.1 GB; 9.4-10.1 GB after Windows trimmed idle apps. Commit limit 39.5 GB
+  never binds. Pinned: 1-6 GiB fine (0.6 s to pin 6 GiB, 13.3 GB/s, no slowdown); 6.75 GiB hard
+  cap with both APIs and 1.8-3.3 GB still free. Shared Usage counter rises by exactly the pinned
+  amount; dxdiag budget 7827 MB. Safe pinned size: 6.0 GiB.
+- Budget (GB): exact 10.52 pinned; lean 5.54; smallest 4.13 (int8 momentum, bf16 embedding Adam
+  moments). Process floor 1.47 (torch 0.51, CUDA 0.14, kernels 0.75); #217 bench 2.18, trainer 3.07.
+- Held-out gap to fp32 at step 24, % of fp32's loss drop (lr 0.02 / 0.002 / 0.0005): lean
+  +0.06 / +0.48 / +0.90; round-to-nearest +0.08 / +4.3 / +57; int8 momentum +0.30 / +0.48 / +1.34;
+  fp32 control's largest mid-run wobble 0.17 / 0.14 / 0.45. Update kept per step at lr 0.0005:
+  SR 1.00, round-to-nearest 0.24.
+- Rejected levers: embedding Adam on GPU (VRAM to ~83%), parked inputs on SSD (620 TB written),
+  recomputing parked inputs (+7.8 s/step, est.).
+
+### Falsifiers
+- Round-to-nearest must lose small updates: it keeps 24% and its loss stalls. SR does not.
+- Repeated ref gradient differs by exactly 0; ref reproduces bit for bit across processes;
+  ref recompute == forward. Pinning proven by is_pinned() and the copy rate.
+
+### What it means
+- Gate 1 passes with the lean state and 0 workers, with a thin margin unless the trainer process
+  is cut toward its 1.47 GB floor or int8 momentum is used. Next: a 208M fp32-vs-lean held-out
+  A/B (~7.5 GPU h), then 1B BCD vs lean streamed (~9.5 GPU h). Unmeasured: the trainer's non-state
+  RAM in this design, a full 24-layer run holding 5.5 GB pinned, long runs with a browser open.
+
 ## Streamed full backprop at 1B, one group measured: 3.55 s vs 3.41 predicted, full step ~22.5 s (2026-11-19, #217)
 
 **One line: the real 1B layers 4-7 run the #216 layer-major design (fp32 masters, momentum and
