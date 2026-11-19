@@ -5,6 +5,63 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## Streamed full backprop at 1B, one group measured: 3.55 s vs 3.41 predicted, full step ~22.5 s (2026-11-19, #217)
+
+**One line: the real 1B layers 4-7 run the #216 layer-major design (fp32 masters, momentum and
+moments in host RAM, weights streamed in, Muon after each layer's backward, state written back)
+in 3.545 s per group step, 1.04x the 3.41 s prediction. That puts the full 1B step at ~22.5 s
+(2.27x BCD, ~241 days for 925,000 steps). Copies cost 0.06 s per group when overlapped. VRAM
+4.53 GB reserved (70%). The result is bit-identical to a trainer-style reference over 3 steps.
+Host RAM is still the blocker (#216): this run does not change that.**
+
+### Setup (`scripts/bench_streamed_group_217.py`, `results/streamed_group_bench_217/`)
+- Standalone, no trainer change. Production modules and flags: ternary + `--fp8-linear`, scan
+  t + megakernel, fused RMSNorm / bias, TF32, bf16 autocast, deterministic (as #213). Production
+  Muon (lr 0.02, AdamW aux 3e-4, wd 0.01). 8 micro-batches x 4096 tokens.
+- Per step: group input parked to host; per layer the fp32 master streams in, forward 8 mb
+  (no_grad); input streams back, layers 4-6 re-run; per layer from the top: recompute + backward
+  (fused checkpoint pass, as the trainer's recompute), per-layer clip 1.0, Muon on the GPU,
+  master + momentum + moments copied back. Host state page-locked with cudaHostRegister.
+- A 0.82 GB stand-in for the tied embedding + grad stays on the GPU. 2 processes x 7 steps per
+  mode, first 2 steps dropped.
+
+### Result
+| mode | group step (s) | fwd | re-fwd | bwd | clip+Muon | copy waits + tail |
+|---|---:|---:|---:|---:|---:|---:|
+| #216 prediction | 3.41 | 0.553 | 0.423 | 1.917 | 0.521 | - |
+| overlap, pinned (2 runs) | 3.545 / 3.542 | 0.552 | 0.428 | 1.972 | 0.533 | 0.059 |
+| all copies on compute stream | 3.806 | 0.607 | 0.476 | 1.966 | 0.698 | - |
+| pageable host memory | 3.831 | 0.582 | 0.461 | 1.974 | 0.743 | - |
+
+Spread over 5 timed steps: +-0.002 s (pinned). Full 1B step from the per-layer times plus #213's
+loss/embedding 2.19 s (not measured here): **22.5 s overlap**, 24.0 s sync, 24.0 s pageable.
+
+- **Copy speeds** (168 MB, one layer): H2D pinned 13.3 GB/s, pageable 12.8; D2H pinned 13.2,
+  pageable 10.0. **No duplex**: H2D and D2H at the same time take the sum of their times
+  (13.3 GB/s total); in the group runs they never ran together. One shared ~13.2 GB/s pipe.
+- **Overlap is real**: per group 2.79 GB in + 1.61 GB out = 0.33 s at 13.2 GB/s. Moving every
+  copy to the compute stream adds 0.26 s, and overlap mode still shows 0.06 s: 0.32 s, as expected.
+- **VRAM**: 3.96 GB allocated, 4.53 GB reserved (70%) with the embedding stand-in (#216: 3.8-4.1 /
+  4.1-4.4).
+- **Host RAM**: group state 1.61 GB (masters 0.673, momentum 0.673, parked input 0.268), pinned
+  at exact size. Working set 3.79 GB; free RAM 10.25 -> 6.42 GB. x6 groups + AdamW embedding +
+  rest of trainer = 13.6 GB, as #216 said: does not fit this laptop at full precision.
+
+### Falsifiers
+- `--check 3`: output, input grad, every weight grad and updated weights equal the trainer-style
+  reference (resident weights, micro-batch-major, torch checkpoint, one Muon) **bit for bit** on all
+  3 steps; GPU copy == host copy after each write-back; host hashes change every step. Weights
+  are compared relative to the update size, not absolutely.
+- Must-fail partners both FAIL: skipping layer 5's write-back (error 1.0x the update, hash
+  unchanged); not copying layer 6 in for the backward (error 422x the update).
+
+### What it means
+- #216's speed numbers hold: per-layer times carry to layer-major order within 0-3%, copies hide.
+- New: no PCIe duplex on this laptop; pageable memory costs ~1.7 s per step. Pin the state.
+- Still unmeasured: the loss/decoder phase in this design, a full 24-layer run, pinning ~10 GB
+  on Windows, per-layer clip vs global clip quality, the BCD penalty at 1B. The RAM gate from
+  #216 (32 GB, or a bf16-state loss A/B) is still the first decision.
+
 ## BCD costs ~32% higher held-out loss than full backprop at equal steps, and the gap is not closing (2026-11-19, #214)
 
 **One line: on the real trainer and production flags, at the largest size where full backprop

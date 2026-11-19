@@ -1,0 +1,25 @@
+gpu used 94 MiB
+=== copybench Thu, Nov 19, 2026  5:21:59 PM
+exit 0 Thu, Nov 19, 2026  5:22:12 PM
+gpu used 94 MiB
+=== check Thu, Nov 19, 2026  5:22:12 PM
+exit 0 Thu, Nov 19, 2026  5:22:58 PM
+gpu used 94 MiB
+=== mustfail_skip_d2h Thu, Nov 19, 2026  5:22:58 PM
+exit 2 Thu, Nov 19, 2026  5:23:43 PM
+gpu used 94 MiB
+=== mustfail_skip_h2d Thu, Nov 19, 2026  5:23:43 PM
+exit 2 Thu, Nov 19, 2026  5:24:28 PM
+gpu used 94 MiB
+=== time_overlap_1 Thu, Nov 19, 2026  5:24:28 PM
+exit 0 Thu, Nov 19, 2026  5:25:00 PM
+gpu used 94 MiB
+=== time_sync Thu, Nov 19, 2026  5:25:00 PM
+exit 0 Thu, Nov 19, 2026  5:25:34 PM
+gpu used 94 MiB
+=== time_pageable Thu, Nov 19, 2026  5:25:35 PM
+exit 0 Thu, Nov 19, 2026  5:26:09 PM
+gpu used 94 MiB
+=== time_overlap_2 Thu, Nov 19, 2026  5:26:09 PM
+exit 0 Thu, Nov 19, 2026  5:26:41 PM
+=== all done Thu, Nov 19, 2026  5:26:41 PM

@@ -1,0 +1,209 @@
+=== copy rates (copybench, 168 MB = one layer's fp32 master) ===
+  h2d_pinned       per-copy GPU GB/s [13.31]  total by wall 13.28 GB/s  (wall 12.5-13.4 ms)
+  h2d_pageable     per-copy GPU GB/s [12.83]  total by wall 12.77 GB/s  (wall 13.0-13.2 ms)
+  d2h_pinned       per-copy GPU GB/s [13.16]  total by wall 13.12 GB/s  (wall 12.8-13.0 ms)
+  d2h_pageable     per-copy GPU GB/s [9.98]  total by wall 9.92 GB/s  (wall 13.2-23.5 ms)
+  duplex_pinned    per-copy GPU GB/s [13.41, 13.19]  total by wall 13.26 GB/s  (wall 25.2-27.5 ms)
+  duplex_pageable  per-copy GPU GB/s [12.84, 12.61]  total by wall 12.69 GB/s  (wall 26.4-27.3 ms)
+  gemm_alone   60 GEMMs 540.4 ms  copy GB/s None
+  gemm+h2d     60 GEMMs 334.8 ms  copy GB/s 13.429680688454704
+  gemm+d2h     60 GEMMs 333.6 ms  copy GB/s 13.187312461650603
+  gemm+duplex  60 GEMMs 334.6 ms  copy GB/s 13.187346071983018
+
+=== falsifier ===
+  check              step 0 PASS out_rel 0.00e+00 dx_rel 0.00e+00 grad_rel max 0.00e+00 upd_rel {'4': 0.0, '5': 0.0, '6': 0.0, '7': 0.0} gpu==host True hash_changed True w_identical True
+  check              step 1 PASS out_rel 0.00e+00 dx_rel 0.00e+00 grad_rel max 0.00e+00 upd_rel {'4': 0.0, '5': 0.0, '6': 0.0, '7': 0.0} gpu==host True hash_changed True w_identical True
+  check              step 2 PASS out_rel 0.00e+00 dx_rel 0.00e+00 grad_rel max 0.00e+00 upd_rel {'4': 0.0, '5': 0.0, '6': 0.0, '7': 0.0} gpu==host True hash_changed True w_identical True
+  check              OVERALL PASS  scan {'fused_ckpt': 144, 'separate_ckpt': 0}
+  mustfail_skip_d2h  step 0 FAIL out_rel 0.00e+00 dx_rel 0.00e+00 grad_rel max 0.00e+00 upd_rel {'4': 0.0, '5': 1.0, '6': 0.0, '7': 0.0} gpu==host False hash_changed False w_identical False
+  mustfail_skip_d2h  step 1 FAIL out_rel 2.83e-01 dx_rel 6.04e-01 grad_rel max 3.51e-01 upd_rel {'4': 0.5595, '5': 0.6912, '6': 0.6325, '7': 0.5309} gpu==host True hash_changed True w_identical False
+  mustfail_skip_d2h  step 2 FAIL out_rel 3.87e-01 dx_rel 1.65e+00 grad_rel max 6.70e-01 upd_rel {'4': 0.7617, '5': 0.7811, '6': 1.0419, '7': 0.9519} gpu==host True hash_changed True w_identical False
+  mustfail_skip_d2h  OVERALL FAIL  scan {'fused_ckpt': 144, 'separate_ckpt': 0}
+  mustfail_skip_h2d  step 0 PASS out_rel 0.00e+00 dx_rel 0.00e+00 grad_rel max 0.00e+00 upd_rel {'4': 0.0, '5': 0.0, '6': 0.0, '7': 0.0} gpu==host True hash_changed True w_identical True
+  mustfail_skip_h2d  step 1 FAIL out_rel 0.00e+00 dx_rel 9.98e-01 grad_rel max 8.44e-01 upd_rel {'4': 0.6145, '5': 0.645, '6': 422.1322, '7': 0.0} gpu==host True hash_changed True w_identical False
+  mustfail_skip_h2d  step 2 FAIL out_rel 8.25e-01 dx_rel 1.43e+00 grad_rel max 9.69e-01 upd_rel {'4': 0.9356, '5': 1.0034, '6': 0.9999, '7': 0.9744} gpu==host True hash_changed True w_identical False
+  mustfail_skip_h2d  OVERALL FAIL  scan {'fused_ckpt': 144, 'separate_ckpt': 0}
+
+=== time_overlap_1 (5 timed steps after 2 warm-up) ===
+  group step, GPU timeline, until last copy lands: 3.545 (min 3.544, max 3.546, n 5) s   vs #216 3.41 s -> x1.04
+  group step, compute stream done:                 3.519 (min 3.518, max 3.520, n 5) s
+  host wall:                                       3.545 (min 3.544, max 3.546, n 5) s
+    bwd                      1.972 s   #216 1.917 (x1.03)
+    bwd.stall                0.000 s
+    fwd                      0.552 s   #216 0.553 (x1.00)
+    fwd.park                 0.000 s
+    fwd.stall                0.033 s
+    optim                    0.533 s   #216 0.521 (x1.02)
+    optim.stall              0.000 s
+    refwd                    0.428 s   #216 0.423 (x1.01)
+    refwd.stall              0.000 s
+    refwd.stall.seg          0.000 s
+    tail                     0.026 s
+    layer 4: fwd 0.129  refwd 0.128  bwd 0.443  optim 0.135  fwd.stall 0.033  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    layer 5: fwd 0.129  refwd 0.129  bwd 0.443  optim 0.134  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    layer 6: fwd 0.166  refwd 0.170  bwd 0.645  optim 0.127  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    layer 7: fwd 0.128  refwd 0.000  bwd 0.441  optim 0.136  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    copy d2h.adam.out    0.001 GB   0.000 s    8.59 GB/s
+    copy d2h.mom.out     0.673 GB   0.052 s   12.99 GB/s
+    copy d2h.seg.park    0.268 GB   0.020 s   13.17 GB/s
+    copy d2h.w.out       0.673 GB   0.052 s   12.89 GB/s
+    copy h2d.adam.in     0.001 GB   0.000 s    9.72 GB/s
+    copy h2d.mom.in      0.673 GB   0.050 s   13.38 GB/s
+    copy h2d.seg.in      0.268 GB   0.020 s   13.22 GB/s
+    copy h2d.w.bwd       0.673 GB   0.051 s   13.21 GB/s
+    copy h2d.w.fwd       0.673 GB   0.051 s   13.12 GB/s
+    copy h2d.w.refwd     0.505 GB   0.038 s   13.14 GB/s
+  H2D 2.79 GB busy 0.212 s; D2H 1.61 GB busy 0.124 s; both at once 0.000 s; H2D under compute 0.199 s; D2H under compute 0.078 s
+  peak VRAM allocated 3.96 GB, reserved 4.53 GB of 6.44 (70%)
+  host: state 1.61 GB pinned=True; ws start 0.02 built 1.37 state 3.11 after steps 3.79 (peak 3.79, private 10.06); system free 10.25 -> 6.42 GB
+  full 1B step from these per-layer times: 22.49 s (2.27x BCD 9.89 s), 241 days for 925,000 steps   (#216 likely 21.83 s)
+      fwd                                                       3.16
+      fwd.stall                                                 0.24
+      refwd                                                     2.40
+      refwd.stall                                               0.00
+      bwd                                                      11.02
+      bwd.stall                                                 0.00
+      optim                                                     3.23
+      optim.stall                                               0.00
+      per-group extras x6 (park, seg-in wait, copy tail)        0.16
+      loss + embedding (trainable decoder) [#213, not measured here]   2.19
+      AdamW embedding [#213, not measured here]                 0.05
+      clip, glue [#213, not measured here]                      0.03
+
+=== time_overlap_2 (5 timed steps after 2 warm-up) ===
+  group step, GPU timeline, until last copy lands: 3.542 (min 3.542, max 3.544, n 5) s   vs #216 3.41 s -> x1.04
+  group step, compute stream done:                 3.516 (min 3.516, max 3.518, n 5) s
+  host wall:                                       3.543 (min 3.542, max 3.544, n 5) s
+    bwd                      1.971 s   #216 1.917 (x1.03)
+    bwd.stall                0.000 s
+    fwd                      0.552 s   #216 0.553 (x1.00)
+    fwd.park                 0.000 s
+    fwd.stall                0.033 s
+    optim                    0.532 s   #216 0.521 (x1.02)
+    optim.stall              0.000 s
+    refwd                    0.428 s   #216 0.423 (x1.01)
+    refwd.stall              0.000 s
+    refwd.stall.seg          0.000 s
+    tail                     0.026 s
+    layer 4: fwd 0.129  refwd 0.128  bwd 0.442  optim 0.135  fwd.stall 0.033  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    layer 5: fwd 0.129  refwd 0.129  bwd 0.443  optim 0.135  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    layer 6: fwd 0.166  refwd 0.170  bwd 0.644  optim 0.127  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    layer 7: fwd 0.128  refwd 0.000  bwd 0.441  optim 0.135  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    copy d2h.adam.out    0.001 GB   0.000 s    8.90 GB/s
+    copy d2h.mom.out     0.673 GB   0.052 s   13.02 GB/s
+    copy d2h.seg.park    0.268 GB   0.020 s   13.18 GB/s
+    copy d2h.w.out       0.673 GB   0.052 s   12.87 GB/s
+    copy h2d.adam.in     0.001 GB   0.000 s    9.42 GB/s
+    copy h2d.mom.in      0.673 GB   0.050 s   13.37 GB/s
+    copy h2d.seg.in      0.268 GB   0.020 s   13.19 GB/s
+    copy h2d.w.bwd       0.673 GB   0.051 s   13.17 GB/s
+    copy h2d.w.fwd       0.673 GB   0.052 s   13.06 GB/s
+    copy h2d.w.refwd     0.505 GB   0.039 s   13.01 GB/s
+  H2D 2.79 GB busy 0.212 s; D2H 1.61 GB busy 0.124 s; both at once 0.000 s; H2D under compute 0.199 s; D2H under compute 0.078 s
+  peak VRAM allocated 3.96 GB, reserved 4.53 GB of 6.44 (70%)
+  host: state 1.61 GB pinned=True; ws start 0.02 built 1.37 state 3.11 after steps 3.79 (peak 3.79, private 10.06); system free 10.16 -> 6.32 GB
+  full 1B step from these per-layer times: 22.47 s (2.27x BCD 9.89 s), 241 days for 925,000 steps   (#216 likely 21.83 s)
+      fwd                                                       3.16
+      fwd.stall                                                 0.24
+      refwd                                                     2.40
+      refwd.stall                                               0.00
+      bwd                                                      11.02
+      bwd.stall                                                 0.00
+      optim                                                     3.22
+      optim.stall                                               0.00
+      per-group extras x6 (park, seg-in wait, copy tail)        0.16
+      loss + embedding (trainable decoder) [#213, not measured here]   2.19
+      AdamW embedding [#213, not measured here]                 0.05
+      clip, glue [#213, not measured here]                      0.03
+
+=== time_sync (5 timed steps after 2 warm-up) ===
+  group step, GPU timeline, until last copy lands: 3.806 (min 3.805, max 3.809, n 5) s   vs #216 3.41 s -> x1.12
+  group step, compute stream done:                 3.806 (min 3.805, max 3.809, n 5) s
+  host wall:                                       3.807 (min 3.805, max 3.809, n 5) s
+    bwd                      1.966 s   #216 1.917 (x1.03)
+    bwd.stall                0.000 s
+    fwd                      0.607 s   #216 0.553 (x1.10)
+    fwd.park                 0.045 s
+    fwd.stall                0.000 s
+    optim                    0.698 s   #216 0.521 (x1.34)
+    optim.stall              0.000 s
+    refwd                    0.476 s   #216 0.423 (x1.13)
+    refwd.stall              0.000 s
+    refwd.stall.seg          0.013 s
+    tail                     0.000 s
+    layer 4: fwd 0.141  refwd 0.141  bwd 0.441  optim 0.161  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    layer 5: fwd 0.141  refwd 0.141  bwd 0.441  optim 0.173  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    layer 6: fwd 0.163  refwd 0.194  bwd 0.642  optim 0.178  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    layer 7: fwd 0.161  refwd 0.000  bwd 0.441  optim 0.186  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    copy d2h.adam.out    0.001 GB   0.000 s   10.59 GB/s
+    copy d2h.mom.out     0.673 GB   0.051 s   13.17 GB/s
+    copy d2h.seg.park    0.268 GB   0.020 s   13.17 GB/s
+    copy d2h.w.out       0.673 GB   0.052 s   12.84 GB/s
+    copy h2d.adam.in     0.001 GB   0.000 s   10.23 GB/s
+    copy h2d.mom.in      0.673 GB   0.051 s   13.28 GB/s
+    copy h2d.seg.in      0.268 GB   0.020 s   13.17 GB/s
+    copy h2d.w.bwd       0.673 GB   0.051 s   13.19 GB/s
+    copy h2d.w.fwd       0.673 GB   0.051 s   13.10 GB/s
+    copy h2d.w.refwd     0.505 GB   0.038 s   13.22 GB/s
+  H2D 2.79 GB busy 0.212 s; D2H 1.61 GB busy 0.124 s; both at once 0.000 s; H2D under compute 0.174 s; D2H under compute 0.104 s
+  peak VRAM allocated 3.96 GB, reserved 4.02 GB of 6.44 (62%)
+  host: state 1.61 GB pinned=True; ws start 0.02 built 1.37 state 3.11 after steps 3.79 (peak 3.79, private 9.53); system free 10.21 -> 6.33 GB
+  full 1B step from these per-layer times: 24.01 s (2.43x BCD 9.89 s), 257 days for 925,000 steps   (#216 likely 21.83 s)
+      fwd                                                       3.58
+      fwd.stall                                                 0.00
+      refwd                                                     2.65
+      refwd.stall                                               0.00
+      bwd                                                      10.99
+      bwd.stall                                                 0.00
+      optim                                                     4.17
+      optim.stall                                               0.00
+      per-group extras x6 (park, seg-in wait, copy tail)        0.35
+      loss + embedding (trainable decoder) [#213, not measured here]   2.19
+      AdamW embedding [#213, not measured here]                 0.05
+      clip, glue [#213, not measured here]                      0.03
+
+=== time_pageable (5 timed steps after 2 warm-up) ===
+  group step, GPU timeline, until last copy lands: 3.831 (min 3.778, max 3.854, n 5) s   vs #216 3.41 s -> x1.12
+  group step, compute stream done:                 3.831 (min 3.778, max 3.854, n 5) s
+  host wall:                                       3.831 (min 3.778, max 3.854, n 5) s
+    bwd                      1.974 s   #216 1.917 (x1.03)
+    bwd.stall                0.000 s
+    fwd                      0.582 s   #216 0.553 (x1.05)
+    fwd.park                 0.047 s
+    fwd.stall                0.001 s
+    optim                    0.743 s   #216 0.521 (x1.43)
+    optim.stall              0.000 s
+    refwd                    0.461 s   #216 0.423 (x1.09)
+    refwd.stall              0.000 s
+    refwd.stall.seg          0.000 s
+    tail                     0.000 s
+    layer 4: fwd 0.145  refwd 0.149  bwd 0.442  optim 0.162  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    layer 5: fwd 0.145  refwd 0.142  bwd 0.442  optim 0.175  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    layer 6: fwd 0.165  refwd 0.170  bwd 0.645  optim 0.180  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    layer 7: fwd 0.128  refwd 0.000  bwd 0.441  optim 0.212  fwd.stall 0.000  refwd.stall 0.000  bwd.stall 0.000  optim.stall 0.000
+    copy d2h.adam.out    0.001 GB   0.000 s    3.14 GB/s
+    copy d2h.mom.out     0.673 GB   0.063 s   10.69 GB/s
+    copy d2h.seg.park    0.268 GB   0.021 s   12.85 GB/s
+    copy d2h.w.out       0.673 GB   0.063 s   10.64 GB/s
+    copy h2d.adam.in     0.001 GB   0.000 s    1.70 GB/s
+    copy h2d.mom.in      0.673 GB   0.065 s   10.38 GB/s
+    copy h2d.seg.in      0.268 GB   0.021 s   12.75 GB/s
+    copy h2d.w.bwd       0.673 GB   0.060 s   11.16 GB/s
+    copy h2d.w.fwd       0.673 GB   0.058 s   11.63 GB/s
+    copy h2d.w.refwd     0.505 GB   0.047 s   10.72 GB/s
+  H2D 2.79 GB busy 0.249 s; D2H 1.61 GB busy 0.152 s; both at once 0.000 s; H2D under compute 0.221 s; D2H under compute 0.128 s
+  peak VRAM allocated 3.96 GB, reserved 4.36 GB of 6.44 (68%)
+  host: state 1.61 GB pinned=False; ws start 0.02 built 1.37 state 2.84 after steps 3.79 (peak 3.79, private 9.89); system free 10.16 -> 6.34 GB
+  full 1B step from these per-layer times: 24.00 s (2.43x BCD 9.89 s), 257 days for 925,000 steps   (#216 likely 21.83 s)
+      fwd                                                       3.39
+      fwd.stall                                                 0.00
+      refwd                                                     2.67
+      refwd.stall                                               0.00
+      bwd                                                      11.00
+      bwd.stall                                                 0.00
+      optim                                                     4.38
+      optim.stall                                               0.00
+      per-group extras x6 (park, seg-in wait, copy tail)        0.28
+      loss + embedding (trainable decoder) [#213, not measured here]   2.19
+      AdamW embedding [#213, not measured here]                 0.05
+      clip, glue [#213, not measured here]                      0.03

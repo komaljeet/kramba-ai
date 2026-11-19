@@ -1,0 +1,121 @@
+#217 streamed full backprop at 1B: one 4-layer group, measured on the GPU (validates #216)
+Date: 2026-11-19. GPU session 17:21-17:26 (about 5 min). RTX 4050 laptop 6 GB, nothing else on the GPU
+(run_all.sh checks <400 MiB used before every run; one process and one log per run).
+Script: scripts/bench_streamed_group_217.py. Raw: *.jsonl / *.log here. Tables: analysis.txt (analyze.py).
+
+VERDICT
+- One group (layers 4-7) takes 3.545 s per step (spread 3.542-3.546 s over 10 timed steps, 2 processes).
+  #216 predicted 3.41 s. Measured is 1.04x the prediction; the pass bar was 1.2x. PASS.
+- Full 1B step built from these per-layer times: 22.5 s (#216 likely: 21.8 s) = 2.27x the BCD step
+  of 9.89 s = ~241 days for 925,000 steps (#216: 234). Speed bar (~40 s) still passes easily.
+- Copies are almost free when overlapped: 2.79 GB in + 1.61 GB out per group cost 0.06 s of the
+  3.55 s (first load of the pass + the last write-back). All copies on the compute stream: 3.806 s
+  (+0.26 s). Pageable host memory: 3.831 s (+0.29 s).
+- Peak VRAM 3.96 GB allocated / 4.53 GB reserved = 70% of the card (includes a 0.82 GB stand-in
+  for the tied embedding + its grad). #216: 3.8-4.1 allocated, 4.1-4.4 reserved. Fits.
+- Host RAM for this group's state: exactly 1.61 GB (masters 0.673 + momentum 0.673 + AdamW 0.001
+  + parked group input 0.268), page-locked without any size rounding. x6 groups = 9.7 GB, matching
+  #216's 13.6 GB total for the trainer. The RAM verdict of #216 (does not fit this laptop at full
+  precision) is unchanged; this run did not test it at full size.
+- The falsifier passed bit for bit, and both must-fail partners failed as they should.
+
+1. GROUP STEP vs #216 (overlap mode, pinned host memory, median of 5 timed steps, 2 warm-up dropped)
+                                 run 1    run 2    #216    ratio
+   forward (4 layers, 8 mb)      0.552    0.552    0.553   1.00
+   re-forward (layers 4-6)       0.428    0.428    0.423   1.01
+   recompute + backward          1.972    1.971    1.917   1.03
+   optimizer (clip + Muon)       0.533    0.532    0.521   1.02
+   waits for copies              0.033    0.033    -       (first weight load of the forward pass)
+   copy tail after compute       0.026    0.026    -       (last write-back)
+   group, until last copy lands  3.545    3.542    3.41    1.04
+   spread (min-max), 5 steps     3.544-3.546  3.542-3.544
+   Warm-up step 0 is 6.2 s (Triton/cuBLAS first calls); step 1 on is flat.
+   Per layer: DeltaNet fwd 0.129 / refwd 0.128 / recompute+bwd 0.442 / optim 0.135 s;
+   attention (layer 6) 0.166 / 0.170 / 0.645 / 0.127 s. #213 BCD numbers: 0.130 / - / 0.430 and
+   0.163 / - / 0.627. Backward is ~3% slower here than in the BCD trainer.
+
+2. FULL 1B STEP (arithmetic from the measured per-layer times; #216's layer counts)
+   forward 22 DN + 2 attn            3.16 s
+   first-load waits (overcounted: counted per layer, real is once per pass or group)  0.24
+   re-forward 16 DN + 2 attn         2.40
+   recompute + backward 22 + 2      11.02
+   clip + Muon 24 layers             3.23
+   per-group park / seg-in / tail x6 0.16
+   loss + embedding (trainable decoder) 2.19   [#213 measured, NOT measured here]
+   AdamW embedding 0.05, clip/glue 0.03        [#213, NOT measured here]
+   TOTAL 22.5 s  -> 2.27x BCD, 925,000 steps = 241 days. With all copies on the compute stream:
+   24.0 s (257 days). Pageable host memory: 24.0 s (257 days).
+
+3. COPY SPEEDS (copybench: one layer's fp32 master, 168 MB, median of 10)
+   H2D pinned 13.3 GB/s, H2D pageable 12.8 GB/s, D2H pinned 13.2 GB/s, D2H pageable 10.0 GB/s.
+   Inside the group run (pinned): every stream 12.9-13.4 GB/s; pageable: 10.4-11.6 GB/s.
+   #216 assumed H2D pinned 13.06 (held), pageable 10.74 (this run: 12.8 H2D, 10.0 D2H), D2H unknown
+   (now measured: same as H2D when pinned).
+   DUPLEX DOES NOT EXIST ON THIS LAPTOP: H2D and D2H issued at the same time on two streams take
+   the sum of their times (25.3 ms for 2 x 168 MB = 13.3 GB/s total). In the group runs the two
+   directions overlapped 0.000 s. Treat PCIe as one shared ~13.2 GB/s pipe for both directions.
+   Overlap with compute: of 0.212 s H2D busy time, 0.199 s ran under compute; of 0.124 s D2H,
+   0.078 s (the rest is the tail and the forward park, which sit next to a stall anyway).
+   Copy-under-GEMM test (copybench end): INCONCLUSIVE. The GEMM-alone baseline ran first and was
+   slower (540 ms) than with copies (334 ms) - GPU clocks were still ramping. Not used.
+
+4. OVERLAP FALSIFIER (asked before running: if the side-stream copies were secretly serial,
+   would anything change? Yes - moving them onto the compute stream must add ~bytes/rate.)
+   Bytes per group 4.40 GB / 13.2 GB/s = 0.33 s expected serial copy time.
+   Sync mode measured 3.806 s vs 3.545 = +0.26 s; overlap mode itself still exposes 0.06 s,
+   so 0.26 + 0.06 = 0.32 s ~ 0.33 s. The number moved by the expected amount: overlap is real.
+
+5. CORRECTNESS FALSIFIER (asked before running: if a copy were skipped, or the update hit stale
+   or zero weights, would this fail? It is checked below with two deliberate breaks.)
+   check (3 steps, state carries over): streamed vs a trainer-style reference on the same group
+   (all weights resident, micro-batch-major, torch.utils.checkpoint per layer, one production
+   Muon over the group, same per-layer clip): group output, input gradient, every layer's weight
+   gradient and the updated weights are BIT-IDENTICAL on all 3 steps. GPU copy == host copy after
+   every write-back; every layer's host master hash changes every step. PASS.
+   Weights are compared relative to the size of the update (an absolute compare would pass on
+   stale weights, since lr moves weights by ~0.002 per step).
+   must-fail 1 (skip layer 5's write-back at step 0): FAIL as required - update-relative error
+   1.0 on layer 5, host hash unchanged, GPU != host; errors then spread to every layer.
+   must-fail 2 (layer 6's weights not copied in for the backward at step 1): FAIL as required -
+   layer 6 update error 422x the update, gradients below it wrong.
+   Scan path: fused-checkpoint recompute used everywhere (fused_ckpt 144, separate 0), same as the
+   trainer's recompute.
+
+6. VRAM (overlap mode): peak allocated 3.96 GB, reserved 4.53 GB of 6.44 (70%), under the 85%
+   guard. Sync mode reserves 4.02 GB (no second copy-stream pool). Includes the 0.82 GB embedding
+   stand-in. Not included: the loss / decoder working set of a real step (unmeasured here).
+
+7. HOST RAM (process working set; system free RAM)
+   start 0.02 GB; after building the 4 layers 1.37; after host state 3.11; after steps 3.79
+   (peak 3.79). System free 10.25 -> 6.42 GB. Host state allocated: 1.61 GB, all page-locked with
+   cudaHostRegister (exact size; torch's pinned allocator would round 168 MB tensors up to
+   powers of two). Private commit reads ~10 GB: that is the CUDA context's reserved virtual
+   commit on Windows, not RAM (free RAM fell by only 3.8 GB).
+   Per group 1.61 GB x 6 = 9.69 GB + AdamW embedding 0.83 + rest of trainer 3.07 = 13.6 GB, as
+   #216 says. Does not fit 15.3 GB with today's other use (~8.1 GB). Unchanged by this run.
+
+WHAT HELD (from #216)
+- Per-layer compute times carry over to layer-major order (within 0-3%).
+- Copies hide behind compute on side streams; pinned H2D ~13 GB/s.
+- D2H is as fast as H2D when pinned (was unmeasured).
+- VRAM fits at ~70% reserved.
+- The group time (3.41 predicted, 3.55 measured) and so the ~22 s full step.
+
+WHAT DID NOT HOLD / NEW
+- No duplex: H2D and D2H share one ~13.2 GB/s pipe. Harmless here (copies are 0.34 s of a 3.5 s
+  group) but any design that leans on both directions at once gets half the rate.
+- Pageable D2H is slower (10.0 GB/s) than pageable H2D (12.8); pageable mode also makes the host
+  block, costing +0.29 s per group (~+1.7 s per step). Pin the host state.
+- Backward ~3% slower than the BCD trainer's (0.442 vs 0.430 s per DeltaNet layer).
+
+STILL UNMEASURED
+- The loss + trainable decoder phase inside this design (2.19 s taken from #213).
+- The whole 24-layer step end to end, and pinning ~10 GB of host state on Windows (only 1.61 GB
+  was pinned here).
+- Host RAM at full size (13.6 GB need vs ~8.3 GB available stays the blocker).
+- Training quality of per-layer clipping (vs global clip) and of any bf16 host-state cut.
+- The BCD penalty at 1B (measured only at 208M, #214).
+
+Choices made without a maintainer decision (defaults, stated): per-layer grad clip at 1.0;
+deterministic mode as in #213; input = dummy embedding lookup of random tokens, upstream grad =
+seeded noise (std 1e-5); weights held in fp32 masters on host (exact variant).
