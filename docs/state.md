@@ -2271,11 +2271,13 @@ now the same way epic #78 did in August -- re-verified on the current build, not
 script itself -- missing the `if __name__ == "__main__":` guard needed when `--fast` spawns
 dataloader workers via `spawn` on Windows. Not a training-code bug; killed and re-run.)
 
-## 1B pretrain: FP8 full-cycle CONFIRMED -- 7.81% faster, 132/211 days (2026-10-23)
+## 1B pretrain: FP8 full-cycle CONFIRMED -- 7.77% faster, 132/211 days (2026-10-23)
 
 **One line: the stalled run below finished all 1300 steps after the mmap/reaper fixes. Real
-13-block average, not a projection: 13.294 -> 12.335 s/step, 2,464 -> 2,656 tok/s = 7.81% more
-tok/s (7.21% less step time). Slightly better than the single-block projection of 6.14% /
+13-block average, not a projection: 13.294 -> 12.335 s/step, 2,464 -> 2,656 tok/s = 7.77% more
+tok/s (7.21% less step time). (Corrected 2026-11-24, #222: this said 7.81%. 13.294 / 12.335 =
+1.0777. The 7.81% divided the CSV's 2,656.3 tok/s by 2,464, which is 32768 / 13.294 = 2,464.87
+rounded down.) Slightly better than the single-block projection of 6.14% /
 ~12.52 s/step made below.**
 
 Measured directly from `checkpoints/pretrain_1b_fp8_fullcycle/training_log.csv` (260 logged
@@ -8332,12 +8334,22 @@ Measured, 1B (d=2048, 24L), seq 4096, tied embeddings, ternary, grad-checkpoint,
 | **adafactor**, no BCD, no offload | 9.08 GiB | **9.42 GiB** | 48.50 | 84 |
 | **muon**, no BCD, no offload | — | — | **OOM** | — |
 | adafactor + BCD + offload | — | — | **blocked by the #151 guard** | — |
-| BCD + offload, untied (reference) | 1.15 GiB | **4.05 GiB** | **4.68** | **875** |
+| BCD + offload, tied (reference; was labelled untied, see correction below) | 1.15 GiB | **4.05 GiB** | **4.68** | **875** |
 
 **9.42 GiB reserved on a 6 GiB card is a spill, not a fit.** It ran only because WDDM
 silently backs the overflow with host RAM — no OOM, just 4-15x slower, the failure mode
 this repo has documented before. Here the penalty is **10.4x**: 48.50 s/step against 4.68
 with offload.
+
+**Correction (2026-11-24, #222): the reference row is tied, not untied.** Its numbers (4.681
+s/step, 875.05 tok/s, 4.05 GiB reserved at seq 4096) match `results/offload_1b/real_seq_tied.json`:
+1,074,214,851 params, body 1,008,672,707, a difference of 65,542,144 = one 32,003 x 2,048 table,
+so tied. The untied file `real_seq.json` has 1,139,756,995 params, 4.30 GiB reserved, 876.5
+tok/s. The 1.15 GiB peak-alloc cell is not in either file (both record about 4.0-4.3 GiB
+allocated). The #221 note above cited `real_seq_tied_157.json`; that file is also tied (4.647
+s/step, 881 tok/s, 4.05 GiB), but the 4.68 / 875 figures are from `real_seq_tied.json`.
+The "must pass `--no-tie-embeddings`" sentence below was written before the guard was lifted
+later the same day (commit 1ff4b3c).
 
 **Why it does not carry.** Adafactor shrinks *optimizer state* (row+column summary instead
 of a full second moment). It does nothing about weights or gradients. At 355M those two are
