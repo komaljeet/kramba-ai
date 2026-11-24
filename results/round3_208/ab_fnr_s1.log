@@ -1,0 +1,476 @@
+[#163] --offload implies --block-coordinate; enabling it.
+[#163] --offload requires --grad-checkpoint; enabling it (offload evicts weights after the forward and relies on the recompute to bring them back).
+[--fast] Enabled recommended training stack: precision=bf16, tf32, triton-scan, megakernel-scan, fused-ternary, ternary-step-cache, fused-rmsnorm, num-workers=4
+[scan] kernel v1, v1 tuned warps True
+[#208] fused norm-residual backward ON
+TF32 matmul enabled (Issue #81): fp32 matmuls use TF32 on Ampere+ tensor cores.
+Seeded all RNGs with 1 (reproducible init + shuffling).
+Deterministic attention backward ON (#196).
+Deterministic algorithms ON (bit-reproducible run-to-run).
+======================================================================
+STEP 1 — HARDWARE SCAN
+======================================================================
+
+--- nvidia-smi ---
+Sun Nov 15 15:54:10 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 610.74                 KMD Version: 610.74        CUDA UMD Version: 13.3     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                  Driver-Model | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 4050 ...  WDDM  |   00000000:01:00.0 Off |                  N/A |
+| N/A   58C    P4              8W /   80W |     139MiB /   6141MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A             248    C+G   ...y\StartMenuExperienceHost.exe      N/A      |
+|    0   N/A  N/A            4744    C+G   ..._cw5n1h2txyewy\SearchHost.exe      N/A      |
+|    0   N/A  N/A            7328    C+G   ...Free Download Manager\fdm.exe      N/A      |
+|    0   N/A  N/A           12060    C+G   ...2txyewy\CrossDeviceResume.exe      N/A      |
+|    0   N/A  N/A           12432    C+G   ...App_cw5n1h2txyewy\LockApp.exe      N/A      |
+|    0   N/A  N/A           14404    C+G   ....0.4341.46\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           17260    C+G   ...ms\Microsoft VS Code\Code.exe      N/A      |
++-----------------------------------------------------------------------------------------+
+
+--- System RAM ---
+  Total RAM: 15.29 GB
+  Free RAM:  8.39 GB
+
+--- Torch Device Checks ---
+  GPU:              NVIDIA GeForce RTX 4050 Laptop GPU
+  VRAM total:       6.00 GB
+  VRAM free:        4.96 GB
+  bf16 supported:   True
+  Torch version:    2.12.1+cu126
+
+--- Chosen Settings (with reasoning) ---
+  d_model:       512  (reference dimension from README)
+  num_layers:    12  (depth for language understanding)
+  n_heads:       8  (standard head count for d=512)
+  batch_size:    4  (fits in VRAM with ternary compression)
+  seq_len:       512  (good context for conversational training)
+  grad_accum:    8  (effective batch = 32)
+  precision:     bf16  (RTX 4050 supports bf16)
+  Est. peak VRAM: ~3.3 GB (safe within 5.0 GB free)
+  Effective batch size: 32
+
+✓ Step 1 complete.
+
+  Loading GPT-2 tokenizer...
+  Tokenizer: gpt2 | vocab_size = 50257 | eos_token_id = 50256
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.0, 'OpenAssistant': 0.0, 'WikiText-103': 0.0, 'FineWeb-Edu': 1.0}
+Sequence length: 4096
+Batch size: 1
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\fineweb_edu.bin (6,642,451,492 tokens) -- skipping parquet extraction
+[data mix] total pretrain budget capped at 6,642,450,432 tokens (6.64B) by DATA VOLUME, not the mix ratio -- every available window from every source is already being used (1,621,692 total), none of them hit their max_repeat=3 limit. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~332M-param model -- if you're targeting something bigger, download more data (proportionate to the current mix shares); adjusting the mix ratio alone will not raise this ceiling until raw volume grows enough for a source's repeat limit to become the active constraint instead.
+
+    Mixed dataset: 1,621,692 train samples (1,621 held-out val), seq_len=4096
+    Unique tokens on disk: 6,642,451,492  |  windows/source: [1621692]
+    Per-source (train): FineWeb-Edu=1,621,692 (100.0%)
+  Tokens: 6642451492
+  Samples: 1621692
+  Held-out val: 1,621 samples
+
+  DataLoader ready: batch_size=1
+✓ Step 2 complete.
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.0
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:/Users/komal/AppData/Local/Temp/claude/s208_ckpt\ckpt_fnr_s1/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:/Users/komal/AppData/Local/Temp/claude/s208_ckpt\ckpt_fnr_s1/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+  warmup override:   14 steps (--warmup-steps; the banner above shows the default)
+
+======================================================================
+STEP 4 — PRE-TRAINING AUDIT
+======================================================================
+
+  [Check 1] DataLoader token shapes...
+    batch_src (source IDs): tensor([0])
+    batch_x shape: torch.Size([1, 4096]) (expected (1, 4096))
+    batch_y shape: torch.Size([1, 4096]) (expected (1, 4096))
+    batch_x dtype: torch.int64 (expected torch.long)
+    batch_x range: [8, 50210]
+    ✓ Shapes correct
+
+  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...
+    ⚠ Skipped under --block-coordinate: this check deepcopies the whole
+      model onto GPU and runs an UN-FROZEN backward pass across every
+      param, before BlockCoordinateScheduler exists to bound memory --
+      at large model sizes that alone can OOM a 6 GB card (Issue #112).
+      BCD's own per-block freeze already bounds real-training risk; any
+      real forward/backward issue will surface immediately on step 1.
+
+  [Check 3] Checkpoint save/load cycle...
+    ⚠ Skipped under --block-coordinate: this check rebuilds a SECOND full
+      EdgeHVN and moves it onto GPU alongside the real model (no BCD/freeze
+      applies here either) -- two full-precision weight copies resident at
+      once can OOM a 6 GB card at large sizes, same class of issue as Check 2
+      (Issue #112). The real training loop's own checkpoint saves/resumes
+      exercise this same code path, so a real problem still surfaces there.
+
+  ✓ All audit checks passed!
+✓ Step 4 complete.
+
+  Fused Triton scan enabled on 22 DeltaNet block(s) (#83).
+
+  Design B blockwise-recompute backward enabled on 22 DeltaNet block(s) (#96) -- ~1.05x faster step under --fast.
+
+  Fused ternary quantizer enabled on 166 TernaryLinear layer(s) (#154).
+
+  Fused RMSNorm enabled on 24 module(s).
+
+  Within-step ternary weight cache enabled on 166 TernaryLinear layer(s).
+
+  FP8 Linear enabled on 166 layer(s) (alpha/beta gates + vocab head stay bf16); weight cache ON.
+
+======================================================================
+STEP 5 — START TRAINING
+======================================================================
+
+  Model parameter count:     1,113,059,793
+  Ternary compression ratio: 4.56x
+  Dense fp32 weight size:     4245.99 MB
+  Ternary weight size:        930.75 MB
+  Optimizer: Muon (muon_lr=0.02 on 210 matrices / 1,009,516,544 params; AdamW aux lr=0.0003 / 103,543,249 params)
+  Block-coordinate-descent: 7 blocks (balanced partition, 4 layers per block), 10 steps/block, active='token_embedding'
+  CPU weight offload: ON (bf16 parked, prefetch on, cache=1 blocks)
+  Active block: last layer(s) not checkpointed (#202): 1 per layer block
+  Mixed-precision: BF16 (Issue #80)
+
+  Training for up to 140 steps (effective batch = 8)
+  Logging every 1 steps | Checkpoint every 100000 steps
+----------------------------------------------------------------------
+[ab208] EVAL step 1: held-out 11.22262 (49s, peak 4.96 GiB)
+  Step      1 (epoch 0)  |  Loss: 11.2263  |  PPL: 75076.08  |  LR: 0.000000  |  0.0 steps/s (507 tok/s)  |  VRAM: 1.64/4.96 GB
+    Per-source: FineWeb-Edu: 11.2263 (n=8)
+  ⏱ Estimated 64.66s/step | ~6466474s per checkpoint interval
+  [vram] peak 83% of card — under the 85% spill threshold
+  Step      2 (epoch 0)  |  Loss: 11.2300  |  PPL: 75355.48  |  LR: 0.001429  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/4.96 GB
+    Per-source: FineWeb-Edu: 11.2300 (n=8)
+  Step      3 (epoch 0)  |  Loss: 11.2184  |  PPL: 74490.63  |  LR: 0.002857  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/4.96 GB
+    Per-source: FineWeb-Edu: 11.2184 (n=8)
+  Step      4 (epoch 0)  |  Loss: 11.1936  |  PPL: 72663.81  |  LR: 0.004286  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/4.96 GB
+    Per-source: FineWeb-Edu: 11.1936 (n=8)
+  Step      5 (epoch 0)  |  Loss: 11.1620  |  PPL: 70402.59  |  LR: 0.005714  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/4.96 GB
+    Per-source: FineWeb-Edu: 11.1620 (n=8)
+  Step      6 (epoch 0)  |  Loss: 11.1151  |  PPL: 67180.61  |  LR: 0.007143  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/4.96 GB
+    Per-source: FineWeb-Edu: 11.1151 (n=8)
+  Step      7 (epoch 0)  |  Loss: 11.0667  |  PPL: 64000.95  |  LR: 0.008571  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/4.96 GB
+    Per-source: FineWeb-Edu: 11.0667 (n=8)
+  Step      8 (epoch 0)  |  Loss: 11.0091  |  PPL: 60419.58  |  LR: 0.010000  |  0.1 steps/s (2205 tok/s)  |  VRAM: 2.02/4.96 GB
+    Per-source: FineWeb-Edu: 11.0091 (n=8)
+  Step      9 (epoch 0)  |  Loss: 10.9239  |  PPL: 55486.28  |  LR: 0.011429  |  0.1 steps/s (2206 tok/s)  |  VRAM: 2.02/4.96 GB
+    Per-source: FineWeb-Edu: 10.9239 (n=8)
+  Step     10 (epoch 0)  |  Loss: 10.8730  |  PPL: 52733.58  |  LR: 0.012857  |  0.1 steps/s (2194 tok/s)  |  VRAM: 2.02/4.96 GB
+    Per-source: FineWeb-Edu: 10.8730 (n=8)
+  Step     11 (epoch 0)  |  Loss: 10.7983  |  PPL: 48937.71  |  LR: 0.014286  |  0.1 steps/s (2260 tok/s)  |  VRAM: 2.75/4.96 GB
+    Per-source: FineWeb-Edu: 10.7983 (n=8)
+  Step     12 (epoch 0)  |  Loss: 10.6174  |  PPL: 40838.48  |  LR: 0.015714  |  0.1 steps/s (2317 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 10.6174 (n=8)
+  Step     13 (epoch 0)  |  Loss: 10.4653  |  PPL: 35075.45  |  LR: 0.017143  |  0.1 steps/s (2317 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 10.4653 (n=8)
+  Step     14 (epoch 0)  |  Loss: 10.2329  |  PPL: 27804.31  |  LR: 0.018569  |  0.1 steps/s (2317 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 10.2329 (n=8)
+  Step     15 (epoch 0)  |  Loss: 10.0925  |  PPL: 24160.91  |  LR: 0.018562  |  0.1 steps/s (2317 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 10.0925 (n=8)
+  Step     16 (epoch 0)  |  Loss: 9.8081  |  PPL: 18179.54  |  LR: 0.018550  |  0.1 steps/s (2300 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 9.8081 (n=8)
+  Step     17 (epoch 0)  |  Loss: 9.6558  |  PPL: 15611.87  |  LR: 0.018534  |  0.1 steps/s (2317 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 9.6558 (n=8)
+  Step     18 (epoch 0)  |  Loss: 9.4073  |  PPL: 12177.02  |  LR: 0.018513  |  0.1 steps/s (2318 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 9.4073 (n=8)
+  Step     19 (epoch 0)  |  Loss: 9.3464  |  PPL: 11457.88  |  LR: 0.018487  |  0.1 steps/s (2317 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 9.3464 (n=8)
+  Step     20 (epoch 0)  |  Loss: 9.1343  |  PPL: 9267.93  |  LR: 0.018457  |  0.1 steps/s (2281 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 9.1343 (n=8)
+  Step     21 (epoch 0)  |  Loss: 8.9799  |  PPL: 7942.07  |  LR: 0.018422  |  0.1 steps/s (2520 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.9799 (n=8)
+  Step     22 (epoch 0)  |  Loss: 8.9480  |  PPL: 7692.65  |  LR: 0.018383  |  0.1 steps/s (2584 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.9480 (n=8)
+  Step     23 (epoch 0)  |  Loss: 8.8069  |  PPL: 6680.49  |  LR: 0.018339  |  0.1 steps/s (2582 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.8069 (n=8)
+  Step     24 (epoch 0)  |  Loss: 8.9504  |  PPL: 7711.04  |  LR: 0.018290  |  0.1 steps/s (2582 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.9504 (n=8)
+  Step     25 (epoch 0)  |  Loss: 8.7412  |  PPL: 6255.37  |  LR: 0.018237  |  0.1 steps/s (2583 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.7412 (n=8)
+  Step     26 (epoch 0)  |  Loss: 8.7836  |  PPL: 6526.02  |  LR: 0.018179  |  0.1 steps/s (2584 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.7836 (n=8)
+  Step     27 (epoch 0)  |  Loss: 8.5956  |  PPL: 5407.86  |  LR: 0.018117  |  0.1 steps/s (2582 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.5956 (n=8)
+  Step     28 (epoch 0)  |  Loss: 8.6599  |  PPL: 5766.87  |  LR: 0.018050  |  0.1 steps/s (2562 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.6599 (n=8)
+  Step     29 (epoch 0)  |  Loss: 8.5064  |  PPL: 4946.37  |  LR: 0.017979  |  0.1 steps/s (2584 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.5064 (n=8)
+  Step     30 (epoch 0)  |  Loss: 8.6450  |  PPL: 5681.41  |  LR: 0.017904  |  0.1 steps/s (2546 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.6450 (n=8)
+  Step     31 (epoch 0)  |  Loss: 8.3826  |  PPL: 4370.49  |  LR: 0.017824  |  0.1 steps/s (2860 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.3826 (n=8)
+  Step     32 (epoch 0)  |  Loss: 8.4463  |  PPL: 4657.87  |  LR: 0.017740  |  0.1 steps/s (2952 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.4463 (n=8)
+  Step     33 (epoch 0)  |  Loss: 8.4683  |  PPL: 4761.27  |  LR: 0.017652  |  0.1 steps/s (2951 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.4683 (n=8)
+  Step     34 (epoch 0)  |  Loss: 8.4736  |  PPL: 4786.60  |  LR: 0.017559  |  0.1 steps/s (2949 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.4736 (n=8)
+  Step     35 (epoch 0)  |  Loss: 8.3520  |  PPL: 4238.54  |  LR: 0.017463  |  0.1 steps/s (2948 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.3520 (n=8)
+  Step     36 (epoch 0)  |  Loss: 8.3259  |  PPL: 4129.52  |  LR: 0.017362  |  0.1 steps/s (2946 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.3259 (n=8)
+  Step     37 (epoch 0)  |  Loss: 8.3588  |  PPL: 4267.58  |  LR: 0.017257  |  0.1 steps/s (2946 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.3588 (n=8)
+  Step     38 (epoch 0)  |  Loss: 8.4761  |  PPL: 4798.64  |  LR: 0.017148  |  0.1 steps/s (2948 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.4761 (n=8)
+  Step     39 (epoch 0)  |  Loss: 8.3831  |  PPL: 4372.62  |  LR: 0.017035  |  0.1 steps/s (2949 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.3831 (n=8)
+  Step     40 (epoch 0)  |  Loss: 8.4194  |  PPL: 4534.29  |  LR: 0.016919  |  0.1 steps/s (2899 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.4194 (n=8)
+  Step     41 (epoch 0)  |  Loss: 8.1828  |  PPL: 3578.95  |  LR: 0.016798  |  0.1 steps/s (3283 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.1828 (n=8)
+  Step     42 (epoch 0)  |  Loss: 8.1833  |  PPL: 3580.66  |  LR: 0.016674  |  0.1 steps/s (3400 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.1833 (n=8)
+  Step     43 (epoch 0)  |  Loss: 8.2534  |  PPL: 3840.61  |  LR: 0.016546  |  0.1 steps/s (3396 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.2534 (n=8)
+  Step     44 (epoch 0)  |  Loss: 8.1635  |  PPL: 3510.28  |  LR: 0.016414  |  0.1 steps/s (3398 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.1635 (n=8)
+  Step     45 (epoch 0)  |  Loss: 8.2737  |  PPL: 3919.50  |  LR: 0.016279  |  0.1 steps/s (3399 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.2737 (n=8)
+  Step     46 (epoch 0)  |  Loss: 8.2835  |  PPL: 3958.19  |  LR: 0.016140  |  0.1 steps/s (3396 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.2835 (n=8)
+  Step     47 (epoch 0)  |  Loss: 8.2183  |  PPL: 3708.16  |  LR: 0.015997  |  0.1 steps/s (3397 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.2183 (n=8)
+  Step     48 (epoch 0)  |  Loss: 8.0670  |  PPL: 3187.61  |  LR: 0.015852  |  0.1 steps/s (3385 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.0670 (n=8)
+  Step     49 (epoch 0)  |  Loss: 8.1992  |  PPL: 3638.11  |  LR: 0.015703  |  0.1 steps/s (3399 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.1992 (n=8)
+  Step     50 (epoch 0)  |  Loss: 8.2369  |  PPL: 3777.97  |  LR: 0.015551  |  0.1 steps/s (3330 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.2369 (n=8)
+  Step     51 (epoch 0)  |  Loss: 8.2086  |  PPL: 3672.50  |  LR: 0.015395  |  0.1 steps/s (3864 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.2086 (n=8)
+  Step     52 (epoch 0)  |  Loss: 8.0885  |  PPL: 3256.77  |  LR: 0.015237  |  0.1 steps/s (4030 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.0885 (n=8)
+  Step     53 (epoch 0)  |  Loss: 8.2765  |  PPL: 3930.35  |  LR: 0.015075  |  0.1 steps/s (4031 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.2765 (n=8)
+  Step     54 (epoch 0)  |  Loss: 8.1544  |  PPL: 3478.58  |  LR: 0.014911  |  0.1 steps/s (4030 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.1544 (n=8)
+  Step     55 (epoch 0)  |  Loss: 8.2465  |  PPL: 3814.25  |  LR: 0.014744  |  0.1 steps/s (4030 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.2465 (n=8)
+  Step     56 (epoch 0)  |  Loss: 8.1169  |  PPL: 3350.69  |  LR: 0.014574  |  0.1 steps/s (4031 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.1169 (n=8)
+  Step     57 (epoch 0)  |  Loss: 8.1285  |  PPL: 3389.72  |  LR: 0.014401  |  0.1 steps/s (4028 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.1285 (n=8)
+  Step     58 (epoch 0)  |  Loss: 8.0637  |  PPL: 3176.92  |  LR: 0.014226  |  0.1 steps/s (4029 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.0637 (n=8)
+  Step     59 (epoch 0)  |  Loss: 8.1275  |  PPL: 3386.27  |  LR: 0.014048  |  0.1 steps/s (4029 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.1275 (n=8)
+  Step     60 (epoch 0)  |  Loss: 8.2810  |  PPL: 3948.24  |  LR: 0.013868  |  0.1 steps/s (3939 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.2810 (n=8)
+  Step     61 (epoch 0)  |  Loss: 8.0026  |  PPL: 2988.80  |  LR: 0.013686  |  0.1 steps/s (4493 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.0026 (n=8)
+  Step     62 (epoch 0)  |  Loss: 8.2506  |  PPL: 3830.10  |  LR: 0.013501  |  0.1 steps/s (4718 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.2506 (n=8)
+  Step     63 (epoch 0)  |  Loss: 8.0287  |  PPL: 3067.72  |  LR: 0.013315  |  0.1 steps/s (4728 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.0287 (n=8)
+  Step     64 (epoch 0)  |  Loss: 8.1535  |  PPL: 3475.64  |  LR: 0.013126  |  0.1 steps/s (4728 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.1535 (n=8)
+  Step     65 (epoch 0)  |  Loss: 8.1486  |  PPL: 3458.45  |  LR: 0.012935  |  0.1 steps/s (4727 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.1486 (n=8)
+  Step     66 (epoch 0)  |  Loss: 8.2935  |  PPL: 3997.88  |  LR: 0.012743  |  0.1 steps/s (4722 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.2935 (n=8)
+  Step     67 (epoch 0)  |  Loss: 8.1723  |  PPL: 3541.55  |  LR: 0.012548  |  0.1 steps/s (4726 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.1723 (n=8)
+  Step     68 (epoch 0)  |  Loss: 8.1078  |  PPL: 3320.16  |  LR: 0.012353  |  0.1 steps/s (4721 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.1078 (n=8)
+  Step     69 (epoch 0)  |  Loss: 8.0295  |  PPL: 3070.23  |  LR: 0.012155  |  0.1 steps/s (4728 tok/s)  |  VRAM: 2.75/4.97 GB
+    Per-source: FineWeb-Edu: 8.0295 (n=8)
+[ab208] EVAL step 70: held-out 8.01903 (47s, peak 5.06 GiB)
+  Step     70 (epoch 0)  |  Loss: 8.1217  |  PPL: 3366.86  |  LR: 0.011956  |  0.0 steps/s (610 tok/s)  |  VRAM: 2.13/5.06 GB
+    Per-source: FineWeb-Edu: 8.1217 (n=8)
+  Step     71 (epoch 0)  |  Loss: 7.9967  |  PPL: 2971.12  |  LR: 0.011756  |  0.1 steps/s (2148 tok/s)  |  VRAM: 2.02/5.06 GB
+    Per-source: FineWeb-Edu: 7.9967 (n=8)
+  Step     72 (epoch 0)  |  Loss: 7.9571  |  PPL: 2855.82  |  LR: 0.011555  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/5.06 GB
+    Per-source: FineWeb-Edu: 7.9571 (n=8)
+  Step     73 (epoch 0)  |  Loss: 7.8637  |  PPL: 2601.06  |  LR: 0.011352  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/5.06 GB
+    Per-source: FineWeb-Edu: 7.8637 (n=8)
+  Step     74 (epoch 0)  |  Loss: 7.5302  |  PPL: 1863.52  |  LR: 0.011148  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/5.06 GB
+    Per-source: FineWeb-Edu: 7.5302 (n=8)
+  Step     75 (epoch 0)  |  Loss: 7.5324  |  PPL: 1867.60  |  LR: 0.010944  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/5.06 GB
+    Per-source: FineWeb-Edu: 7.5324 (n=8)
+  Step     76 (epoch 0)  |  Loss: 7.4524  |  PPL: 1723.93  |  LR: 0.010738  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/5.06 GB
+    Per-source: FineWeb-Edu: 7.4524 (n=8)
+  Step     77 (epoch 0)  |  Loss: 7.5273  |  PPL: 1858.10  |  LR: 0.010532  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/5.06 GB
+    Per-source: FineWeb-Edu: 7.5273 (n=8)
+  Step     78 (epoch 0)  |  Loss: 7.3840  |  PPL: 1610.05  |  LR: 0.010325  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/5.06 GB
+    Per-source: FineWeb-Edu: 7.3840 (n=8)
+  Step     79 (epoch 0)  |  Loss: 7.3670  |  PPL: 1582.89  |  LR: 0.010118  |  0.1 steps/s (2209 tok/s)  |  VRAM: 2.02/5.06 GB
+    Per-source: FineWeb-Edu: 7.3670 (n=8)
+  Step     80 (epoch 0)  |  Loss: 7.4195  |  PPL: 1668.27  |  LR: 0.009910  |  0.1 steps/s (2195 tok/s)  |  VRAM: 2.02/5.06 GB
+    Per-source: FineWeb-Edu: 7.4195 (n=8)
+  Step     81 (epoch 0)  |  Loss: 7.2946  |  PPL: 1472.36  |  LR: 0.009702  |  0.1 steps/s (2256 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.2946 (n=8)
+  Step     82 (epoch 0)  |  Loss: 7.3881  |  PPL: 1616.63  |  LR: 0.009494  |  0.1 steps/s (2320 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3881 (n=8)
+  Step     83 (epoch 0)  |  Loss: 7.3026  |  PPL: 1484.08  |  LR: 0.009286  |  0.1 steps/s (2319 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3026 (n=8)
+  Step     84 (epoch 0)  |  Loss: 6.9822  |  PPL: 1077.34  |  LR: 0.009077  |  0.1 steps/s (2320 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 6.9822 (n=8)
+  Step     85 (epoch 0)  |  Loss: 7.3421  |  PPL: 1543.93  |  LR: 0.008869  |  0.1 steps/s (2320 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3421 (n=8)
+  Step     86 (epoch 0)  |  Loss: 7.1761  |  PPL: 1307.76  |  LR: 0.008661  |  0.1 steps/s (2320 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1761 (n=8)
+  Step     87 (epoch 0)  |  Loss: 7.3308  |  PPL: 1526.58  |  LR: 0.008453  |  0.1 steps/s (2319 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3308 (n=8)
+  Step     88 (epoch 0)  |  Loss: 7.3331  |  PPL: 1530.11  |  LR: 0.008246  |  0.1 steps/s (2320 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3331 (n=8)
+  Step     89 (epoch 0)  |  Loss: 7.4422  |  PPL: 1706.43  |  LR: 0.008039  |  0.1 steps/s (2318 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.4422 (n=8)
+  Step     90 (epoch 0)  |  Loss: 7.4885  |  PPL: 1787.32  |  LR: 0.007833  |  0.1 steps/s (2287 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.4885 (n=8)
+  Step     91 (epoch 0)  |  Loss: 7.1849  |  PPL: 1319.32  |  LR: 0.007628  |  0.1 steps/s (2516 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1849 (n=8)
+  Step     92 (epoch 0)  |  Loss: 7.2131  |  PPL: 1357.03  |  LR: 0.007423  |  0.1 steps/s (2582 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.2131 (n=8)
+  Step     93 (epoch 0)  |  Loss: 7.3268  |  PPL: 1520.54  |  LR: 0.007219  |  0.1 steps/s (2583 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3268 (n=8)
+  Step     94 (epoch 0)  |  Loss: 7.1000  |  PPL: 1212.00  |  LR: 0.007017  |  0.1 steps/s (2583 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1000 (n=8)
+  Step     95 (epoch 0)  |  Loss: 7.1950  |  PPL: 1332.81  |  LR: 0.006815  |  0.1 steps/s (2582 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1950 (n=8)
+  Step     96 (epoch 0)  |  Loss: 7.2294  |  PPL: 1379.35  |  LR: 0.006615  |  0.1 steps/s (2584 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.2294 (n=8)
+  Step     97 (epoch 0)  |  Loss: 7.1369  |  PPL: 1257.47  |  LR: 0.006416  |  0.1 steps/s (2582 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1369 (n=8)
+  Step     98 (epoch 0)  |  Loss: 7.1005  |  PPL: 1212.54  |  LR: 0.006219  |  0.1 steps/s (2584 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1005 (n=8)
+  Step     99 (epoch 0)  |  Loss: 7.3032  |  PPL: 1485.09  |  LR: 0.006023  |  0.1 steps/s (2582 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3032 (n=8)
+  Step    100 (epoch 0)  |  Loss: 7.0461  |  PPL: 1148.37  |  LR: 0.005829  |  0.1 steps/s (2525 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.0461 (n=8)
+  Step    101 (epoch 0)  |  Loss: 7.2958  |  PPL: 1474.12  |  LR: 0.005636  |  0.1 steps/s (2859 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.2958 (n=8)
+  Step    102 (epoch 0)  |  Loss: 7.0250  |  PPL: 1124.42  |  LR: 0.005446  |  0.1 steps/s (2950 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.0250 (n=8)
+  Step    103 (epoch 0)  |  Loss: 7.1090  |  PPL: 1222.91  |  LR: 0.005257  |  0.1 steps/s (2951 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1090 (n=8)
+  Step    104 (epoch 0)  |  Loss: 7.1253  |  PPL: 1243.03  |  LR: 0.005070  |  0.1 steps/s (2950 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1253 (n=8)
+  Step    105 (epoch 0)  |  Loss: 7.3460  |  PPL: 1550.02  |  LR: 0.004886  |  0.1 steps/s (2948 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3460 (n=8)
+  Step    106 (epoch 0)  |  Loss: 7.1392  |  PPL: 1260.46  |  LR: 0.004703  |  0.1 steps/s (2945 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1392 (n=8)
+  Step    107 (epoch 0)  |  Loss: 7.1372  |  PPL: 1257.96  |  LR: 0.004523  |  0.1 steps/s (2946 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1372 (n=8)
+  Step    108 (epoch 0)  |  Loss: 7.1019  |  PPL: 1214.32  |  LR: 0.004345  |  0.1 steps/s (2945 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1019 (n=8)
+  Step    109 (epoch 0)  |  Loss: 7.2309  |  PPL: 1381.45  |  LR: 0.004170  |  0.1 steps/s (2946 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.2309 (n=8)
+  Step    110 (epoch 0)  |  Loss: 7.2456  |  PPL: 1401.92  |  LR: 0.003998  |  0.1 steps/s (2899 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.2456 (n=8)
+  Step    111 (epoch 0)  |  Loss: 7.0552  |  PPL: 1158.88  |  LR: 0.003828  |  0.1 steps/s (3279 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.0552 (n=8)
+  Step    112 (epoch 0)  |  Loss: 7.3155  |  PPL: 1503.37  |  LR: 0.003661  |  0.1 steps/s (3398 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3155 (n=8)
+  Step    113 (epoch 0)  |  Loss: 7.2727  |  PPL: 1440.46  |  LR: 0.003496  |  0.1 steps/s (3399 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.2727 (n=8)
+  Step    114 (epoch 0)  |  Loss: 7.0977  |  PPL: 1209.13  |  LR: 0.003335  |  0.1 steps/s (3395 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.0977 (n=8)
+  Step    115 (epoch 0)  |  Loss: 7.0804  |  PPL: 1188.42  |  LR: 0.003176  |  0.1 steps/s (3396 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.0804 (n=8)
+  Step    116 (epoch 0)  |  Loss: 7.1628  |  PPL: 1290.46  |  LR: 0.003021  |  0.1 steps/s (3394 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1628 (n=8)
+  Step    117 (epoch 0)  |  Loss: 7.3252  |  PPL: 1518.13  |  LR: 0.002869  |  0.1 steps/s (3398 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3252 (n=8)
+  Step    118 (epoch 0)  |  Loss: 7.0161  |  PPL: 1114.39  |  LR: 0.002720  |  0.1 steps/s (3396 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.0161 (n=8)
+  Step    119 (epoch 0)  |  Loss: 7.3669  |  PPL: 1582.78  |  LR: 0.002574  |  0.1 steps/s (3396 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3669 (n=8)
+  Step    120 (epoch 0)  |  Loss: 7.3393  |  PPL: 1539.66  |  LR: 0.002432  |  0.1 steps/s (3332 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3393 (n=8)
+  Step    121 (epoch 0)  |  Loss: 7.3051  |  PPL: 1487.84  |  LR: 0.002293  |  0.1 steps/s (3861 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.3051 (n=8)
+  Step    122 (epoch 0)  |  Loss: 7.0345  |  PPL: 1135.15  |  LR: 0.002158  |  0.1 steps/s (4030 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.0345 (n=8)
+  Step    123 (epoch 0)  |  Loss: 7.0939  |  PPL: 1204.64  |  LR: 0.002026  |  0.1 steps/s (4030 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.0939 (n=8)
+  Step    124 (epoch 0)  |  Loss: 7.0810  |  PPL: 1189.17  |  LR: 0.001898  |  0.1 steps/s (4026 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.0810 (n=8)
+  Step    125 (epoch 0)  |  Loss: 7.1181  |  PPL: 1234.13  |  LR: 0.001773  |  0.1 steps/s (4030 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1181 (n=8)
+  Step    126 (epoch 0)  |  Loss: 7.0835  |  PPL: 1192.10  |  LR: 0.001653  |  0.1 steps/s (4029 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.0835 (n=8)
+  Step    127 (epoch 0)  |  Loss: 7.0462  |  PPL: 1148.43  |  LR: 0.001536  |  0.1 steps/s (4027 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.0462 (n=8)
+  Step    128 (epoch 0)  |  Loss: 7.1612  |  PPL: 1288.48  |  LR: 0.001423  |  0.1 steps/s (4027 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1612 (n=8)
+  Step    129 (epoch 0)  |  Loss: 7.2698  |  PPL: 1436.24  |  LR: 0.001314  |  0.1 steps/s (4031 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.2698 (n=8)
+  Step    130 (epoch 0)  |  Loss: 7.1159  |  PPL: 1231.37  |  LR: 0.001210  |  0.1 steps/s (3940 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1159 (n=8)
+  Step    131 (epoch 0)  |  Loss: 7.1332  |  PPL: 1252.90  |  LR: 0.001109  |  0.1 steps/s (4496 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1332 (n=8)
+  Step    132 (epoch 0)  |  Loss: 7.2091  |  PPL: 1351.66  |  LR: 0.001012  |  0.1 steps/s (4727 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.2091 (n=8)
+  Step    133 (epoch 0)  |  Loss: 7.1488  |  PPL: 1272.53  |  LR: 0.000920  |  0.1 steps/s (4727 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1488 (n=8)
+  Step    134 (epoch 0)  |  Loss: 6.9581  |  PPL: 1051.67  |  LR: 0.000831  |  0.1 steps/s (4729 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 6.9581 (n=8)
+  Step    135 (epoch 0)  |  Loss: 7.1130  |  PPL: 1227.80  |  LR: 0.000747  |  0.1 steps/s (4717 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1130 (n=8)
+  Step    136 (epoch 0)  |  Loss: 7.1364  |  PPL: 1256.90  |  LR: 0.000668  |  0.1 steps/s (4725 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1364 (n=8)
+  Step    137 (epoch 0)  |  Loss: 7.1792  |  PPL: 1311.86  |  LR: 0.000592  |  0.1 steps/s (4718 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1792 (n=8)
+  Step    138 (epoch 0)  |  Loss: 7.0121  |  PPL: 1109.94  |  LR: 0.000521  |  0.1 steps/s (4727 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.0121 (n=8)
+  Step    139 (epoch 0)  |  Loss: 7.1001  |  PPL: 1212.13  |  LR: 0.000454  |  0.1 steps/s (4727 tok/s)  |  VRAM: 2.75/5.06 GB
+    Per-source: FineWeb-Edu: 7.1001 (n=8)
+[ab208] EVAL step 140: held-out 7.09145 (47s, peak 5.06 GiB)

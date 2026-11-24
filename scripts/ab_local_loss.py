@@ -166,8 +166,17 @@ def run_arm(arm, args, batches, probes, copy_seqs, device) -> dict:
             # layers-per-block changes (a big budget would otherwise pack it with layers).
             import hvn.core.block_coordinate as _bc
             _orig_bg = _bc._balance_groups
-            _bc._balance_groups = lambda blocks, b=None: (
-                [([blocks[0][0]], blocks[0][1])] + _orig_bg(blocks[1:], b))
+            def _keep_emb(blocks, b=None):
+                groups = _orig_bg(blocks[1:], b)
+                # A tail-only final_norm+decoder block trains just a LayerNorm (the decoder
+                # is the tied embedding), so its turn is wasted; merge it into the last
+                # layer group as the production partition does (#193).
+                if len(groups) > 1 and groups[-1][0] == ["final_norm+decoder"]:
+                    groups[-2] = (groups[-2][0] + groups[-1][0],
+                                  list(groups[-2][1]) + list(groups[-1][1]))
+                    groups.pop()
+                return [([blocks[0][0]], blocks[0][1])] + groups
+            _bc._balance_groups = _keep_emb
         sched = BlockCoordinateScheduler(model, opt, steps_per_block=args.steps_per_block,
                                          partition=partition, partition_budget=budget)
         if arm in BUDGET_LAYERS:
@@ -295,7 +304,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--tokenizer", default="gpt2")
     p.add_argument("--out", default="results/local_loss/ab.json")
+    p.add_argument("--scan-kernel", choices=["v1", "t"], default="v1",
+                   help="#206: DeltaNet scan kernels (hvn.core.deltanet_triton.SCAN_KERNEL)")
     args = p.parse_args(argv)
+    import hvn.core.deltanet_triton as _dt
+    _dt.SCAN_KERNEL[0] = args.scan_kernel
+    print(f"[ab] scan kernel {args.scan_kernel}", flush=True)
 
     # Import BEFORE touching CUDA (pyarrow after CUDA init aborts natively).
     import train_edge_conversational as tec
@@ -342,6 +356,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump({"config": vars(args), "forward_to_diff": diff, "arms": results},
                       fh, indent=2)
+    print(f"[ab] scan t stats {_dt.SCAN_T_STATS} (kernel {_dt.SCAN_KERNEL[0]})", flush=True)
 
     print("\n[ab] ================ local-loss BCD ================")
     print(f"[ab] {'arm':<20}{'held-out':>10}{'ppl':>9}{'copy':>8}{'train min':>11}{'GiB':>7}")

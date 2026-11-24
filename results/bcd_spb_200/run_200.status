@@ -1,0 +1,4 @@
+2026-11-13 17:22:09 start k4s50 attempt 1 (last step 0)
+2026-11-14 03:43:49 k4s50 attempt 1 exit 0
+2026-11-14 03:43:49 start k4s25 attempt 1 (last step 0)
+2026-11-14 06:55:00 k4s25 killed at step 821 on purpose (maintainer: "stop and run 200"; k4s50 was worse than k4@100, so shorter turns are not worth 20 GPU hours); k4s10 never started; RUN_200_ABANDONED, next arm is k4s200 (run_200_s200.sh)

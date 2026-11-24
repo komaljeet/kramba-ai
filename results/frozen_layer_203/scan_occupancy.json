@@ -1,0 +1,42 @@
+{
+ "B1_H32": {
+  "N": 32,
+  "fwd_bv16_ms": 3.4484222412109373,
+  "ckpt_ms": 4.500377655029297,
+  "bwd_ms": 9.037602996826172,
+  "fwd_bv8_ms": 3.248931121826172,
+  "fwd_bv8_bitequal": true,
+  "fwd_bv4_ms": 4.460441589355469,
+  "fwd_bv4_bitequal": false
+ },
+ "B1_H64": {
+  "N": 64,
+  "fwd_bv16_ms": 5.687091064453125,
+  "ckpt_ms": 4.649983978271484,
+  "bwd_ms": 13.791641235351562,
+  "fwd_bv8_ms": 5.846527862548828,
+  "fwd_bv8_bitequal": true,
+  "fwd_bv4_ms": 7.493222045898437,
+  "fwd_bv4_bitequal": false
+ },
+ "B2_H64": {
+  "N": 128,
+  "fwd_bv16_ms": 9.581158447265626,
+  "ckpt_ms": 6.068428802490234,
+  "bwd_ms": 23.880908203125,
+  "fwd_bv8_ms": 10.625536346435547,
+  "fwd_bv8_bitequal": true,
+  "fwd_bv4_ms": 13.881138610839844,
+  "fwd_bv4_bitequal": false
+ },
+ "B4_H64": {
+  "N": 256,
+  "fwd_bv16_ms": 18.498538208007812,
+  "ckpt_ms": 12.939263916015625,
+  "bwd_ms": 42.80370178222656,
+  "fwd_bv8_ms": 20.82733154296875,
+  "fwd_bv8_bitequal": true,
+  "fwd_bv4_ms": 28.543795776367187,
+  "fwd_bv4_bitequal": false
+ }
+}

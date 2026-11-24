@@ -1,0 +1,147 @@
+{
+ "args": {
+  "repo": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai-wt203",
+  "out": "results/frozen_layer_203/A_after.json",
+  "active": 1,
+  "steps": 3,
+  "ga": 8,
+  "cache_blocks": 1,
+  "profile": true,
+  "no_skip_unread": false,
+  "hash": true,
+  "set": ""
+ },
+ "info": {
+  "blocks.0": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "18/18"
+  },
+  "blocks.1": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "18/18"
+  },
+  "blocks.2": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "0/18"
+  },
+  "blocks.3": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "0/18"
+  },
+  "blocks.4": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "0/18"
+  },
+  "blocks.5": {
+   "type": "TransformerBlock",
+   "params": 41953280,
+   "requires_grad": "0/9"
+  }
+ },
+ "rows": [
+  {
+   "step": 0,
+   "wall": 4.855308300000615,
+   "phases": {},
+   "peak_reserved_frac": 0.43579513068968323,
+   "loss": 1.9562959671020508,
+   "grad_sha": "5010f34ae74ad8715935a26dab11f50c164c2293f2ce57b3e9ede8fb644e0d0d"
+  },
+  {
+   "step": 1,
+   "wall": 4.284152000007452,
+   "phases": {
+    "embed": 0.008034111976623536,
+    "fwd.L0": 0.15606272125244142,
+    "fwd.glue": 0.004381952052703128,
+    "fwd.L1": 0.15513484764099122,
+    "fwd.L2": 0.15721980857849122,
+    "fwd.L3": 0.15677327919006348,
+    "fwd.L4": 0.15664435195922852,
+    "fwd.L5": 0.16598118591308594,
+    "head": 0.01878220772743225,
+    "bwd.L5": 0.1303511028289795,
+    "bwdgrad.L5": 0.41160908889770514,
+    "bwd.L4": 0.12462080097198489,
+    "bwdgrad.L4": 0.27399475479125973,
+    "bwd.L3": 0.12473548793792724,
+    "bwdgrad.L3": 0.27375820541381835,
+    "bwd.L2": 0.12463718414306639,
+    "bwdgrad.L2": 0.2747555847167969,
+    "bwd.L1": 0.12653772926330567,
+    "bwdgrad.L1": 0.4083814392089844,
+    "bwd.L0": 0.12597555255889892,
+    "bwdgrad.L0": 0.39641293334960936
+   },
+   "peak_reserved_frac": 0.4778112531552805,
+   "loss": -2765.732421875,
+   "grad_sha": "7864db1aeb991adac9dc7278f338b072f95021e7609fd58ea91d7d1bc955f278"
+  },
+  {
+   "step": 2,
+   "wall": 4.327208600006998,
+   "phases": {
+    "embed": 0.00728793603181839,
+    "fwd.L0": 0.15480896186828613,
+    "fwd.glue": 0.0033819200207944964,
+    "fwd.L1": 0.15493273544311523,
+    "fwd.L2": 0.15691523361206053,
+    "fwd.L3": 0.15697158813476564,
+    "fwd.L4": 0.15680553627014163,
+    "fwd.L5": 0.1656893424987793,
+    "head": 0.018443936109542848,
+    "bwd.L5": 0.13045267105102537,
+    "bwdgrad.L5": 0.4132189407348633,
+    "bwd.L4": 0.1250442876815796,
+    "bwdgrad.L4": 0.27433789062499997,
+    "bwd.L3": 0.12435392093658447,
+    "bwdgrad.L3": 0.2743653717041016,
+    "bwd.L2": 0.1247199363708496,
+    "bwdgrad.L2": 0.27531343841552736,
+    "bwd.L1": 0.12595260810852052,
+    "bwdgrad.L1": 0.4092406730651856,
+    "bwd.L0": 0.1259806718826294,
+    "bwdgrad.L0": 0.39657299041748045
+   },
+   "peak_reserved_frac": 0.4778112531552805,
+   "loss": -4808.98095703125,
+   "grad_sha": "060f4f3b97848a9334683d4aa352d89fef591f49ef159934d99ae663a2a0cb0b"
+  }
+ ],
+ "peak_reserved_frac": 0.4778112531552805,
+ "trace": "results/frozen_layer_203/A_after_trace.json",
+ "trace_labels": [
+  "embed",
+  "fwd.L0",
+  "fwd.glue",
+  "fwd.L1",
+  "fwd.glue",
+  "fwd.L2",
+  "fwd.glue",
+  "fwd.L3",
+  "fwd.glue",
+  "fwd.L4",
+  "fwd.glue",
+  "fwd.L5",
+  "fwd.glue",
+  "head",
+  "bwd.L5",
+  "bwdgrad.L5",
+  "bwd.L4",
+  "bwdgrad.L4",
+  "bwd.L3",
+  "bwdgrad.L3",
+  "bwd.L2",
+  "bwdgrad.L2",
+  "bwd.L1",
+  "bwdgrad.L1",
+  "bwd.L0",
+  "bwdgrad.L0",
+  "end"
+ ]
+}

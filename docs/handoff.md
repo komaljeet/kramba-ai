@@ -1,4 +1,4 @@
-# Handoff — read this first (updated 2026-10-10 15:05)
+# Handoff — read this first (updated 2026-11-24; sections 0 onward are from 2026-10-10)
 
 Author: Rambarun Komaljeet
 
@@ -6,6 +6,35 @@ State of play for a session picking this up cold, or for the same session after 
 context reset. Everything below is measured unless it says otherwise.
 
 ---
+
+## 000. 1B pretrain stopped (2026-11-20)
+
+- The maintainer stopped the 1B pretrain effort on 2026-11-20. Rule: a full-quality 1B
+  pretrain must take under 212 days. No measured route meets it.
+- BCD: ~106 days of compute, not full quality (#214: at 208M, 6.7x the steps to match full
+  backprop, 32% higher held-out loss, gap not closing; 1B unmeasured).
+- Streamed full backprop: ~22.5 s/step, ~241 days (#216/#217); fp32 host state needs ~13.6 GB
+  of RAM (a 32 GB machine; this one has 16 GB, no upgrade).
+- MR !273 (#218, lean 16 GB host state) is open, not merged. Do not restart this work unasked.
+- Detail: docs/state.md (2026-11-20 roll-up).
+
+## 00. 1B speed state (2026-11-18, #207-#213)
+
+- Default 1B k4 step on main: **9.890 s** (#210; 9.865 s in the #213 re-time) = ~106 days
+  for 925,000 steps. Was 11.285 s (~121 days) before #207-#210.
+- Trainer defaults now: `--scan-kernel t` (`v1` opts out; not bit-identical, held-out not
+  worse at 1,800 steps), `--active-no-ckpt-layers 1`, fp8 bias fused, cache emptied at each
+  BCD switch (`--no-bcd-switch-empty-cache` opts out).
+- Held-out eval under `--offload` works since !268: add
+  `--val-fraction 0.001 --val-every 500 --val-batches 64`. ~38 s per eval, +0.08 s/step at 500.
+- Keep other apps off the NVIDIA GPU: a WDDM squeeze made turns 2.0-2.5x slower (#211).
+- No same-bits speed change worth 0.2 s/step is left (#213 hunt). Next candidates need a
+  loss A/B first (Muon with 3 Newton-Schulz steps; `alpha_proj` in fp8, not measured).
+- Unmeasured: BCD quality cost at 1B (#214 measured 208M: 6.7x the steps), `t` rounding and fp8 over a full run,
+  a real run with eval on.
+- Failing on main: `tests/test_issue33.py` (does not load);
+  `test_fused_norm_residual.py::test_bcd_offload_trajectory_close_and_path_ran` (order dependent).
+- Detail: docs/state.md (#215 roll-up).
 
 ## 0. DONE (not yet graded): the 896x16 chat + tool-use fine-tune, 2026-10-10 13:50 -> 15:01
 

@@ -1,0 +1,7 @@
+{"step": 2, "block": "token_embedding", "peak_res": 5299503104, "peak_alloc": 3985739776, "peak_res_pct": 82.30600113997231, "over_85": false, "turn_wall_sec": 51.10356688499451}
+{"step": 4, "block": "blocks.0+blocks.1+blocks.2+blocks.3", "peak_res": 5278531584, "peak_alloc": 4662046720, "peak_res_pct": 81.98029476427001, "over_85": false, "turn_wall_sec": 32.31443643569946}
+{"step": 6, "block": "blocks.4+blocks.5+blocks.6+blocks.7", "peak_res": 5278531584, "peak_alloc": 4534413312, "peak_res_pct": 81.98029476427001, "over_85": false, "turn_wall_sec": 29.17909026145935}
+{"step": 8, "block": "blocks.8+blocks.9+blocks.10+blocks.11", "peak_res": 5278531584, "peak_alloc": 4393611264, "peak_res_pct": 81.98029476427001, "over_85": false, "turn_wall_sec": 25.74977731704712}
+{"step": 10, "block": "blocks.12+blocks.13+blocks.14+blocks.15", "peak_res": 5278531584, "peak_alloc": 4259393536, "peak_res_pct": 81.98029476427001, "over_85": false, "turn_wall_sec": 22.52711319923401}
+{"step": 12, "block": "blocks.16+blocks.17+blocks.18+blocks.19", "peak_res": 5278531584, "peak_alloc": 4131760128, "peak_res_pct": 81.98029476427001, "over_85": false, "turn_wall_sec": 19.16549801826477}
+{"step": 14, "block": "blocks.20+blocks.21+blocks.22+blocks.23+final_norm+decoder", "peak_res": 4305453056, "peak_alloc": 4067586048, "peak_res_pct": 66.8675189316831, "over_85": false, "turn_wall_sec": 15.829938650131226}

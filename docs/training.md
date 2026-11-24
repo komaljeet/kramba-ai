@@ -34,7 +34,19 @@ numbers transferring across scale, let alone across hardware.
 
 ## Before / after — same hardware, one week of real fixes (2026-08 -> 2026-10)
 
-| | August 2026 | October 2026 (now) |
+> **Current number (2026-11-18, status updated 2026-11-24): the default 1B k4 step is 9.890 s** (`--scan-kernel t`
+> default, 7 BCD blocks of 4 layers; #210 re-time, 9.865 s in the #213 speed hunt). That is
+> ~106 days for 925,000 steps at 8 x 4096 tokens (~3,310 tok/s). Before the #207-#210 round it
+> was 11.285 s (~121 days). History at 1B k4: 12.60 -> 12.10 -> 11.79 -> 11.285 -> 11.095 ->
+> 9.890 s. The 13.294 / 12.335 s and 132-211 day figures below are for the old 13-block layout
+> and older code: stale; the 211 end also used the 1.6x factor, withdrawn. The BCD quality cost
+> at 1B with today's layout is not measured (#198 showed the old 1.6x does not carry over). At
+> 208M (#214) BCD ended 32% worse in held-out loss than full backprop and needed 6.7x the steps,
+> so ~106 days is BCD compute, not full quality. Streamed full backprop is ~22.5 s/step, ~241
+> days (#217). The 1B pretrain effort was stopped on 2026-11-20. See docs/state.md (#215 roll-up
+> and the 2026-11-20 roll-up).
+
+| | August 2026 | October 2026 (2026-10-17/21; stale, see the note above) |
 |---|---|---|
 | 1B step time | 21.81 s/step | **13.294 s/step** (-39%) |
 | Throughput | 1,579 tok/s | **2,464 tok/s** |
@@ -49,7 +61,8 @@ training mode is** compared to training the full model at once -- not a speed ch
 block slot sized for the vocabulary table was wasting memory for every other block;
 grouping layers into balanced-size blocks reclaimed it, letting more layers train "live"
 at once for the same VRAM budget. Full trail: `docs/state.md`'s BCD-balanced-partition and
-offload-bugs entries.
+offload-bugs entries. (2026-11-24: that 1.6x came from one small test. #198 showed it does not
+carry over to the 1B layout, and #214 measured a much larger cost at 208M.)
 
 **13.294 s/step is a full-BCD-cycle average, not every step (2026-10-22).** Per block it
 ranges from **18.9 s/step** (`token_embedding`, slowest, trained first) down to **7.5 s/step**
@@ -68,7 +81,8 @@ full-cycle run launched to confirm this across all 13 BCD blocks (initially stal
 the pressure-reaper opt-out, see `docs/state.md`) finished to step 1300/1300. Real cycle
 average: **13.294 -> 12.335 s/step, 2,464 -> 2,656 tok/s (+7.81%)** -- slightly better than
 the one-block projection. Day estimate: **142 -> ~132 days / 227 -> ~211 days**. This is now
-the real number, not a projection.
+the real number, not a projection. (2026-11-24: only ~132 is a speed number; the 211 end used
+the 1.6x factor, withdrawn.)
 
 ## HVN vs Transformer — Fundamental Differences
 
@@ -205,6 +219,51 @@ CPU/NVMe offload (not wired).
 > alive. On Linux the same configs hard-OOM. Treat `peak < 6 GiB` as the envelope, not "it
 > didn't crash"; the >6 GiB rows in the JSON record true allocator demand (for #70).
 
+> **It also happens below 6 GiB, and then it stays (#211, 2026-11-16).** The 1B k4 trainer
+> holds ~5.05-5.2 GiB and `cudaMemGetInfo` reports 0 free for most turns: it runs at the
+> driver's limit. If anything else then needs VRAM, WDDM moves part of the trainer's memory to
+> host RAM, and because the caching allocator reuses those blocks every step, the slowdown
+> lasts until they are freed -- in the trainer, never. Measured: 900 MiB taken by another
+> process for 200 s made the rest of a 14-turn run 2.0-2.5x slower after it was gone.
+> `--bcd-switch-empty-cache` empties the cache at each BCD switch: the same run recovered at
+> the next switch. Same bits (step hashes equal); cost +0.012 s/step (9.898 -> 9.910 s at 1B k4),
+> peak reserved 82.3% -> 83.8% (the cache is rebuilt each turn).
+> On by default since #212; `--no-bcd-switch-empty-cache` turns it off. See docs/state.md (#211, #212).
+
+### Held-out eval in the 1B BCD `--offload` recipe: `--val-every` works since #213 (2026-11-18)
+
+**Use `--val-every 500` for a long run: 100 costs 3.7% of the step, 500 costs 0.7%.**
+
+**One line: add `--val-fraction 0.001 --val-every 500 --val-batches 64` to the 1B k4 command and
+the trainer scores the same 64 held-out windows as the #208/#209 harness, bit for bit. One eval
+takes 38.2 s; at `--val-every 500` that is +0.08 s per step (0.7%), at 100 it is +0.38 s (3.7%).
+Training is unchanged (loss, gradient and RNG hashes equal at all 7 block positions) and peak
+VRAM is unchanged at every step (equal to an eval-off run at all 16 steps measured).**
+
+- Defaults are unchanged. `--val-every` defaults to the checkpoint interval
+  (`--save-every-steps`, 500). No eval runs at all unless `--val-fraction` > 0 (default 0).
+  `--val-batches` (new, default 100 = the old fixed cap) sets how many held-out batches one eval
+  scores; at `--batch-size 1` a batch is one window, so 64 matches the #209 harness.
+- Memory: the eval leaves nothing allocated but re-lays-out the CUDA cache. Right after a block
+  switch (where the cache was just emptied) the trainer empties it again after the eval, so the
+  next turn starts exactly as it would without one; mid-turn it leaves the cache alone (emptying
+  there made the next step rebuild around the optimizer state and peak 97.0%). Measured: eval
+  every 2 steps (at each switch, 16 steps) and eval after EVERY step (14 steps): each step's peak
+  reserved equal to the eval-off run, max 84.9%.
+- Set `--val-fraction` at launch. It holds windows out of the TRAINING split, so adding it to a
+  run that started without it changes the data that run trains on (not measured here).
+- Eval peak: at most what the training step before it already held (82.6% after the first step,
+  26-47% right after a switch, 64-77% mid-turn). The eval allocates nothing that stays.
+- Before #213 the eval crashed under `--offload` (`weight is on cpu`): eval mode skipped the
+  offload streaming. See docs/state.md (#213) for the cause, the tests and the falsifiers.
+
+Example (the #209 1B k4 command plus eval):
+
+```
+... --offload --bcd-layers-per-block 4 --grad-accum 8 --bcd-steps-per-block 100 \
+    --val-fraction 0.001 --val-every 500 --val-batches 64
+```
+
 ### Head count at 1B: `head_dim` 32 is the default, and the old default was the WORST case (2026-08-30)
 
 **One line: at d_model 2048 the scan's cost is linear in `head_dim`, so `--n-heads 64`
@@ -307,6 +366,39 @@ Since 2026-09-29 blocks default to `--bcd-partition balanced` (consecutive layer
 to the vocab table's size: same peak memory, each layer trains ~3-4x as often; ppl 228 vs
 317 in the 8-layer A/B). Since #164 `--offload` uses `balanced` too; before that it silently
 fell back to `layer`.
+Since #201 (2026-11-14) the balanced partition defaults to **4 layers per block**
+(`--bcd-layers-per-block 4`): at 1B that is 7 blocks (embedding alone, then 6 groups of 4,
+tail merged into the last) instead of 13. It was 0.446 nats better on held-out loss at step
+2800 (4.881 vs 5.327), with 6.8% slower steps and peak reserved 83.3% (#194). Per-step and
+per-cycle timings in this doc measured before that are for the 13-block layout.
+`--bcd-layers-per-block 0` restores the old packing (about 2 layers per block); a checkpoint
+saved before #201 must resume with it, and resuming under a different layout stops with an
+error that names the flag.
+
+`--active-no-ckpt-layers N` (#202, with `--offload`): the last N layers of the active block
+keep their activations instead of being recomputed in backward. Bit-identical. At 1B k4,
+N=1 is -0.12 s/step (12.10 s with the other #202 changes) at unchanged peak VRAM; N=2 on
+every block fails the 85% guard (86.6%). A comma list gives one N per layer block:
+`1,1,2,2,3,3` is 12.00 s at 84.0% peak reserved (thin margin). Default 1 since #207 (`0` opts
+out). Re-timed on today's defaults (#213): the list is 9.773 s vs 9.865 s for the default, so
+it now saves only ~0.09 s.
+
+`--scan-kernel` (#206, default `t` since #210): which DeltaNet scan kernels the strided-IO
+path runs. `t` keeps the state transposed and fuses the checkpoint pass into the recompute
+forward. At 1B k4 (#210 re-time, 3 alternating repeats, all 7 block positions) the default
+step is **9.890 s** vs **11.097 s** with `--scan-kernel v1` (spreads 0.019 / 0.010), peak reserved
+82.3% in both. Not bit-identical to `v1` (fp32 rounding-level; same fp64 error, #208); held-out loss
+over 1800 steps x 2 seeds was 5.21862 (t) vs 5.21976 (v1), lower at all 18 turn ends (#209).
+`--scan-kernel v1` is the opt-out: use it to continue or reproduce a run started before #210.
+
+`--fused-norm-residual` (#208, opt-in, default off): adds the residual gradient inside the
+RMSNorm backward kernel. -0.051 s/step alone, but only -0.041 s on top of `t`, so it stays
+off. One of its tests (`test_bcd_offload_trajectory_close_and_path_ran`) fails depending on
+test order on main.
+
+The #213 speed hunt found no same-bits change worth 0.2 s/step or more on top of these
+defaults. Muon with 3 Newton-Schulz steps (`Muon.step` 0.514 -> 0.330 s) would need a loss A/B
+first. See docs/state.md (#215).
 
 **Measured on this card** (`scripts/bench_block_coordinate_vram.py`, isolated subprocesses,
 `results/bcd_vram.json`):

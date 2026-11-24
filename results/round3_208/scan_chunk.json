@@ -1,0 +1,122 @@
+{
+ "shape": {
+  "Bt": 1,
+  "H": 64,
+  "S": 4096,
+  "D": 32
+ },
+ "grad_layers_mean": 14.142857142857142,
+ "fwd_layers_mean": 7.857142857142857,
+ "v1": {
+  "F_ms": 4.699443054199219,
+  "C_ms": 29.120700073242187,
+  "t_stats_delta": {
+   "fused_ckpt": 0,
+   "separate_ckpt": 0
+  }
+ },
+ "t": {
+  "F_ms": 3.558707046508789,
+  "C_ms": 16.963583374023436,
+  "t_stats_delta": {
+   "fused_ckpt": 11,
+   "separate_ckpt": 0
+  }
+ },
+ "chunked": [
+  {
+   "chunk": 16,
+   "bv": 8,
+   "variant": "real",
+   "F_ms": 14.469223022460938
+  },
+  {
+   "chunk": 16,
+   "bv": 8,
+   "variant": "nosolve",
+   "F_ms": 12.688076782226563
+  },
+  {
+   "chunk": 16,
+   "bv": 16,
+   "variant": "real",
+   "F_ms": 10.02239990234375
+  },
+  {
+   "chunk": 16,
+   "bv": 16,
+   "variant": "nosolve",
+   "F_ms": 8.650649261474609
+  },
+  {
+   "chunk": 16,
+   "bv": 32,
+   "variant": "real",
+   "F_ms": 6.700032043457031
+  },
+  {
+   "chunk": 16,
+   "bv": 32,
+   "variant": "nosolve",
+   "F_ms": 5.6881153106689455
+  },
+  {
+   "chunk": 32,
+   "bv": 8,
+   "variant": "real",
+   "F_ms": 24.009829711914062
+  },
+  {
+   "chunk": 32,
+   "bv": 8,
+   "variant": "nosolve",
+   "F_ms": 20.162751770019533
+  },
+  {
+   "chunk": 32,
+   "bv": 16,
+   "variant": "real",
+   "F_ms": 15.763046264648438
+  },
+  {
+   "chunk": 32,
+   "bv": 16,
+   "variant": "nosolve",
+   "F_ms": 11.740160369873047
+  },
+  {
+   "chunk": 32,
+   "bv": 32,
+   "variant": "real",
+   "F_ms": 12.604518127441406
+  },
+  {
+   "chunk": 32,
+   "bv": 32,
+   "variant": "nosolve",
+   "F_ms": 7.353126525878906
+  }
+ ],
+ "fwd_rel_err_vs_fp64_N8": {
+  "c16_real": 1.4803135423278599e-07,
+  "c16_nosolve": 0.19802470074617592,
+  "c32_real": 1.6329467297678578e-07,
+  "c32_nosolve": 0.23064031866750667,
+  "v1": 1.1623553528355924e-07,
+  "t": 1.1592159731815318e-07
+ },
+ "F_chunk_lb_ms": 5.6881153106689455,
+ "F_chunk_best_real_ms": 6.700032043457031,
+ "projection": {
+  "v1": {
+   "bound_saving_s_per_step_nosolve": 1.3019452410016739,
+   "bound_saving_s_per_step_real": 0.8948655953543527,
+   "scan_s_per_step_now": 3.590192771693638
+  },
+  "t": {
+   "bound_saving_s_per_step_nosolve": -0.14524908316476037,
+   "bound_saving_s_per_step_real": -0.5523287288120814,
+   "scan_s_per_step_now": 2.142998447527204
+  }
+ }
+}

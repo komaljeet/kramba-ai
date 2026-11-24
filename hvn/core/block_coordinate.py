@@ -435,6 +435,7 @@ class GPUBufferPool:
         data in synchronously on the current stream (the pre-#115 behavior,
         unchanged for any block that was never prefetched)."""
         self.register_cpu_home(params)
+        self._evict_if_other_params(key, params)
         if key in self._resident:
             self._resident.move_to_end(key)
             event = self._pending_events.pop(key, None)
@@ -505,6 +506,7 @@ class GPUBufferPool:
         BCD), 144-192 misses and 1.2-1.7 s of main-stream copy time per step.
         """
         self.register_cpu_home(params)
+        self._evict_if_other_params(key, params)
         if self._prefetch_stream is None or key in self._resident:
             return
         params = self._offloadable(params)
@@ -614,6 +616,20 @@ class GPUBufferPool:
         if event is not None:
             event.synchronize()
             self._release_staging(key)
+
+    def _evict_if_other_params(self, key: str, params: list[nn.Parameter]) -> None:
+        """#204: the same block can be streamed as two different tensor lists
+        -- its bf16 weights (eval) or, in training, frozen fp8 codes holders in
+        place of some weights. A resident entry under ``key`` holding the OTHER
+        list must not count as a hit: drop it, so the caller loads its own.
+        A request for a SUBSET of the resident list is a hit, as before (the
+        tail is prefetched as final_norm+decoder and loaded as final_norm)."""
+        entry = self._resident.get(key)
+        if entry is None:
+            return
+        have = {id(p) for p in entry["params"]}
+        if any(id(p) not in have for p in self._offloadable(params)):
+            self.evict(key)
 
     def evict(self, key: str) -> None:
         """Force-release one resident entry now (used only when a call
@@ -739,6 +755,15 @@ def balance_blocks(
     return [("+".join(names), params) for names, params in _balance_groups(blocks, budget)]
 
 
+# #201: what to tell a user whose checkpoint's block layout differs from this run's.
+LAYOUT_RESUME_HINT = (
+    "Since #201 train_edge_conversational.py defaults to 4 layers per block "
+    "under --bcd-partition balanced. A checkpoint saved before that with the "
+    "default balanced packing (about 2 layers per block, 13 blocks at 1B) resumes "
+    "with --bcd-layers-per-block 0; one saved with --bcd-layers-per-block K "
+    "resumes with the same K; one saved per layer resumes with --bcd-partition layer.")
+
+
 def _balance_groups(
     blocks: list[tuple[str, list[nn.Parameter]]],
     budget: int | None = None,
@@ -767,6 +792,35 @@ def _balance_groups(
     if cur_names:
         out.append((cur_names, cur_params))
     return out
+
+
+def _layer_count_groups(
+    blocks: list[tuple[str, list[nn.Parameter]]],
+    layers_per_block: int,
+) -> list[tuple[list[str], list[nn.Parameter]]]:
+    """Blocks of up to `layers_per_block` layers (#194).
+
+    The default 'balanced' packing is capped by the embedding table, which gives about
+    2 layers per block at 1B. This sets the layer count directly instead:
+      - the embedding stays alone in the first block (its AdamW state is the heaviest);
+      - consecutive layers are packed `layers_per_block` at a time;
+      - the tail (final_norm+decoder) joins the last group. Alone it would train only
+        a LayerNorm, because the tied decoder is the embedding table: a wasted turn.
+    Requires the usual block order: embedding, layers..., tail.
+    """
+    if layers_per_block < 1:
+        raise ValueError("layers_per_block must be >= 1")
+    if len(blocks) < 3 or blocks[-1][0] != "final_norm+decoder":
+        raise ValueError("layers_per_block needs blocks ordered embedding, layers..., "
+                         "final_norm+decoder")
+    emb, layers, tail = blocks[0], blocks[1:-1], blocks[-1]
+    groups: list[tuple[list[str], list[nn.Parameter]]] = [([emb[0]], list(emb[1]))]
+    for i in range(0, len(layers), layers_per_block):
+        chunk = layers[i:i + layers_per_block]
+        groups.append(([n for n, _ in chunk], [p for _, ps in chunk for p in ps]))
+    groups[-1][0].append(tail[0])
+    groups[-1][1].extend(tail[1])
+    return groups
 
 
 def _validate_partition(model: nn.Module, blocks: list[tuple[str, list[nn.Parameter]]]) -> None:
@@ -827,6 +881,7 @@ class BlockCoordinateScheduler:
         partition: str = "layer",
         partition_budget: int | None = None,
         initial_active_idx: int | None = None,
+        layers_per_block: int | None = None,
     ):
         """
         offload_inactive_weights : bool
@@ -936,6 +991,11 @@ class BlockCoordinateScheduler:
         # "layer", several under "balanced". The offload path is told the WHOLE
         # active set (#164) -- see _activate.
         self._block_members: list[tuple[str, ...]] = [(n,) for n, _ in self.blocks]
+        self.layers_per_block = layers_per_block or None
+        # #201: names the budget packing WOULD give, so load_state_dict can tell
+        # an old checkpoint (saved before block names were stored) apart when
+        # both packings happen to give the same number of blocks.
+        self._budget_block_names: list[str] | None = None
         # "layer" (library default) = one block per layer, BAdam's default.
         # train_edge_conversational.py defaults to "balanced" (2026-09-29, 8L
         # A/B). "balanced" packs consecutive layers into groups no larger than
@@ -946,12 +1006,21 @@ class BlockCoordinateScheduler:
             # compared each segment's name to ONE active name and a merged name
             # like "blocks.0+blocks.1" matched none of them. The model now gets
             # the member set instead (EdgeHVN._offload_active_names).
-            groups = _balance_groups(self.blocks, partition_budget)
+            budget_groups = _balance_groups(self.blocks, partition_budget)
+            self._budget_block_names = ["+".join(names) for names, _ in budget_groups]
+            if layers_per_block:
+                groups = _layer_count_groups(self.blocks, layers_per_block)
+            else:
+                groups = budget_groups
             self.blocks = [("+".join(names), params) for names, params in groups]
             self._block_members = [tuple(names) for names, _ in groups]
             _validate_partition(model, self.blocks)
         elif partition != "layer":
             raise ValueError(f"unknown partition {partition!r} (layer|balanced)")
+        elif layers_per_block:
+            # #194: "layer" would silently ignore the option and train 1 layer
+            # per block, so an A/B arm asking for 4 would measure 1.
+            raise ValueError("layers_per_block needs partition='balanced'")
         self.partition = partition
         # #157: parameters reachable from more than one module must never be
         # evicted. The tied table is the case that matters: `_take()` assigns it
@@ -1030,8 +1099,9 @@ class BlockCoordinateScheduler:
             if not 0 <= initial_active_idx < n:
                 raise ValueError(
                     f"initial_active_idx={initial_active_idx} out of range for "
-                    f"{n} blocks (partition={partition!r}); was the checkpoint "
-                    f"saved with a different --bcd-partition?")
+                    f"{n} blocks (partition={partition!r}, "
+                    f"layers_per_block={self.layers_per_block}); the checkpoint "
+                    f"was saved with a different block layout. {LAYOUT_RESUME_HINT}")
             self._active_idx = initial_active_idx
         self._activate(self._active_idx)
 
@@ -1243,11 +1313,17 @@ class BlockCoordinateScheduler:
             "order": self.order,
             "steps_per_block": self.steps_per_block,
             "partition": self.partition,
+            # #201: the exact layout, so a resume under a different one fails
+            # even when the block COUNT happens to match.
+            "layers_per_block": self.layers_per_block,
+            "block_names": [n for n, _ in self.blocks],
         }
 
     def load_state_dict(self, sd: dict) -> None:
         saved = sd.get("partition", "layer")
-        if saved != self.partition or len(sd["order"]) != len(self.blocks):
+        names = [n for n, _ in self.blocks]
+        saved_names = sd.get("block_names")
+        if saved != self.partition:
             # Cycle positions index into a specific partition; restoring one
             # partition's position into another would point at the wrong block.
             raise ValueError(
@@ -1255,6 +1331,27 @@ class BlockCoordinateScheduler:
                 f"({len(sd['order'])} blocks) but this run uses "
                 f"partition={self.partition!r} ({len(self.blocks)} blocks); "
                 f"resume with --bcd-partition {saved}")
+        if (len(sd["order"]) != len(self.blocks)
+                or (saved_names is not None and list(saved_names) != names)):
+            def _lpb(v):
+                return "budget packing" if v is None else f"{v} layers per block"
+            saved_lpb = (_lpb(sd["layers_per_block"]) if "layers_per_block" in sd
+                         else "layout not recorded (pre-#201)")
+            raise ValueError(
+                f"BCD state was saved with a different block layout "
+                f"({len(sd['order'])} blocks, {saved_lpb}) than this run "
+                f"({len(self.blocks)} blocks, {_lpb(self.layers_per_block)}). "
+                f"{LAYOUT_RESUME_HINT}")
+        if (saved_names is None and self.partition == "balanced"
+                and self._budget_block_names is not None
+                and self._budget_block_names != names
+                and len(self._budget_block_names) == len(names)):
+            # Pre-#201 checkpoint: only the count was saved, and both packings
+            # give the same count for this model, so it cannot be told apart.
+            print(f"  [resume] WARNING this BCD state predates #201 and records no "
+                  f"block names; the budget packing and layers_per_block="
+                  f"{self.layers_per_block} both give {len(names)} blocks here, "
+                  f"so the layout cannot be checked. {LAYOUT_RESUME_HINT}")
         self._cycle_pos = sd["cycle_pos"]
         self._step_in_block = sd["step_in_block"]
         self.order = sd["order"]

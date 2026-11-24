@@ -1,0 +1,354 @@
+[#163] --offload implies --block-coordinate; enabling it.
+[#163] --offload requires --grad-checkpoint; enabling it (offload evicts weights after the forward and relies on the recompute to bring them back).
+[--fast] Enabled recommended training stack: precision=bf16, tf32, triton-scan, megakernel-scan, fused-ternary, ternary-step-cache, fused-rmsnorm, num-workers=4
+TF32 matmul enabled (Issue #81): fp32 matmuls use TF32 on Ampere+ tensor cores.
+Seeded all RNGs with 0 (reproducible init + shuffling).
+Deterministic attention backward ON (#196).
+Deterministic algorithms ON (bit-reproducible run-to-run).
+======================================================================
+STEP 1 — HARDWARE SCAN
+======================================================================
+
+--- nvidia-smi ---
+Fri Nov 13 16:37:15 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 610.74                 KMD Version: 610.74        CUDA UMD Version: 13.3     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                  Driver-Model | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 4050 ...  WDDM  |   00000000:01:00.0 Off |                  N/A |
+| N/A   43C    P8              1W /   80W |     131MiB /   6141MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A             248    C+G   ...y\StartMenuExperienceHost.exe      N/A      |
+|    0   N/A  N/A            4744    C+G   ..._cw5n1h2txyewy\SearchHost.exe      N/A      |
+|    0   N/A  N/A            7328    C+G   ...Free Download Manager\fdm.exe      N/A      |
+|    0   N/A  N/A           12060    C+G   ...2txyewy\CrossDeviceResume.exe      N/A      |
+|    0   N/A  N/A           14404    C+G   ....0.4341.46\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           17260    C+G   ...ms\Microsoft VS Code\Code.exe      N/A      |
++-----------------------------------------------------------------------------------------+
+
+--- System RAM ---
+  Total RAM: 15.29 GB
+  Free RAM:  8.08 GB
+
+--- Torch Device Checks ---
+  GPU:              NVIDIA GeForce RTX 4050 Laptop GPU
+  VRAM total:       6.00 GB
+  VRAM free:        4.96 GB
+  bf16 supported:   True
+  Torch version:    2.12.1+cu126
+
+--- Chosen Settings (with reasoning) ---
+  d_model:       512  (reference dimension from README)
+  num_layers:    12  (depth for language understanding)
+  n_heads:       8  (standard head count for d=512)
+  batch_size:    4  (fits in VRAM with ternary compression)
+  seq_len:       512  (good context for conversational training)
+  grad_accum:    8  (effective batch = 32)
+  precision:     bf16  (RTX 4050 supports bf16)
+  Est. peak VRAM: ~3.3 GB (safe within 5.0 GB free)
+  Effective batch size: 32
+
+✓ Step 1 complete.
+
+  Loading GPT-2 tokenizer...
+  Tokenizer: gpt2 | vocab_size = 50257 | eos_token_id = 50256
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.0, 'OpenAssistant': 0.0, 'WikiText-103': 0.0, 'FineWeb-Edu': 1.0}
+Sequence length: 4096
+Batch size: 1
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\fineweb_edu.bin (6,642,451,492 tokens) -- skipping parquet extraction
+[data mix] total pretrain budget capped at 6,642,450,432 tokens (6.64B) by DATA VOLUME, not the mix ratio -- every available window from every source is already being used (1,621,692 total), none of them hit their max_repeat=3 limit. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~332M-param model -- if you're targeting something bigger, download more data (proportionate to the current mix shares); adjusting the mix ratio alone will not raise this ceiling until raw volume grows enough for a source's repeat limit to become the active constraint instead.
+
+    Mixed dataset: 1,621,692 train samples (1,621 held-out val), seq_len=4096
+    Unique tokens on disk: 6,642,451,492  |  windows/source: [1621692]
+    Per-source (train): FineWeb-Edu=1,621,692 (100.0%)
+  Tokens: 6642451492
+  Samples: 1621692
+  Held-out val: 1,621 samples
+
+  DataLoader ready: batch_size=1
+✓ Step 2 complete.
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        24
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.0
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → results/bcd_stall_200\ckpt_stall/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from results/bcd_stall_200\ckpt_stall/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 1,113,059,793
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 166 nn.Linear layers with TernaryLinear (STE)
+  Excluded 45 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  4245.99 MB
+  Weight storage (ternary):     930.75 MB
+  Compression ratio:            4.56x
+
+✓ Step 3 complete.
+
+======================================================================
+STEP 4 — PRE-TRAINING AUDIT
+======================================================================
+
+  [Check 1] DataLoader token shapes...
+    batch_src (source IDs): tensor([0])
+    batch_x shape: torch.Size([1, 4096]) (expected (1, 4096))
+    batch_y shape: torch.Size([1, 4096]) (expected (1, 4096))
+    batch_x dtype: torch.int64 (expected torch.long)
+    batch_x range: [8, 50210]
+    ✓ Shapes correct
+
+  [Check 2] Forward pass (EdgeHVN + DeltaNet + ternary)...
+    ⚠ Skipped under --block-coordinate: this check deepcopies the whole
+      model onto GPU and runs an UN-FROZEN backward pass across every
+      param, before BlockCoordinateScheduler exists to bound memory --
+      at large model sizes that alone can OOM a 6 GB card (Issue #112).
+      BCD's own per-block freeze already bounds real-training risk; any
+      real forward/backward issue will surface immediately on step 1.
+
+  [Check 3] Checkpoint save/load cycle...
+    ⚠ Skipped under --block-coordinate: this check rebuilds a SECOND full
+      EdgeHVN and moves it onto GPU alongside the real model (no BCD/freeze
+      applies here either) -- two full-precision weight copies resident at
+      once can OOM a 6 GB card at large sizes, same class of issue as Check 2
+      (Issue #112). The real training loop's own checkpoint saves/resumes
+      exercise this same code path, so a real problem still surfaces there.
+
+  ✓ All audit checks passed!
+✓ Step 4 complete.
+
+  Fused Triton scan enabled on 22 DeltaNet block(s) (#83).
+
+  Design B blockwise-recompute backward enabled on 22 DeltaNet block(s) (#96) -- ~1.05x faster step under --fast.
+
+  Fused ternary quantizer enabled on 166 TernaryLinear layer(s) (#154).
+
+  Fused RMSNorm enabled on 24 module(s).
+
+  Within-step ternary weight cache enabled on 166 TernaryLinear layer(s).
+
+  FP8 Linear enabled on 166 layer(s) (alpha/beta gates + vocab head stay bf16); weight cache ON.
+
+======================================================================
+STEP 5 — START TRAINING
+======================================================================
+
+  Model parameter count:     1,113,059,793
+  Ternary compression ratio: 4.56x
+  Dense fp32 weight size:     4245.99 MB
+  Ternary weight size:        930.75 MB
+  Optimizer: Muon (muon_lr=0.02 on 210 matrices / 1,009,516,544 params; AdamW aux lr=0.0003 / 103,543,249 params)
+  Block-coordinate-descent: 7 blocks (balanced partition), 4 steps/block, active='token_embedding'
+  CPU weight offload: ON (bf16 parked, prefetch on, cache=1 blocks)
+  Mixed-precision: BF16 (Issue #80)
+
+  Training for up to 2800 steps (effective batch = 8)
+  Logging every 1 steps | Checkpoint every 100000 steps
+----------------------------------------------------------------------
+[s200] step 1 normal token_embeddin pos 1 16.94s
+  Step      1 (epoch 0)  |  Loss: 11.2222  |  PPL: 74774.40  |  LR: 0.000000  |  0.1 steps/s (1927 tok/s)  |  VRAM: 1.96/4.94 GB
+    Per-source: FineWeb-Edu: 11.2222 (n=8)
+  ⏱ Estimated 17.01s/step | ~1700936s per checkpoint interval
+  [vram] peak 82% of card — under the 85% spill threshold
+[s200] step 2 normal token_embeddin pos 2 16.23s
+C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\profiler\profiler.py:272: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+USDT:2026-11-13 16:38:06 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step      2 (epoch 0)  |  Loss: 11.2297  |  PPL: 75333.20  |  LR: 0.000040  |  0.1 steps/s (2016 tok/s)  |  VRAM: 1.96/4.94 GB
+    Per-source: FineWeb-Edu: 11.2297 (n=8)
+USDT:2026-11-13 16:38:22 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 3 normal token_embeddin pos 3 16.30s stall 0.06s idle_other 0.13s side 31.7GB @12.9GB/s
+USDT:2026-11-13 16:38:27 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step      3 (epoch 0)  |  Loss: 11.2313  |  PPL: 75452.99  |  LR: 0.000080  |  0.0 steps/s (1564 tok/s)  |  VRAM: 1.96/4.94 GB
+    Per-source: FineWeb-Edu: 11.2313 (n=8)
+USDT:2026-11-13 16:38:43 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 4 normal token_embeddin pos 4 16.53s stall 0.07s idle_other 0.14s side 31.7GB @12.8GB/s
+  Step      4 (epoch 0)  |  Loss: 11.2355  |  PPL: 75773.52  |  LR: 0.000120  |  0.0 steps/s (1548 tok/s)  |  VRAM: 1.96/4.94 GB
+    Per-source: FineWeb-Edu: 11.2355 (n=8)
+[s200] step 5 normal blocks.0+block pos 1 16.68s
+  Step      5 (epoch 0)  |  Loss: 11.2281  |  PPL: 75211.60  |  LR: 0.000160  |  0.1 steps/s (1983 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.2281 (n=8)
+[s200] step 6 normal blocks.0+block pos 2 16.16s
+USDT:2026-11-13 16:39:21 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step      6 (epoch 0)  |  Loss: 11.2282  |  PPL: 75220.56  |  LR: 0.000200  |  0.1 steps/s (2027 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.2282 (n=8)
+USDT:2026-11-13 16:39:37 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 7 normal blocks.0+block pos 3 16.16s stall 0.00s idle_other 0.13s side 26.9GB @12.9GB/s
+USDT:2026-11-13 16:39:42 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step      7 (epoch 0)  |  Loss: 11.2297  |  PPL: 75331.69  |  LR: 0.000240  |  0.0 steps/s (1581 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.2297 (n=8)
+USDT:2026-11-13 16:39:58 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 8 normal blocks.0+block pos 4 16.32s stall 0.00s idle_other 0.13s side 26.9GB @12.7GB/s
+  Step      8 (epoch 0)  |  Loss: 11.2240  |  PPL: 74904.59  |  LR: 0.000280  |  0.0 steps/s (1531 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.2240 (n=8)
+[s200] step 9 normal blocks.4+block pos 1 15.03s
+  Step      9 (epoch 0)  |  Loss: 11.2267  |  PPL: 75110.39  |  LR: 0.000320  |  0.1 steps/s (2226 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.2267 (n=8)
+[s200] step 10 normal blocks.4+block pos 2 14.51s
+USDT:2026-11-13 16:40:32 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step     10 (epoch 0)  |  Loss: 11.2220  |  PPL: 74757.72  |  LR: 0.000360  |  0.1 steps/s (2258 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.2220 (n=8)
+USDT:2026-11-13 16:40:47 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 11 normal blocks.4+block pos 3 14.53s stall 0.06s idle_other 0.12s side 23.6GB @12.9GB/s
+USDT:2026-11-13 16:40:51 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step     11 (epoch 0)  |  Loss: 11.2214  |  PPL: 74710.75  |  LR: 0.000400  |  0.1 steps/s (1766 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.2214 (n=8)
+USDT:2026-11-13 16:41:05 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 12 normal blocks.4+block pos 4 14.68s stall 0.07s idle_other 0.13s side 23.6GB @12.8GB/s
+  Step     12 (epoch 0)  |  Loss: 11.2136  |  PPL: 74129.77  |  LR: 0.000440  |  0.1 steps/s (1755 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.2136 (n=8)
+[s200] step 13 normal blocks.8+block pos 1 13.38s
+  Step     13 (epoch 0)  |  Loss: 11.2014  |  PPL: 73229.25  |  LR: 0.000480  |  0.1 steps/s (2504 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.2014 (n=8)
+[s200] step 14 normal blocks.8+block pos 2 12.80s
+USDT:2026-11-13 16:41:35 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step     14 (epoch 0)  |  Loss: 11.2001  |  PPL: 73141.17  |  LR: 0.000520  |  0.1 steps/s (2560 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.2001 (n=8)
+USDT:2026-11-13 16:41:48 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 15 normal blocks.8+block pos 3 12.83s stall 0.06s idle_other 0.11s side 20.9GB @13.0GB/s
+USDT:2026-11-13 16:41:51 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step     15 (epoch 0)  |  Loss: 11.2056  |  PPL: 73539.07  |  LR: 0.000560  |  0.1 steps/s (2062 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.2056 (n=8)
+USDT:2026-11-13 16:42:04 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 16 normal blocks.8+block pos 4 13.09s stall 0.06s idle_other 0.12s side 20.9GB @12.7GB/s
+  Step     16 (epoch 0)  |  Loss: 11.1923  |  PPL: 72572.12  |  LR: 0.000600  |  0.1 steps/s (1953 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1923 (n=8)
+[s200] step 17 normal blocks.12+bloc pos 1 11.57s
+  Step     17 (epoch 0)  |  Loss: 11.1948  |  PPL: 72753.12  |  LR: 0.000640  |  0.1 steps/s (2909 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1948 (n=8)
+[s200] step 18 normal blocks.12+bloc pos 2 11.17s
+USDT:2026-11-13 16:42:30 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step     18 (epoch 0)  |  Loss: 11.1966  |  PPL: 72882.84  |  LR: 0.000680  |  0.1 steps/s (2934 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1966 (n=8)
+USDT:2026-11-13 16:42:42 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 19 normal blocks.12+bloc pos 3 11.20s stall 0.06s idle_other 0.11s side 18.2GB @13.0GB/s
+USDT:2026-11-13 16:42:44 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step     19 (epoch 0)  |  Loss: 11.1878  |  PPL: 72247.08  |  LR: 0.000720  |  0.1 steps/s (2324 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1878 (n=8)
+USDT:2026-11-13 16:42:56 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 20 normal blocks.12+bloc pos 4 11.32s stall 0.06s idle_other 0.10s side 18.2GB @12.8GB/s
+  Step     20 (epoch 0)  |  Loss: 11.1767  |  PPL: 71447.20  |  LR: 0.000760  |  0.1 steps/s (2293 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1767 (n=8)
+[s200] step 21 normal blocks.16+bloc pos 1 10.13s
+  Step     21 (epoch 0)  |  Loss: 11.1735  |  PPL: 71221.13  |  LR: 0.000800  |  0.1 steps/s (3338 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1735 (n=8)
+[s200] step 22 normal blocks.16+bloc pos 2 9.50s
+USDT:2026-11-13 16:43:18 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step     22 (epoch 0)  |  Loss: 11.1730  |  PPL: 71183.38  |  LR: 0.000840  |  0.1 steps/s (3447 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1730 (n=8)
+USDT:2026-11-13 16:43:28 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 23 normal blocks.16+bloc pos 3 9.51s stall 0.06s idle_other 0.09s side 15.5GB @13.0GB/s
+USDT:2026-11-13 16:43:30 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step     23 (epoch 0)  |  Loss: 11.1596  |  PPL: 70237.29  |  LR: 0.000880  |  0.1 steps/s (2798 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1596 (n=8)
+USDT:2026-11-13 16:43:40 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 24 normal blocks.16+bloc pos 4 9.73s stall 0.07s idle_other 0.09s side 15.5GB @12.7GB/s
+  Step     24 (epoch 0)  |  Loss: 11.1493  |  PPL: 69515.12  |  LR: 0.000920  |  0.1 steps/s (2646 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1493 (n=8)
+[s200] step 25 normal blocks.20+bloc pos 1 8.31s
+  Step     25 (epoch 0)  |  Loss: 11.1524  |  PPL: 69731.05  |  LR: 0.000960  |  0.1 steps/s (4090 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1524 (n=8)
+[s200] step 26 normal blocks.20+bloc pos 2 7.83s
+USDT:2026-11-13 16:43:58 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step     26 (epoch 0)  |  Loss: 11.1480  |  PPL: 69427.34  |  LR: 0.001000  |  0.1 steps/s (4184 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1480 (n=8)
+USDT:2026-11-13 16:44:06 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 27 normal blocks.20+bloc pos 3 7.84s stall 0.07s idle_other 0.08s side 12.8GB @13.1GB/s
+USDT:2026-11-13 16:44:08 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+  Step     27 (epoch 0)  |  Loss: 11.1232  |  PPL: 67723.47  |  LR: 0.001040  |  0.1 steps/s (3417 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1232 (n=8)
+USDT:2026-11-13 16:44:16 14204:6564 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[s200] step 28 normal blocks.20+bloc pos 4 7.96s stall 0.06s idle_other 0.08s side 12.8GB @12.7GB/s
+  Step     28 (epoch 0)  |  Loss: 11.1368  |  PPL: 68653.77  |  LR: 0.001080  |  0.1 steps/s (3199 tok/s)  |  VRAM: 2.69/4.94 GB
+    Per-source: FineWeb-Edu: 11.1368 (n=8)
+Traceback (most recent call last):
+  File "C:\Users\komal\Documents\Codes\kramba-ai-wt200\scripts\exp_bcd_stall_200.py", line 306, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\komal\Documents\Codes\kramba-ai-wt200\scripts\exp_bcd_stall_200.py", line 302, in main
+    T.main()
+    ~~~~~~^^
+  File "C:\Users\komal\Documents\Codes\kramba-ai-wt200\train_edge_conversational.py", line 4771, in main
+    train(
+    ~~~~~^
+        model=model,
+        ^^^^^^^^^^^^
+    ...<7 lines>...
+        resume_state=resume_state,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\komal\Documents\Codes\kramba-ai-wt200\train_edge_conversational.py", line 3546, in train
+    tok_loss = chunked_cross_entropy(
+        hidden, batch_y,
+        getattr(model, "_orig_mod", model).decoder,
+        chunk=chunked_loss_size,
+    )
+  File "C:\Users\komal\Documents\Codes\kramba-ai-wt200\hvn\edge\chunked_loss.py", line 221, in chunked_cross_entropy
+    piece = checkpoint(fn, h, t, *extra, use_reentrant=False)
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_compile.py", line 54, in inner
+    return disable_fn(*args, **kwargs)
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\_dynamo\eval_frame.py", line 1298, in _fn
+    return fn(*args, **kwargs)
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\utils\checkpoint.py", line 518, in checkpoint
+    ret = function(*args, **kwargs)
+  File "C:\Users\komal\Documents\Codes\kramba-ai-wt200\hvn\edge\chunked_loss.py", line 87, in _slice_loss
+    logits = decoder(hidden_slice)
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1778, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1789, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "C:\Users\komal\Documents\Codes\kramba-ai-wt200\hvn\core\decoder.py", line 68, in forward
+    return self.decoder(x)
+           ~~~~~~~~~~~~^^^
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1778, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1789, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\nn\modules\linear.py", line 134, in forward
+    return F.linear(input, self.weight, self.bias)
+           ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Expected all tensors to be on the same device, but got mat1 is on cuda:0, different from other tensors on cpu (when checking argument in method wrapper_CUDA_addmm)

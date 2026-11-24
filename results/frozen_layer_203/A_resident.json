@@ -1,0 +1,147 @@
+{
+ "args": {
+  "repo": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai-wt203",
+  "out": "results/frozen_layer_203/A_resident.json",
+  "active": 1,
+  "steps": 3,
+  "ga": 8,
+  "cache_blocks": 8,
+  "profile": true,
+  "no_skip_unread": false,
+  "hash": false,
+  "set": ""
+ },
+ "info": {
+  "blocks.0": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "18/18"
+  },
+  "blocks.1": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "18/18"
+  },
+  "blocks.2": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "0/18"
+  },
+  "blocks.3": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "0/18"
+  },
+  "blocks.4": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "0/18"
+  },
+  "blocks.5": {
+   "type": "TransformerBlock",
+   "params": 41953280,
+   "requires_grad": "0/9"
+  }
+ },
+ "rows": [
+  {
+   "step": 0,
+   "wall": 4.557769399980316,
+   "phases": {},
+   "peak_reserved_frac": 0.4475205602149662,
+   "loss": 1.9562959671020508,
+   "grad_sha": null
+  },
+  {
+   "step": 1,
+   "wall": 4.062539300008211,
+   "phases": {
+    "embed": 0.008637120068073273,
+    "fwd.L0": 0.1558159370422363,
+    "fwd.glue": 0.003693471997510645,
+    "fwd.L1": 0.1559234561920166,
+    "fwd.L2": 0.1575803852081299,
+    "fwd.L3": 0.15620198440551758,
+    "fwd.L4": 0.1544120330810547,
+    "fwd.L5": 0.16442572975158692,
+    "head": 0.018718719720840455,
+    "bwd.L5": 0.13329408264160159,
+    "bwdgrad.L5": 0.416270336151123,
+    "bwd.L4": 0.12559359931945802,
+    "bwdgrad.L4": 0.27553587341308594,
+    "bwd.L3": 0.1246412801742554,
+    "bwdgrad.L3": 0.2746326980590821,
+    "bwd.L2": 0.125066237449646,
+    "bwdgrad.L2": 0.2756474876403809,
+    "bwd.L1": 0.12633702468872068,
+    "bwdgrad.L1": 0.4109086723327637,
+    "bwd.L0": 0.1264906234741211,
+    "bwdgrad.L0": 0.39824178695678714
+   },
+   "peak_reserved_frac": 0.4895366826805635,
+   "loss": -2765.732421875,
+   "grad_sha": null
+  },
+  {
+   "step": 2,
+   "wall": 4.11593339999672,
+   "phases": {
+    "embed": 0.00757504004240036,
+    "fwd.L0": 0.15458659172058106,
+    "fwd.glue": 0.0032739520247559986,
+    "fwd.L1": 0.1559320945739746,
+    "fwd.L2": 0.15766415786743165,
+    "fwd.L3": 0.15587622261047365,
+    "fwd.L4": 0.15474873542785644,
+    "fwd.L5": 0.16485398292541503,
+    "head": 0.01843385601043701,
+    "bwd.L5": 0.13261964225769043,
+    "bwdgrad.L5": 0.41662760925292974,
+    "bwd.L4": 0.1254139528274536,
+    "bwdgrad.L4": 0.2748140525817871,
+    "bwd.L3": 0.12461049556732176,
+    "bwdgrad.L3": 0.27465331268310544,
+    "bwd.L2": 0.12464851188659669,
+    "bwdgrad.L2": 0.27587433242797854,
+    "bwd.L1": 0.1261970558166504,
+    "bwdgrad.L1": 0.41260547256469726,
+    "bwd.L0": 0.12628844642639162,
+    "bwdgrad.L0": 0.3991504249572753
+   },
+   "peak_reserved_frac": 0.4895366826805635,
+   "loss": -4808.98095703125,
+   "grad_sha": null
+  }
+ ],
+ "peak_reserved_frac": 0.4895366826805635,
+ "trace": "results/frozen_layer_203/A_resident_trace.json",
+ "trace_labels": [
+  "embed",
+  "fwd.L0",
+  "fwd.glue",
+  "fwd.L1",
+  "fwd.glue",
+  "fwd.L2",
+  "fwd.glue",
+  "fwd.L3",
+  "fwd.glue",
+  "fwd.L4",
+  "fwd.glue",
+  "fwd.L5",
+  "fwd.glue",
+  "head",
+  "bwd.L5",
+  "bwdgrad.L5",
+  "bwd.L4",
+  "bwdgrad.L4",
+  "bwd.L3",
+  "bwdgrad.L3",
+  "bwd.L2",
+  "bwdgrad.L2",
+  "bwd.L1",
+  "bwdgrad.L1",
+  "bwd.L0",
+  "bwdgrad.L0",
+  "end"
+ ]
+}

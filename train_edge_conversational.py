@@ -2553,6 +2553,30 @@ def resolve_bcd_partition(partition: str | None, offload: bool) -> str:
     return "balanced"
 
 
+# #201: 4 layers per BCD block is the default under the balanced partition. At 1B
+# (24 layers -> 7 blocks) it beat the old budget packing (about 2 layers per block,
+# 13 blocks) by 0.446 nats held-out at step 2800, 6.8% slower steps, peak reserved
+# 83.3% (#194); 5 layers per block broke the 85% guard.
+BCD_DEFAULT_LAYERS_PER_BLOCK = 4
+
+
+def resolve_bcd_layers_per_block(layers_per_block: int | None,
+                                 partition: str) -> int | None:
+    """--bcd-layers-per-block after defaults (#201).
+
+    None (flag not given): 4 under 'balanced', None under 'layer' -- so the
+    per-layer partition still refuses the option only when it is passed
+    explicitly. 0 stays 0 and means the pre-#201 budget packing (embedding-sized
+    groups); the scheduler is given `value or None`. Idempotent, so train() can
+    re-apply it to a config main() has already resolved.
+    """
+    if layers_per_block is None:
+        return BCD_DEFAULT_LAYERS_PER_BLOCK if partition == "balanced" else None
+    if layers_per_block < 0:
+        raise ValueError(f"--bcd-layers-per-block must be >= 0, got {layers_per_block}")
+    return layers_per_block
+
+
 # Issue #182: the most of the card the audit's throwaway copies may push peak
 # VRAM to. Same 90% margin as #178/#180: real spills were measured at ~94%
 # reserved on this card, and on WDDM going past the card does not reliably
@@ -3114,6 +3138,21 @@ def load_hybrid_trunk_into_model(
 
 
 @torch.no_grad()
+def _parse_active_no_ckpt(spec, block_members):
+    """``--active-no-ckpt-layers`` (#202): ``"N"`` for every BCD block, or one
+    comma-separated N per block that holds layers, in order (the embedding
+    block has none). Returns an int, or {frozenset(members): N} for the list
+    form, which is what EdgeHVN looks the active block up by."""
+    parts = [s for s in str(spec or 0).split(",") if s.strip()]
+    if len(parts) <= 1:
+        return int(parts[0]) if parts else 0
+    layer_blocks = [m for m in block_members if any(n.startswith("blocks.") for n in m)]
+    if len(parts) != len(layer_blocks):
+        raise ValueError(f"--active-no-ckpt-layers has {len(parts)} values but the BCD "
+                         f"layout has {len(layer_blocks)} blocks with layers")
+    return {frozenset(m): int(v) for m, v in zip(layer_blocks, parts)}
+
+
 def evaluate(model, val_loader, device, max_batches: int = 100,
              precision: str = "bf16", chunked_loss: int = 0):
     """Held-out validation: mean loss overall + per-source.
@@ -3142,6 +3181,22 @@ def evaluate(model, val_loader, device, max_batches: int = 100,
     """
     if val_loader is None:
         return None
+    # #213: no_grad, and the RNG put back afterwards.
+    #   no_grad   eval builds no autograd graph (before this, the active block's
+    #             activations were kept per batch and the chunked loss took its
+    #             grad-carrying path), fp8 Linears run bf16 as the docs say eval
+    #             does, and an offloaded (BCD --offload) model can stream its
+    #             frozen layers at all -- EdgeHVN._forward_offload_inference.
+    #   fork_rng  iter(val_loader) draws a worker base seed from the global CPU
+    #             RNG even with num_workers=0, so an eval used to move the RNG
+    #             the training run (and its checkpoints, #174) carries.
+    devices = [device] if getattr(device, "type", str(device)) == "cuda" else []
+    with torch.no_grad(), torch.random.fork_rng(devices=devices):
+        return _evaluate_impl(model, val_loader, device, max_batches,
+                              precision, chunked_loss)
+
+
+def _evaluate_impl(model, val_loader, device, max_batches, precision, chunked_loss):
     was_training = model.training
     model.eval()
     crit = nn.CrossEntropyLoss(reduction="none")
@@ -3171,6 +3226,12 @@ def evaluate(model, val_loader, device, max_batches: int = 100,
                 tok_loss = chunked_cross_entropy(
                     hidden, y, getattr(model, "_orig_mod", model).decoder,
                     chunk=chunked_loss, use_checkpoint=False)
+                # #213: an offloaded model keeps its tail resident for the
+                # projection above; hand it back now.
+                _release = getattr(getattr(model, "_orig_mod", model),
+                                   "release_offload_tail", None)
+                if _release is not None:
+                    _release()
             else:
                 logits = model(x)
                 tok_loss = crit(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
@@ -3198,6 +3259,23 @@ def evaluate(model, val_loader, device, max_batches: int = 100,
     src_loss = src_loss_t.tolist()
     per_src = [src_loss[s] / src_n[s] if src_n[s] else float("nan") for s in range(3)]
     return overall, per_src
+
+
+def bcd_step(bcd_scheduler, empty_cache_on_switch: bool, device) -> bool:
+    """Advance the BCD cycle once (one optimizer step). Returns True on a switch.
+
+    #211, ``--bcd-switch-empty-cache``: on a switch, hand the caching allocator's
+    unused blocks back to the driver. On Windows/WDDM a CUDA allocation made while
+    the card is at its video-memory budget can be placed in host RAM, and the
+    caching allocator then reuses that block every step, so the slowdown lasts
+    until the block is freed -- in this trainer, never. Emptying the cache at each
+    switch bounds such a slowdown to one turn. It moves memory, not math: same
+    kernels in the same order, same bits.
+    """
+    switched = bcd_scheduler.step()
+    if switched and empty_cache_on_switch and device.type == "cuda":
+        torch.cuda.empty_cache()
+    return switched
 
 
 def train(
@@ -3283,6 +3361,7 @@ def train(
         # 4.00 GB" figure in docs/ was produced by bench harnesses that enabled
         # this; the training script itself had no path to it until now.
         offload = bool(config.get("offload", False))
+        _bcd_partition = resolve_bcd_partition(config.get("bcd_partition"), offload)
         bcd_scheduler = BlockCoordinateScheduler(
             model, optimizer,
             steps_per_block=config.get("bcd_steps_per_block", 100),
@@ -3296,7 +3375,10 @@ def train(
             # do not re-enable it without re-reading that commit.
             offload_prefetch=offload,
             offload_cache_blocks=config.get("offload_cache_blocks", 1),
-            partition=resolve_bcd_partition(config.get("bcd_partition"), offload),
+            partition=_bcd_partition,
+            # #201: default 4 under balanced; 0 = the old budget packing.
+            layers_per_block=resolve_bcd_layers_per_block(
+                config.get("bcd_layers_per_block"), _bcd_partition) or None,
             # #169: on resume, activate the SAVED block first. Otherwise the
             # constructor's first _activate parks it in bf16 (block 0 active)
             # and the later load_state_dict only casts it back to fp32 -- the
@@ -3305,13 +3387,28 @@ def train(
             initial_active_idx=(resume_state.get("bcd_state_dict") or {}).get("active_idx")
             if resume_state else None,
         )
+        _layout = ("1 layer per block" if bcd_scheduler.partition == "layer" else
+                   f"{bcd_scheduler.layers_per_block} layers per block"
+                   if bcd_scheduler.layers_per_block else
+                   "budget packing (--bcd-layers-per-block 0)")
         print(f"  Block-coordinate-descent: {bcd_scheduler.num_blocks} blocks "
-              f"({bcd_scheduler.partition} partition), "
+              f"({bcd_scheduler.partition} partition, {_layout}), "
               f"{bcd_scheduler.steps_per_block} steps/block, "
               f"active={bcd_scheduler.active_block_name!r}")
+        print(f"  Empty CUDA cache at each BCD switch: "
+              f"{'ON' if config.get('bcd_switch_empty_cache', True) else 'OFF'} (#211/#212)")
         if offload:
             print(f"  CPU weight offload: ON (bf16 parked, prefetch on, "
                   f"cache={config.get('offload_cache_blocks', 1)} blocks)")
+            # #202: the last N layers of the active block keep their
+            # activations (no checkpoint recompute). Trades ~0.3 GB per layer
+            # at 1B for ~0.14 s per layer per step.
+            n_keep = _parse_active_no_ckpt(config.get("active_no_ckpt_layers", 0),
+                                           bcd_scheduler._block_members)
+            model._active_no_ckpt = n_keep
+            if n_keep:
+                print(f"  Active block: last layer(s) not checkpointed (#202): "
+                      f"{config.get('active_no_ckpt_layers')} per layer block")
 
     # --- Restore optimizer + BCD cycle position (Issue #112) ---
     # Without this, every restart of a long run threw away Muon/AdamW momentum AND
@@ -3619,8 +3716,11 @@ def train(
 
             # Issue #99: advance the block-coordinate cycle (may switch the
             # active block + clear the outgoing block's optimizer state).
+            _switch_emptied = False
             if bcd_scheduler is not None:
-                bcd_scheduler.step()
+                _switch_emptied = (
+                    bcd_step(bcd_scheduler, config.get("bcd_switch_empty_cache", True), device)
+                    and config.get("bcd_switch_empty_cache", True))
 
             # torch.profiler step boundary (only active under --profile)
             if _PROF is not None:
@@ -3689,12 +3789,29 @@ def train(
 
             # Held-out validation eval (A/B primary metric)
             if val_writer is not None and global_step % val_every == 0:
+                _v_t0 = time.time()
                 v_overall, v_src = evaluate(model, val_loader, device,
+                                             max_batches=config.get("val_batches", 100),
                                              precision=precision,
                                              chunked_loss=chunked_loss_size)
+                # #213, measured at 1B k4 --offload. The eval leaves nothing
+                # allocated, but it re-lays-out the caching allocator's blocks.
+                # - Right after a BCD switch the cache had just been emptied
+                #   (--bcd-switch-empty-cache, default on): empty it again, so
+                #   the next turn starts from exactly the state it would have
+                #   without the eval. Without this, the turn's 2nd step peaked
+                #   87.1% (eval off: 83.3%).
+                # - Mid-turn: do NOT empty it. Emptying there made the next step
+                #   rebuild its cache around the live optimizer state and peak
+                #   97.0% (eval off: 82.6%). Left alone, it reuses its own cache:
+                #   with this rule, eval after EVERY step gave the same peak as
+                #   eval off at all 14 steps. Memory only, either way: same bits.
+                if _switch_emptied and device.type == "cuda":
+                    torch.cuda.empty_cache()
                 v_ppl = math.exp(min(v_overall, 20))
                 print(f"    ↳ VAL step {global_step}: loss {v_overall:.4f} | ppl {v_ppl:.2f} | "
-                      f"Slim {v_src[0]:.4f}  OA {v_src[1]:.4f}  Wiki {v_src[2]:.4f}", flush=True)
+                      f"Slim {v_src[0]:.4f}  OA {v_src[1]:.4f}  Wiki {v_src[2]:.4f}"
+                      f" | {time.time() - _v_t0:.1f}s", flush=True)
                 val_writer.writerow([
                     global_step, f"{v_overall:.6f}", f"{v_ppl:.4f}",
                     f"{v_src[0]:.6f}", f"{v_src[1]:.6f}", f"{v_src[2]:.6f}",
@@ -3783,7 +3900,23 @@ def train(
 # Main Entry Point
 # ---------------------------------------------------------------------------
 
-def main():
+def apply_scan_kernel_args(args):
+    """#206/#210: set the module-level DeltaNet scan kernel from the parsed args.
+    The module default (hvn.core.deltanet_triton.SCAN_KERNEL) stays "v1" for
+    library callers; the trainer default is "t" (#210)."""
+    try:
+        import hvn.core.deltanet_triton as _dt
+    except ImportError:
+        return
+    _dt.SCAN_KERNEL[0] = args.scan_kernel
+    if not args.scan_v1_warps:
+        _dt.SCAN_V1_WARPS.update(fwd=None, ckpt=None)
+    print(f"[scan] kernel {args.scan_kernel}, v1 tuned warps {args.scan_v1_warps}")
+
+
+def build_arg_parser():
+    """The trainer's argument parser (split out of main() so tests can parse
+    the real defaults, #210)."""
     parser = argparse.ArgumentParser(
         description="EdgeHVN Conversational Training Pipeline (Issue #72)"
     )
@@ -3919,7 +4052,19 @@ def main():
                         help="Fraction of each source's unique windows held out as a "
                              "token-disjoint validation set (e.g. 0.02). 0 disables.")
     parser.add_argument("--val-every", type=int, default=None,
-                        help="Run held-out val eval every N steps (default: checkpoint interval).")
+                        help="Run held-out val eval every N steps (default: checkpoint "
+                             "interval, --save-every-steps, 500). Needs --val-fraction > 0; "
+                             "with the default 0 there is no val split and no eval. Works "
+                             "under --offload (#213): frozen layers are streamed through "
+                             "the offload pool. Measured at 1B k4 --offload: 38 s per "
+                             "eval of 64 windows (--val-batches 64), +0.08 s/step at "
+                             "--val-every 500; training bits and peak VRAM unchanged "
+                             "(docs/training.md).")
+    parser.add_argument("--val-batches", type=int, default=100,
+                        help="Held-out batches per eval (default 100, the old fixed "
+                             "cap). At --batch-size 1 a batch is one window; "
+                             "--val-batches 64 scores the same 64 windows as the "
+                             "#208/#209 held-out harness.")
     parser.add_argument("--precision", type=str, default="fp32",
                         choices=["fp32", "fp16", "bf16"],
                         help="Mixed-precision training mode (Issue #80). "
@@ -3956,12 +4101,51 @@ def main():
                              "fused Triton quantizer). alpha/beta gates and the vocab "
                              "head stay bf16; eval stays bf16. Needs --precision bf16. "
                              "Default OFF, not part of --fast.")
+    parser.add_argument("--frozen-fp8-codes", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="#204, with --fp8-linear --offload: a BCD-frozen weight's fp8 "
+                             "codes are made once per BCD turn, kept in host RAM and "
+                             "streamed instead of its bf16 weight, not re-quantized on "
+                             "every use. Bit-identical. --no-frozen-fp8-codes opts out.")
     parser.add_argument("--fused-rmsnorm", action=argparse.BooleanOptionalAction,
                         default=False,
                         help="Run each block's pre-norm RMSNorm as F.rms_norm's single "
                              "CUDA kernel instead of the six-op eager chain (fp32 inputs "
                              "only). ulp-level, not bit-identical. On under --fast; "
                              "--no-fused-rmsnorm opts out.")
+    parser.add_argument("--fp8-bias", choices=["off", "add", "fused"], default="fused",
+                        help="#207, with --fp8-linear: how the bias after each fp8 GEMM is "
+                             "added. fused = folded into the next op in DeltaNet blocks "
+                             "(SiLU gate, GELU, residual sum), a 2-D add kernel elsewhere; "
+                             "add = the 2-D add kernel only; off = the old separate add. "
+                             "All bit-identical.")
+    parser.add_argument("--fused-bias-amax", action=argparse.BooleanOptionalAction,
+                        default=False,
+                        help="#207, with --fp8-bias fused: the fused kernels also compute "
+                             "the fp8 amax of the tensors they write that feed an fp8 GEMM "
+                             "next (GELU output; gradients into gate_proj, ffn[0], ffn[3], "
+                             "out_proj), so the quantizer skips its amax pass. Same bits. "
+                             "Opt-in: measured -0.040 s/step at 1B k4, under the 0.05 s bar.")
+    parser.add_argument("--scan-kernel", choices=["t", "v1"], default="t",
+                        help="DeltaNet scan kernels on the strided-IO path. t (DEFAULT "
+                             "since #210) = transposed-layout kernels with the checkpoint "
+                             "pass fused into the recompute forward (#206): ~2x faster scan "
+                             "at d_head 32, -1.2 s/step at 1B k4, held-out loss same as v1 "
+                             "over 1800 steps x 2 seeds (#209). Not bit-identical to v1 "
+                             "(fp32 rounding-level differences, same fp64 error). "
+                             "v1 = the old kernels (opt-out; use it to reproduce runs "
+                             "made before #210).")
+    parser.add_argument("--fused-norm-residual", action=argparse.BooleanOptionalAction,
+                        default=False,
+                        help="#208: in DeltaNet blocks, add the residual gradient inside the "
+                             "RMSNorm backward kernel instead of a separate autograd add "
+                             "(hvn/core/fused_norm_residual.py). Forward unchanged; backward "
+                             "NOT bit-identical (own reduction order). Default off.")
+    parser.add_argument("--scan-v1-warps", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="#206: v1 scan at d_head 32 launches the forward with 1 warp and "
+                             "the checkpoint pass with 8 (measured faster, same bits). "
+                             "--no-scan-v1-warps restores Triton's default 4.")
     parser.add_argument("--megakernel-scan", action="store_true",
                         help="Route the DeltaNet scan through the Design B fused "
                              "blockwise-recompute backward (#96) when --triton-scan is on: "
@@ -4060,6 +4244,15 @@ def main():
                              "rule). Windows/WDDM does NOT raise on overflow -- "
                              "it spills to host RAM and runs 4-15x slower while "
                              "looking healthy. 0 disables the check.")
+    parser.add_argument("--bcd-switch-empty-cache", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="#211/#212: release the CUDA caching allocator's unused "
+                             "blocks (torch.cuda.empty_cache) at every BCD block switch, "
+                             "so any of them that WDDM placed in host RAM are handed back "
+                             "instead of being reused for the rest of the run. Memory "
+                             "placement only: same kernels, same bits. ON by default "
+                             "(#212; cost +0.012 s/step, peak reserved +1.5 pts at 1B "
+                             "k4); --no-bcd-switch-empty-cache turns it off.")
     parser.add_argument("--log-every", type=int, default=50,
                         help="Optimizer steps between console/CSV log rows "
                              "(default 50, previously hardcoded). Each row's "
@@ -4118,6 +4311,22 @@ def main():
     parser.add_argument("--bcd-steps-per-block", type=int, default=100,
                         help="Optimizer steps per active block before switching to the "
                              "next (only used with --block-coordinate). Default: 100.")
+    parser.add_argument("--bcd-layers-per-block", type=int, default=None,
+                        help="Pack exactly this many layers per BCD block (embedding "
+                             "alone first, tail merged into the last group). Default: "
+                             "4 under --bcd-partition balanced (7 blocks at 1B; #201). "
+                             "0 = the pre-#201 budget packing, groups no bigger than "
+                             "the embedding table (about 2 layers per block, 13 blocks "
+                             "at 1B): pass 0 to resume a run saved before #201. Not "
+                             "allowed with --bcd-partition layer. (#194, #201)")
+    parser.add_argument("--active-no-ckpt-layers", default="1",
+                        help="With --offload: the last N layers of the active BCD block "
+                             "keep their activations instead of being recomputed in "
+                             "backward. Bit-identical. 1B k4: N=1 is -0.12 s/step and "
+                             "+5%% peak allocated (peak reserved 82.4 -> 82.5%%); N=2 fails "
+                             "the 85%% VRAM guard (86.6%%). A comma list gives one N per "
+                             "layer block, in order. Default 1 since #207; 0 opts out "
+                             "(the pre-#207 behaviour). (#202, #207)")
     parser.add_argument("--bcd-partition", choices=["layer", "balanced"], default=None,
                         help="How --block-coordinate splits the model. 'balanced' "
                              "(default): pack consecutive layers into groups no larger "
@@ -4234,6 +4443,11 @@ def main():
                              "needs the bare fp32 default. Any lever passed explicitly "
                              "overrides the preset (e.g. --fast --precision fp32). "
                              "Triton scan is skipped under --arch transformer.")
+    return parser
+
+
+def main():
+    parser = build_arg_parser()
     args = parser.parse_args()
 
     # --- Issue #163: validate the offload couplings BEFORE anything expensive ---
@@ -4261,6 +4475,13 @@ def main():
                   "recompute to bring them back).")
     if args.bcd_partition is None:
         args.bcd_partition = resolve_bcd_partition(None, args.offload)
+    # #201: default 4 layers per block under balanced. An explicit value under
+    # --bcd-partition layer is kept, so the scheduler still refuses it loudly.
+    try:
+        args.bcd_layers_per_block = resolve_bcd_layers_per_block(
+            args.bcd_layers_per_block, args.bcd_partition)
+    except ValueError as e:
+        parser.error(str(e))
 
     # --- Issue #86: expand the --fast meta-flag into the recommended stack ---
     # One switch instead of five flags. Any lever the user passed explicitly on
@@ -4322,6 +4543,21 @@ def main():
             parser.error("--fp8-linear needs --precision bf16")
         if args.compile:
             parser.error("--fp8-linear is not supported with --compile")
+        # #204: frozen offloaded weights stream fp8 codes made once per turn.
+        import hvn.edge.fp8_fused as _f8
+        _f8.FROZEN_CODES[0] = bool(args.frozen_fp8_codes)
+        # #207: bias add after the fp8 GEMMs.
+        import hvn.edge.fused_bias as _fb
+        _fb.set_mode(args.fp8_bias)
+        _fb.AMAX_HINTS[0] = bool(args.fused_bias_amax)
+
+    # #206/#210: scan kernel choice (module-level, read at every scan call).
+    apply_scan_kernel_args(args)
+    # #208: residual gradient folded into the RMSNorm backward (opt-in).
+    import hvn.core.fused_norm_residual as _fnr
+    _fnr.ENABLED[0] = bool(args.fused_norm_residual)
+    if args.fused_norm_residual:
+        print("[#208] fused norm-residual backward ON")
 
     # --- Issue #93/#120: parse --pretrain-mix 'slim,oasst,wiki,fineweb_edu' -> float tuple (or None) ---
     if args.pretrain_mix is not None:
@@ -4581,6 +4817,8 @@ def main():
     config["block_coordinate"] = args.block_coordinate
     config["bcd_steps_per_block"] = args.bcd_steps_per_block
     config["bcd_partition"] = args.bcd_partition
+    config["bcd_layers_per_block"] = args.bcd_layers_per_block
+    config["active_no_ckpt_layers"] = args.active_no_ckpt_layers
     config["log_every_steps"] = max(1, args.log_every)
     # --- Issue #163 ---
     config["offload"] = args.offload
@@ -4588,12 +4826,14 @@ def main():
     config["keep_checkpoints"] = args.keep_checkpoints
     config["milestone_every"] = args.milestone_every
     config["max_vram_pct"] = args.max_vram_pct
+    config["bcd_switch_empty_cache"] = bool(args.bcd_switch_empty_cache)
     if args.save_every_steps is not None:
         config["save_every_steps"] = args.save_every_steps
     config["dynamic_lr"] = args.dynamic_lr
     config["dynamic_lr_log"] = args.dynamic_lr_log
     if args.val_every is not None:
         config["val_every_steps"] = args.val_every
+    config["val_batches"] = max(1, args.val_batches)
     if args.warmup_steps is not None:
         config["warmup_steps"] = max(0, args.warmup_steps)
         print(f"  warmup override:   {config['warmup_steps']} steps (--warmup-steps; "

@@ -1,0 +1,99 @@
+{
+ "rows": [
+  {
+   "stage": "python start",
+   "ws": 0.018530304,
+   "peak_ws": 0.018530304,
+   "private": 0.010493952,
+   "sys_avail": 9.880981504,
+   "sys_total": 16.415322112
+  },
+  {
+   "stage": "import torch",
+   "ws": 0.52682752,
+   "peak_ws": 0.52682752,
+   "private": 1.291165696,
+   "sys_avail": 9.3232128,
+   "sys_total": 16.415322112
+  },
+  {
+   "stage": "import trainer module",
+   "ws": 0.590737408,
+   "peak_ws": 0.590737408,
+   "private": 1.37373696,
+   "sys_avail": 9.241153536,
+   "sys_total": 16.415322112
+  },
+  {
+   "stage": "CUDA context",
+   "ws": 0.72620032,
+   "peak_ws": 0.72620032,
+   "private": 1.640525824,
+   "sys_avail": 9.107255296,
+   "sys_total": 16.415322112
+  },
+  {
+   "stage": "deltanet layer built on GPU",
+   "ws": 0.813965312,
+   "peak_ws": 0.813965312,
+   "private": 1.829965824,
+   "sys_avail": 9.053601792,
+   "sys_total": 16.415322112
+  },
+  {
+   "stage": "deltanet fwd+bwd (kernels loaded)",
+   "ws": 1.2939264,
+   "peak_ws": 1.2939264,
+   "private": 3.392630784,
+   "sys_avail": 8.612175872,
+   "sys_total": 16.415322112
+  },
+  {
+   "stage": "deltanet Muon step",
+   "ws": 1.41729792,
+   "peak_ws": 1.41729792,
+   "private": 3.542069248,
+   "sys_avail": 8.503054336,
+   "sys_total": 16.415322112
+  },
+  {
+   "stage": "attn layer built on GPU",
+   "ws": 1.41733888,
+   "peak_ws": 1.41733888,
+   "private": 2.607058944,
+   "sys_avail": 8.504717312,
+   "sys_total": 16.415322112
+  },
+  {
+   "stage": "attn fwd+bwd (kernels loaded)",
+   "ws": 1.47093504,
+   "peak_ws": 1.47093504,
+   "private": 3.481309184,
+   "sys_avail": 8.449441792,
+   "sys_total": 16.415322112
+  },
+  {
+   "stage": "attn Muon step",
+   "ws": 1.47093504,
+   "peak_ws": 1.47093504,
+   "private": 3.481309184,
+   "sys_avail": 8.465555456,
+   "sys_total": 16.415322112
+  },
+  {
+   "stage": "after freeing layers",
+   "ws": 1.470951424,
+   "peak_ws": 1.470951424,
+   "private": 2.645286912,
+   "sys_avail": 8.466808832,
+   "sys_total": 16.415322112
+  }
+ ],
+ "modules": {
+  "pandas": true,
+  "pyarrow": true,
+  "transformers": false,
+  "datasets": false,
+  "numpy": true
+ }
+}

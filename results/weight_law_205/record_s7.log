@@ -1,0 +1,99 @@
+
+======================================================================
+STEP 2 — DATASET PIPELINE
+======================================================================
+
+Mix ratio: {'SlimPajama': 0.0, 'OpenAssistant': 0.0, 'WikiText-103': 0.0, 'FineWeb-Edu': 1.0}
+Sequence length: 512
+Batch size: 4
+
+  Loading datasets from C:\Users\komal\Documents\Codes\kramba-ai\data_cache...
+
+  Preparing datasets (tokenize once -> memmap, flat RAM)...
+    SlimPajama cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\slimpajama_en.txt (5157.9 MB)
+    Tokenizing SlimPajama (cap 500 MB)...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\slimpajama.bin (129,128,993 tokens)
+    OpenAssistant cached: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\oasst1.txt (44.1 MB)
+    Tokenizing OpenAssistant...
+    Tokenized cache hit: C:\Users\komal\Documents\Codes\kramba-ai\data_cache\tokenized\oasst.bin (15,724,872 tokens)
+    WikiText-103 not found locally, skipping
+[data mix] total pretrain budget capped at 114,564,096 tokens (0.11B) by a MIX-RATIO bind -- binding source: 'OpenAssistant' (share=0.41, max_repeat=3) would need to repeat past max_repeat to keep up with the other source(s), even though more of THEM is available. At the 20 tokens/param Chinchilla convention this project uses, that's enough for a ~6M-param model -- if you're targeting something bigger, THIS MIX will silently under-serve it regardless of how much more data you download. Fix: drop/reduce the binding source's share, or raise --max-repeat (weighing the overfitting risk of repeating a small source that many times).
+
+    Mixed dataset: 223,757 train samples (0 held-out val), seq_len=512
+    Unique tokens on disk: 144,853,865  |  windows/source: [252205, 30712]
+    Per-source (train): SlimPajama=131,622 (58.8%)  OpenAssistant=92,135 (41.2%)
+  Tokens: 144853865
+  Samples: 223757
+
+  DataLoader ready: batch_size=4
+✓ Step 2 complete.
+[205] sha heldout 4b7e0a5dd5d1e1be val e30aa8bfd8cbd22a train 185f07376dd01d48
+[ab] triton+megakernel scan on 22 DeltaNet blocks
+[205] block token_embedding                                                25.73M
+[205] block blocks.0+blocks.1+blocks.2+blocks.3                            10.54M
+[205] block blocks.4+blocks.5+blocks.6+blocks.7                            10.53M
+[205] block blocks.8+blocks.9+blocks.10+blocks.11                          10.54M
+[205] block blocks.12+blocks.13+blocks.14+blocks.15                        10.54M
+[205] block blocks.16+blocks.17+blocks.18+blocks.19                        10.53M
+[205] block blocks.20+blocks.21+blocks.22+blocks.23+final_norm+decoder     10.59M
+[205] step 0 held-out 10.914026201 (ref 10.914026201, init seed 7)
+C:\Users\komal\Documents\Codes\kramba-ai-wtlaw\scripts\exp_weight_law_205.py:253: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\torch\csrc\autograd\generated\python_variable_methods.cpp:839.)
+  tl = float(loss)
+[205] step   100 held-out 9.51839 0.6 min
+[205] turn   0 token_embedding              len 100 steps 0-100 val 10.9084->9.3790
+[205] step   200 held-out 7.99782 1.2 min
+[205] turn   1 blocks.0+blocks.1+blocks.2+b len 100 steps 100-200 val 9.3790->7.4218
+[205] step   300 held-out 7.86283 1.8 min
+[205] turn   2 blocks.4+blocks.5+blocks.6+b len 100 steps 200-300 val 7.4218->7.2506
+[205] step   400 held-out 7.79106 2.3 min
+[205] turn   3 blocks.8+blocks.9+blocks.10+ len 100 steps 300-400 val 7.2506->7.1829
+[205] step   500 held-out 7.75712 2.8 min
+[205] turn   4 blocks.12+blocks.13+blocks.1 len 100 steps 400-500 val 7.1829->7.1443
+[205] step   600 held-out 7.73183 3.3 min
+[205] turn   5 blocks.16+blocks.17+blocks.1 len 100 steps 500-600 val 7.1443->7.1153
+[205] step   700 held-out 7.63715 3.8 min
+[205] turn   6 blocks.20+blocks.21+blocks.2 len 100 steps 600-700 val 7.1153->7.0010
+[205] step   800 held-out 6.52073 4.4 min
+[205] turn   7 token_embedding              len 100 steps 700-800 val 7.0010->5.6310
+[205] step   900 held-out 6.37806 5.0 min
+[205] turn   8 blocks.0+blocks.1+blocks.2+b len 100 steps 800-900 val 5.6310->5.5111
+[205] step  1000 held-out 6.32197 5.6 min
+[205] turn   9 blocks.4+blocks.5+blocks.6+b len 100 steps 900-1000 val 5.5111->5.4340
+[205] step  1100 held-out 6.28791 6.1 min
+[205] turn  10 blocks.8+blocks.9+blocks.10+ len 100 steps 1000-1100 val 5.4340->5.4023
+[205] step  1200 held-out 6.26662 6.6 min
+[205] turn  11 blocks.12+blocks.13+blocks.1 len 100 steps 1100-1200 val 5.4023->5.3828
+[205] step  1300 held-out 6.25084 7.1 min
+[205] turn  12 blocks.16+blocks.17+blocks.1 len 100 steps 1200-1300 val 5.3828->5.3585
+[205] step  1400 held-out 6.22300 7.6 min
+[205] turn  13 blocks.20+blocks.21+blocks.2 len 100 steps 1300-1400 val 5.3585->5.3271
+[205] step  1500 held-out 6.10617 8.1 min
+[205] turn  14 token_embedding              len 100 steps 1400-1500 val 5.3271->5.2029
+[205] step  1600 held-out 6.07100 8.8 min
+[205] turn  15 blocks.0+blocks.1+blocks.2+b len 100 steps 1500-1600 val 5.2029->5.1745
+[205] step  1700 held-out 6.04058 9.3 min
+[205] turn  16 blocks.4+blocks.5+blocks.6+b len 100 steps 1600-1700 val 5.1745->5.1434
+[205] step  1800 held-out 6.01543 9.8 min
+[205] turn  17 blocks.8+blocks.9+blocks.10+ len 100 steps 1700-1800 val 5.1434->5.1193
+[205] step  1900 held-out 6.00345 10.4 min
+[205] turn  18 blocks.12+blocks.13+blocks.1 len 100 steps 1800-1900 val 5.1193->5.1072
+[205] step  2000 held-out 5.99257 10.8 min
+[205] turn  19 blocks.16+blocks.17+blocks.1 len 100 steps 1900-2000 val 5.1072->5.0892
+[205] step  2100 held-out 5.97941 11.3 min
+[205] turn  20 blocks.20+blocks.21+blocks.2 len 100 steps 2000-2100 val 5.0892->5.0791
+[205] step  2200 held-out 5.94146 11.9 min
+[205] turn  21 token_embedding              len 100 steps 2100-2200 val 5.0791->5.0483
+[205] step  2300 held-out 5.93188 12.5 min
+[205] turn  22 blocks.0+blocks.1+blocks.2+b len 100 steps 2200-2300 val 5.0483->5.0349
+[205] step  2400 held-out 5.92062 13.0 min
+[205] turn  23 blocks.4+blocks.5+blocks.6+b len 100 steps 2300-2400 val 5.0349->5.0245
+[205] step  2500 held-out 5.91331 13.6 min
+[205] turn  24 blocks.8+blocks.9+blocks.10+ len 100 steps 2400-2500 val 5.0245->5.0164
+[205] step  2600 held-out 5.91021 14.1 min
+[205] turn  25 blocks.12+blocks.13+blocks.1 len 100 steps 2500-2600 val 5.0164->5.0126
+[205] step  2700 held-out 5.90873 14.6 min
+[205] turn  26 blocks.16+blocks.17+blocks.1 len 100 steps 2600-2700 val 5.0126->5.0104
+[205] step  2800 held-out 5.90842 15.1 min
+[205] turn  27 blocks.20+blocks.21+blocks.2 len 100 steps 2700-2800 val 5.0104->5.0095
+[205] DONE final held-out 5.90842 turns 28 mean len 100.0 wall 15.1 min

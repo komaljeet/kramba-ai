@@ -1,0 +1,14 @@
+[n218] teacher targets for [0, 1, 2, 3, 99] in 6.4s
+[n218] SR check: mean bias -2.74e-06 (rel), |mean64(SR)-x| 8.785e-05 vs |RNE-x| 1.230e-04
+[n218] cast cost per layer (GPU): {'layer_matrix_params': 42074112, 'sr_ms': 7.173120021820068, 'rne_ms': 1.481727957725525, 'int8_q_dq_ms': 12.87065601348877}
+[n218] setup muon_lr 0.002 arms ['ref', 'lean', 'rne', 'lean_m8'] muon params 168,165,376 aux 84,160 host ws 5.05 GB avail 5.71
+[n218] step-0 grad attribution {"park_bf16_only": {"grad_rel": 0.016716044464013174, "grad_cos": 0.9998603279370533, "per_layer": [0.024950584396719933, 0.012594168074429035, 0.008325940929353237, 0.011556199751794338]}, "w_bf16_only": {"grad_rel": 0.06167216644850072, "grad_cos": 0.9981031131199471, "per_layer": [0.06412983685731888, 0.06212110072374344, 0.05686977878212929, 0.06288684159517288]}}
+[n218] s00 ref      loss 0.172243 held 0.172359    kept 1.0000 noise 0.000 grad_rel 0.00e+00 cum_err 0.0000 cum_kept 1.0000 cast 0.0ms t 7.0s
+[n218] s00 lean     loss 0.172326 held 0.172426    kept 1.0000 noise 0.919 grad_rel 6.24e-02 cum_err 0.9576 cum_kept 0.9638 cast 25.6ms t 5.4s
+[n218] s00 rne      loss 0.172326 held 0.172426    kept 0.8603 noise 0.590 grad_rel 6.24e-02 cum_err 0.6418 cum_kept 0.8284 cast 5.2ms t 4.7s
+[n218] s00 lean_m8  loss 0.172326 held 0.172426    kept 1.0000 noise 0.919 grad_rel 6.24e-02 cum_err 0.9576 cum_kept 0.9638 cast 25.2ms t 4.7s
+[n218] final ref heldout 0.170349
+[n218] final lean heldout 0.170515
+[n218] final rne heldout 0.170546
+[n218] final lean_m8 heldout 0.170515
+[n218] done peak alloc 4.12 GB host ws 6.59

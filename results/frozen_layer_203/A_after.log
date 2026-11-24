@@ -1,0 +1,43 @@
+
+======================================================================
+STEP 3 — TRAINING CONFIGURATION
+======================================================================
+
+  use_deltanet:      False
+  precision:         bf16
+  batch_size:        1
+  grad_accum:        8 (effective batch = 8)
+  seq_len:           4096
+  d_model:           2048
+  num_layers:        6
+  n_heads:           64
+  optimizer:         muon (lr=0.0003, wd=0.01)
+  dropout:           0.0
+  schedule:          cosine LR, warmup 500 steps
+  checkpoint_every:  500 steps → C:\Users\komal\Documents\Codes\kramba-ai-wt203\results\frozen_layer_203\ckpt/
+  log_every:         50 steps (console + CSV)
+  resume:            auto-resume from C:\Users\komal\Documents\Codes\kramba-ai-wt203\results\frozen_layer_203\ckpt/ if checkpoint exists
+
+  Building EdgeHVN model (arch=hvn-hybrid)...
+  Hybrid block_plan: ['deltanet', 'deltanet', 'deltanet', 'deltanet', 'deltanet', 'transformer'] (window=4096)
+  Architecture: hvn-hybrid  |  total params: 355,427,729
+  Applying ternary BitNet b1.58 weight quantization...
+  Ternary: replaced 41 nn.Linear layers with TernaryLinear (STE)
+  Excluded 11 gate/decoder layers
+  Offload ON: model stays CPU-resident; the BCD scheduler owns placement
+
+  Weight storage (dense fp32):  1355.85 MB
+  Weight storage (ternary):     519.44 MB
+  Compression ratio:            2.61x
+
+✓ Step 3 complete.
+[cfg] blocks ['token_embedding', 'blocks.0+blocks.1', 'blocks.2+blocks.3', 'blocks.4+blocks.5+final_norm+decoder'] active blocks.0+blocks.1
+[cfg] layers {"blocks.0": {"type": "DeltaNetBlock", "params": 42098752, "requires_grad": "18/18"}, "blocks.1": {"type": "DeltaNetBlock", "params": 42098752, "requires_grad": "18/18"}, "blocks.2": {"type": "DeltaNetBlock", "params": 42098752, "requires_grad": "0/18"}, "blocks.3": {"type": "DeltaNetBlock", "params": 42098752, "requires_grad": "0/18"}, "blocks.4": {"type": "DeltaNetBlock", "params": 42098752, "requires_grad": "0/18"}, "blocks.5": {"type": "TransformerBlock", "params": 41953280, "requires_grad": "0/9"}}
+[step 0] wall 4.855s peak 43.6% loss 1.956296 sha 5010f34ae74ad871 
+[step 1] wall 4.284s peak 47.8% loss -2765.732422 sha 7864db1aeb991ada bwd.L0=0.1260 bwd.L1=0.1265 bwd.L2=0.1246 bwd.L3=0.1247 bwd.L4=0.1246 bwd.L5=0.1304 bwdgrad.L0=0.3964 bwdgrad.L1=0.4084 bwdgrad.L2=0.2748 bwdgrad.L3=0.2738 bwdgrad.L4=0.2740 bwdgrad.L5=0.4116 embed=0.0080 fwd.L0=0.1561 fwd.L1=0.1551 fwd.L2=0.1572 fwd.L3=0.1568 fwd.L4=0.1566 fwd.L5=0.1660 fwd.glue=0.0044 head=0.0188
+C:\Users\komal\Documents\Codes\kramba-ai\.venv\Lib\site-packages\torch\profiler\profiler.py:272: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+USDT:2026-11-14 09:56:33 33220:33228 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:415] profiler_start
+USDT:2026-11-14 09:56:34 33220:33228 C:\actions-runner\_work\pytorch\pytorch\third_party\kineto\libkineto\src\ActivityProfilerController.cpp:455] profiler_stop
+[step 2] wall 4.327s peak 47.8% loss -4808.980957 sha 060f4f3b97848a93 bwd.L0=0.1260 bwd.L1=0.1260 bwd.L2=0.1247 bwd.L3=0.1244 bwd.L4=0.1250 bwd.L5=0.1305 bwdgrad.L0=0.3966 bwdgrad.L1=0.4092 bwdgrad.L2=0.2753 bwdgrad.L3=0.2744 bwdgrad.L4=0.2743 bwdgrad.L5=0.4132 embed=0.0073 fwd.L0=0.1548 fwd.L1=0.1549 fwd.L2=0.1569 fwd.L3=0.1570 fwd.L4=0.1568 fwd.L5=0.1657 fwd.glue=0.0034 head=0.0184
+[done]

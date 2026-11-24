@@ -1,0 +1,62 @@
+== identity: eval every step vs eval off ==
+step  1 token_embedding              lr 0.02 nz 102925572/102926336  IDENTICAL
+step  2 token_embedding              lr 0.02 nz 102925649/102926336  IDENTICAL
+step  3 blocks.0+blocks.1+blocks.2+b lr 0.02 nz 168379580/168395008  IDENTICAL
+step  4 blocks.0+blocks.1+blocks.2+b lr 0.02 nz 168379537/168395008  IDENTICAL
+step  5 blocks.4+blocks.5+blocks.6+b lr 0.02 nz 168236689/168249536  IDENTICAL
+step  6 blocks.4+blocks.5+blocks.6+b lr 0.02 nz 168236816/168249536  IDENTICAL
+step  7 blocks.8+blocks.9+blocks.10+ lr 0.02 nz 168383050/168395008  IDENTICAL
+step  8 blocks.8+blocks.9+blocks.10+ lr 0.02 nz 168383545/168395008  IDENTICAL
+step  9 blocks.12+blocks.13+blocks.1 lr 0.02 nz 168384004/168395008  IDENTICAL
+step 10 blocks.12+blocks.13+blocks.1 lr 0.02 nz 168383765/168395008  IDENTICAL
+step 11 blocks.16+blocks.17+blocks.1 lr 0.02 nz 168239673/168249536  IDENTICAL
+step 12 blocks.16+blocks.17+blocks.1 lr 0.02 nz 168239103/168249536  IDENTICAL
+step 13 blocks.20+blocks.21+blocks.2 lr 0.02 nz 168438842/168449361  IDENTICAL
+step 14 blocks.20+blocks.21+blocks.2 lr 0.02 nz 168438303/168449361  IDENTICAL
+identical steps: 14/14
+
+== falsifier vs eval off ==
+step 1 loss_sha:same grad_sha:same rng_sha:same
+step 2 loss_sha:same grad_sha:same rng_sha:DIFF
+step 3 loss_sha:DIFF grad_sha:DIFF rng_sha:DIFF
+step 4 loss_sha:DIFF grad_sha:DIFF rng_sha:DIFF
+
+== evals (64 windows) ==
+target sha distinct values: 1
+after step  1 active token_embedding              38.5s peak 82.6% loss 11.07499
+after step  2 active blocks.0+blocks.1+blocks.2+b 37.7s peak 46.5% loss 10.91799
+after step  3 active blocks.0+blocks.1+blocks.2+b 37.7s peak 76.7% loss 10.70073
+after step  4 active blocks.4+blocks.5+blocks.6+b 38.2s peak 46.4% loss 10.47327
+after step  5 active blocks.4+blocks.5+blocks.6+b 38.2s peak 74.1% loss 10.30042
+after step  6 active blocks.8+blocks.9+blocks.10+ 38.2s peak 46.1% loss 10.11447
+after step  7 active blocks.8+blocks.9+blocks.10+ 38.2s peak 71.4% loss 9.96440
+after step  8 active blocks.12+blocks.13+blocks.1 38.2s peak 46.5% loss 9.81213
+after step  9 active blocks.12+blocks.13+blocks.1 38.2s peak 69.3% loss 9.68494
+after step 10 active blocks.16+blocks.17+blocks.1 38.2s peak 45.0% loss 9.56099
+after step 11 active blocks.16+blocks.17+blocks.1 38.2s peak 67.3% loss 9.46004
+after step 12 active blocks.20+blocks.21+blocks.2 38.2s peak 43.1% loss 9.36842
+after step 13 active blocks.20+blocks.21+blocks.2 38.2s peak 63.8% loss 9.29580
+after step 14 active token_embedding              38.5s peak 26.9% loss 9.22539
+   harness 9.225388 vs trainer 9.225389  bit-equal windows 64/64 max|d| 0  harness 48.4s
+
+== step time and peak: off vs on (step after an eval) ==
+step  1 off 14.83s peak 82.6% | on 14.76s peak 82.6% start-res 6.4%
+step  2 off 13.38s peak 82.6% | on 13.79s peak 97.0% start-res 27.9%
+step  3 off 13.45s peak 76.7% | on 13.52s peak 76.7% start-res 25.5%
+step  4 off 13.01s peak 83.3% | on 12.96s peak 87.2% start-res 38.3%
+step  5 off 12.39s peak 74.2% | on 12.41s peak 74.1% start-res 25.6%
+step  6 off 11.78s peak 84.9% | on 11.83s peak 84.6% start-res 38.0%
+step  7 off 10.99s peak 71.4% | on 11.07s peak 71.4% start-res 26.0%
+step  8 off 10.39s peak 82.9% | on 10.46s peak 82.4% start-res 39.8%
+step  9 off 9.84s peak 69.3% | on 9.82s peak 69.3% start-res 26.9%
+step 10 off 9.24s peak 80.0% | on 9.31s peak 80.4% start-res 38.8%
+step 11 off 8.61s peak 67.2% | on 8.64s peak 67.3% start-res 26.8%
+step 12 off 8.05s peak 76.3% | on 8.07s peak 77.6% start-res 40.0%
+step 13 off 7.61s peak 63.8% | on 7.63s peak 63.8% start-res 26.9%
+step 14 off 7.02s peak 74.6% | on 7.06s peak 74.4% start-res 43.2%
+
+eval sec: mean 38.17 min 37.68 max 38.53
+post-eval step slowdown: mean +0.060s (n=13)
+per-step cost at --val-every 100: 0.382 s/step (= 3.66% of a step)
+per-step cost at --val-every 500: 0.076 s/step (= 0.73% of a step)
+max eval peak 82.6%, max on-step peak 97.0%, max off-step peak 84.9%

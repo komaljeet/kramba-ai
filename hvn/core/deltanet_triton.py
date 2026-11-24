@@ -1101,6 +1101,233 @@ if _HAS_TRITON:
 
 SCAN_IO_STATS = {"fallback_copies": 0}
 
+# #206: launch widths of the strided-IO kernels at d_head 32 (the 1B shape). Measured
+# at N=64, S=4096, d=32 on the RTX 4050 (results/scan_study/): forward 1 warp instead
+# of 4 (5.71 -> 4.30 ms) and checkpoint 8 warps instead of 4 (4.66 -> 3.62 ms) give
+# the SAME bits (each row's reduction order does not change); the backward at 2
+# warps is faster but changes bits, so it stays at 4. Other d_head keep Triton's
+# default (4 warps) -- only d=32 was measured. Set an entry to None for the default.
+SCAN_V1_WARPS = {"fwd": 1, "ckpt": 8}
+
+# #206: which scan kernels `megakernel_scan_bshd` runs.
+#   "v1" -- the kernels above (state held as [d_v, d_k]).
+#   "t"  -- transposed-layout kernels below (state held as [d_k, d_v]): the per-step
+#           reductions over d_k become in-thread adds, the checkpoint pass is fused
+#           into the checkpoint-recompute forward, and the backward runs 1 warp.
+#           Same recurrence, different summation order: NOT bit-identical to "v1"
+#           (relative difference ~1e-7 fp32; bf16 grads differ in ~1e-4 of elements
+#           by one ulp). The TRAINER default since #210 (`--scan-kernel v1` opts out);
+#           this module default stays "v1" so library callers keep the old bits.
+SCAN_KERNEL = ["v1"]
+SCAN_T_STATS = {"fused_ckpt": 0, "separate_ckpt": 0}
+
+
+def _v1_warps(name, D):
+    w = SCAN_V1_WARPS.get(name) if D == 32 else None
+    return {} if w is None else {"num_warps": w}
+
+
+if _HAS_TRITON:
+
+    @triton.jit
+    def _t_fwd_kernel(
+        q_ptr, k_ptr, v_ptr, alpha_ptr, beta_ptr, o_ptr, ckpt_ptr, nblk,
+        H, sB, sS, sH,
+        S: tl.constexpr, D: tl.constexpr, BV: tl.constexpr, B: tl.constexpr,
+        WRITE_O: tl.constexpr, WRITE_CKPT: tl.constexpr,
+    ):
+        """Transposed-layout forward (#206). State tile is S^T [d_k, BV]: lanes lie
+        along d_v and each thread keeps a d_k column, so the two per-step
+        reductions over d_k are (mostly) in-thread. WRITE_O stores o (fp32
+        [N,S,D]); WRITE_CKPT stores the block-boundary entering states in the
+        production checkpoint layout [N, nblk, d_v, d_k], so the same kernel is
+        the plain forward, the checkpoint pass, or both at once (the recompute)."""
+        pid_n = tl.program_id(0)
+        pid_v = tl.program_id(1)
+        bi = pid_n // H
+        hi = pid_n % H
+        offs_k = tl.arange(0, D)
+        offs_v = pid_v * BV + tl.arange(0, BV)
+        base = bi * sB + hi * sH
+        obase = pid_n * S * D
+        cbase = pid_n * nblk * D * D
+        st = tl.zeros((D, BV), dtype=tl.float32)
+        blk = 0
+        while blk < nblk:
+            if WRITE_CKPT:
+                tl.store(ckpt_ptr + cbase + blk * D * D + offs_v[None, :] * D + offs_k[:, None], st)
+            for j in tl.static_range(B):
+                t = blk * B + j
+                row = base + t * sS
+                k_t = tl.load(k_ptr + row + offs_k).to(tl.float32)
+                a_t = tl.load(alpha_ptr + row + offs_k).to(tl.float32)
+                v_t = tl.load(v_ptr + row + offs_v).to(tl.float32)
+                b_t = tl.load(beta_ptr + (bi * S + t) * H + hi).to(tl.float32)
+                st = st * a_t[:, None]
+                Sk = tl.sum(st * k_t[:, None], axis=0)
+                u = v_t - Sk
+                st = st + b_t * (k_t[:, None] * u[None, :])
+                if WRITE_O:
+                    q_t = tl.load(q_ptr + row + offs_k).to(tl.float32)
+                    o_t = tl.sum(st * q_t[:, None], axis=0)
+                    tl.store(o_ptr + obase + t * D + offs_v, o_t)
+            blk += 1
+
+    @triton.jit
+    def _t_bwd_kernel(
+        q_ptr, k_ptr, v_ptr, alpha_ptr, beta_ptr, ckpt_ptr, do_ptr,
+        dq_ptr, dk_ptr, dv_ptr, dalpha_ptr, dbeta_ptr, nblk,
+        H, sB, sS, sH,
+        S: tl.constexpr, D: tl.constexpr, B: tl.constexpr,
+    ):
+        """Transposed-layout adjoint (#206): `_mk_bwd_kernel_s`'s math (O(B^2)
+        blockwise recompute from the checkpoints, then the validated per-step
+        adjoint) with the state and its gradient held as [d_k, d_v]."""
+        n = tl.program_id(0)
+        bi = n // H
+        hi = n % H
+        base = bi * sB + hi * sH
+        gbase = (bi * S * H + hi) * D
+        obase = n * S * D
+        cbase = n * nblk * D * D
+        rk = tl.arange(0, D)
+        rv = tl.arange(0, D)
+        dS = tl.zeros((D, D), dtype=tl.float32)        # dS^T [d_k, d_v]
+        b = nblk - 1
+        while b >= 0:
+            s = b * B
+            S_start = tl.load(ckpt_ptr + cbase + b * D * D + rv[None, :] * D + rk[:, None])
+            for j in tl.static_range(B - 1, -1, -1):
+                t = s + j
+                row = base + t * sS
+                grow = gbase + t * H * D
+                bidx = (bi * S + t) * H + hi
+                Sprev = S_start
+                for jj in tl.static_range(j):
+                    tt = s + jj
+                    rrow = base + tt * sS
+                    k_tt = tl.load(k_ptr + rrow + rk).to(tl.float32)
+                    a_tt = tl.load(alpha_ptr + rrow + rk).to(tl.float32)
+                    v_tt = tl.load(v_ptr + rrow + rv).to(tl.float32)
+                    b_tt = tl.load(beta_ptr + (bi * S + tt) * H + hi).to(tl.float32)
+                    Sprev = Sprev * a_tt[:, None]
+                    Skk = tl.sum(Sprev * k_tt[:, None], axis=0)
+                    uu = v_tt - Skk
+                    Sprev = Sprev + b_tt * (k_tt[:, None] * uu[None, :])
+                k_t = tl.load(k_ptr + row + rk).to(tl.float32)
+                q_t = tl.load(q_ptr + row + rk).to(tl.float32)
+                a_t = tl.load(alpha_ptr + row + rk).to(tl.float32)
+                v_t = tl.load(v_ptr + row + rv).to(tl.float32)
+                b_t = tl.load(beta_ptr + bidx).to(tl.float32)
+                do_t = tl.load(do_ptr + obase + t * D + rv).to(tl.float32)
+                Sd = Sprev * a_t[:, None]
+                Sk = tl.sum(Sd * k_t[:, None], axis=0)
+                u = v_t - Sk
+                S_t = Sd + b_t * (k_t[:, None] * u[None, :])
+                dS_t = dS + q_t[:, None] * do_t[None, :]
+                dq_t = tl.sum(S_t * do_t[None, :], axis=1)
+                tl.store(dq_ptr + grow + rk, dq_t.to(dq_ptr.dtype.element_ty))
+                dSk_via = tl.sum(dS_t * k_t[:, None], axis=0)
+                dbeta_t = tl.sum(u * dSk_via)
+                tl.store(dbeta_ptr + bidx, dbeta_t.to(dbeta_ptr.dtype.element_ty))
+                du = b_t * dSk_via
+                dk_t = b_t * tl.sum(dS_t * u[None, :], axis=1)
+                tl.store(dv_ptr + grow + rv, du.to(dv_ptr.dtype.element_ty))
+                dSd = dS_t - k_t[:, None] * du[None, :]
+                dk_t = dk_t - tl.sum(Sd * du[None, :], axis=1)
+                tl.store(dk_ptr + grow + rk, dk_t.to(dk_ptr.dtype.element_ty))
+                dalpha_t = tl.sum(Sprev * dSd, axis=1)
+                tl.store(dalpha_ptr + grow + rk, dalpha_t.to(dalpha_ptr.dtype.element_ty))
+                dS = dSd * a_t[:, None]
+            b = b - 1
+
+
+# Launch shapes of the "t" kernels, measured at N=64, S=4096, d=32 (#206).
+# The forward uses the checkpoint pass's tile shape and warps so the recompute (which
+# writes the checkpoints) reproduces the first forward's o bit for bit (1 warp: 3.48 ms).
+T_FWD_BV, T_FWD_WARPS = 8, 2          # forward only            3.53 ms (v1 5.71)
+T_CKPT_BV, T_CKPT_WARPS = 8, 2        # forward + checkpoints   4.04 ms (v1 fwd + ckpt 10.4)
+T_BWD_WARPS = 1                       # adjoint                 7.67 ms (v1 13.8)
+
+
+def _in_backward() -> bool:
+    """True while autograd is executing a backward pass, i.e. a non-reentrant
+    checkpoint is recomputing this forward right before its backward."""
+    return torch._C._current_graph_task_id() != -1
+
+
+class _MegaScanBSHD_T(torch.autograd.Function):
+    """`_MegaScanBSHD` on the transposed-layout kernels (#206).
+
+    Saves a 6th tensor, the backward's checkpoint. Inside a checkpoint recompute
+    (forward run during backward) the forward writes it as it goes -- the separate
+    checkpoint pass disappears. Otherwise it saves a zero-stride placeholder with
+    the checkpoint's shape (no memory; the shape matches so torch.utils.checkpoint's
+    recompute metadata check passes) and the backward runs the checkpoint pass."""
+
+    @staticmethod
+    def forward(ctx, q, k, v, alpha, beta):
+        Bt, S, H, D = q.shape
+        ts = [t if t.stride(-1) == 1 else t.contiguous() for t in (q, k, v, alpha)]
+        if len({tuple(st if sz > 1 else 0 for st, sz in zip(t.stride(), t.shape))
+                for t in ts}) != 1:
+            SCAN_IO_STATS["fallback_copies"] += 1
+            ts = [t.contiguous() for t in ts]
+        q, k, v, alpha = ts
+        beta3 = beta.reshape(Bt, S, H)
+        if not beta3.is_contiguous():
+            beta3 = beta3.contiguous()
+        sB, sS, sH, _ = q.stride()
+        N = Bt * H
+        B = _MegaScan.block
+        assert S % B == 0, f"S={S} must be divisible by block B={B}"
+        nblk = S // B
+        o = torch.empty(N, S, D, device=q.device, dtype=torch.float32)
+        fuse = _in_backward() and any(ctx.needs_input_grad)
+        if fuse:
+            BV = min(T_CKPT_BV, D)
+            ckpt = torch.empty(N, nblk, D, D, device=q.device, dtype=torch.float32)
+            _t_fwd_kernel[(N, D // BV)](q, k, v, alpha, beta3, o, ckpt, nblk, H, sB, sS, sH,
+                                        S=S, D=D, BV=BV, B=B, WRITE_O=True, WRITE_CKPT=True,
+                                        num_warps=T_CKPT_WARPS)
+            SCAN_T_STATS["fused_ckpt"] += 1
+        else:
+            BV = min(T_FWD_BV, D)
+            ckpt = torch.empty((), device=q.device, dtype=torch.float32).expand(N, nblk, D, D)
+            _t_fwd_kernel[(N, D // BV)](q, k, v, alpha, beta3, o, o, nblk, H, sB, sS, sH,
+                                        S=S, D=D, BV=BV, B=B, WRITE_O=True, WRITE_CKPT=False,
+                                        num_warps=T_FWD_WARPS)
+        ctx.save_for_backward(q, k, v, alpha, beta3, ckpt)
+        ctx.beta_shape = beta.shape
+        return o
+
+    @staticmethod
+    def backward(ctx, do):
+        q, k, v, alpha, beta3, ckpt = ctx.saved_tensors
+        Bt, S, H, D = q.shape
+        N = Bt * H
+        B = _MegaScan.block
+        nblk = S // B
+        do = do.contiguous().float()
+        sB, sS, sH, _ = q.stride()
+        if ckpt.stride(0) == 0:      # placeholder: no recompute wrote it
+            BV = min(T_CKPT_BV, D)
+            ckpt = torch.empty(N, nblk, D, D, device=q.device, dtype=torch.float32)
+            _t_fwd_kernel[(N, D // BV)](q, k, v, alpha, beta3, ckpt, ckpt, nblk, H, sB, sS, sH,
+                                        S=S, D=D, BV=BV, B=B, WRITE_O=False, WRITE_CKPT=True,
+                                        num_warps=T_CKPT_WARPS)
+            SCAN_T_STATS["separate_ckpt"] += 1
+        shp = (Bt, S, H, D)
+        dq = torch.empty(shp, device=q.device, dtype=q.dtype)
+        dk = torch.empty(shp, device=q.device, dtype=k.dtype)
+        dv = torch.empty(shp, device=q.device, dtype=v.dtype)
+        dalpha = torch.empty(shp, device=q.device, dtype=alpha.dtype)
+        dbeta3 = torch.empty_like(beta3)
+        _t_bwd_kernel[(N,)](q, k, v, alpha, beta3, ckpt, do,
+                            dq, dk, dv, dalpha, dbeta3, nblk, H, sB, sS, sH,
+                            S=S, D=D, B=B, num_warps=T_BWD_WARPS)
+        return dq, dk, dv, dalpha, dbeta3.reshape(ctx.beta_shape)
+
 
 class _MegaScanBSHD(torch.autograd.Function):
     """`_MegaScan` on [B,S,H,d] inputs in their own dtype (no permute/cast
@@ -1126,7 +1353,7 @@ class _MegaScanBSHD(torch.autograd.Function):
         o = torch.empty(Bt * H, S, D, device=q.device, dtype=torch.float32)
         BV = 16 if D % 16 == 0 else 1
         _gated_delta_fwd_kernel_s[(Bt * H, D // BV)](
-            q, k, v, alpha, beta3, o, H, sB, sS, sH, S=S, D=D, BV=BV)
+            q, k, v, alpha, beta3, o, H, sB, sS, sH, S=S, D=D, BV=BV, **_v1_warps("fwd", D))
         ctx.save_for_backward(q, k, v, alpha, beta3)
         ctx.beta_shape = beta.shape
         return o
@@ -1143,7 +1370,7 @@ class _MegaScanBSHD(torch.autograd.Function):
         sB, sS, sH, _ = q.stride()
         ckpt = torch.empty(N, nblocks, D, D, device=q.device, dtype=torch.float32)
         _mk_ckpt_kernel_s[(N,)](k, v, alpha, beta3, ckpt, nblocks, H, sB, sS, sH,
-                                S=S, D=D, B=B)
+                                S=S, D=D, B=B, **_v1_warps("ckpt", D))
         shp = (Bt, S, H, D)
         dq = torch.empty(shp, device=q.device, dtype=q.dtype)
         dk = torch.empty(shp, device=q.device, dtype=k.dtype)
@@ -1163,6 +1390,9 @@ def megakernel_scan_bshd(q, k, v, alpha, beta):
     inputs; gradients come back in each input's dtype."""
     assert _HAS_TRITON and q.is_cuda, "CUDA + triton required"
     assert not _MegaScan.buffered, "strided IO implements the O(B^2) backward only"
+    if SCAN_KERNEL[0] == "t":
+        return _MegaScanBSHD_T.apply(q, k, v, alpha, beta)
+    assert SCAN_KERNEL[0] == "v1", f"unknown scan kernel {SCAN_KERNEL[0]!r}"
     return _MegaScanBSHD.apply(q, k, v, alpha, beta)
 
 

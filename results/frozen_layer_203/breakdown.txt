@@ -1,0 +1,200 @@
+
+== fwd.L3: wall 19.61 ms  busy 19.33  idle 0.28  kernels 71  side-copy 8.00
+   gemm_fp8                    6.21 ms
+   scan_fwd                    5.75 ms
+   elementwise_norm_other      3.68 ms
+   gemm_bf16                   1.51 ms
+   quant_act                   1.25 ms
+   quant_weight                0.94 ms
+   marker                      0.00 ms
+   top kernels:
+       5.745 [scan_fwd] _gated_delta_fwd_kernel_s
+       3.452 [gemm_fp8] sm89_xmma_gemm_e4m3bf16_e4m3f32_f32_tn_n_tilesize64x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_execute_ker
+       2.755 [gemm_fp8] sm89_xmma_gemm_e4m3bf16_e4m3f32_f32_tn_n_tilesize128x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_execute_ke
+       1.369 [gemm_bf16] ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tt
+       0.944 [quant_weight] _ternary_fp8_kernel
+       0.918 [elementwise_norm_other] _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_15CUDAFunctor_addIN3c108BFloat16
+       0.757 [quant_act] _amax_kernel
+       0.633 [elementwise_norm_other] _add3_fwd_kernel
+       0.489 [quant_act] _cast_kernel
+       0.396 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_18GeluCUDAKernelImplERNS_18TensorIteratorBaseENS0_8Gel
+       0.395 [elementwise_norm_other] _ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f28vectorized_layer_norm_kernelIffLb1EEEviT
+       0.357 [elementwise_norm_other] _rng_fwd_kernel
+       0.292 [elementwise_norm_other] _l2n_fwd_kernel
+       0.262 [elementwise_norm_other] _cc_fwd_kernel
+   host runtime: {'cudaEventSynchronize': 1.56, 'cudaLaunchKernel': 0.67, 'cudaMemcpyAsync': 0.39, 'cudaLaunchKernelExC': 0.08, 'cudaStreamIsCapturing': 0.03} {'aten::copy_ >1ms (host)': 7.05}
+
+== bwd.L3: wall 15.54 ms  busy 15.44  idle 0.10  kernels 56  side-copy 0.00
+   scan_fwd                    5.75 ms
+   gemm_fp8                    4.14 ms
+   elementwise_norm_other      2.74 ms
+   gemm_bf16                   1.50 ms
+   quant_weight                0.69 ms
+   quant_act                   0.62 ms
+   marker                      0.00 ms
+   top kernels:
+       5.746 [scan_fwd] _gated_delta_fwd_kernel_s
+       2.761 [gemm_fp8] sm89_xmma_gemm_e4m3bf16_e4m3f32_f32_tn_n_tilesize64x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_execute_ker
+       1.377 [gemm_fp8] sm89_xmma_gemm_e4m3bf16_e4m3f32_f32_tn_n_tilesize128x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_execute_ke
+       1.370 [gemm_bf16] ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tt
+       0.722 [elementwise_norm_other] _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_15CUDAFunctor_addIN3c108BFloat16
+       0.693 [quant_weight] _ternary_fp8_kernel
+       0.381 [elementwise_norm_other] _ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f28vectorized_layer_norm_kernelIffLb1EEEviT
+       0.369 [quant_act] _amax_kernel
+       0.360 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_18GeluCUDAKernelImplERNS_18TensorIteratorBaseENS0_8Gel
+       0.357 [elementwise_norm_other] _rng_fwd_kernel
+       0.268 [elementwise_norm_other] _l2n_fwd_kernel
+       0.260 [elementwise_norm_other] _cc_fwd_kernel
+       0.251 [quant_act] _cast_kernel
+       0.228 [elementwise_norm_other] _sig_fwd_kernel
+   host runtime: {'cudaDeviceSynchronize': 15.54} {}
+
+== bwdgrad.L3: wall 34.26 ms  busy 34.14  idle 0.12  kernels 57  side-copy 0.00
+   scan_bwd                   18.63 ms
+   elementwise_norm_other      6.39 ms
+   gemm_fp8                    6.20 ms
+   gemm_bf16                   1.43 ms
+   quant_act                   1.27 ms
+   quant_weight                0.22 ms
+   marker                      0.00 ms
+   top kernels:
+      13.934 [scan_bwd] _mk_bwd_kernel_s
+       4.693 [scan_bwd] _mk_ckpt_kernel_s
+       3.450 [gemm_fp8] sm89_xmma_gemm_e4m3e5m2bf16_e4m3e5m2f32_f32_tn_n_tilesize64x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_exe
+       2.753 [gemm_fp8] sm89_xmma_gemm_e4m3e5m2bf16_e4m3e5m2f32_f32_tn_n_tilesize128x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_ex
+       1.370 [gemm_bf16] ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nn
+       1.205 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIN3c108BFloat16EEESt5arrayIPcLy3EEEEviT0
+       1.086 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIfEESt5arrayIPcLy3EEEEviT0_T1_
+       0.803 [quant_act] _amax_kernel
+       0.661 [elementwise_norm_other] _rng_bwd_kernel
+       0.599 [elementwise_norm_other] _l2n_bwd_kernel
+       0.594 [elementwise_norm_other] _ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f39layer_norm_grad_input_kernel_vectorizedI
+       0.555 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_26GeluBackwardCUDAKernelImplERNS_18TensorIteratorBaseE
+       0.512 [elementwise_norm_other] _sig_bwd_kernel
+       0.465 [quant_act] _cast_kernel
+   host runtime: {'cudaDeviceSynchronize': 34.26} {}
+
+== bwd.L1: wall 15.75 ms  busy 15.67  idle 0.08  kernels 38  side-copy 0.00
+   scan_fwd                    5.75 ms
+   gemm_fp8                    4.85 ms
+   elementwise_norm_other      2.83 ms
+   gemm_bf16                   1.50 ms
+   quant_act                   0.75 ms
+   marker                      0.00 ms
+   top kernels:
+       5.746 [scan_fwd] _gated_delta_fwd_kernel_s
+       3.471 [gemm_fp8] sm89_xmma_gemm_e4m3bf16_e4m3f32_f32_tn_n_tilesize64x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_execute_ker
+       1.376 [gemm_fp8] sm89_xmma_gemm_e4m3bf16_e4m3f32_f32_tn_n_tilesize128x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_execute_ke
+       1.369 [gemm_bf16] ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tt
+       0.745 [elementwise_norm_other] _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_15CUDAFunctor_addIN3c108BFloat16
+       0.390 [quant_act] _amax_kernel
+       0.358 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_18GeluCUDAKernelImplERNS_18TensorIteratorBaseENS0_8Gel
+       0.357 [elementwise_norm_other] _rng_fwd_kernel
+       0.356 [quant_act] _cast_kernel
+       0.340 [elementwise_norm_other] _ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f28vectorized_layer_norm_kernelIffLb1EEEviT
+       0.273 [elementwise_norm_other] _l2n_fwd_kernel
+       0.259 [elementwise_norm_other] _cc_fwd_kernel
+       0.226 [elementwise_norm_other] _sig_fwd_kernel
+       0.137 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_62_GLOBAL__N__a30504db_23_ActivationSiluKernel_cu_9ffb
+   host runtime: {'cudaDeviceSynchronize': 15.75} {}
+
+== bwdgrad.L1: wall 51.80 ms  busy 51.53  idle 0.27  kernels 119  side-copy 0.00
+   scan_bwd                   18.62 ms
+   gemm_fp8                   14.10 ms
+   elementwise_norm_other     13.84 ms
+   gemm_bf16                   2.95 ms
+   quant_act                   2.03 ms
+   memset                      0.00 ms
+   marker                      0.00 ms
+   top kernels:
+      13.933 [scan_bwd] _mk_bwd_kernel_s
+       7.592 [gemm_fp8] sm89_xmma_gemm_e4m3e5m2bf16_e4m3e5m2f32_f32_tn_n_tilesize128x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_ex
+       4.682 [scan_bwd] _mk_ckpt_kernel_s
+       3.537 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIfEESt5arrayIPcLy3EEEEviT0_T1_
+       3.457 [gemm_fp8] sm89_xmma_gemm_e4m3e5m2bf16_e4m3e5m2f32_f32_tn_n_tilesize64x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_exe
+       2.745 [gemm_bf16] ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tt
+       1.662 [gemm_fp8] sm89_xmma_gemm_e4m3bf16_e4m3f32_f32_tn_n_tilesize128x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_execute_ke
+       1.390 [gemm_fp8] sm89_xmma_gemm_e4m3e5m2bf16_e4m3e5m2f32_f32_tn_n_tilesize64x64x64_stage6_warpsize2x2x1_tensor16x8x32_algo2_exe
+       1.359 [elementwise_norm_other] _ZN2at6native27unrolled_elementwise_kernelIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_
+       1.106 [quant_act] _cast_kernel
+       1.056 [elementwise_norm_other] _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_15CUDAFunctor_addIN3c108BFloat16
+       0.921 [quant_act] _amax_kernel
+       0.906 [elementwise_norm_other] _ZN2at6native18elementwise_kernelILi128ELi2EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS
+       0.869 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIN3c108BFloat16EEESt5arrayIPcLy3EEEEviT0
+   host runtime: {'cudaDeviceSynchronize': 51.8} {}
+
+== bwd.L0: wall 15.75 ms  busy 15.67  idle 0.08  kernels 38  side-copy 0.00
+   scan_fwd                    5.75 ms
+   gemm_fp8                    4.84 ms
+   elementwise_norm_other      2.83 ms
+   gemm_bf16                   1.50 ms
+   quant_act                   0.75 ms
+   marker                      0.00 ms
+   top kernels:
+       5.746 [scan_fwd] _gated_delta_fwd_kernel_s
+       3.467 [gemm_fp8] sm89_xmma_gemm_e4m3bf16_e4m3f32_f32_tn_n_tilesize64x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_execute_ker
+       1.376 [gemm_fp8] sm89_xmma_gemm_e4m3bf16_e4m3f32_f32_tn_n_tilesize128x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_execute_ke
+       1.370 [gemm_bf16] ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tt
+       0.745 [elementwise_norm_other] _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_15CUDAFunctor_addIN3c108BFloat16
+       0.391 [quant_act] _amax_kernel
+       0.357 [elementwise_norm_other] _rng_fwd_kernel
+       0.357 [quant_act] _cast_kernel
+       0.356 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_18GeluCUDAKernelImplERNS_18TensorIteratorBaseENS0_8Gel
+       0.343 [elementwise_norm_other] _ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f28vectorized_layer_norm_kernelIffLb1EEEviT
+       0.269 [elementwise_norm_other] _l2n_fwd_kernel
+       0.257 [elementwise_norm_other] _cc_fwd_kernel
+       0.227 [elementwise_norm_other] _sig_fwd_kernel
+       0.140 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_62_GLOBAL__N__a30504db_23_ActivationSiluKernel_cu_9ffb
+   host runtime: {'cudaDeviceSynchronize': 15.75} {}
+
+== bwdgrad.L0: wall 49.90 ms  busy 49.67  idle 0.23  kernels 112  side-copy 0.00
+   scan_bwd                   18.61 ms
+   gemm_fp8                   13.81 ms
+   elementwise_norm_other     12.27 ms
+   gemm_bf16                   2.95 ms
+   quant_act                   2.02 ms
+   memset                      0.00 ms
+   marker                      0.00 ms
+   top kernels:
+      13.929 [scan_bwd] _mk_bwd_kernel_s
+       7.593 [gemm_fp8] sm89_xmma_gemm_e4m3e5m2bf16_e4m3e5m2f32_f32_tn_n_tilesize128x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_ex
+       4.679 [scan_bwd] _mk_ckpt_kernel_s
+       3.454 [gemm_fp8] sm89_xmma_gemm_e4m3e5m2bf16_e4m3e5m2f32_f32_tn_n_tilesize64x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_exe
+       3.063 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIfEESt5arrayIPcLy3EEEEviT0_T1_
+       2.749 [gemm_bf16] ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tt
+       1.390 [gemm_fp8] sm89_xmma_gemm_e4m3e5m2bf16_e4m3e5m2f32_f32_tn_n_tilesize64x64x64_stage6_warpsize2x2x1_tensor16x8x32_algo2_exe
+       1.377 [gemm_fp8] sm89_xmma_gemm_e4m3bf16_e4m3f32_f32_tn_n_tilesize128x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_execute_ke
+       1.355 [elementwise_norm_other] _ZN2at6native27unrolled_elementwise_kernelIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_
+       1.112 [quant_act] _cast_kernel
+       1.036 [elementwise_norm_other] _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_15CUDAFunctor_addIN3c108BFloat16
+       0.919 [elementwise_norm_other] _ZN2at6native18elementwise_kernelILi128ELi2EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS
+       0.909 [quant_act] _amax_kernel
+       0.872 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_15CUDAFunctor_addIN3c108BFloat16EEESt5arrayIPcLy3EEEEviT0
+   host runtime: {'cudaDeviceSynchronize': 49.9} {}
+
+#### B_before (frozen-before)
+
+== fwd.L2: wall 19.45 ms  busy 19.20  idle 0.26  kernels 71  side-copy 6.53
+   gemm_fp8                    6.22 ms
+   scan_fwd                    5.75 ms
+   elementwise_norm_other      3.56 ms
+   gemm_bf16                   1.51 ms
+   quant_act                   1.21 ms
+   quant_weight                0.95 ms
+   marker                      0.00 ms
+   top kernels:
+       5.751 [scan_fwd] _gated_delta_fwd_kernel_s
+       3.458 [gemm_fp8] sm89_xmma_gemm_e4m3bf16_e4m3f32_f32_tn_n_tilesize64x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_execute_ker
+       2.757 [gemm_fp8] sm89_xmma_gemm_e4m3bf16_e4m3f32_f32_tn_n_tilesize128x64x64_stage4_warpsize2x2x1_tensor16x8x32_algo2_execute_ke
+       1.373 [gemm_bf16] ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tt
+       0.947 [quant_weight] _ternary_fp8_kernel
+       0.903 [elementwise_norm_other] _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastINS0_15CUDAFunctor_addIN3c108BFloat16
+       0.744 [quant_act] _amax_kernel
+       0.555 [elementwise_norm_other] _add3_fwd_kernel
+       0.467 [quant_act] _cast_kernel
+       0.364 [elementwise_norm_other] _ZN2at6native53_GLOBAL__N__e58679f9_20_layer_norm_kernel_cu_3ff0b71f28vectorized_layer_norm_kernelIffLb1EEEviT
+       0.358 [elementwise_norm_other] _rng_fwd_kernel
+       0.358 [elementwise_norm_other] _ZN2at6native29vectorized_elementwise_kernelILi4EZZZNS0_18GeluCUDAKernelImplERNS_18TensorIteratorBaseENS0_8Gel
+       0.301 [elementwise_norm_other] _l2n_fwd_kernel
+       0.278 [elementwise_norm_other] _cc_fwd_kernel
+   host runtime: {'cudaEventSynchronize': 2.51, 'cudaLaunchKernel': 1.1, 'cudaLaunchKernelExC': 0.3, 'cudaMemcpyAsync': 0.11, 'cudaEventRecordWithFlags': 0.11} {'aten::copy_ >1ms (host)': 3.27}

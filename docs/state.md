@@ -40,6 +40,1657 @@ New test `tests/test_bcd_prefix_forward_only.py` (33 cases, CPU + CUDA + offload
 fails if a prefix layer ever gets a recompute, and checks that the counter does catch a forced one.
 Data: `results/bcd_prefix/` (`base`, `base2` repeat, `forced`, `nograd`, `summary.json`).
 Harness: `scripts/profile_bcd_prefix.py`.
+## Streamed full backprop at 1B fits 16 GB only with a lean host state: 5.5 GB pinned + process, ~7 GB of ~8.1 available; Windows caps pinned memory at 6.75 GiB (2026-11-19, #218)
+
+**One line: the full-precision design cannot run on this laptop at all: Windows will not pin more
+than 6.75 GiB for the GPU (the WDDM shared-memory budget, half of RAM) and #217's state needs
+10.5 GB pinned. A lean state fits: bf16 masters with stochastic rounding, bf16 Muon momentum,
+5 bf16 parked group inputs = 5.54 GB pinned + 1.47 GB measured process floor = 7.0 GB vs 8.1 GB
+available at rest (1.1 GB margin; 0.5 GB short if the process stays as fat as today's trainer,
+3.07 GB). Cost ~+0.2 s on a 22.5 s step. On the real 1B group, stochastic rounding keeps 99% of
+the update where round-to-nearest keeps 23%. Proxy only: a held-out LM-loss A/B is still needed.**
+
+### Setup (`results/streamed_16gb_gate_218/`, summary.txt there)
+- Step 1: `scripts/probe_pinned_host_218.py`, one process per size, cudaHostAlloc (256 MiB and
+  1 GiB chunks) and cudaHostRegister; typeperf paging log; responsiveness probes; a 3 GiB hog run.
+  Other RAM users at the time: VS Code 2.2 GB, Claude CLI 1.1 GB, Avast ~0.6 GB, 109 stray
+  tail/grep processes 0.57 GB; no browser.
+- Step 2: `budget.py` from exact counts; `scripts/probe_process_overhead_218.py` for the floor.
+- Step 3: `scripts/bench_lean_numerics_218.py`: real layers 4-7, production stack, deterministic,
+  24 steps, Muon lr 0.02 / 0.002 / 0.0005; synthetic teacher-imitation loss with a held-out batch.
+  Arms: fp32 ref, lean (SR), round-to-nearest (falsifier), int8 momentum, fp32 control with the
+  micro-batch order reversed.
+
+### Result
+- Available RAM at rest 8.1 GB; 9.4-10.1 GB after Windows trimmed idle apps. Commit limit 39.5 GB
+  never binds. Pinned: 1-6 GiB fine (0.6 s to pin 6 GiB, 13.3 GB/s, no slowdown); 6.75 GiB hard
+  cap with both APIs and 1.8-3.3 GB still free. Shared Usage counter rises by exactly the pinned
+  amount; dxdiag budget 7827 MB. Safe pinned size: 6.0 GiB.
+- Budget (GB): exact 10.52 pinned; lean 5.54; smallest 4.13 (int8 momentum, bf16 embedding Adam
+  moments). Process floor 1.47 (torch 0.51, CUDA 0.14, kernels 0.75); #217 bench 2.18, trainer 3.07.
+- Held-out gap to fp32 at step 24, % of fp32's loss drop (lr 0.02 / 0.002 / 0.0005): lean
+  +0.06 / +0.48 / +0.90; round-to-nearest +0.08 / +4.3 / +57; int8 momentum +0.30 / +0.48 / +1.34;
+  fp32 control's largest mid-run wobble 0.17 / 0.14 / 0.45. Update kept per step at lr 0.0005:
+  SR 1.00, round-to-nearest 0.24.
+- Rejected levers: embedding Adam on GPU (VRAM to ~83%), parked inputs on SSD (620 TB written),
+  recomputing parked inputs (+7.8 s/step, est.).
+
+### Falsifiers
+- Round-to-nearest must lose small updates: it keeps 24% and its loss stalls. SR does not.
+- Repeated ref gradient differs by exactly 0; ref reproduces bit for bit across processes;
+  ref recompute == forward. Pinning proven by is_pinned() and the copy rate.
+
+### What it means
+- Gate 1 passes with the lean state and 0 workers, with a thin margin unless the trainer process
+  is cut toward its 1.47 GB floor or int8 momentum is used. Next: a 208M fp32-vs-lean held-out
+  A/B (~7.5 GPU h), then 1B BCD vs lean streamed (~9.5 GPU h). Unmeasured: the trainer's non-state
+  RAM in this design, a full 24-layer run holding 5.5 GB pinned, long runs with a browser open.
+## 1B pretrain on this laptop: no measured route reaches full quality under 212 days; effort stopped 2026-11-20 (roll-up, written 2026-11-24, #219)
+
+**One line: the maintainer's rule is that a full-quality 1B pretrain must take under 212 days
+(19.8 s/step at 925,000 steps). BCD is ~106 days of compute but not full quality (#214: at 208M
+it needed 6.7x the steps to match full backprop). Streamed full backprop is full quality by design
+but ~22.5 s/step = ~241 days (#216/#217). The maintainer stopped the 1B pretrain effort on
+2026-11-20. MR !273 (#218) is open, not merged. Nothing new was run for this entry.**
+
+| route | step (s) | days for 925,000 steps | quality | source |
+|---|---:|---:|---|---|
+| BCD, 7 blocks of 4 layers (default) | 9.890 | ~106 | not full: 208M 32% higher held-out loss at 4000 steps, 6.7x steps to match, gap not closing; 1B unmeasured | #210, #215, #214 |
+| streamed full backprop, fp32 host state | ~22.5 (one group measured, rest from per-layer times) | ~241 | full backprop by design | #217 |
+| same, paper estimate range | 19.4-25.5 | 208-273 | same | #216 (never measured end to end) |
+| streamed, lean bf16 host state | ~22.5 + ~0.2 | not computed | held-out A/B still needed | #218, MR !273, open, not merged |
+
+- RAM: the fp32 streamed design needs ~13.6 GB of host RAM in the trainer (#216/#217). That
+  means a 32 GB machine. This laptop has 16 GB (15.29 GB usable) and will not be upgraded.
+- From the open MR !273 (branch `exp/streamed-16gb-gate`, `results/streamed_16gb_gate_218/`,
+  not on main): Windows caps pinned memory at 6.75 GiB; the fp32 state needs 10.5 GB pinned, so
+  it cannot run here at all; a lean state (bf16 masters with stochastic rounding, bf16 Muon
+  momentum, bf16 parked inputs) needs 5.54 GB pinned and fits with ~1.1 GB margin.
+- Docs updated to match (#219): HF_BLOG_POST.md, PRETRAIN_STORY.md, README.md, training.md,
+  handoff.md, index.md, benchmarks_speed.md, roadmap.md now call 106 days BCD compute, not full
+  quality, and mark the bigger-GPU day counts (scaled from the October 132-211 days) as
+  unmeasured. The 211 figure used the 1.6x factor that #198 withdrew.
+- Still unmeasured: the BCD penalty at 1B and at full length; the lean variant's quality; a full
+  24-layer streamed run.
+
+## Streamed full backprop at 1B, one group measured: 3.55 s vs 3.41 predicted, full step ~22.5 s (2026-11-19, #217)
+
+**One line: the real 1B layers 4-7 run the #216 layer-major design (fp32 masters, momentum and
+moments in host RAM, weights streamed in, Muon after each layer's backward, state written back)
+in 3.545 s per group step, 1.04x the 3.41 s prediction. That puts the full 1B step at ~22.5 s
+(2.27x BCD, ~241 days for 925,000 steps). Copies cost 0.06 s per group when overlapped. VRAM
+4.53 GB reserved (70%). The result is bit-identical to a trainer-style reference over 3 steps.
+Host RAM is still the blocker (#216): this run does not change that.**
+
+### Setup (`scripts/bench_streamed_group_217.py`, `results/streamed_group_bench_217/`)
+- Standalone, no trainer change. Production modules and flags: ternary + `--fp8-linear`, scan
+  t + megakernel, fused RMSNorm / bias, TF32, bf16 autocast, deterministic (as #213). Production
+  Muon (lr 0.02, AdamW aux 3e-4, wd 0.01). 8 micro-batches x 4096 tokens.
+- Per step: group input parked to host; per layer the fp32 master streams in, forward 8 mb
+  (no_grad); input streams back, layers 4-6 re-run; per layer from the top: recompute + backward
+  (fused checkpoint pass, as the trainer's recompute), per-layer clip 1.0, Muon on the GPU,
+  master + momentum + moments copied back. Host state page-locked with cudaHostRegister.
+- A 0.82 GB stand-in for the tied embedding + grad stays on the GPU. 2 processes x 7 steps per
+  mode, first 2 steps dropped.
+
+### Result
+| mode | group step (s) | fwd | re-fwd | bwd | clip+Muon | copy waits + tail |
+|---|---:|---:|---:|---:|---:|---:|
+| #216 prediction | 3.41 | 0.553 | 0.423 | 1.917 | 0.521 | - |
+| overlap, pinned (2 runs) | 3.545 / 3.542 | 0.552 | 0.428 | 1.972 | 0.533 | 0.059 |
+| all copies on compute stream | 3.806 | 0.607 | 0.476 | 1.966 | 0.698 | - |
+| pageable host memory | 3.831 | 0.582 | 0.461 | 1.974 | 0.743 | - |
+
+Spread over 5 timed steps: +-0.002 s (pinned). Full 1B step from the per-layer times plus #213's
+loss/embedding 2.19 s (not measured here): **22.5 s overlap**, 24.0 s sync, 24.0 s pageable.
+
+- **Copy speeds** (168 MB, one layer): H2D pinned 13.3 GB/s, pageable 12.8; D2H pinned 13.2,
+  pageable 10.0. **No duplex**: H2D and D2H at the same time take the sum of their times
+  (13.3 GB/s total); in the group runs they never ran together. One shared ~13.2 GB/s pipe.
+- **Overlap is real**: per group 2.79 GB in + 1.61 GB out = 0.33 s at 13.2 GB/s. Moving every
+  copy to the compute stream adds 0.26 s, and overlap mode still shows 0.06 s: 0.32 s, as expected.
+- **VRAM**: 3.96 GB allocated, 4.53 GB reserved (70%) with the embedding stand-in (#216: 3.8-4.1 /
+  4.1-4.4).
+- **Host RAM**: group state 1.61 GB (masters 0.673, momentum 0.673, parked input 0.268), pinned
+  at exact size. Working set 3.79 GB; free RAM 10.25 -> 6.42 GB. x6 groups + AdamW embedding +
+  rest of trainer = 13.6 GB, as #216 said: does not fit this laptop at full precision.
+
+### Falsifiers
+- `--check 3`: output, input grad, every weight grad and updated weights equal the trainer-style
+  reference (resident weights, micro-batch-major, torch checkpoint, one Muon) **bit for bit** on all
+  3 steps; GPU copy == host copy after each write-back; host hashes change every step. Weights
+  are compared relative to the update size, not absolutely.
+- Must-fail partners both FAIL: skipping layer 5's write-back (error 1.0x the update, hash
+  unchanged); not copying layer 6 in for the backward (error 422x the update).
+
+### What it means
+- #216's speed numbers hold: per-layer times carry to layer-major order within 0-3%, copies hide.
+- New: no PCIe duplex on this laptop; pageable memory costs ~1.7 s per step. Pin the state.
+- Still unmeasured: the loss/decoder phase in this design, a full 24-layer run, pinning ~10 GB
+  on Windows, per-layer clip vs global clip quality, the BCD penalty at 1B. The RAM gate from
+  #216 (32 GB, or a bf16-state loss A/B) is still the first decision.
+## Streamed full backprop at 1B: fast enough (~21.8 s/step, 2.2x BCD), but needs ~13.6 GB of host RAM and this laptop has ~8.3 GB free for it (2026-11-19, #216)
+
+**One line: a paper estimate, nothing run. Full backprop at 1B with every layer streamed through
+the GPU, one layer at a time, would take ~21.8 s/step (low 19.4, high 25.5) = 234 days for
+925,000 steps (208-273). That is well under the ~40 s bar (4x the 9.89 s BCD step). VRAM fits on
+paper (~3.8-4.1 GB allocated vs 4.99 today). Host RAM does not: fp32 masters + Muon momentum +
+AdamW state + checkpoints need ~13.6 GB in the trainer, and it can use ~8.3 GB today (10.6 with
+0 DataLoader workers). Worth building only after RAM is solved: 32 GB installed, or a 208M loss
+A/B showing bf16 momentum + bf16 master (stochastic rounding) + previous-step clipping cost
+nothing. If it works, the loss BCD reaches at 925,000 steps would take ~138,000 full steps,
+~35 days instead of 106 (using #214's 208M penalty; the penalty at 1B is unmeasured).**
+
+Full write-up: `results/streamed_fullbp_est_216/estimate.md`. Arithmetic:
+`scripts/estimate_streamed_fullbp_216.py` (output in `estimate_numbers.txt`).
+
+Design used: layer-major. Each layer runs all 8 micro-batches before the next, so its gradient
+finishes on the GPU and Muon updates it at once; gradients never go to host RAM. Segment inputs
+(every 4th layer) are parked in host RAM; backward re-forwards each 4-layer segment once to
+rebuild layer inputs (+2.41 s). Micro-batch-major (today's loop) was rejected: grads would have
+to leave the GPU 8 times per step (16-32 GB D2H) and live in host RAM (+4 GB).
+
+| | value | source |
+|---|---|---|
+| H2D pinned / pageable | 13.06 / 10.74 GB/s | `results/bcd_stall_200/stall_steps_ctrl.jsonl` trace (#200) |
+| D2H, duplex, CPU optimizer speed | unmeasured | - |
+| trainable layer per step (8 mb): DeltaNet fwd / recompute+bwd | 0.130 / 0.430 s | #213 per-layer table (copied into the results folder) |
+| attention layer fwd / recompute+bwd | 0.163 / 0.627 s | same |
+| Muon, all 1,009.5M matrix params, GPU | 3.16 s (3.13 ns/param) | #213 phases, 6 blocks summed |
+| compute total (fwd 3.19 + re-fwd 2.41 + bwd 10.71 + loss 2.19 + optim 3.21 + misc) | 21.73 s | arithmetic |
+| PCIe per step | H2D 18.6 GB, D2H 10.5 GB | arithmetic from sizes |
+| host RAM needed: rest 3.07 + masters 4.04 + momentum 4.04 + AdamW 0.83 + seg inputs 1.61 | 13.59 GB | arithmetic; rest from `results/frozen_codes_204/` |
+| host RAM available to the trainer | 8.33 GB (10.57 with 0 workers) | `results/frozen_codes_204/time_base*.jsonl` |
+
+- The speed verdict holds unless D2H is slower than 0.64 GB/s.
+- New code needed: fp32 host masters (frozen weights are parked in bf16 today, no master), a
+  D2H write-back path in `GPUBufferPool`, a layer-major training driver, per-layer optimizer
+  steps inside backward, a new clipping policy (global `clip_grad_norm_` cannot run before the
+  updates), save/resume of host state, tests over a sequence of steps.
+- Next, only with the maintainer's OK: one GPU check (~10-15 min) of a real 4-layer segment
+  streamed layer-major, predicted 3.41 s per segment; plus the RAM decision above.
+
+## BCD costs ~32% higher held-out loss than full backprop at equal steps, and the gap is not closing (2026-11-19, #214)
+
+**One line: on the real trainer and production flags, at the largest size where full backprop
+fits (208.7M, d832 x 24 layers), the 1B BCD plan (7 blocks, 100 steps per block, offload) ends
+4000 steps 1.24 nats worse than full backprop (32% higher loss, perplexity x3.5). Full backprop
+reached BCD's final loss at step ~596, so BCD needed 6.7x the steps, and that multiplier grew
+all run (3.8x at step 1000). Per step BCD is 1.63x faster, so full is still ~4.2x faster in
+wall-clock to the same loss. 200 steps per block is 0.02 nats better than 100 at step 2000:
+not a lever.**
+
+### Setup (`scripts/ab_bcd_penalty_214.py`, `results/bcd_penalty_214/`)
+- #209 held-out harness, one arm per process. PROD_ARGV with `--d-model 832 --n-heads 26`
+  (head dim 32, as 1B), 24 layers, attention at 6 and 18, grad_accum 8 (32,768 tokens/step),
+  scan-kernel t, `--deterministic`. 4000-step schedule, warmup 400, cosine to 0.
+- `full`: PROD_ARGV minus `--offload` (so no BCD), plus `--grad-checkpoint`. `bcd100`/`bcd200`:
+  PROD_ARGV (BCD + offload, 4 layers per block = 7 blocks).
+- Same data order (shuffle seed pinned), same 64 held-out windows (one target sha over every
+  eval), seed = model init only.
+
+### Size: 300-500M does not fit for full backprop
+Full backprop at batch 1 x 4096, grad_accum 8, steady-state step: d768 180.8M 73.8% reserved;
+**d832 208.7M 83.4%, 6.68 s/step (used)**; d896 238.6M 91-93.5% and slowing after an eval;
+d1024 304.2M 111%, 42-70 s/step (spilling). The 2026-10-24 entry's "304M fits at 72%" does not
+hold at the steady-state step with today's stack.
+
+### Result (seed 0 pair, 4000 steps)
+
+| step | Mtok | full | BCD 100 | gap (nats) | % worse | full reaches BCD loss at | BCD needs |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1000 | 32.8 | 4.639 | 6.040 | +1.401 | 30.2% | 264 | 3.8x steps |
+| 2000 | 65.5 | 4.207 | 5.510 | +1.303 | 31.0% | 414 | 4.8x |
+| 3000 | 98.3 | 3.996 | 5.230 | +1.234 | 30.9% | 539 | 5.6x |
+| 4000 | 131.1 | 3.884 | 5.127 | +1.243 | 32.0% | 596 | 6.7x |
+
+- Gap in nats shrinks 1.40 -> 1.23 by step 2500, then stays flat. In steps it keeps growing,
+  because full's curve flattens. The steps figure uses full's 4000-step curve, so it is a lower
+  bound (a full run scheduled to end at ~600 steps would anneal and do better).
+- 6.7x is close to the 7 blocks: each block gets 1/7 of the updates, and BCD recovers almost
+  none of that from the other blocks moving.
+- Time: full 6.69 s/step, BCD 4.10 (1.63x faster per step). Full hit 5.127 in ~1.1 h; BCD took
+  4.62 h. At equal wall-clock (4.62 h) full is at ~4.09.
+- Can it see a difference? Seed spread at step 500 (seed 1 run to 500): full 0.0023, BCD
+  0.0045, against a 2.67 gap with both seeds agreeing (+2.672, +2.670). 64/64 windows worse at
+  step 4000 (sem 0.020). Every full step trained all 208.7M params; every BCD step one block
+  (27.8-41.8M).
+
+### Block length (seed 0, same 4000-step schedule)
+| step | 100/block | 200/block | 200 - 100 (paired) |
+|---:|---:|---:|---:|
+| 1000 | 6.040 | 6.623 | +0.583 |
+| 1500 | 5.678 | 5.944 | +0.266 |
+| 2000 | 5.510 | 5.490 | -0.020 (sem 0.003) |
+
+200 steps per block catches up once its rotations complete and is ahead by 0.02 at step 2000,
+1.5% of the gap to full. 50 per block was not run (16 h cap).
+
+### Cuts and limits
+- One seed per arm at 4000 steps (seed 1 only to 500); 200/block only to 2000; 50/block not
+  run. 16.2 h of GPU.
+- Not measured: the gap at 1B, at 925,000 steps, at other tokens per step. Here it did not
+  close over 4000 steps, and #198 (d512, other harness) saw it grow to 12,000 steps. Nothing
+  measured so far suggests it closes at length; how it moves at 1B is unmeasured.
+
+## Speed round #207-#213 in one place: the default 1B k4 step is 9.89 s (~106 days for 925,000 steps), close to its floor; what is still unmeasured (2026-11-18, #215)
+
+**One line: on main today the default 1B k4 step is 9.890 s (#210 re-time; the #213 speed hunt
+re-timed it at 9.865 s). That is ~106 days for 925,000 steps at 8 x 4096 tokens. Before this
+round (#206 number) it was 11.285 s, ~121 days. The speed hunt found no code change worth
+0.2 s/step or more that keeps the same bits. What is left needs a loss A/B first. This entry
+only collects numbers already recorded in the entries below and in the results folders named.
+Nothing new was run for it.**
+
+Step history at 1B k4 (7 BCD blocks, 4 layers per block). Metric: mean of turn steps 2-3 over
+the 7 block positions (`scripts/profile_step_202.py`). Days = 925,000 x step.
+
+| date | issue | change | step (s) | same bits | days |
+|---|---|---|---:|---|---:|
+| 2026-11-14 | #202 | first k4 round | 12.60 -> 12.10 | yes | 134.9 -> 129.5 |
+| 2026-11-14 | #204 | frozen weights' fp8 codes made once per turn | 12.08 -> 11.79 | yes | 126.2 |
+| 2026-11-15 | #206 | scan launch widths | 11.797 -> 11.285 | yes | 120.8 |
+| 2026-11-15 | #207 | no-ckpt 1 default, fp8 bias folded into the next op | 11.285 -> 11.095 | yes | 118.8 |
+| 2026-11-16 | #210 | `--scan-kernel t` made the trainer default | 11.097 -> 9.890 | no (rounding level) | 105.9 |
+| 2026-11-17 | #213 | re-time of main 2845f80, no change | 9.865 (9.863 / 9.866) | - | 105.6 |
+
+- The 13-block numbers in older docs (13.294 s, 12.335 s with fp8, 132-211 days) are for the
+  old layout and older code. They are stale.
+- A whole run is a bit slower than this metric. #209's `t` runs averaged 10.32 s/step over 1800
+  steps. That includes each turn's slower first step (0.028 s/step averaged over the run,
+  `results/speed_hunt_213/long209_reanalysis.txt`), a held-out eval at every turn end, and 3
+  visits to the slow early blocks against 2 for the fast late ones.
+
+What each issue did (details in the entries below):
+- #207 (merged): bit-identical round 2. `--active-no-ckpt-layers 1` is the default, and the
+  bias add after each fp8 GEMM is folded into the op that reads it (`hvn/edge/fused_bias.py`,
+  `fp8_fused.py`, `hvn/core/deltanet.py`). Hashes equal 14/14.
+- #208/#209: `--scan-kernel t` keeps the scan state transposed, folds the checkpoint pass into
+  the recompute and runs the backward on 1 warp. It saves ~1.2 s/step. Its fp64 error is the
+  same as v1's. It is NOT bit-identical. Held-out loss at 1B over 1800 steps (2 seeds each):
+  5.21862 (t) vs 5.21976 (v1), lower at all 18 turn ends. So: not worse. The seed spread is tiny
+  (0.00045 at the end) because the seed only sets model init; the data order is pinned.
+- #208: `--fused-norm-residual` is opt-in. -0.051 s alone, only -0.041 s on top of `t`.
+- #210: `t` is the trainer default; `--scan-kernel v1` opts out. The library default
+  (`hvn.core.deltanet_triton.SCAN_KERNEL`) stays `v1`.
+- #211/#212: the slow embedding turns in #209 were Windows WDDM moving part of the trainer's
+  GPU memory to host RAM. The CUDA caching allocator kept reusing those slow blocks, so whole
+  turns ran 2.0-2.5x slower. `--bcd-switch-empty-cache` empties the cache at each BCD switch,
+  so a hit lasts at most one turn. On by default since #212; `--no-bcd-switch-empty-cache` opts
+  out. Cost +0.012 s/step, peak reserved 82.3% -> 83.8%.
+- #213 (!268, merged): in-trainer eval under `--offload` crashed. Fixed with
+  `EdgeHVN._forward_offload_inference`; `evaluate()` runs under `no_grad` and restores the RNG;
+  `--val-batches` (default 100). The eval matches the #209 harness bit for bit (64/64 windows),
+  takes ~38.2 s, costs +0.38 s/step at `--val-every 100` and +0.08 s/step at 500. Peak VRAM
+  max 84.9%, same as eval off. Training hashes are identical with eval on vs off (14/14 steps),
+  and the falsifier flips the hash. Use `--val-every 500`. Eval is off unless `--val-fraction`
+  is above 0.
+
+### #213 speed hunt: where the 9.87 s goes and what is left (`results/speed_hunt_213/`, local, not committed)
+Same harness, main 2845f80, all 7 positions.
+
+- Per position (s): 12.85, 12.37, 11.22, 9.87, 8.71, 7.49, 6.54 (embedding first). Peak 82.3%.
+- Share of the step (mean of 7 positions, `phases_default.txt`): backward with recompute 5.13 s
+  (52%), forward through the layers 3.05 s (31%), optimizer 0.46 s (4.6%), loss forward, glue
+  and loss recompute ~1.08 s (~11%), the rest under 1% each.
+- Dropping `--deterministic`: 9.869 s. No gain.
+- `--active-no-ckpt-layers 1,1,2,2,3,3`: 9.773 s (-0.09 s), peak 82.4% in this harness (no
+  eval). #202 measured this list at 84.0% peak, a thin margin under the 85% guard. It is
+  bit-identical, so it needs no loss A/B, but it saves under 0.1 s.
+- Muon with 3 Newton-Schulz steps instead of 5: `Muon.step` 0.514 -> 0.330 s alone
+  (`muon_ns.json`). Its output differs from the 5-step result by 64% (relative, synthetic
+  spectrum). Needs a loss A/B before use.
+- `alpha_proj` in fp8: a candidate. Not measured.
+- Held-out eval walked layer-major (each segment loaded once per 8 windows) vs window-major:
+  37.1 vs 45.6 s, bit-equal (3 of 3).
+- Verdict: no bit-identical change of 0.2 s/step or more found. The big parts are the
+  recompute and the frozen-layer forward, which #203 already found mostly inherent.
+
+### Still unmeasured
+- BCD quality cost at 1B and at full run length (a matched-size test, #214, is running; not
+  reported here). [2026-11-24: #214 has since reported at 208M, see its entry above; 1B is
+  still unmeasured.]
+- Whether `t`'s rounding matters over 925,000 steps (tested to 1800).
+- fp8 vs bf16 at full length (#197 saw no cost at 180 steps).
+- A copy_ cost in the profile that is not yet attributed to any one cause.
+- A real long run with eval on (the eval cost above is derived from 38.2 s per eval).
+
+### Known failing tests on main
+- `tests/test_fused_norm_residual.py::test_bcd_offload_trajectory_close_and_path_ran` fails
+  depending on test order. Reported by the #213 work; not re-run for this entry.
+- `tests/test_issue33.py` does not load (IndentationError).
+- `tests/test_checkpoint_crash_safety.py::test_evaluate_chunked_never_builds_full_logits` was
+  fixed by !268.
+
+## The trainer's `--val-every` eval now works under BCD `--offload`, and reports the #209 harness number bit for bit (2026-11-18, #213)
+
+**One line: the in-trainer held-out eval crashed on every 1B `--offload` run (`weight is on
+cpu`). Fixed. On the real 1B k4 run it scores the same 64 windows as the #209 harness with
+64/64 per-window losses bit-equal, takes 38.2 s per eval, and changes nothing about training:
+loss, gradient and RNG hashes identical at all 7 block positions, and every step's peak VRAM
+equal to an eval-off run (max 84.9%). Cost: +0.08 s/step at `--val-every 500` (0.7%), +0.38
+s/step at 100 (3.7%).**
+
+### Cause (measured, not read)
+- Repro on origin/main 4611a2f: 1B k4 PROD command, `--max-steps 3 --val-fraction 0.001
+  --val-every 1`. Step 1 trains, then `evaluate()` dies in `hvn/core/hvn_block.py` rms_norm of
+  `blocks.0`: `Expected all tensors to be on the same device, but got weight is on cpu`.
+- Why: `evaluate()` calls `model.eval()`. `EdgeHVN.forward` streams CPU-parked frozen layers only
+  when `self.training and torch.is_grad_enabled()`, so in eval mode it took the plain path and
+  ran frozen layers whose weights live in host RAM. The #209 harness worked because it does its
+  own walk: `pool.load(segment)`, run it, `pool.evict(segment)`, for every non-active segment.
+- Two smaller bugs in the same function, found on the way:
+  - No `torch.no_grad()`. Eval built an autograd graph, took the chunked loss's grad-carrying
+    path, and ran fp8 Linears in fp8 (the docs say eval is bf16). This is why
+    `tests/test_checkpoint_crash_safety.py::test_evaluate_chunked_never_builds_full_logits`
+    failed on main (the "chunked" eval kept 330 MB, more than one full logit tensor). It passes
+    now. So yes, that known failure was this eval path.
+  - `iter(val_loader)` draws a worker base seed from the global CPU RNG even with
+    `num_workers=0`. Every eval moved the RNG the run (and its #174 checkpoints) carries. On a
+    dropout model through the real `train()` this changed the final weights (new CPU test fails
+    on main).
+
+### Fix
+- `EdgeHVN._forward_offload_inference` (hvn/edge/model.py): any forward of an offloaded model
+  outside training streams each frozen segment through the pool: load, run, evict, prefetch the
+  next (the training forward's order for a block with no recompute coming). It streams the real
+  bf16 weights (not the #204 fp8 codes) and drops a frozen TernaryLinear's #131 inference cache
+  right after use (that cache is a GPU copy of the weight being evicted; kept, it rebuilds ~2 GB
+  of the model on the card during one eval; this is what the #209 harness did). With
+  `return_hidden` the tail stays resident for the caller's projection;
+  `release_offload_tail()` evicts it. With grad enabled it refuses with a clear message.
+- `evaluate()`: runs under `torch.no_grad()` and `torch.random.fork_rng`; calls
+  `release_offload_tail()` after each batch's loss. New `--val-batches N` (default 100, the old
+  fixed cap); 64 at batch size 1 = the harness's 64 windows.
+- Memory: after an eval that ran right after a BCD switch (the switch had just emptied the
+  cache, #212 default), the trainer empties it again; mid-turn it does not. Both halves measured:
+  - no empty at all: eval at each switch, the turn's 2nd step peaked 87.1% (eval off 83.3%), and
+    at the 6th turn 78.7% (76.3%). The eval left nothing allocated (allocated bytes and pool
+    buffers equal before/after), so this was cache layout, not a leak.
+  - empty after every eval: the step after a mid-turn eval peaked 97.0% (eval off 82.6%).
+  - the rule above: equal to eval off at every step, both with eval at each switch (16 steps)
+    and eval after every step (14 steps).
+- Defaults unchanged: `--val-every` default is still the checkpoint interval
+  (`--save-every-steps`, 500), and no eval runs unless `--val-fraction` > 0 (default 0).
+
+### Measured on the real 1B k4 run (scripts/eval_offload_213.py, results/eval_offload_213/)
+PROD_ARGV + `--grad-accum 8 --bcd-layers-per-block 4 --deterministic`, `--bcd-steps-per-block 2`
+so 14 steps visit all 7 block positions twice, `--warmup-steps 0` and a 2800-step schedule so
+every step runs at the full LR (Muon 0.02).
+- Same number as the harness: after step 14, trainer eval and the #209 walk on the same 64
+  windows at the same state: 64/64 per-window losses bit-equal (max|d| 0). Means 9.225389
+  (trainer, fp32 GPU sum) vs 9.225388 (harness, Python float sum). Harness walk: 48.4 s.
+- Training unchanged: eval after EVERY step vs eval off, 14/14 steps identical sha256 of
+  per-micro-batch losses, active-block gradients (all nonzero) and CPU+CUDA RNG state. Also 16/16
+  with eval at each switch.
+- Falsifier (eval with the RNG restore disabled, plus +1e-3 on one optimizer-state element after
+  each eval): RNG hash differs from step 2, loss and gradient hashes from step 3. So the check
+  sees both kinds of side effect. (This arm ran on the build that emptied the cache after every
+  eval; that changes memory only.)
+- Eval time: 38.2 s per eval (37.6-38.6, 14 evals, 64 windows). The step after an eval is
+  +0.03 s slower on average. Per-step cost: 0.38 s at `--val-every 100` (3.7% of the 10.4 s mean
+  step in this run), 0.076 s at 500 (0.7%). Derived from these numbers, not from a 500-step run.
+- Peak reserved during an eval (reset at eval start): 82.6% after the first step (the training
+  cache it reuses), 26-47% right after a switch, 64-77% mid-turn. Never above the step before it.
+- Peak reserved per position, eval every step (= eval off, each): token_embedding 82.6/82.6,
+  blocks 0-3 76.7/83.3, 4-7 74.2/84.9, 8-11 71.4/82.9, 12-15 69.3/80.0, 16-19 67.2/76.3, 20-23
+  63.8/74.6 (1st/2nd step of the turn); 2nd token_embedding turn 84.2/84.2 (16-step run).
+
+### Tests (tests/test_trainer_eval_offload.py, 14 tests, each with a partner that can fail)
+- `test_offloaded_eval_runs_and_matches_harness_and_resident_copy`: per-window losses equal the
+  harness walk and a plain GPU-resident copy of the same weights, bit for bit. Fails on main with
+  the same `weight is on cpu` crash. Partner `test_resident_copy_check_can_fail` (one frozen
+  weight x1.01 in the copy breaks equality).
+- `test_eval_leaves_weights_parked_and_pool_empty`, `test_offloaded_forward_with_grad_on_refuses_clearly`.
+- Real `train()` on a tiny offloaded model with dropout: `test_eval_every_step_leaves_training_bits_unchanged`,
+  with `test_runs_are_not_vacuous` (all 6 blocks x 2 steps, LR > 0, nonzero grads),
+  `test_determinism_control` (eval-off twice), and falsifiers
+  `test_hash_catches_eval_that_moves_the_rng` and `test_hash_catches_eval_that_touches_optimizer_state`.
+- `test_cache_emptied_after_eval_only_at_a_switch`: flipping the condition makes it fail (checked).
+- CPU, real `train()`: `test_cpu_eval_every_step_leaves_weights_unchanged` fails on main (RNG);
+  partner `test_cpu_check_can_fail`; `test_cpu_resume_with_eval_on_matches_uninterrupted` (kill
+  inside step 8, resume from step 5, bit-identical end).
+- `test_defaults_unchanged`.
+- On origin/main code: 8 failed + 3 errors of the then-13 tests (the crash, the RNG test, the
+  defaults test); with the fix all pass.
+- Full suite (tests/, minus test_issue33.py which does not load), same machine, back to back:
+  origin/main 14 failed + 6 errors; this branch 13 failed + 6 errors, the same set minus
+  `test_evaluate_chunked_never_builds_full_logits`. No new failure. The new GPU tests set
+  `max_vram_pct: 0`: the trainer's 85% guard reads the process-wide peak, which earlier tests
+  in a full run had already raised (first full run tripped it).
+
+### Not measured
+- A real 100- or 500-step run with eval on (cost is derived from 38.2 s per eval).
+- Eval with `--no-bcd-switch-empty-cache` (then nothing is emptied after an eval).
+- A resume of the 1B run with eval on (resume is tested on the CPU toy only).
+- Batch size above 1 for the val loader, and models without tied embeddings under offload.
+
+## `--bcd-switch-empty-cache` is now ON by default; `--no-bcd-switch-empty-cache` turns it off (2026-11-17, #212)
+
+**One line: every BCD run now empties the CUDA cache at each block switch, so a WDDM spill
+(the #211 slow turns) lasts at most one turn instead of the rest of the run. No new
+measurement: the cost is the #211 number, +0.012 s/step at 1B k4 (9.898 -> 9.910 s), peak
+reserved 82.3% -> 83.8% (still under the 85% abort), same bits.**
+
+- Change: the flag's parser default is `True`. The old `--bcd-switch-empty-cache` still parses
+  (now a no-op), and `--no-bcd-switch-empty-cache` is the opt-out. The `train()` fallback for a
+  config without the key is also `True`. The startup banner now prints
+  `Empty CUDA cache at each BCD switch: ON/OFF` under the BCD line, so a log shows which ran.
+- Non-BCD runs are unaffected: the call only happens on a block switch.
+- Tests: `tests/test_bcd_switch_empty_cache_211.py`. The default parses to on, the opt-out to
+  off. With the DEFAULT parsed args (turned into the flag the way `main()` does) the cache is
+  emptied once per switch and reserved drops by >= 64 MiB each time; with the opt-out there is
+  no call and no drop. Must-fail partner: setting the parser default back to `False` made the
+  default-parse test and the default-release test fail (2 failed, 4 passed); restored after.
+
+## Slow embedding turns in #209 = WDDM moved part of the trainer's GPU memory to host RAM; our cache kept it there. `--bcd-switch-empty-cache` (opt-in) recovers at the next switch (2026-11-16, #211)
+
+**One line: the 1-2 s/step slow turns were not our math. Part of the trainer's GPU memory sat in
+host RAM (WDDM), and the CUDA caching allocator kept reusing it, so the whole turn was slow. The
+trainer runs at the driver's memory limit (`cudaMemGetInfo` free = 0 in most turns), so any
+extra VRAM demand can do this. Reproduced on demand: 900 MiB taken by another process for 200 s
+left the rest of a 14-turn run 2.0-2.5x slower after that process was gone. With the new opt-in
+`--bcd-switch-empty-cache` the same run was back to normal from the next switch. Same bits;
+cost +0.012 s/step; peak reserved 82.3% -> 83.8%. What took VRAM during #209 is not known (no counters were logged then).
+`t` was not immune: under the same squeeze a t run went 2.1x slower. In #209 it was not hit.**
+
+### What the #209 data already showed
+- Slow turns: def_s0 turn 15 (16.97 s), def_s1 turns 8 (16.42) and 15 (15.95); normal 14.93-14.95.
+  Turn 1 never slow (4/4); t never slow (0/6). Each slow turn is slow at a FIXED level for all
+  100 steps (p10-p90 within 0.1 s), and starts at the turn boundary.
+- Same memory in slow and normal turns: peak reserved 5150-5152 MiB in every v1 repeat embedding
+  turn. t held 4528 MiB in the same turns (624 MiB less).
+- The eval right after a slow turn was slow too (147 s and 111.5 s vs 47 s normal): the whole GPU
+  was slow, not one op. The harness empties the cache after each eval, and the next turn was
+  normal again.
+- t runs had slow evals too (74.8 s at step 1200, 58.3 s at 600): the pressure came during t
+  runs as well, but t's training turns stayed normal.
+- #200 (older code; its harness emptied the cache only at evals, every 100 steps): the
+  embedding turns that started without an emptied cache were slow (+0.9 to +1.1 s), with
+  reserved 6.1-6.6 GiB, above the card; the ones right after an eval were +0.0 to +0.3 s.
+- No relevant System event log entries at the slow-turn times.
+
+### Measurements (all 1B k4 production settings, `results/embed_turn_211/`)
+Monitor: `scripts/gpu_mem_monitor_211.ps1` (Windows counters every 5 s: per-process GPU
+dedicated / shared memory, host available RAM, hard page faults).
+
+| test | what it could show | result |
+|---|---|---|
+| host-RAM squeeze, 4000 MiB held and touched (host free 211-256 MiB), v1 | host paging causes it | no: embedding turn -0.13 s, all turns within 0.13 s |
+| idle 900 MiB VRAM taken by another process, v1 | outside VRAM use causes it | WDDM pushed the idle process out instead; trainer +0.1 s |
+| same 900 MiB, t | t is immune | no: trainer lost ~380 MiB of dedicated memory (shared 222 -> 606 MiB), 9.90 -> 21.26 s/step mean, blocks.0 turn 36 s |
+| #209 harness, 10 steps/turn, v1, nothing else running (2 repeat embedding turns) | our code alone triggers it | no: 14.95 / 14.96 s, shared memory flat at 222 MiB |
+| 900 MiB (kept in use) for the first 200 s, t, no fix | it ends by itself | no: turns 3-14 at 2.0-2.5x (blocks.4 27.8 vs 11.75 s) long after the 900 MiB was gone |
+| same, with `--bcd-switch-empty-cache` | the fix ends it | yes: blocks.4 11.22 s from the first full turn after; 2nd rotation within 0.05 s of normal |
+
+The driver's free memory (`torch.cuda.mem_get_info`) logged per step: 0 MiB in the embedding,
+blocks.0 and blocks.4 turns of every run, in both the production pattern and the #209 pattern.
+
+### The fix: `--bcd-switch-empty-cache` (opt-in)
+`train_edge_conversational.bcd_step()` empties the CUDA cache when a BCD switch happens. Blocks
+that WDDM put in host RAM are freed, and the next allocations come back in VRAM if there is
+room. Memory placement only.
+- Bits: `profile_step_202.py --hash` (sha of every micro-batch loss and the active block's
+  gradients, 42 steps, 14 turns), flag on vs off: all equal. The hash's one-ulp falsifier is
+  #202's (`--perturb-ulp`).
+- Cost with nothing else on the GPU (2 rotations, 14 turns per run, mean of turn steps 2-3):
+
+| run | 14-turn mean s/step | peak reserved |
+|---|---:|---:|
+| e4_off_1 | 9.898 | 82.3% |
+| e4_on_1 | 9.909 | 83.8% |
+| e4_off_2 | 9.898 | 82.3% |
+| e4_on_2 | 9.911 | 83.8% |
+| e3_base (off, --hash) | 10.391 | 82.3% |
+| e3_fix_nob (on, --hash) | 10.403 | 83.8% |
+
+Flag off 9.898 s, on 9.910 s: +0.012 s/step (without --hash runs).
+
+  Peak reserved goes UP with the flag, 82.3% -> 83.8%: the cache is rebuilt each turn and one
+  turn (blocks.4) lands about 100 MiB higher. Still under the 85% guard, but less margin.
+- Tests: `tests/test_bcd_switch_empty_cache_211.py` -- same losses and gradients (torch.equal)
+  with and without the flag over 8 steps / 4 switches; with the flag, empty_cache runs once per
+  switch and a freed 64 MiB cached block is released at each switch. Must-fail partner: without
+  the flag, no call and no release. One-ulp sensitivity of the equality check. Flag off by
+  default, parses on.
+
+### What this means for other turns and the 925,000-step run
+- Any turn can be hit: under the squeeze every turn slowed (up to 3x), not just the embedding.
+- The real run is MORE exposed than #209: the trainer never empties the cache, so one squeeze
+  (a browser on the NVIDIA GPU, a game, a video call) slows every turn after it until restart.
+  Recommended for the long run: `--bcd-switch-empty-cache` (bounds a hit to one turn).
+- Outside the repo (not applied): keep other apps off the NVIDIA GPU during runs (Windows
+  Settings > Graphics: browsers and Phone Link on the power-saving GPU); optionally NVIDIA
+  Control Panel "CUDA - Sysmem Fallback Policy: Prefer No Sysmem Fallback" for python.exe
+  (not measured here).
+
+Not measured: what took VRAM during #209; whether the fallback policy setting changes any of
+this; the fix in a run longer than 14 turns; a v1 run under the active squeeze.
+## `--scan-kernel t` is the training default: 1B k4 step 11.097 -> 9.890 s (2026-11-16, #210)
+
+**One line: the trainer now runs the `t` scan kernels unless told `--scan-kernel v1`. Re-timed
+at 1B k4: 9.890 s/step by default vs 11.097 s with the v1 opt-out, peak reserved 82.3% in both.
+Basis: #208 (-1.20 s, same fp64 error) and #209 (1800 steps x 2 seeds, held-out 5.21862 vs
+5.21976, lower at all 18 turn ends). Library default (`hvn.core.deltanet_triton.SCAN_KERNEL`)
+stays `v1`; only the trainer flag changed.**
+
+Method: `scripts/profile_step_202.py` (1B k4 production settings, 3 steps per turn, mean of turn
+steps 2-3 over the 7 block positions, arms alternated, 3 repeats each),
+`results/scan_default_210/` (`run_timing.sh`, `time_*.jsonl`, logs). Each run's log prints the
+kernel it used (`[scan] kernel t` with no flag, `[scan] kernel v1` with the opt-out).
+
+| arm | repeat 1 | repeat 2 | repeat 3 | mean | spread | peak reserved |
+|---|---:|---:|---:|---:|---:|---:|
+| default (now `t`) | 9.899 | 9.880 | 9.890 | **9.890** | 0.019 | 82.3% |
+| `--scan-kernel v1` | 11.094 | 11.094 | 11.103 | **11.097** | 0.010 | 82.3% |
+
+The task asked to confirm "~10.3 s": that figure is the #209 whole-run average (10.317 s/step,
+including the slow first step of each process). The per-turn metric used by #202-#208 is the
+one above; it matches #208's 9.880 s.
+Projected full run (925,000 steps x step): default 9.890 s -> 105.9 days; v1 11.097 s -> 118.8 days.
+
+Tests (`tests/test_scan_default_210.py`): the real parser (`build_arg_parser()`, split out of
+`main()`) defaults to `t`; `--scan-kernel v1` parses to `v1`; an unknown name is refused. A
+real checkpointed `DeltaNetBlock` at d_head 32, set up by `apply_scan_kernel_args()` exactly as
+`main()` does, raises `SCAN_T_STATS["fused_ckpt"]` and calls only the t autograd Function.
+Must-fail partner: the same block under `--scan-kernel v1` leaves `fused_ckpt` unchanged and
+calls only the v1 Function. Flipping the parser default back to `v1` fails 2 of the 5 tests
+(checked). The first draft of the test built the block without `use_triton_scan`, so neither
+kernel ran; both tests failed on it (the partner because no v1 call was counted), which is the
+point of counting calls rather than only asserting fused_ckpt stays 0.
+
+Resume note: a checkpoint saved before #210 resumes under `t` unless `--scan-kernel v1` is
+passed. Same model, rounding-level different bits from then on.
+## `--scan-kernel t` at the real turn length (100 steps per block, 1800 steps): not worse, slightly lower loss; -1.42 s/step (2026-11-16, #209)
+
+**One line: over 18 full-length turns at 1B k4, `--scan-kernel t` ends with held-out loss
+0.0012 LOWER than the defaults (mean of 2 seeds: 5.21862 vs 5.21976), and lower at all 18
+turn ends. It is not worse. The fixed rule ("within the default's own seed spread") is NOT
+met, but only because t is better by more than that spread, which shrank to 0.00045 by the
+end. Step time 11.74 -> 10.32 s (-1.42 s, -12%). Nothing was made default; maintainer call.**
+
+Method: `scripts/ab_heldout_209.py` (the #208 harness + auto-resume, `--stop-at`, wall time),
+`scripts/analyze_long_ab_209.py`, chain `results/long_ab_209/run_chain.sh`, results in
+`results/long_ab_209/` (`summary.txt`, `ab/`). About 23.6 h of GPU for the 4 main runs.
+
+Setup: the `PROD_ARGV` k4 production run (fp8, offload, Muon, grad_accum 8, `--deterministic`),
+100 steps per BCD block (the real recipe), 1800 steps = 18 turns (blocks 0-3 seen 3 times,
+4-6 twice), warmup 180, cosine to 0 at 1800. Asked for 2000 steps; cut to 1800 before launch
+because the #208 per-block step times put 4 x 2000 steps at ~25.2 h of the 26 h budget. Seed =
+model init only; data order pinned (shuffle seed 0); 64 fixed held-out windows after step 1
+and every turn end (one target sha in all runs). Order def s0, t s0, def s1, t s1. No run
+crashed or resumed. Resume was checked first: an 8-step run stopped at step 5 and resumed from
+its step-4 checkpoint matched a straight run bit for bit (train loss steps 5-8, held-out at 5, 8).
+
+| arm | seed | final held-out (step 1800) | mean of last 5 turn ends | s/step (mean, whole run) | wall | peak VRAM train / eval |
+|---|---:|---:|---:|---:|---:|---:|
+| default (v1) | 0 | 5.21954 | 5.26733 | 11.728 | 6.13 h | 84.8% / 84.8% |
+| `--scan-kernel t` | 0 | 5.21900 | 5.26660 | 10.317 | 5.40 h | 84.8% / 84.8% |
+| default (v1) | 1 | 5.21999 | 5.26718 | 11.748 | 6.14 h | 84.8% / 84.8% |
+| `--scan-kernel t` | 1 | 5.21824 | 5.26604 | 10.324 | 5.39 h | 84.8% / 84.8% |
+
+- Default seed spread: 0.00045 (final), 0.00016 (last-5 mean). t seed spread: 0.00076, 0.00056.
+- t - default: final -0.00115 (per seed -0.00054, -0.00175); last-5 mean -0.00093
+  (-0.00073, -0.00113). Per-window paired at step 1800: -0.00054 +- 0.00151 sem (s0),
+  -0.00175 +- 0.00139 (s1), so each seed alone is inside window noise.
+- Curve: both arms fall the same way (8.88 at turn 1, 6.50 at 3, 5.71 at 8, 5.39 at 12,
+  5.22 at 18; the big drop at step 800 is the second visit to the embedding block). t sits
+  0.0001-0.003 below the default at every turn end from 100 to 1800 (18 of 18). The seed
+  spread starts at 0.047 (step 100) and shrinks to ~0.001 by step 1200: the seeds converge
+  faster than the arms separate, which is why a 0.001 gap ends up "outside the spread".
+- Peak VRAM per turn is the same as #208: 84.8% max (blocks 4-7 turn), under the 85% guard.
+  Eval peak = train peak.
+- Step time per block (median over both seeds, s): embedding 15.0 -> 13.1, blocks 0-3
+  14.21 -> 12.40, 4-7 12.74 -> 11.24, 8-11 11.16 -> 9.89, 12-15 9.68 -> 8.73, 16-19 8.16 -> 7.51,
+  20-23 6.95 -> 6.54. The 1800-step mean is higher than the #208 7-block mean (11.08 / 9.88)
+  only because the slow early blocks get 3 turns and the fast late ones 2.
+
+Open, not explained: in the DEFAULT arm 3 of 6 embedding turns ran slower for the whole
+turn (def s0 turn 15: 16.97 s; def s1 turns 8 and 15: 16.42, 15.95; normal 14.95). Flat for
+the 100 steps, GPU at full clocks and 97% busy, nothing else on the GPU. The t arm never
+did it (13.09-13.14 in all 6). It adds ~0.1 s to the default's whole-run mean, so the clean
+saving is ~1.31 s (per-block medians: 11.24 -> 9.91 mean over the 7 blocks). Needs a debugger pass.
+
+Not measured: 2000 steps (cut to 1800); more than 2 seeds; any run longer than ~2.6 passes;
+downstream/probe quality; whether t's consistent ~0.001 edge is "better" or just "different"
+(the #208 zero-gradient falsifier also LOWERED loss, so lower is not proof of correct).
+
+Falsifier (fits in budget, re-run): `--scan-kernel t` with the scan backward returning ZERO
+gradients (49,600 broken backward calls), seed 0, 300 steps of the same 1800-step schedule.
+Held-out vs def s0: step 100 -0.896, step 200 -0.095, step 300 -0.104, against a default seed
+spread of 0.047 / 0.015 / 0.013. So this harness flags a scan-gradient bug at 8x the spread
+within 3 turns. As in #208 it flags it in the DOWN direction: killing the scan's gradient makes
+held-out loss fall faster early (the embedding turn most of all). That is why "t is 0.001 lower"
+is reported as "not worse", not as "better": a lower number here does not prove a correct
+gradient. t's fp64 error is the same as v1's (#208), and its gap is ~100x smaller than the
+falsifier's. Why the zero-gradient run learns faster early is itself unexplained and worth a look.
+
+## 1B k4 step 11.08 -> 9.88 s (-10.8%) with `--scan-kernel t`, held-out loss unchanged at 1B; residual-grad fold -0.05 s; chunked scan dead (2026-11-15, #208)
+
+**One line: `--scan-kernel t` passes every check and is recommended as a future default;
+nothing was made default. (1) `--scan-kernel t` (#206): step 11.082 -> 9.880 s (-1.20 s). In a 1B
+held-out loss A/B (2 seeds, 140 steps, two full passes over the 7 BCD blocks) it lands
++0.0002 nats from the defaults, inside the defaults' own seed spread (0.0028). (2) New
+`--fused-norm-residual`: the residual gradient is added inside the RMSNorm backward kernel
+instead of by a separate autograd add: 11.089 -> 11.038 s (-0.051 s), held-out -0.0001 from
+the defaults. Both together: 9.835 s (-1.247 s); on top of `t` the fold saves only 0.041 s, under the 0.05 s bar. A chunked scan (chunk 16/32) cannot win: even
+a lower bound that skips its triangular solve is 1.6x slower than `t`'s forward. A
+deliberately broken scan backward (zero gradients) moved held-out loss by -0.030, 10x the
+seed spread, so the A/B can see a scan bug, but note it moved DOWN (see below).**
+
+Method: `scripts/profile_step_202.py` (1B k4, 3 steps per turn, mean of turn steps 2-3 over the
+7 block positions, arms alternated, 3 repeats each), `scripts/ab_heldout_208.py` (held-out A/B),
+`scripts/scan_chunk_208.py`, `scripts/bench_norm_res_208.py`, `scripts/analyze_round3_208.py`,
+`scripts/scan_study2_206.py` (fp64), `results/round3_208/` (chains 1-5). Code:
+`hvn/core/fused_norm_residual.py`, `hvn/core/deltanet.py`, trainer flag `--fused-norm-residual`.
+About 4.7 h of GPU.
+
+| change | expected (s/step) | measured (s/step) | fp64 error vs current | held-out A/B (mean of 2 seeds, step 140) | VRAM peak | verdict |
+|---|---:|---:|---|---|---:|---|
+| `--scan-kernel t` | -1.21 (#206) | **-1.202** (11.082 -> 9.880; spreads 0.014 / 0.008) | same size: o 1.16e-7 vs 1.16e-7, grads 1.18-1.63e-7 vs 1.16-1.61e-7 | 7.09381 vs 7.09361 (+0.0002) | 82.3% timing / 84.5% A/B incl. eval | within spread: recommend as default (maintainer call) |
+| chunked scan, chunk 16 / 32 | needs >= 0.05 | not built: forward alone 6.70 / 12.60 ms vs t 3.56 | 1.5e-7 / 1.6e-7 (forward) | not run | - | dead |
+| `--fused-norm-residual` | -0.057 (kernel bench) | **-0.051** (11.089 -> 11.038; spreads 0.002 / 0.004) | dx 3.17e-8 vs ATen 3.18e-8; dw 1.31e-7 vs 1.06e-7 | 7.09351 vs 7.09361 (-0.0001) | 82.3% / 84.5% | passes alone; on top of `t` only -0.041 (under the bar): stays opt-in |
+| t + fused-norm-residual | -1.25 (sum) | **9.835** (t alone 9.876 in the same chain: fold adds -0.041; spreads 0.006 / 0.001) | - | not run as a pair | 82.3% | see below |
+
+### Held-out loss A/B at 1B (the decision test)
+
+Same `PROD_ARGV` k4 run as production (fp8, offload, Muon, grad_accum 8, `--deterministic`),
+except: 10 steps per block instead of 100, 140 steps (2 full passes over the 7 blocks), warmup
+14, cosine to 0 at 140. 4 runs at 100 steps per block would be ~17 h, over the 6 h budget.
+Seed = model init; data order pinned (shuffle seed 0) in every run; 64 fixed held-out windows
+(262,144 tokens, token-disjoint FineWeb-Edu split), one target sha across all runs.
+
+| arm | step 1 | step 70 | step 140 |
+|---|---:|---:|---:|
+| default, seed 0 | 11.23556 | 8.02395 | 7.09500 |
+| default, seed 1 | 11.22262 | 8.02133 | 7.09222 |
+| t, seed 0 | 11.23558 | 8.02893 | 7.09793 |
+| t, seed 1 | 11.22262 | 8.01879 | 7.08968 |
+| fused-norm-residual, seed 0 | 11.23556 | 8.02732 | 7.09558 |
+| fused-norm-residual, seed 1 | 11.22262 | 8.01903 | 7.09145 |
+| falsifier: t with zero scan gradients, seed 0 | 11.23558 | 7.80884 | 7.06467 |
+
+Decision rule (fixed before the runs): recommend as a future default only if the arm's mean is
+within the defaults' seed spread (|7.09500 - 7.09222| = 0.00278).
+- t - default: +0.00020 (paired per seed +0.0029, -0.0025; per-window sem ~0.0012). Within.
+- fused-norm-residual - default: -0.00010 (paired +0.0006, -0.0008). Within.
+- falsifier - default: -0.0303 (per-window sem 0.0024, 12 sem). Outside: flagged. Its broken
+  backward ran 15,840 times.
+
+Read this carefully: the broken arm is BETTER on held-out at 140 steps. Zeroing the scan's input
+gradients freezes the DeltaNet q/k/v/decay projections, and this early that helps the loss. So
+this short A/B can see a scan change but cannot say which direction is "harm"; it only bounds
+how far each flag moves the loss. Both flags move it 10x less than the falsifier and less than
+the seed spread. A cost that only shows after many 100-step turns is outside what it can see.
+
+### Chunked scan, chunk 16 and 32 (measured, not built)
+
+`scripts/scan_chunk_208.py`, real per-layer shape (64 heads, d_head 32, seq 4096). Current
+kernels through the production autograd path: forward only (frozen-before layer) v1 4.70 ms,
+t 3.56 ms; checkpointed forward + backward v1 29.1 ms, t 17.0 ms. The repo's chunk-parallel
+forward (#96 Design A), inputs pre-staged in its favour:
+
+| chunk | BV 8 | BV 16 | BV 32 | BV 32, solve skipped (lower bound) |
+|---|---:|---:|---:|---:|
+| 16 | 14.47 | 10.02 | 6.70 | 5.69 |
+| 32 | 24.01 | 15.76 | 12.60 | 7.35 |
+
+A chunked layer needs 2 forwards + a backward no cheaper than a forward, so with the bound
+5.69 ms the best possible saving vs `t` is -0.15 s per step (a loss). Against v1 it could only
+win if the chunked backward were as fast as its forward (fla's measured 2.5x, #206), and `t`
+already takes that saving. Falsifier for the bench: the real chunked output matches fp64
+(1.5e-7), the solve-skipped one does not (0.20), so the solve really ran and was really skipped.
+
+### Leftover autograd costs (profiled, one built)
+
+`prof_ops.jsonl` (CPU + CUDA profile with shapes, last step of each turn): the fp32 `add_` on
+[1, 4096, 2048] is 0.225 s per step. It is autograd summing x's two gradients in each DeltaNet
+block (residual path + RMSNorm path). `--fused-norm-residual` routes the residual through the
+norm Function (`x_link`), so one kernel writes `norm_bwd + g`: 1.50 -> 0.74 ms per active-layer
+backward, 1.13 -> 0.73 ms per frozen one (kernel bench), -0.051 s measured on the step. Other
+items: `copy_ [4096, 2048]` 0.35 s (activation casts; split between the fp8 Linear's
+`dx.to(fp32)` and others, not attributed further), `aten::add [1, 4096, 2048]` 0.12 s (x_norm's
+two gradients, conv + FFN), AccumulateGrad 0.07 s. `copy_ [2048, 2048]` 1.0 s is the offload
+weight streaming (copy engine, overlapped, #200), not compute. Not chased.
+
+Checks, and that they could fail:
+- `tests/test_fused_norm_residual.py` (7): forward == `F.rms_norm` bit for bit; dx/dw error vs
+  fp64 within 4x ATen's; block and checkpointed block grads match the default path to 1e-5 with
+  the fused backward counted and the residual attached; BCD + offload + no-ckpt trajectory; flag
+  default off. Must-fail partners that do fail: residual dropped, weight off by 2^-10, residual
+  link detached.
+- 1B runs: fused backward ran 2,376 times per timing run and 15,840 per A/B run, residual
+  attached every time (`bwd_no_res` 0). t: fused checkpoint 14,880 times per A/B run.
+
+Projected full run (925,000 steps, measured step x steps): defaults 11.082 s -> 118.6 days;
+`--scan-kernel t` 9.880 s -> 105.8 days; both flags 9.835 s -> 105.3 days (-13.3 days vs defaults).
+
+Not measured: a long run (hours or 100-step turns) with either flag; loss A/B past 140 steps or
+with more than 2 seeds; the two flags together in a loss A/B; the cast copies' exact sources;
+fp32 `dx` straight from the fp8 dW/dX GEMMs (would drop a cast); bf16 gradient accumulation.
+Chain 3's first launch lost its fnr runs to an argparse quirk (`--extra "--flag"`), relaunched;
+see `run_chain3.sh`.
+
+## 1B k4 step 11.29 -> 11.10 s (-1.7%) with the same bits: fp8 bias folded into the next op; no-ckpt 1 is now the default (2026-11-15, #207)
+
+**One line: two bit-identical changes are now on by default. (1) `--active-no-ckpt-layers 1`
+is the trainer default (0 opts out): 11.400 -> 11.288 s per step. (2) The bias add after each
+fp8 GEMM is folded into the op that reads it (SiLU gate, GELU, residual sum): 11.288 ->
+11.095 s. Together 11.400 -> 11.095 s (-2.7%) against the old trainer defaults, and 11.285 ->
+11.095 s (-1.7%) against #206's number. Loss, active-block gradients and held-out loss equal
+14/14. Peak VRAM 82.3% with held-out eval at every turn (was 83.7%). The card is not
+throttled in any way software can fix. Batching Muon is not faster. A faster stand-alone
+bias-add kernel and amax-in-producer were built and measured, and both missed the 0.05 s bar.**
+
+Method: `scripts/profile_step_202.py` (1B k4, 3 steps per turn, mean of turn steps 2-3 over
+the 7 positions), arms interleaved A0, A1, A2, A3, A4 per repeat. `scripts/analyze_round2_207.py`,
+`scripts/bench_fused_bias_207.py`, `scripts/muon_batch_207.py`, `scripts/clock_ceiling_207.py`,
+`results/round2_207/` (chains 0-4). Code: `hvn/edge/fused_bias.py`, `fp8_fused.py`
+(`fp8_linear_parts`), `hvn/core/deltanet.py`.
+
+| step | change | expected | measured (s/step) | same bits | kept |
+|---|---|---:|---:|---|---|
+| 1 | no-ckpt 1 default (A0 -> A1) | -0.117 (#202) | **-0.112** (11.400 -> 11.288) | 14/14 | yes, default |
+| 2 | 2-D Triton bias add + skip the add on skipped GEMMs (A1 -> A2) | -0.08 (#202) | -0.011 (11.277) | 14/14 | under bar; its kernel stays inside (3) |
+| 3a | bias folded into SiLU / GELU / residual (A2 -> A3) | -0.19 (kernel bench) | **-0.182** (11.095) | 14/14 | yes, default (`--fp8-bias fused`) |
+| 3b | + fused kernels hand their amax to the fp8 quantizer (A3 -> A4) | -0.08 to -0.11 | -0.040 (11.055) | 14/14 | no: opt-in `--fused-bias-amax` |
+| 5 | Muon NS batched over same-shape matrices | ~0 | +0.028 (slower) | 2048x2048 and FFN yes, 64x2048 no | no |
+
+Step time per position (s), mean of repeats:
+
+| arm | emb | 0-3 | 4-7 | 8-11 | 12-15 | 16-19 | 20-23+tail | mean | repeats, spread |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| A0 no-ckpt 0, bias off | 14.97 | 14.56 | 13.08 | 11.49 | 10.00 | 8.45 | 7.25 | 11.400 | 2 clean (see below) |
+| A1 bias off (= main + flag) | 14.96 | 14.43 | 12.95 | 11.36 | 9.87 | 8.32 | 7.12 | 11.288 | 3, 0.004 |
+| A2 add kernel | 14.94 | 14.41 | 12.97 | 11.34 | 9.85 | 8.32 | 7.10 | 11.277 | 3, 0.010 |
+| **A3 fused (shipped)** | 14.72 | 14.20 | 12.77 | 11.16 | 9.69 | 8.16 | 6.96 | **11.095** | 3, 0.013 |
+| A4 fused + amax | 14.67 | 14.15 | 12.73 | 11.12 | 9.65 | 8.14 | 6.95 | 11.055 | 6, 0.009 |
+
+A0 repeat 2 had one stall: the embedding turn's steps 2-3 took 19.9 and 38.1 s (GPU time
+too), the other six positions matched repeats 1 and 3 to 0.01 s. Its mean was 13.409; the A0
+row uses repeats 1 and 3. Cause not found. It is a baseline arm, not shipped.
+
+Why step 2 missed: the eager bias add was not slow. At the real shapes it runs at 165 GB/s
+(0.20 ms for 4096x2048), the same as the Triton kernel. #202's "slow broadcast kernel" was
+just bytes. The saving comes from not writing and re-reading `y + b`: per DeltaNet layer
+forward, gate 0.39 -> 0.21 ms, GELU 0.80 -> 0.43 ms, residual 0.81 -> 0.61 ms
+(`bench_fused_bias.json`).
+
+How it stays bit-identical:
+- Each kernel rounds `y + b` to bf16 in registers, exactly as the separate add did, then
+  applies the consumer. SiLU is computed (libdevice `expf`, IEEE divide): equal to ATen for
+  all 65,536 bf16 inputs, forward and backward.
+- GELU could not be computed: Triton's libdevice `erff` differs from the one PyTorch is built
+  with in the last bit for 11 bf16 inputs (all below -3). So GELU is a 65,536-entry table made
+  by ATen's own `F.gelu`. The backward factor `cdf + x*pdf` is a second table (fp32, ATen's
+  `gelu_backward` with dy = 1), times dy. Checked over every bf16 x and 20 scales of dy.
+- Bias gradient: `grad.sum_to_size(b.shape)` on the 2-D gradient, the reduction autograd does
+  for a broadcast add.
+
+Checks, and that they could fail:
+- 1B, sha256 of per-token loss and active-block gradients at each of 14 steps (13 with lr > 0):
+  A0, A2, A3, A4 and the shipped defaults all equal A1 14/14. A1 equals #206's `hash_v1` 14/14.
+- Falsifier (hidden-state gradient x (1 + 2^-20)) on A3 and A4: gradient hash 0/14 equal,
+  loss 2/14.
+- Held-out loss after each of 14 steps: shipped defaults = A4 = A1 = #206, 14/14, to the last bit.
+- `tests/test_fused_bias.py` (18 tests): every bf16 value through each kernel, 1B shapes,
+  forward and backward; the DeltaNet block in off / add / fused modes, with call counters
+  showing the fused path ran; a BCD + offload + checkpoint trajectory over three turns. Must-fail
+  partners that do fail: `y + b` rounded toward zero instead of to nearest; GELU tables one ulp
+  off; a stale amax hint (in-place write) is refused; a doubled amax changes the codes.
+- `tests/test_active_no_ckpt.py`: the trainer's default parses to 1 and `0` to 0.
+
+VRAM (peak reserved, share of the card):
+
+| | training, worst turn | held-out eval after every step |
+|---|---:|---:|
+| A1 (main + flag) | 82.0% | 83.7% |
+| A4 | 82.3% | 82.3% |
+| shipped defaults | 82.3% | 82.3% |
+
+#200's long runs sat about 1% above these short runs, so the shipped setting projects to about
+83-84%, under the 85% guard. Not measured on a long run.
+
+Throttling (step 4, `smi_time_main.csv`, 948 busy samples at 250 ms during a real k4 run):
+SM clock median 2535 MHz (p10 2520, min 2445), memory 8001 MHz, power median 74 W of the 80 W
+limit, temperature 54-75 C. `sw_power_cap` was flagged in 30% of samples, but the SM clock
+median was 2535 MHz with and without the flag. No thermal or hardware slowdown flags. A light
+load (39 W, 48 C) runs at 2565 MHz, so the step runs at most ~1.2% below this card's real
+ceiling. The listed max of 3105 MHz is not reached even at 39 W. Nothing to change without the
+power limit, which was not touched.
+
+Muon (step 5, `muon_batch.json`, real active-block shapes): batching the 24 2048x2048 matrices
+gives the same bits but takes 0.322 s vs 0.298 s; FFN shapes same bits and also slower; 64x2048
+(beta) is not bit-identical. The loop already runs at ~84% of the card's bf16 peak.
+
+Other items in the profile (`prof_main.jsonl`, GPU s/step): fp32 adds 0.28 (autograd gradient
+accumulation), bf16 and fp32 cast copies 0.15 + 0.15, bf16 adds 0.18. No single bit-identical
+change of 0.05 s or more was found in them; not chased.
+
+Not measured: a long run (hours) with the new defaults; VRAM on a long run; why A0 repeat 2
+stalled; hint hit rates inside the 1B run (only in the unit tests); any of the profile's
+remaining small items.
+
+## DeltaNet scan at 1B shapes: 1B k4 step 11.80 -> 11.29 s with the same bits (default), 10.08 s with `--scan-kernel t` (-14.6%, opt-in) (2026-11-15, #206)
+
+**One line: the scan was not limited by latency, memory or too few programs. It was limited by
+the SM's instruction rate: each step's reductions over d_k ran as cross-lane shuffle trees and
+cross-warp shared-memory round trips. Two fixes, both measured on the real 1B step (3 alternating
+repeats each). (1) Launch widths only (forward 1 warp, checkpoint pass 8): same bits, on by
+default, step 11.797 -> 11.285 s (-0.51 s). (2) `--scan-kernel t`: state held transposed so those
+reductions are in-thread adds, checkpoint pass fused into the checkpoint recompute, backward
+1 warp: step 10.076 s (-1.72 s, about 44% of the ~3.9 s of scan per step). (2) is not
+bit-identical. Its error vs an fp64 reference equals the current kernels'. In a d512 loss A/B its
+held-out loss is within the run-to-run noise of the current kernels. It ships behind a flag,
+default off. Chunked (fla KDA) is slower than (2) and 10^4x less accurate here. Peak VRAM
+unchanged (83.7% with eval).**
+
+Method: `scripts/scan_study_206.py` (step 1: per-kernel CUDA events, regs/occupancy from the
+compiled kernels, SM clock, N sweep, num_warps x num_stages sweep with bit-equality),
+`scripts/scan_kernels_206.py` + `scripts/scan_study2_206.py` (layout variants, fp64 reference),
+`scripts/scan_fla_206.py` (fla 0.5.1 `chunk_kda`, already in the venv, NOT added as a dependency),
+`scripts/profile_step_202.py` (1B k4, `--active-no-ckpt-layers 1`, 3 steps per turn, mean of
+turn steps 2-3 over 7 positions), `scripts/ab_local_loss.py` (d512 stand-in, `--scan-kernel`),
+`scripts/analyze_scan_study_206.py`, `results/scan_study/`. Shapes: batch 1, 64 heads, d_head 32,
+seq 4096 (N = 64 sequences). Card: RTX 4050 Laptop, 20 SMs, SM clock 2.36-2.57 GHz under load.
+No Nsight Compute on this PC; occupancy is computed from register counts, not profiled.
+
+### Why only 11-23% of the memory bound (step 1)
+
+| hypothesis (refuter written first) | result | verdict |
+|---|---|---|
+| H1 per-program latency (refuted if time at N=20 > 1.5x N=1) | forward 1.31 ms at N=1, 3.22 at N=20, 5.71 at N=64 | refuted at N=64: ~1 program per SM already fills it |
+| H2 SM issue-bound at N=64 (refuted if N=128 < 1.3x N=64) | forward 1.69x, backward 1.72x, checkpoint 1.30x | confirmed (forward, backward) |
+| H3 memory (refuted if < 50% of 170-187 GB/s) | forward ~21 GB/s | refuted |
+
+Production forward: 40 regs, 4 warps, 128 programs, 2 bar.sync per step. Backward: 93 regs,
+5 blocks/SM (42% occupancy), 28 bar.sync in the loop. A forward step costs ~3500 SM cycles at
+N=64. num_stages had no effect (no pipelined loads).
+
+### Per kernel, ms per call at the 1B shape
+
+| kernel | main | v1 warps (same bits) | t |
+|---|---:|---:|---:|
+| forward | 5.71 | 4.30 (1 warp) | 3.53 (BV 8, 2 warps) |
+| checkpoint pass | 4.66 | 3.62 (8 warps) | 2.59 alone; 0 in the recompute (fused) |
+| recompute forward + checkpoints | 10.37 | 7.92 | 4.04 |
+| backward adjoint | 13.84 | 13.84 (2 warps: 9.59, bits move) | 7.67 (1 warp) |
+| frozen-after layer, per micro-batch | ~30 | ~26 | ~15 |
+| fla `chunk_kda` forward / fwd+bwd | | | 4.82 / 16.9 |
+
+Splitting d_v over more programs (2 or 4 per head, partial sums) was slower: 9.0 and 15.8 ms
+for the backward vs 7.67. That matches #203's "doubling programs costs 1.7x".
+
+### Numbers
+
+| check | result |
+|---|---|
+| v1 warps vs main, 1B, 14 steps, sha256 of loss + active grads | 14/14 equal; held-out after each step equal 14/14 |
+| falsifier (hidden-state grad x (1+2^-20)) | grads differ 14/14 (the hash can see a change) |
+| t vs main, 1B hashes | 0/14 equal; held-out after 14 steps max diff 1.4e-3 |
+| rel error vs fp64 (N=8, S=4096, fp32 in): main / t | o 1.16e-7 / 1.16e-7, dq 1.16e-7 / 1.18e-7, dk 1.36e-7 / 1.32e-7, dv 1.28e-7 / 1.46e-7, dalpha 1.61e-7 / 1.57e-7, dbeta 1.48e-7 / 1.63e-7 |
+| same, falsifier (beta x (1+2^-10)) | ~1e-3 (the metric can see an error) |
+| fla KDA rel error vs fp64, bf16 / fp32 inputs | 4e-3 / 1.4e-3 |
+| t vs main, bf16 grads at 1B shape | ~1e-4 of elements differ by one bf16 ulp |
+
+d512 loss A/B (12 layers, 2000 steps, final held-out on 16 fixed probes, t minus v1):
+
+| | seed 7 | seed 8 | v1 same-seed repeat |
+|---|---:|---:|---:|
+| bcd_k2 | +0.0002 | -0.0021 | -0.0021 |
+| full (checkpointed, fused path ran 20,000 times) | -0.0042 | +0.0019 | +0.0003 |
+
+Mean t - v1 is -0.001 nats over the four. The v1 kernels themselves move 0.002 nats between two
+runs of the same seed. No sign of a bias either way. At d512 t is 5-6% faster per step.
+
+Step time at 1B (s, 7 positions, mean of turn steps 2-3):
+
+| run | emb | 0-3 | 4-7 | 8-11 | 12-15 | 16-19 | 20-23+tail | mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| main x3 | 15.63 | 15.09 | 13.53 | 11.89 | 10.32 | 8.69 | 7.41 | 11.797 (spread 0.013) |
+| v1 warps x3 | 14.94 | 14.44 | 12.95 | 11.36 | 9.87 | 8.32 | 7.11 | 11.285 (spread 0.005) |
+| t x3 | 13.11 | 12.61 | 11.44 | 10.09 | 8.92 | 7.67 | 6.70 | 10.076 (spread 0.008) |
+
+Not measured: own chunked WY kernel at chunk 16/32 (only fla's chunk 64 was timed; it lost);
+t at d_head other than 16/32/64 in unit tests, or at seq lengths other than 512/4096; a long run
+(hours) with t; loss A/B at 1B or longer than 2000 steps at d512; the backward at 2 warps under
+v1 (faster but bits move; t supersedes it); Nsight-level stall reasons.
+
+## Early BCD block switching from a fitted law: weights follow a law, held-out loss does not; the rule does not beat plain shorter turns (2026-11-14, #205)
+
+**One line: STAND-IN, not 1B (d512, 24 layers, 4 layers per block + embedding alone, 7 blocks,
+2800 steps). The active block's weights move by a clean saturating-exponential law (time constant
+~100 steps). The held-out loss inside a turn does not follow any law better than a straight line,
+and it is still falling at step 100 in 27 of 28 turns. A pre-registered early-switch rule (fit an
+exponential to an 8-batch val loss, switch once its rate drops below 1/4) averaged 5.911 held-out
+over 3 seeds, vs 5.909 for plain 50-step turns and 5.910 for 100-step turns. Its seed spread is
+0.024 nats, 12-17x the fixed arms', so it is a coin flip, not a gain. Verdict: no.**
+
+Method (`scripts/exp_weight_law_205.py`, `scripts/analyze_weight_law_205.py`,
+`scripts/compare_weight_law_ab_205.py`, `scripts/run_weight_law_ab_205.sh`,
+`results/weight_law_205/`): the #198 harness model, data, Muon, warmup 100 + cosine over 2800
+steps, seed-7 data window. Step-0 held-out equals the #198 run's (10.914026201), so same probes
+and init. Held-out = the 16 #198 probe batches; the rule reads 8 OTHER val batches; both sets
+and the train window are sha-checked identical in all 10 runs. Init seeds 7, 8, 9.
+
+Step 1-2 (record run, 100 steps/turn, weights every 5 steps, held-out every 10):
+
+| quantity in a turn | best form | error on hidden points vs linear | forecast t>50 from t<=50 vs linear |
+|---|---|---:|---:|
+| distance from turn start | exp / stretched exp | 0.06x | 0.09-0.11x |
+| distance to turn-end weights | power law | 0.25x | 0.31x |
+| held-out loss | none clearly | 0.89-0.90x | 1.00-1.27x (linear wins 12/28) |
+
+- Weight time constant: 100-140 steps in rotation 1, 42-105 by rotation 4 (falls with the LR).
+  Layer blocks move half-straight (displacement/path 0.47, 5-step delta cosine 0.75, same as
+  #126's 0.47); the embedding moves almost straight (0.92).
+- Held-out is lowest at t=100 in 27/28 turns; in 18/28 the last 30 steps drop at least half as
+  much as the first 30. By the test stated before running, that is "no useful law" for loss.
+
+Step 4 (pre-registered rule, issue comment before any rule run; C = round(B's seed-7 mean) = 50):
+
+| seed | A fixed 100 | B rule | C fixed 50 | B - C |
+|---|---:|---:|---:|---:|
+| 7 | 5.9104 | 5.9390 (55 turns, mean 50.0) | 5.9078 | +0.031 |
+| 8 | 5.9077 | 5.9001 (59 turns, mean 47.8) | 5.9080 | -0.008 |
+| 9 | 5.9115 | 5.8941 (47 turns, mean 58.9) | 5.9103 | -0.016 |
+| mean (sd) | 5.9099 (0.0020) | 5.9110 (0.0244) | 5.9087 (0.0014) | +0.002 |
+
+- Noise: same seed rerun 0.0019 apart (attention backward is not deterministic in this harness,
+  see the #196 entry); seed spread of the fixed arms 0.0014-0.0020.
+- The rule mostly fires at its 30-step minimum, from fits on 4 noisy points. How it splits steps
+  across blocks is close to random: seed 7 gave blocks 0-3 only 240 of 2800 steps (30 per turn
+  every time), the worst run.
+- Steps saved: none at equal steps. "Step at which an arm reaches A's final loss" is noise here
+  (the cosine curve is flat at the end, so 0.002 nats moves it by hundreds of steps).
+- Unlike #200 at 1B (50 steps/turn +0.027 worse), on this stand-in 50 and 100 are equal.
+
+Not measured: 1B; longer runs; any other rule (only the one pre-registered rule was run); a rule
+using the weight law (its time constant ~100 steps would rarely switch before 100 anyway).
+
+## 1B k4 step 12.08 -> 11.79 s (-2.4%): frozen weights' fp8 codes made once per turn, same numbers bit for bit (2026-11-14, #204)
+
+**One line: a BCD-frozen weight is no longer quantized to fp8 on every use. Its codes are
+made once per BCD turn, kept in host RAM, and streamed instead of its bf16 weight. The step
+is 0.29 s faster (12.085 -> 11.792 s, three repeats each), loss, active-block gradients and
+held-out loss are bit-identical at all 7 block positions, and peak VRAM drops 0.2 points. The
+cost is 1.70 GB more host RAM: the lowest free system RAM seen during a run went from 3.0 GB
+to 1.0 GB on this 15.3 GB machine. On by default; `--no-frozen-fp8-codes` turns it off.**
+
+Where the codes live, decided by numbers: on the GPU they would be 1 byte per weight for every
+frozen-after layer (~0.7 GB with block 0 active, twice that with the transposed copy), against ~0.15 GB left under the 85% guard. Not
+possible. In host RAM they go in a "holder" tensor with the same shape and dtype as the
+bf16-parked weight (codes, then the transposed codes: 2 bytes per weight, as before). The
+offload pool streams the holder in place of the weight, so PCIe bytes and pool buffers are
+unchanged and the weight itself stays on the CPU (any code path that reads it instead of the
+codes fails loudly). Streaming only the codes (half the bytes) would need a transpose on the
+GPU per recompute; not tried, the copies are already hidden (#203).
+
+Staleness guard: codes are used only if their key matches the BCD turn (every switch expires
+all codes), the weight's storage pointer and version counter, and the quantizer route. The
+active block never uses codes (its weight needs grad, which takes the per-step cache first).
+
+Method: `scripts/profile_step_202.py` (now with `--no-frozen-codes` and host RAM per step),
+#202 shipped settings (`--active-no-ckpt-layers 1`), 3 steps per turn, step time = mean of
+turn steps 2-3 averaged over the 7 positions; base and codes runs interleaved.
+`scripts/analyze_frozen_codes_204.py`, `results/frozen_codes_204/`.
+
+| run | embedding | 0-3 | 4-7 | 8-11 | 12-15 | 16-19 | 20-23+tail | mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| base, run 1 | 16.06 | 15.45 | 13.84 | 12.16 | 10.56 | 8.91 | 7.61 | 12.083 |
+| base, run 2 | 16.07 | 15.44 | 13.85 | 12.16 | 10.56 | 8.91 | 7.60 | 12.084 |
+| base, run 3 | 16.06 | 15.45 | 13.86 | 12.17 | 10.57 | 8.91 | 7.60 | 12.088 |
+| codes, run 1 | 15.62 | 15.09 | 13.54 | 11.88 | 10.31 | 8.69 | 7.42 | 11.793 |
+| codes, run 2 | 15.63 | 15.09 | 13.52 | 11.88 | 10.30 | 8.69 | 7.42 | 11.789 |
+| codes, run 3 | 15.62 | 15.09 | 13.53 | 11.89 | 10.31 | 8.69 | 7.42 | 11.794 |
+
+The three baselines agree within 0.005 s on the mean (the #202 shipped number was 12.10 s).
+The saving is larger than #203's 0.22 s projection: it also drops the once-per-step scale
+pass of every frozen weight and the weight-quantize launches.
+
+| | base | codes |
+|---|---:|---:|
+| peak reserved, training (worst turn) | 82.3% | 82.0% |
+| peak reserved, held-out eval after every step | 83.9% | 83.7% |
+| codes in host RAM | 0 | 1.70 GB |
+| process working set, max | 4.7 GB | 6.8 GB |
+| process private commit, max | 11.5 GB | 15.3 GB |
+| free system RAM, lowest seen | 3.0 GB | 1.0 GB |
+| codes refresh at a block switch | - | 0.34 s (0.65 s on the first step) |
+| first step of a turn (carries the switch) | 12.35 s | 12.41 s |
+
+Switch cost: 0.34 s once per turn, so 0.003 s/step at the default 100 steps per turn.
+
+Same numbers, and the check could fail:
+- sha256 of every micro-batch's per-token loss and of the active block's gradients at
+  `optimizer.step`, 14 steps (2 per block position, LR non-zero from step 2): base vs codes
+  equal 14/14 and 14/14. The base hashes also equal the #202 hash files 14/14.
+- Falsifier: the hidden-state gradient of micro-batch 0 scaled by (1 + 2^-20): gradient hash
+  differs 14/14, loss hash 12/14.
+- Held-out loss after each of 14 steps: equal 14/14. Codes were really used: 25,232 codes
+  reads in the codes run, 0 in the base run.
+- `tests/test_frozen_fp8_codes.py` (small model, two full BCD rotations, Muon, offload):
+  trajectory, parameters and offload-aware eval bit-identical to per-use quantize, with
+  must-fail partners that do fail: codes never remade; a frozen weight changed through
+  `p.data` between turns with the per-turn expiry removed; a frozen weight changed in place
+  within a turn with the version counter removed from the key. The active block never reads
+  codes.
+
+Risk: host RAM. With 1.0 GB free left at the low point, other programs on this PC (or a
+longer run whose RAM grows) could push Windows into paging, which would show up as slower
+steps, not wrong numbers. Step times were steady across all three runs, so no paging here.
+If RAM gets tight, `--no-frozen-fp8-codes` gives back the 1.7 GB for 0.29 s/step.
+
+Not measured: a long run (hours) with the codes on; host RAM with other programs running;
+the full-step time with the `1,1,2,2,3,3` no-ckpt list; streaming codes only (half the
+bytes, half the RAM).
+
+## Why frozen layers are ~70% of the 1B k4 step: mostly inherent, ~7% waste found (2026-11-14, #203)
+
+**One line: a frozen DeltaNet layer costs 69 ms per micro-batch when it sits after the active
+block (forward 19.6 + recompute 15.5 + input-only backward 34.3) and 19.6 ms before it. The
+GEMMs run at 100% of this card's measured fp8/bf16 peak, the elementwise and quantize kernels
+at its memory bandwidth, the GPU never waits on the weight stream, and no weight-gradient work
+is done. The cost is the sequential scan (43% of a frozen-after layer) plus BCD's checkpoint
+recompute. Three measured wastes add up to about 0.9 s/step (~7%); none is bit-identical AND
+a few lines, so nothing was changed.**
+
+Method (`scripts/frozen_layer_203.py`, `scripts/analyze_frozen_layer_203.py`,
+`results/frozen_layer_203/`): the trainer's own 1B layer (d 2048, 64 heads, seq 4096, batch 1,
+ternary + fp8 + the `--fast` stack, bf16 weights streamed by the real offload pool, checkpointed,
+deterministic), 6 layers, 2 per BCD block, timed with CUDA events at block boundaries and cut
+into phases in a profiler trace by marker kernels. Anchor, stated before running: it must
+reproduce the #202 production per-layer times or it is not measuring production. It does, per
+step of 8 micro-batches: frozen forward 0.157 s (production 0.156), frozen-after recompute +
+backward 0.398 s (0.400), active layer 0.535 s (0.534), first active layer 0.522 s (0.522).
+
+Peak on this card (`scripts/peak_gpu_203.py`): fp8 GEMM 48 TFLOPs, bf16 24.6, memory 170-187
+GB/s, pinned PCIe 13.4 GB/s.
+
+### Seconds per frozen layer per step (8 micro-batches)
+
+| phase | total | scan | fp8 GEMM | bf16 GEMM | quantize (weight / input) | elementwise + norm | GPU idle | vs bound |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| forward | 0.157 | 0.046 | 0.050 | 0.012 | 0.008 / 0.010 | 0.029 | 0.002 | 72% |
+| recompute | 0.124 | 0.046 | 0.033 | 0.012 | 0.006 / 0.005 | 0.022 | 0.001 | 66% |
+| backward, input grad only | 0.274 | 0.149 | 0.050 | 0.011 | 0.002 / 0.010 | 0.051 | 0.001 | 58% |
+| **frozen after the active block** | **0.555** | **0.241** | 0.133 | 0.035 | 0.040 | 0.102 | 0.004 | 64% |
+| frozen before the active block | 0.156 | 0.046 | 0.050 | 0.012 | 0.017 | 0.028 | 0.002 | 72% |
+| active layer, recompute + backward with weight grads | 0.540 | 0.195 | 0.152 | 0.036 | 0.022 | 0.133 | 0.003 | |
+
+"vs bound" = time if every GEMM ran at the measured peak, every other kernel at its own
+bandwidth bound (they already do), and the scan at the bandwidth bound of its inputs and
+outputs, divided by the measured time. The whole gap is the scan: its forward runs at 11% of
+its memory bound, its backward (checkpoint pass 4.7 ms + adjoint 13.9 ms per micro-batch) at 23%.
+It is a serial loop over 4096 tokens per head; at 64 heads, doubling the programs (N 64 -> 128)
+costs 1.7x the time for the backward and forward (`scripts/scan_occupancy_203.py`), so splitting
+it over more programs would buy at most ~15%.
+
+Frozen vs active: recompute + backward is 26% cheaper frozen (49.8 vs 67.6 ms per micro-batch).
+The active layer's extra 17.5 ms is the weight-grad GEMMs (9.4 ms) and fp32 grad casts and
+accumulation (7.4 ms). The dX GEMMs and the scan backward are the same in both.
+
+### The cheap hypotheses
+
+| hypothesis | verdict | number |
+|---|---|---|
+| (a) scan backward dominates | **yes** | 18.6 of 34.3 ms of the frozen backward; all scan passes 30.1 of 69.4 ms of a frozen-after layer (43%) |
+| (b) frozen backward does unneeded work | no | 0/18 frozen params require grad; 7 fp8 + 2 bf16 GEMMs in backward = exactly the 9 dX products; conv / norm weight grads skipped; only a 7 us read-norm reduction runs |
+| (c) recompute redoes cacheable quantization | yes, small | weight quantize 0.94 ms per forward, 0.91 per recompute; activation quantize in the recompute 0.62 ms (only avoidable by keeping activations) |
+| (d) weight-stream waits stall | no | GPU idle 0.28 / 0.10 / 0.12 ms in forward / recompute / backward (<1%); a larger offload cache moved the layer time <1% (partial check: the forward still streams) |
+| (e) launch / elementwise overhead | launch no; elementwise is real bytes | 184 kernels per frozen-after layer, GPU idle <1%; elementwise 12.8 ms per micro-batch but each kernel at 85-100% of bandwidth (RMSNorm 170 GB/s, residual add 160, GELU 170, sigmoid 196) |
+
+### Top 3 savings, measured per layer, projected per step
+
+Per-step numbers use the turn-averaged counts at k4: 11.0 frozen-after and 7.9 frozen-before
+DeltaNet layers, ~3 active.
+
+| saving | measured | per step | bit-identical? |
+|---|---|---:|---|
+| 1. the recompute's scan forward also writes the backward's state checkpoints; drop `_mk_ckpt_kernel_s` | 4.7 ms pass removed, +0.1 ms on the forward (`scripts/scan_fwd_ckpt_203.py`) | ~0.49 s (4%) | no: states differ by up to 3.6e-7 (the two existing kernels already disagree at that level); 268 MB checkpoint lives longer, VRAM not measured |
+| 2. fp8 codes of frozen weights made once per BCD turn, not per use | quantize kernels 0.94 ms per forward, 0.91 per recompute | ~0.22 s (1.8%) | yes by construction (weights and scale fixed for the turn); costs host RAM for the codes |
+| 3. bias in the fp8 GEMM epilogue instead of a separate add | 0.74 ms per forward, 0.59 per recompute (`scripts/bias_epilogue_203.py`) | ~0.20 s (1.7%) | no: 25% of outputs move one bf16 ulp |
+
+Verdict: the 70% is mostly the price of BCD (every frozen layer after the active block runs
+forward, recompute and an input-grad backward) times a serial scan that cannot use the tensor
+cores. Not waste in the GEMMs, the copies, the launches or the grad bookkeeping. About 0.9 s/step
+of real waste exists, and the largest piece is the scan's duplicate checkpoint pass.
+
+Not measured: the full-step effect of any saving (projections only); VRAM of saving 1; host RAM
+of saving 2; the two attention layers (0.167 / 0.544 s, not analysed); quality effect of the
+non-bit-identical savings.
+
+## 1B k4 step: 12.60 -> 12.10 s (-3.9%) at the same VRAM, same numbers bit for bit (2026-11-14, #202)
+
+**One line: three changes make the 1B k4 pretrain step 0.50 s faster (12.60 -> 12.10 s, -3.9%)
+with peak VRAM unchanged. Loss and the active block's gradients are bit-identical to before at
+all 7 block positions. Two of the changes are always on; the third is a flag,
+`--active-no-ckpt-layers 1`. With `--active-no-ckpt-layers 1,1,2,2,3,3` the step is 12.00 s
+(-4.7%), but peak reserved goes 82.3% -> 84.0%, leaving 1% to the 85% guard.**
+
+Method (`scripts/profile_step_202.py`, `scripts/analyze_step_202.py`, `results/step_speed_202/`):
+the real trainer at the #194/#200 k4 settings (fp8, offload, chunked loss 512, grad_accum 8,
+seed 0, deterministic), 3 steps per block so every block position is visited. Step time =
+mean of steps 2-3 of each turn (step 1 carries the switch), averaged over the 7 positions.
+Phases come from CUDA events at block, loss-slice, backward and optimizer boundaries.
+
+### A. Where the 12.6 s went (before any change)
+
+| part of the step | seconds | % of step |
+|---|---:|---:|
+| backward through the frozen layers after the active block (recompute + backward) | 5.02 | 39.8% |
+| forward of the frozen layers after the active block | 1.94 | 15.3% |
+| active block: recompute + backward | 1.85 | 14.7% |
+| forward of the frozen layers before the active block | 1.38 | 10.9% |
+| loss: slice recompute + backward | 0.96 | 7.6% |
+| active block forward | 0.53 | 4.2% |
+| optimizer (Muon) | 0.46 | 3.6% |
+| loss forward | 0.38 | 3.0% |
+| embedding (incl. the `blocks.0` load miss from #200) | 0.06 | 0.5% |
+| everything else (clip, glue, data) | 0.03 | 0.3% |
+
+By kernel type (GPU time, all streams): Triton scan 3.9 s, fp8 GEMM 2.7 s, bf16 GEMM 2.3 s,
+elementwise 1.8 s, weight copies 1.7 s (side stream, hidden, #200), fp8 + ternary quantize
+0.9 s, softmax 0.1 s. The forward/backward through frozen layers is the cost of block
+coordinate descent itself; nothing below touches it.
+
+### B. The changes
+
+| change | expected before building | measured | bit-identical | peak reserved | verdict |
+|---|---|---:|---|---:|---|
+| 1. loss: gradient of each slice computed in the forward, no logits recompute | -0.26 s (0.36 s on 5 of 7 turns) | **-0.258 s** (-2.0%) | yes | 82.4% (same) | shipped, always on |
+| 2. active block's last N layers not checkpointed, N=1 | audit: -0.32 s, +0.65 GiB (for the whole block) | **-0.117 s** (-0.9%) | yes | 82.5% | shipped as a flag, default off |
+| 2b. same, per block `1,1,2,2,3,3` | ~-0.12 s more | -0.100 s more | yes | **84.0%** | in the flag; thin margin |
+| 3. frozen ternary weight -> fp8 codes in one pass | -0.3 to -0.4 s (bandwidth estimate) | **-0.119 s** (-1.0%) | yes | 82.3% | shipped, always on |
+
+1. **Loss.** Each 512-position slice ran its vocab projection twice (forward, then again in
+   backward to rebuild the logits). Now the forward also computes the slice's hidden-state
+   gradient (same autograd ops, upstream gradient 1) and keeps only that, 4 MB a slice.
+   Backward multiplies it by the real per-token gradient. Exact because that gradient is
+   1/(4096 x 8), a power of two. Not used on the embedding turn (trainable decoder weight) or
+   the tail turn (trainable bias: its gradient sums rows, so it cannot be scaled after the
+   fact); those keep the old path. Doing the tail too would add 0.05 s, under the bar.
+2. **Active block without recompute.** Keeping all 4 active layers' activations spills: peak
+   over 100%, a 93 s step. One layer is about 0.3 GB (+5% allocated) and fits in the
+   allocator's slack: reserved 82.4 -> 82.5%. Two layers on every turn: 86.6% at blocks 0-3
+   (fails); three: 96%. The later blocks have more room, hence the per-block list. Saving per
+   kept layer: one layer forward per micro-batch, 0.12-0.14 s per step.
+3. **Frozen weights.** A frozen ternary weight is quantized on every use (forward and
+   recompute, 8 micro-batches): ternary kernel, bf16 temporary, amax pass, cast pass. A
+   ternary weight holds only 0 and +-scale, so its fp8 amax is known without a pass, and one
+   kernel can go from the latent weight to fp8 codes and their transposed copy. The estimate
+   was 3x too high: the old route moved fewer bytes than assumed. The saving scales with the
+   number of frozen layer uses per step (embedding turn -0.15 s, tail turn -0.07 s), as
+   predicted, so it is the change and not noise.
+
+Audit ideas checked against the code: "ternary re-quantization per micro-batch" was already
+fixed for active weights (per-step cache); for frozen weights it cannot be cached (they are
+streamed in per use), so change 3 makes each use cheaper instead. "Chunk slicing copies" do
+not exist at batch 1: the slices are views. Nothing to do.
+
+### C. Step time per block position (seconds)
+
+| run | embedding | 0-3 | 4-7 | 8-11 | 12-15 | 16-19 | 20-23+tail | mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline, run 1 | 16.25 | 16.10 | 14.55 | 12.80 | 11.17 | 9.50 | 7.82 | 12.600 |
+| baseline, run 2 | 16.26 | 16.12 | 14.55 | 12.79 | 11.17 | 9.50 | 7.83 | 12.602 |
+| baseline, run 3 (end of session) | 16.25 | 16.11 | 14.50 | 12.79 | 11.18 | 9.50 | 7.82 | 12.592 |
+| + loss change | 16.25 | 15.75 | 14.14 | 12.48 | 10.82 | 9.14 | 7.82 | 12.342 |
+| + no-ckpt 1 layer | 16.24 | 15.61 | 14.00 | 12.35 | 10.68 | 9.02 | 7.68 | 12.225 |
+| + frozen fp8 one pass (**shipped, with the flag at 1**) | 16.10 | 15.46 | 13.87 | 12.21 | 10.57 | 8.91 | 7.61 | **12.104** |
+| + no-ckpt list 1,1,2,2,3,3 | 16.06 | 15.46 | 13.87 | 12.16 | 10.49 | 8.64 | 7.35 | 12.004 |
+
+The three baselines agree within 0.01 s on the mean and 0.06 s at any position. The no-ckpt-1
+run was repeated through the trainer flag: 12.223 s.
+
+### D. Same numbers, and the check could have failed
+
+- sha256 of every micro-batch's per-token loss and of the active block's gradients at
+  `optimizer.step`, 14 steps (2 per block position, LR non-zero from step 2).
+- Baseline run twice: equal at all 14 steps (the run is deterministic).
+- Each change against the baseline: equal at all 14 steps, for the loss change alone, + no-ckpt
+  1, + frozen fp8, and for the 1,1,2,2,3,3 list.
+- Falsifier that works: the gradient reaching the hidden states of micro-batch 0 scaled by
+  (1 + 2^-20), far below bf16 resolution. The gradient hash changed at all 14 steps, the loss
+  hash from step 3. So the check sees backward differences much smaller than a real bug.
+- Falsifier that did not: one ulp on one fp32 embedding weight changed the hash at only 2 of
+  14 steps. The bf16/fp8/ternary casts round it away. Not a hole in the check: the gradients
+  really were equal.
+- Held-out loss after each of 14 steps (production offload-aware eval): equal to the
+  baseline's, to the last bit, for the shipped setting and for the list.
+- Unit tests: `tests/test_chunked_loss.py` (bit-identical at power-of-two scale, one
+  projection per slice, a wrong per-row scale is caught), `tests/test_active_no_ckpt.py`
+  (bit-identical over 8 steps, each kept layer's forward runs once per micro-batch, not twice),
+  `tests/test_fp8_fused.py` (codes, scale and transposed copy equal at the 1B shapes, ties,
+  all-zero; the BCD+offload trajectory still equals the eager reference with the new path
+  taken).
+
+### E. VRAM (peak reserved, no extra empty_cache)
+
+| | training only | eval after every step |
+|---|---:|---:|
+| baseline | 82.4% | 84.1% |
+| shipped (flag at 1) | 82.3% | 83.9% |
+| list 1,1,2,2,3,3 | 84.0% (turns 8-23) | 84.0% |
+
+Eval here is the #194 harness's offload-aware held-out eval run after every step without its
+`empty_cache`: the worst case for fragmentation. The shipped setting is at or below the
+baseline at every turn. The list is under 85% as measured, but #200's long runs sat about 1%
+above these short runs (83.3-83.5% vs 82.4%), so with the list a long run could reach the guard.
+Use it only with the guard watched.
+
+### F. Not done
+
+- Bias add after each fp8 GEMM (gate_proj, both FFN Linears): 0.32 s of GPU time in a
+  non-vectorized kernel (broadcast operand). A bit-identical Triton add might save ~0.08 s
+  (estimate, not measured). Folding the bias into the fp8 GEMM's epilogue would save more
+  (~0.3 s) but rounds once instead of twice, so it is not bit-identical and needs a held-out
+  A/B. Next candidate.
+- Prefetching `blocks.0` before the embedding (0.05 s) and the loss change on the tail turn
+  (0.05 s): under the 0.5% bar.
+- What is left (profile of the shipped setting, 12.10 s): forward and backward through the
+  frozen layers 70% of the step, the active block 16%, the loss 9%, Muon 4%. All of it is needed work.
+
+**Found on the way, not fixed:** the trainer's own `--val-every` eval crashes with `--offload`
+(`evaluate()` runs the model in eval mode, which skips the offload loads, and hits a
+CPU-parked weight: "weight is on cpu"). The #194/#197/#200 runs used the harness's
+offload-aware eval, so their numbers are fine. A plain run with `--offload --val-every` crashes
+at its first eval; reproduced with all #202 changes off (`results/step_speed_202/valevery_base.log`).
+
+**How to use:** nothing for changes 1 and 3. For change 2 add `--active-no-ckpt-layers 1` to
+the 1B k4 command (12.10 s/step). The list form needs one value per layer block (6 at k4).
+
+## 4 layers per BCD block is now the default: 7 blocks at 1B, peak reserved 82.6% (2026-11-14, #201)
+
+**One line: `train_edge_conversational.py` now trains 4 layers per BCD block under the
+balanced partition. At 1B that is 7 blocks instead of 13. `--bcd-layers-per-block 0`
+gives back the old layout.**
+
+Why: the #194 A/B. 4 layers per block was 0.446 nats better on held-out loss at step 2800
+(4.881 vs 5.327), with 6.8% slower steps (12.60 vs 11.80 s). 5 layers broke the 85% guard.
+
+What changed:
+- No flag + `--bcd-partition balanced` (the default) = 4 layers per block.
+- `--bcd-layers-per-block 0` = the old budget packing (about 2 layers per block, 13 blocks at 1B).
+- `--bcd-partition layer` still works. It refuses only an explicit layers-per-block value.
+- The run banner now says the layout, e.g. `7 blocks (balanced partition, 4 layers per block)`.
+- The saved BCD state now records the block names. Resuming under a different layout stops
+  with an error that names the flag. A checkpoint saved before #201 with the old default
+  needs `--bcd-layers-per-block 0`.
+
+Measured on the real entrypoint (`scripts/profile_bcd_memory.py`, production 1B flags, no
+layers-per-block flag, grad-accum 8, 2 steps per block, 16 steps):
+- Banner: 7 blocks, 4 layers per block. The 7 blocks were embedding alone, five groups of 4,
+  and blocks 20-23 with the tail.
+- Peak reserved: 69.7% on the first embedding step, 82.5-82.6% on every step after, on every
+  block. Under the 85% guard. No allocator retries.
+- Grad bytes equal active params x grad size on every step, so the probe counted the right thing.
+- Step time: 17.4 s on the embedding block down to 7.8 s on the last block.
+- Resume check: the same 7-block checkpoint relaunched with `--bcd-layers-per-block 0`
+  (13 blocks) stopped at startup, exit 1, with `ValueError: BCD state was saved with a
+  different block layout (7 blocks ...) than this run (13 blocks ...)` and the flag to use.
+
+Tests (CPU): `tests/test_bcd_default_layers_201.py` (15) and the #194, BCD, offload and
+resume files: 120 passed, 21 skipped (need CUDA). With the old `block_coordinate.py` put
+back, 7 of the 15 new tests fail.
+
+Not changed: the per-step and per-cycle timings in README, HF_BLOG_POST and docs/training.md
+(13.294 s/step cycle average, 17.6 s first steps) were measured on the 13-block layout.
+The blog's launch command now gives 7 blocks.
+
+## Weight streaming is not a stall at 1B k4: 0.06 s of a 12.7 s step; 50 steps per BCD turn is slightly worse than 100, 25 and 10 not run (2026-11-14, #200)
+
+**One line: at 1B k4 production settings, the GPU waits on weight copies for 0.056 s per step
+on average (0.44% of the step). 13-32 GB cross PCIe per step at 12.7 GB/s, but the copies run
+next to compute and finish early. Doubling the copy work changes nothing. One block switch
+costs 0.2-0.35 s, so 10x more switches add well under 1% to a run. At 50 steps per turn the held-out
+loss is 0.027 nats worse than at 100 (step 2800), so shorter turns were not pursued; 25 and 10 were
+stopped on purpose, and 200 was not run.**
+
+### A. Is the PCIe weight stream a stall? No (measured)
+
+Method (`scripts/exp_bcd_stall_200.py`, `scripts/analyze_bcd_stall_200.py`,
+`results/bcd_stall_200/`): the real trainer with the #194 k4 settings (grad_accum 8, fp8,
+balanced, seed 0, deterministic), 4 steps per block so every block position is visited. In each
+turn, step 2 is timed without the profiler and steps 3-4 are profiled (CUDA only). From the GPU
+timeline of each profiled step:
+
+- stall = host-to-device copies ON the compute stream + compute-stream idle time that ends
+  within 2 ms of a side-stream copy finishing (the compute was waiting for that copy).
+- idle other = compute-stream idle not explained by a copy (Python, kernel launches, host work).
+
+| active block | step (no profiler) | GPU busy | stall | stall % | idle other | GB per step | GB/s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| token_embedding | 16.23 s | 16.21 s | 0.068 s | 0.41% | 0.137 s | 32.3 | 12.8 |
+| blocks 0-3 | 16.16 s | 16.10 s | 0.001 s | 0.01% | 0.129 s | 26.9 | 12.8 |
+| blocks 4-7 | 14.51 s | 14.41 s | 0.068 s | 0.47% | 0.123 s | 24.3 | 12.7 |
+| blocks 8-11 | 12.80 s | 12.79 s | 0.061 s | 0.47% | 0.113 s | 21.6 | 12.7 |
+| blocks 12-15 | 11.17 s | 11.09 s | 0.063 s | 0.56% | 0.106 s | 18.9 | 12.8 |
+| blocks 16-19 | 9.50 s | 9.46 s | 0.068 s | 0.71% | 0.088 s | 16.2 | 12.7 |
+| blocks 20-23 + tail | 7.83 s | 7.75 s | 0.064 s | 0.81% | 0.081 s | 13.5 | 12.7 |
+| **mean** | 12.60 s | | **0.056 s** | **0.44%** | 0.111 s | 22.0 | 12.7 |
+
+- Unprofiled step times match the #194 k4@100 run's per-block medians within 0.1%
+  (16.24 / 16.10 / 14.48 / 12.79 / 11.16 / 9.50 / 7.82 s). Profiling adds 0.0-0.2 s.
+- The copies take 1.1-2.5 s per step on the side stream, all hidden behind 7.8-16.2 s of compute.
+- Almost the whole stall is one thing: `blocks.0` is never prefetched (the embedding segment
+  issues no prefetch), so whenever it is frozen its forward load is a synchronous copy, once per
+  micro-batch: 8 x 84 MB = 0.67 GB, 0.06 s per step. With blocks 0-3 active the stall is 0.001 s.
+- Peak reserved 82.4% in every mode.
+
+**Positive control 1 (can the number see a stall?).** Backward-recompute prefetch turned off,
+so every recompute load is a synchronous copy on the compute stream. Step time rose 0.25-1.60 s
+depending on the block, and the stall number rose by 85-100% of that rise at every block
+(e.g. blocks 8-11: step +0.750 s, stall +0.753 s). Last block: +0.009 s, as expected (nothing
+after it to recompute). The measurement does see a stall when one exists.
+
+**Positive control 2 (how much slack?).** Every prefetch copies its own size again before its
+ready-event, so the side stream moves 2x the bytes (26-64 GB per step). Step time moved
+-0.02 to +0.17 s and the stall +0.000-0.017 s. The copies have at least 2x headroom.
+
+**Fix: none shipped.** The only fixable part is the `blocks.0` miss (prefetch it before the
+embedding forward), worth at most 0.06 s per step (0.5%). Below the "real share" bar, so not
+prototyped. A bigger LRU cache would not help: nothing is waiting on copies.
+
+**Found on the way, not fixed:** with `offload_prefetch=False` (never used by the trainer) and
+`--chunked-loss`, training crashes: the tail segment loads only `final_norm`, and the decoder
+bias stays on the CPU (`hvn/edge/model.py` `_offload_wrap_plain("final_norm+decoder",
+[self.final_norm], ...)`). With prefetch on, the prefetch of the tail fetches the decoder too, so
+production is not affected. The control above uses backward-prefetch-off for this reason.
+
+### B. Switch cost and steps per turn: 50 is slightly worse than 100; 25, 10 and 200 not run
+
+**Result (measured, 2800 steps each, same seed, batches, schedule and held-out set):** k4 at 50
+steps per turn against k4 at 100 (`scripts/analyze_bcd_spb_200.py`). Gap = 50-step minus 100-step
+held-out loss, positive = 50 steps worse.
+
+| step | 50 steps/turn | 100 steps/turn | gap (nats) | ppl ratio |
+|---:|---:|---:|---:|---:|
+| 2100 | 5.0576 | 5.0308 | +0.027 | 1.03x |
+| 2600 | 4.9376 | 4.8991 | +0.039 | 1.04x |
+| 2800 | 4.9076 | 4.8807 | +0.027 | 1.03x |
+
+- By the rule below: WORSE (above 0.012 at 2800, positive at 2100 and 2600). The size is small, about
+  3% in perplexity, and the gap jumps up to 0.1 between neighbouring steps mid-run. One seed per
+  setting, so a small cost, not a settled one.
+- Step time: 50-step turns match 100-step turns within 0.16%. Switches are not a speed cost.
+- VRAM: 83.5% in training, 83.3% in eval, same as 100 steps.
+- Stopped on purpose: k4s25 was killed at step 821 (about 3 h in) and k4s10 never started,
+  because 50 was already worse than 100 and 20 more GPU hours were judged not worth it. 200 steps
+  per turn (the other direction) was also not run; that was the maintainer's call (10 h).
+- Not tested: shorter turns with `retain_optimizer_state`, longer turns, more than one seed.
+- Everything below this line was written before the results, at launch.
+
+
+**Cost of one switch (measured three ways):** `_activate` alone 0.30 s (synchronized, 168M-param
+block; 0.16-0.18 s into the smaller embedding block). First step of a turn minus the turn's
+median: 0.178 s over 26 switches in the #194 k4@100 run, 0.344 s over 5 switches in the
+10-step smoke. Upper figure 0.35 s x 279 switches at 10 steps/turn = 1.6 min in a ~10 h run,
+under 0.3% of the step time. So the slowdown gate (+25%) is nowhere near.
+
+**Arms:** k4 with `--bcd-steps-per-block` 50, 25, 10 (rotations 350 / 175 / 70 steps), 2800
+steps each, run in that order. Everything else identical to the #194 k4@100 run, which is the
+comparison arm and is NOT rerun (its logs are read from `results/bcd_blocksize_194/`): same
+harness `scripts/exp_bcd_blocksize_194.py`, seed 0, deterministic, warmup 500, cosine to 0 at
+2800, held-out 64 windows every 100 steps (sha-checked), checkpoint every 700 steps (a whole
+number of rotations for all three).
+
+**Reading rule, set before any result:** gap = arm minus k4@100 held-out loss. An arm is WORSE
+if the gap is above 0.012 nats (2x the #197 floor) at step 2800 and positive at 2100 and 2600;
+BETTER if the gap is below -0.012 at 2800 and negative at 2100 and 2600; otherwise cannot tell.
+Also reported: equal training time and mean step per arm (switches included).
+
+**Production deletes optimizer state at every switch.** The trainer does not pass
+`retain_optimizer_state`, so with 10-step turns Muon momentum and the AdamW moments restart
+every 10 steps. The arms keep production behaviour (they must match k4@100). The #151 note says
+retention helped at 5 steps per block and did nothing at 100, so shorter turns may pay a cost
+that retention would remove. Not tested here.
+
+**Pre-run checks (measured, `results/bcd_spb_200/smoke/`, 10 steps per turn, one rotation,
+full LR, every turn fingerprinted):** 7 blocks; every turn exactly 10 steps in the right order;
+418/418 params changed over the rotation; 0 frozen params changed; optimizer held 0 entries at
+every turn start and state for every active param at every turn end, all finite; lr > 0 at
+every step; held-out sha matches #197; peak reserved 83.5% (blocks 0-3), eval 83.0%
+(k4@100: 83.3% / 83.4%).
+
+**Status at launch:** k4s50 launched 2026-11-13 17:22. First 304 steps healthy: every turn
+50 steps, block order right, no NaN, step-1 held-out 11.23550 (equal to k4@100, same init),
+sha matches, peak reserved 83.5% (blocks 0-3), eval 83.3% and 49-51 s. Per-block step medians
+equal k4@100's within 0.16% (16.25 / 16.11 / 14.50 / 12.79 / 11.18 / 9.51 / 7.83 s); switch
+overhead 0.19 s median over 5 switches. So each arm takes about what k4@100 took, ~10.2 h
+wall. (Those ETAs are void: the sweep was stopped, see Result above.)
+Early held-out gaps (k4s50 1.15 nats better at step 100, 0.68 worse at 300) only reflect which
+blocks have trained so far in the first rotation; they say nothing yet.
+
+Launch / resume (same command; an arm already at step 2800 is skipped, the trainer resumes from
+`ckpt_<tag>`):
+`powershell -NoProfile -Command "Start-Process -WindowStyle Hidden -WorkingDirectory 'C:\Users\komal\Documents\Codes\kramba-ai-wt200' -FilePath 'C:\Program Files\Git\bin\bash.exe' -ArgumentList 'results/bcd_spb_200/run_200.sh'"`.
+Status: `results/bcd_spb_200/run_200.status` (`RUN_200_DONE` or `RUN_200_FAILED`). Logs:
+`results/bcd_spb_200/log_<tag>.a<attempt>.log`, tags `k4s50`, `k4s25`, `k4s10`. Analysis:
+`python scripts/analyze_bcd_spb_200.py`.
+
+## VRAM spill starts at about 91-92% of the card; a 90% guard leaves only 60-110 MiB (2026-11-13, #194)
+
+**One line: on this 6 GB RTX 4050 (Windows, desktop idle at 129 MiB), training is clean up to
+91.0% peak reserved (measured twice), shows the first spill at 91.8% (+4.3% step time, 64 MiB
+moved to host RAM), and spills clearly at 92.6% (+16%). A 90% guard would sit only 59 MiB under
+the last clean level and 109 MiB under the first spill. That is less than one browser tab with
+video, so 90% is NOT supported with a safe margin. The 85% guard has 366-416 MiB of room.**
+
+### Method (`scripts/exp_vram_spill_onset_194.py`, `results/vram_spill_onset_194/`)
+
+- Real 1B k5 training (production settings, grad_accum 8, fp8, balanced partition), rotation
+  started at the worst blocks: 5-9, then 0-4, then 10-14, 4 steps each, one eval at step 4.
+- A ballast tensor (0-400 MiB) is put on the GPU before step 1 and rewritten after every step,
+  so it stays resident. It sits inside PyTorch's reserved memory, so "pressure" below is
+  exactly what the #163 guard compares to the card (peak reserved incl. ballast / 6143 MiB).
+- Spill signal: block step time (median of steps 2-4) vs the no-ballast run, and the Windows
+  counter "GPU Process Memory / Shared Usage" of the training process, sampled every ~3 s.
+- Rule, written before running (`run_point.sh`): spill = step > 1.05x baseline or shared usage
+  more than 64 MiB above baseline. Baseline repeat spread: 0.13-0.36% per block, 0.67% eval.
+- Positive control: 400 MiB ballast must spill. It did (1.19-1.86x), so the method can see it.
+- The #163 guard was off for these runs (`--max-vram-pct 0`); production code is unchanged.
+
+### Result (pressure = peak reserved incl. ballast)
+
+| ballast | block | pressure | reserved MiB | step time ratio | shared usage rise |
+|---:|---|---:|---:|---:|---:|
+| 0 (x2) | 5-9 / 0-4 / 10-14 | 87.6 / 90.1 / 90.1% | 5380 / 5538 / 5538 | 1.00 / 1.00 / 1.00 | 0 |
+| 0 (x2) | eval | 88.1% | 5412 | 1.00 | 0 |
+| 50 (x2) | 0-4 and 10-14 | **91.0%** | 5588 | 1.000 / 0.999 | 0 |
+| 100 | 0-4 | **91.8%** | 5638 | **1.043** | **+64 MiB** |
+| 150 | 5-9 | 90.0% | 5530 | 0.998 | 0 |
+| 150 | eval | 90.5% | 5562 | 0.999 | 0 |
+| 150 | 0-4 | **92.6%** | 5688 | **1.163** | **+128 MiB** |
+| 150 | 10-14 | 92.6% | 5688 | 1.016 | +128 (left over from 0-4) |
+| 400 | 5-9 | 94.1% | 5780 | 1.193 | +192 MiB |
+| 400 | 0-4 / 10-14 | 96.7% | 5938 | 1.857 / 1.776 | +356 MiB |
+| 400 | eval | 94.6% | 5812 | 1.536 | +214 MiB |
+
+- Onset: between 91.0% (clean, twice) and 91.8% (first spill). The 91.8% point is just under
+  the written thresholds (4.3% < 5%, 64 MiB not > 64), but both signals moved well past the
+  0.36% noise, so it is counted as spill. By the strict rule the onset is 92.6%.
+- What the process actually got: the training process's dedicated VRAM never went above
+  5683-5722 MiB. With the desktop's 129 MiB, nvidia-smi showed 5812-5850 of 6141 MiB used
+  when spill started: about 290-330 MiB of the card is never handed to the process.
+- 0 allocator retries and 0 OOMs at every point, even at 1.86x. Spill does not raise.
+
+### What the percentages mean in MiB
+
+- Card: 6141 MiB (nvidia-smi) = 6143 MiB (torch). 1% = 61 MiB.
+- Non-allocator overhead (CUDA context, kernels, cuBLAS): process dedicated minus torch
+  reserved = **123 MiB**, the same at every point. Desktop with no training: 129-130 MiB.
+- `torch.cuda.mem_get_info()` reports **0 MiB free** from 87.6% up, with no spill. It is not a
+  usable spill signal on WDDM.
+- 85% guard = 5222 MiB reserved: 416 MiB under the first spill (5638 MiB), 366 MiB under
+  the last clean level (5588).
+- 90% guard = 5529 MiB reserved: **109 MiB** under the first spill, **59 MiB** under the last
+  clean level.
+
+### Caveats
+
+- Measured with the desktop idle (129 MiB). Browsers, video and other apps use the same VRAM.
+  It is likely, but NOT measured here, that each MiB they take lowers the onset by about a MiB.
+  A video tab can take a few hundred MiB, more than the whole 90% margin.
+- The ceiling moved by about 40 MiB between runs (5683 vs 5722 MiB dedicated), which is most of
+  the 90% margin.
+- k5 itself reached **90.1%** with no ballast in this sweep (blocks 0-4 after blocks 5-9),
+  against 86.8% in the k5 smoke for the same block. Allocated memory was the same (5000 MiB);
+  the extra 208 MiB is allocator cache from the earlier turn. Production evals are rare, so the
+  cache is not emptied between turns, and k5 would run at about 90%, only 50-100 MiB under
+  the onset.
+- Short runs: 4 steps per block. A spill that only builds up over hundreds of steps would not
+  show here.
+
+### Verdict for #194
+
+Raising the guard to 90% is not supported with a useful margin: 59-109 MiB at an idle desktop,
+and k5 already reaches 90.1%. k5 would fit only with the desktop kept nearly empty. Production
+guard code not changed.
+
+## 5 layers per BCD block at 1B: not launched, it breaks the 85% VRAM rule (2026-11-13, #194)
+
+**One line: a k5 layout (embedding, then 5,5,5,5,4 layers: 6 blocks) is fast enough, 12.91 s
+mean step vs k4's 12.60 s, and shows no spill. But three 5-layer training turns reserve
+85.2-87.6% of the card, and eval with a 5-layer block active reserves 88.3-88.6%. The gate was
+"nothing above 85%", so the 2800-step k5 run was NOT launched.**
+
+### Gate, written before running (`results/bcd_blocksize_194/smoke/run_smoke_k5.sh`, `gate_k5.py`)
+
+(a) no training turn and no eval above 85% of the card; (b) no block slower than 1.5x what its
+depth predicts from the k2/k4 runs (spill sign); (c) mean step over a rotation at most 13.9 s.
+Measured on one full rotation, 3 steps per block, full LR, every turn fingerprinted.
+
+| block | layers | step (median) | predicted | peak reserved, turn | peak reserved, eval |
+|---|---:|---:|---:|---:|---:|
+| token_embedding | 0 | 16.30 s | 16.25 | 83.3% | 73.6% |
+| blocks 0-4 | 5 | 16.57 s | 16.38 | **86.8%** | **88.6%** |
+| blocks 5-9 | 5 | 14.35 s | 14.30 | **87.6%** | **88.5%** |
+| blocks 10-14 | 5 | 12.24 s | 12.22 | **85.2%** | **88.3%** |
+| blocks 15-19 | 5 | 10.16 s | 10.15 | 80.6% | **88.3%** |
+| blocks 20-23 + tail | 4 | 7.82 s | 7.83 | 68.5% | 83.2% |
+
+- (a) FAIL. (b) pass: every block within 1.2% of its prediction (fit on k2/k4 per-block
+  medians, max error 0.06 s). (c) pass: 12.91 s.
+- No slowdown was seen even at 88.6%: eval took 49 s, same as k4. So this is a breach of the
+  safety margin, not a measured spill.
+- Peak allocated in the 5-layer turns is 4526-5000 MiB, vs 4062-4446 MiB for k4's 4-layer
+  turns. In the k4 runs the 3-step smoke reserved the same or more than the long run, so the
+  long run would likely sit near these numbers too.
+- Smoke checks passed: 6 blocks as expected; 418/418 params updated over the rotation; 0 frozen
+  params changed; lr-0 control changed 0 of 418 over all 6 blocks; lr > 0 at every step.
+
+### What would change it
+
+The parent decides. Options: accept up to ~89% because no spill showed (risky on WDDM, which
+spills silently), or cut the eval peak first (eval holds the active block's training state).
+
+## 4 layers per BCD block beats 2 at 1B: held-out loss 0.45 nats lower at 2800 steps, for 6.8% slower steps (2026-11-13, #194)
+
+**One line: at real 1B settings, 4 layers per BCD block (7 blocks) ended 0.446 nats below 2 layers
+per block (13 blocks) on held-out loss at step 2800: 4.881 vs 5.327, a perplexity ratio of
+1.56x. A k4 step costs 6.8% more (12.60 vs 11.80 s mean). At equal training time k4 is still
+0.42 nats ahead. 2800 steps only; not shown for a full-length run.**
+
+### Result (measured, `results/bcd_blocksize_194/`, `scripts/analyze_bcd_blocksize_194.py`)
+
+Both arms scored the same 64 held-out windows (sha matches #197). Gap = k2 minus k4, positive
+means k4 better. Paired standard error 0.006-0.012.
+
+| step | k2 | k4 | gap (nats) | ppl ratio |
+|---:|---:|---:|---:|---:|
+| 700 | 6.961 | 6.798 | 0.163 | 1.18x |
+| 1300 | 6.779 | 5.421 | 1.358 | 3.89x |
+| 1400 | 5.848 | 5.385 | 0.463 | 1.59x |
+| 2100 | 5.468 | 5.031 | 0.438 | 1.55x |
+| 2600 | 5.411 | 4.899 | 0.512 | 1.67x |
+| 2800 | 5.327 | 4.881 | 0.446 | 1.56x |
+
+- The reading rule below is met: gap 0.446 at 2800 (above 0.012), positive at 2100 and 2600.
+- Steps 800-1300 are inflated: k2's first 1300-step rotation had not finished, and its loss
+  stayed near 6.8 until its second rotation began. After step 1400 the gap sits at 0.41-0.53
+  and does not shrink through step 2800.
+- Equal training time: k4 interpolated at k2's elapsed time is 0.42 nats better at k2's step
+  2800 (9.18 h); 0.35-0.45 from step 1400 on.
+- Cost: k4 mean step 12.604 s, k2 11.804 s (k4/k2 1.068). Train time 9.80 h vs 9.18 h.
+- VRAM: peak reserved 83.3% (embedding turn) in both arms, no turn over 85%.
+- Not measured: a full-length run, 3 layers per block, 5 layers per block, and a noise floor at
+  2800 steps (the 0.006 floor is #197's, at 180 steps). Both arms are one seed.
+
+### What runs
+
+`scripts/exp_bcd_blocksize_194.py`, one arm per process, launched by
+`results/bcd_blocksize_194/run_194.sh`. Production flags (fp8, grad_accum 8, 100 steps per block
+turn, balanced partition, Muon, warmup 500, cosine to 0 at step 2800), `--seed 0
+--deterministic`. The arms differ only in `--bcd-layers-per-block` (2 is passed explicitly).
+
+- k2: 13 training blocks (embedding, 12 two-layer blocks, tail in the last). Same layout as
+  production. 2 full rotations at step 2600.
+- k4: 7 training blocks. 4 full rotations at step 2800.
+- Held-out loss every 100 steps: the same 64 windows (262,144 tokens) as #197, sha-checked.
+
+### Pre-run checks (measured, `results/bcd_blocksize_194/smoke/`)
+
+| check | k2 | k4 |
+|---|---|---|
+| training blocks | 13 | 7 |
+| params updated over one rotation (fp32, full LR) | 418/418 | 418/418 |
+| frozen params changed during a turn | 0 | 0 |
+| step time, mean of per-block medians | 11.48 s | 12.59 s (+9.7%) |
+| peak reserved, worst training turn | 82.4% | 82.4% |
+| peak reserved, during eval | 82.3% | 83.0% |
+
+- **Negative control.** At lr 0 the same checksum saw 0 of 418 params change over 3 turns.
+  A float64-sum checksum had shown fake changes (same tensor summed on CPU vs GPU), so the
+  checksum is now an exact integer sum of the bit patterns.
+- **Resume.** Killed at step 4 and resumed: train loss at steps 5-8 and all 64 held-out window
+  losses at step 8 are bit-identical to the uninterrupted run. Checkpoint every 700 steps,
+  ~3.4 GB each, ~3 s to save.
+- **Eval memory.** With a 4-layer block active, eval first reached 94% of the card and slowed
+  from 51 s to 68 s. Cause: the step's gradients were still alive. The harness now drops them
+  before eval (the trainer's `zero_grad()` does the same right after); train and eval losses
+  stayed bit-identical, eval fell to 83% and 49 s.
+- **Step-1 held-out (init weights)** is 11.23550 vs #197's 11.23556, same tokens. Not
+  investigated; #197 forced a different cuBLAS workspace setting, which may explain it.
+- Step times are lower than the 12.3 / 13.4 s from the 2026-11-11 entry because #195 landed
+  since; the ratio is unchanged (1.097 vs 1.095).
+- Step time falls with depth in both arms (embedding 16.2 s, last block 6.5-7.8 s), since a
+  deeper active block runs the backward through fewer layers.
+
+### Reading rule, set before the result
+
+The only noise floor measured in this harness is #197's: 0.006 nats, one sample, at 180 steps.
+It is not re-measured at 2800 steps. So: call k4 better only if k2 - k4 is above 0.012 nats
+(twice that floor) at step 2800 AND positive at 2100 and 2600. Below 0.012, cannot tell without
+a floor arm at this length. Call it a speed win too only if k4 is also ahead at equal training
+time (`scripts/analyze_bcd_blocksize_194.py` interpolates k4 at k2's elapsed seconds).
+
+### Found on the way, not fixed
+
+`--warmup-steps 1` trains at lr 0 forever: warmup sets lr to 0 at step 0, and the recursive
+cosine then scales 0. Logged lr was 0.0 at every step of a 6-step run. `--warmup-steps 0`
+gave full lr (measured). The default 500 hands over at 499/500 of peak, so it should be fine;
+the long run's logged lr will confirm it.
+## The 1.6x BCD penalty does not hold at 13 blocks per rotation: it is 2.4x at 4000 steps and 3.2x at 12000, and still growing (2026-11-12, #198)
+
+Why: the published 211-day figure (132 days x 1.6) used a penalty of 0.47 nats from ONE test (d1024 x 8 layers, 4 layers per block, about 3 blocks per rotation, 4000 steps, #164). The 1B run is 24 layers at 2 layers per block (13 blocks per rotation) and far longer. Full training does not fit at 1B, so this measures the penalty at a narrow stand-in where full fits. It is NOT a 1B measurement.
+
+Setup: d512, 16 heads, same data and harness as #192 (`scripts/ab_local_loss.py`, `scripts/run_penalty_vs_n.sh`). Arms `bcd_k2` (balanced BCD, 2 layers per block) and `full`, 12000 steps each, held-out loss. 12 layers = embedding block + 6 layer blocks (7 training blocks, attention layers 3 and 9). 24 layers = embedding block + 12 layer blocks (13 training blocks, attention layers 6 and 18). Layout checked in the logs. Raw: `results/local_loss/penalty_d512_L12.*`, `penalty_d512_L24.*`.
+
+| Step | 12L BCD | 12L full | 12L gap (nats) | 12L ppl penalty | 24L BCD | 24L full | 24L gap (nats) | 24L ppl penalty |
+|---|---|---|---|---|---|---|---|---|
+| 1000 | 6.292 | 5.516 | 0.776 | 2.17x | 7.731 | 5.517 | 2.214 | 9.2x |
+| 2000 | 5.936 | 5.256 | 0.680 | 1.97x | 6.218 | 5.253 | 0.965 | 2.62x |
+| 4000 | 5.655 | 5.008 | 0.647 | 1.91x | 5.864 | 4.993 | 0.872 | 2.39x |
+| 8000 | 5.445 | 4.602 | 0.843 | 2.32x | 5.613 | 4.565 | 1.048 | 2.85x |
+| 12000 | 5.348 | 4.405 | 0.943 | 2.57x | 5.511 | 4.360 | 1.151 | 3.16x |
+
+Findings (measured):
+- At equal steps (4000), penalty is 1.6x (old, about 3 blocks) -> 1.9x (7 blocks) -> 2.4x (13 blocks). More blocks per rotation costs more, so the old 1.6x does not describe the 1B layout.
+- After step 4000 the penalty grows with run length at both depths (12L: 1.9x -> 2.6x; 24L: 2.4x -> 3.2x). BCD flattens (24L: 5.61 at 8000 -> 5.51 at 12000) while full keeps falling. Steps 1000-2000 at 24L are dominated by each block having trained only about 77 steps in the first rotation and say little.
+- Both the 4000-step gaps differ from the old test in width, depth and block count at once, so the 1.6x vs 1.9x vs 2.4x comparison mixes factors; the 12L vs 24L pair differs only in depth/block count (same width, same data).
+
+Not measured: the penalty at 1B, and its value at the 1B run length. The curves have not flattened by 12000 steps, so the 12000-step penalty is not an upper bound. Plugging the formula (132 days x penalty) with the 24L numbers gives 316 days (2.4x) to 417 days (3.2x); that is arithmetic on a stand-in, not a measured 1B figure. The "~12-17% cheaper at 3-4 layers per block" line in the entry below is unaffected by this result but also still unproven at 1B.
 
 ## fp8 gradients are far from bf16 gradients at 1B, but no loss cost is detectable at 180 steps (2026-11-12, #197)
 

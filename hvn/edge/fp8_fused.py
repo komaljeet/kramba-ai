@@ -81,7 +81,11 @@ DEFAULT_EXEMPT = ("alpha_proj", "beta_proj", "decoder")
 
 #: Call counters. Python ints, cheap; tests use them to prove the path ran.
 FP8_STATS = {"fwd": 0, "bwd": 0, "w_hits": 0, "w_misses": 0, "fallback_rows": 0,
-             "x_hits": 0, "skipped": 0}
+             "x_hits": 0, "skipped": 0, "frozen_fused": 0, "codes_hits": 0}
+
+#: #202 switch for A/B measurement: False sends BCD-frozen ternary weights back
+#: through the old ternary-then-fp8 route (same bits, slower).
+FROZEN_FUSED = [True]
 
 #: Test hook: route every fp8 module through the eager reference (feasibility
 #: branch semantics, no fused kernels, no weight cache) instead.
@@ -203,6 +207,50 @@ if _HAS_TRITON:
             # `1.0 / s` is likewise s.reciprocal() * 1.0 == div_rn(1, s).
             tl.store(inv_ptr, tl.div_rn(one, s))
 
+    @triton.jit
+    def _ternary_fp8_kernel(w_ptr, scale_ptr, out_ptr, out_t_ptr, flag_ptr, inv_ptr, M, N,
+                            MAXV: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr):
+        """fp8 codes of a per-tensor TERNARY weight, straight from the latent weight.
+
+        Same arithmetic, element by element, as ``_quantize_kernel``
+        (ternary_fused.py) followed by ``_amax_kernel`` + ``_cast_kernel``, in one
+        pass. A ternary weight holds only 0 and +-bf16(scale), so its amax is
+        bf16(scale) whenever any code is non-zero, and the scale needs no
+        reduction pass. ``flag`` records whether any code is non-zero; ``inv``
+        gets the dequant scale for both cases (amax = bf16(scale), amax = 0), and
+        the caller picks one -- the all-zero case only changes the scale, every
+        code is 0 either way.
+        """
+        pid_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        rm = pid_m * BM + tl.arange(0, BM)
+        rn = pid_n * BN + tl.arange(0, BN)
+        mask = (rm[:, None] < M) & (rn[None, :] < N)
+        w = tl.load(w_ptr + rm[:, None] * N + rn[None, :], mask=mask, other=0.0).to(tl.float32)
+        scale = tl.load(scale_ptr).to(tl.float32)
+        # _quantize_kernel, verbatim: code, clamp, rescale, canonical +0.
+        q = tl.extra.cuda.libdevice.rint(tl.div_rn(w, scale))
+        q = tl.minimum(tl.maximum(q, -1.0), 1.0)
+        t = q * scale
+        t = t + 0.0
+        # ... stored as bf16 (the weight the fp8 quantizer reads) ...
+        v = t.to(tl.bfloat16).to(tl.float32)
+        # ... and _cast_kernel with amax = bf16(scale).
+        one = tl.full([], 1.0, tl.float32)
+        amax = scale.to(tl.bfloat16).to(tl.float32)
+        amax = tl.maximum(amax, 1e-12, propagate_nan=tl.PropagateNan.ALL)
+        s = tl.div_rn(one, amax) * MAXV
+        q8 = tl.clamp(v * s, -MAXV, MAXV, propagate_nan=tl.PropagateNan.ALL)
+        q8 = q8.to(out_ptr.dtype.element_ty)
+        tl.store(out_ptr + rm[:, None] * N + rn[None, :], q8, mask=mask)
+        tl.store(out_t_ptr + rn[None, :] * M + rm[:, None], q8, mask=mask)
+        nz = tl.max(tl.max(((q != 0.0) & mask).to(tl.int32), axis=1), axis=0)
+        tl.atomic_max(flag_ptr, nz)
+        if (pid_m == 0) & (pid_n == 0):
+            tl.store(inv_ptr, tl.div_rn(one, s))
+            s0 = tl.div_rn(one, tl.full([], 1e-12, tl.float32)) * MAXV
+            tl.store(inv_ptr + 1, tl.div_rn(one, s0))
+
 
 def fp8_quantize(t: torch.Tensor, dtype, transpose: bool = False):
     """Fused per-tensor fp8 quantize of ``bf16(t)`` for a 2-D ``t``.
@@ -227,18 +275,47 @@ def fp8_quantize(t: torch.Tensor, dtype, transpose: bool = False):
         return q, inv, (q_t if transpose else None)
     t = t.contiguous()
     M, N = t.shape
-    amax = torch.zeros((), device=t.device, dtype=torch.float32)
+    # #207: the kernel that wrote t may already have its amax (same bytes, same
+    # exact max); otherwise one pass over t computes it.
+    from .fused_bias import take_amax_hint
+    amax = take_amax_hint(t)
     inv = torch.empty((), device=t.device, dtype=torch.float32)
     out = torch.empty((M, N), device=t.device, dtype=dtype)
     out_t = torch.empty((N, M), device=t.device, dtype=dtype) if transpose else out
     n = t.numel()
     BLOCK = 4096
-    _amax_kernel[(triton.cdiv(n, BLOCK),)](t, amax, n, BLOCK=BLOCK)
+    if amax is None:
+        amax = torch.zeros((), device=t.device, dtype=torch.float32)
+        _amax_kernel[(triton.cdiv(n, BLOCK),)](t, amax, n, BLOCK=BLOCK)
     BM, BN = 64, 64
     _cast_kernel[(triton.cdiv(M, BM), triton.cdiv(N, BN))](
         t, amax, out, out_t, inv, M, N, MAXV=_FP8_MAX[dtype],
         WRITE_T=transpose, BM=BM, BN=BN)
     return out, inv, (out_t if transpose else None)
+
+
+def ternary_fp8_frozen(w: torch.Tensor, scale: torch.Tensor):
+    """``fp8_quantize(ternary(w, scale).to(bf16), E4M3, transpose=True)`` in one pass (#202).
+
+    For a BCD-frozen per-tensor TernaryLinear weight, which is quantized on
+    every use (forward and checkpoint recompute, every micro-batch): the old
+    route writes the bf16 ternary weight, reads it for the amax, reads it again
+    for the cast. Here the latent weight is read once and the fp8 codes and
+    their transposed copy are written directly; no bf16 temporary. Bit-identical
+    codes and scale (tests/test_fp8_fused.py). CUDA + Triton only.
+    """
+    assert w.dim() == 2 and w.is_contiguous() and w.is_cuda, (w.shape, w.stride())
+    M, N = w.shape
+    out = torch.empty((M, N), device=w.device, dtype=E4M3)
+    out_t = torch.empty((N, M), device=w.device, dtype=E4M3)
+    flag = torch.zeros((), device=w.device, dtype=torch.int32)
+    inv = torch.empty(2, device=w.device, dtype=torch.float32)
+    BM, BN = 64, 64
+    _ternary_fp8_kernel[(triton.cdiv(M, BM), triton.cdiv(N, BN))](
+        w, scale, out, out_t, flag, inv, M, N, MAXV=_FP8_MAX[E4M3], BM=BM, BN=BN)
+    # All codes zero (all-zero weight): the reference's amax is 0, clamped to
+    # 1e-12. Only the scale differs; every code is 0 either way.
+    return out, torch.where(flag > 0, inv[0], inv[1]), out_t
 
 
 #: One-entry cache of the last activation quantized by ``_FP8Linear`` (#195):
@@ -365,6 +442,23 @@ def _bf16_weight(mod: nn.Module) -> torch.Tensor:
     return mod.weight.to(torch.bfloat16)
 
 
+def _frozen_ternary_scale(mod: nn.Module):
+    """The per-step ternary scale if ``_bf16_weight(mod)`` would be the fused
+    frozen-weight quantize (``TernaryLinear._quantize_raw``'s fused branch with
+    the #199 frozen scale), else None. Mirrors those conditions exactly, so
+    every other case keeps the old route."""
+    from . import ternary as T
+    if not (_HAS_TRITON and isinstance(mod, T.TernaryLinear)):
+        return None
+    w = mod.weight
+    if (mod._frozen_codes is not None or w.requires_grad or not w.is_cuda
+            or not (T._USE_FUSED_TERNARY or mod.use_fused)
+            or mod.group_size != T.GROUP_PER_TENSOR or not mod.use_step_cache
+            or w.dim() != 2 or not w.is_contiguous()):
+        return None
+    return mod._frozen_step_scale(w)
+
+
 def _fp8_weight(mod: nn.Module):
     """(wq, ws, wq_t) for ``mod``, from the per-step cache when trainable."""
     from . import ternary as T
@@ -376,13 +470,167 @@ def _fp8_weight(mod: nn.Module):
         if c is not None and c[0] == key:
             FP8_STATS["w_hits"] += 1
             return c[1]
+    elif getattr(mod, "_f8codes", None) is not None and mod._f8codes.holder.data.is_cuda:
+        return _streamed_codes(mod)
     with torch.no_grad():
-        wq, ws, wq_t = fp8_quantize(_bf16_weight(mod), E4M3, transpose=True)
+        scale = None if cacheable or not FROZEN_FUSED[0] else _frozen_ternary_scale(mod)
+        if scale is not None:
+            wq, ws, wq_t = ternary_fp8_frozen(w, scale)
+            FP8_STATS["frozen_fused"] += 1
+        else:
+            wq, ws, wq_t = fp8_quantize(_bf16_weight(mod), E4M3, transpose=True)
     if cacheable:
         mod._f8cache = (key, (wq, ws, wq_t))
         T._STEP_LIVE.add(mod)
         FP8_STATS["w_misses"] += 1
     return wq, ws, wq_t
+
+
+# ---------------------------------------------------------------------------
+# #204: fp8 codes of BCD-frozen weights made once per turn, streamed instead of
+# the bf16 weight.
+#
+# A frozen offloaded weight is streamed CPU -> GPU on every use (forward and
+# checkpoint recompute, every micro-batch) and quantized to fp8 codes again on
+# every use (#203: 0.94 ms per forward, 0.91 per recompute, per layer). Its
+# value cannot change within a BCD turn, so the codes are a pure function of
+# bytes that are fixed for the turn.
+#
+# Where the codes live: a GPU copy of every frozen layer's codes is the VRAM
+# the offload exists to avoid. So they live in host RAM next to the bf16
+# weight, packed as ``wq`` bytes then ``wq_t`` bytes into a "holder" tensor of
+# the SAME shape and dtype as the bf16-parked weight (2 bytes per weight either
+# way). The offload pool then streams the holder in place of the weight: same
+# PCIe bytes, same buffer-set signature (no new GPU buffers, eval keeps sharing
+# them), and the weight Parameter itself stays on the CPU, so any code path
+# that would read it instead of the codes fails loudly ("weight is on cpu")
+# rather than silently.
+#
+# Staleness (#117 is the precedent): a module's codes are used only if its key
+# matches -- the BCD turn (bumped by every block switch, which is when parking
+# rewrites weights), the weight's storage pointer and version counter, the
+# holder-home's version counter and the quantizer route. A write through
+# ``p.data`` bumps no counter, so the turn bump is the guard for those; a
+# write between turns is always caught (tests/test_frozen_fp8_codes.py).
+# The ACTIVE block never uses codes: its weight requires grad, which takes the
+# per-step cache above before the codes branch is consulted.
+# ---------------------------------------------------------------------------
+#: Master switch (``--no-frozen-fp8-codes`` turns it off).
+FROZEN_CODES = [True]
+_CODES_TURN = [0]
+CODES_STATS = {"refreshed": 0, "refresh_calls": 0, "refresh_sec": 0.0, "home_bytes": 0}
+
+
+class _Codes:
+    __slots__ = ("key", "holder", "ws", "shape")
+
+    def __init__(self, key, holder, ws, shape):
+        self.key, self.holder, self.ws, self.shape = key, holder, ws, shape
+
+
+def _bump_codes_turn(*_a, **_k) -> None:
+    _CODES_TURN[0] += 1
+
+
+def _codes_key(mod: nn.Module):
+    w = mod.weight
+    return (_CODES_TURN[0], w.data_ptr(), w._version, w.dtype, tuple(w.shape),
+            FROZEN_FUSED[0])
+
+
+def _streamed_codes(mod: nn.Module):
+    """(wq, ws, wq_t) as views into the streamed holder buffer."""
+    c = mod._f8codes
+    w = mod.weight
+    # The wrapper only streams holders whose key was fresh at forward start;
+    # re-check at use (also covers the recompute, inside backward).
+    if c.key != _codes_key(mod):
+        raise RuntimeError(f"stale frozen fp8 codes streamed (#204): key {c.key} "
+                           f"vs now {_codes_key(mod)}")
+    if w.device.type != "cpu":
+        raise RuntimeError("frozen fp8 codes streamed while the weight is on "
+                           f"{w.device} too (#204)")
+    M, N = c.shape
+    flat = c.holder.data.view(-1).view(torch.uint8)
+    wq = flat[:M * N].view(E4M3).view(M, N)
+    wq_t = flat[M * N:2 * M * N].view(E4M3).view(N, M)
+    FP8_STATS["codes_hits"] += 1
+    return wq, c.ws, wq_t
+
+
+def frozen_codes_enabled(model: nn.Module) -> bool:
+    return (FROZEN_CODES[0] and not _REFERENCE_MODE[0]
+            and getattr(model, "_offload_pool", None) is not None
+            and torch.is_autocast_enabled("cuda")
+            and torch.get_autocast_dtype("cuda") == torch.bfloat16)
+
+
+def _codes_candidates(model: nn.Module):
+    """fp8-enabled Linears of the frozen, offloaded layer blocks."""
+    from .ternary import TernaryLinear
+    pool, act = model._offload_pool, model._offload_active_names
+    for i, blk in enumerate(model.blocks):
+        if f"blocks.{i}" in act:
+            continue
+        for m in blk.modules():
+            if not (isinstance(m, (FP8Linear, TernaryLinear)) and m.use_fp8):
+                continue
+            w = m.weight
+            if (w.requires_grad or w.dim() != 2 or w.element_size() != 2
+                    or id(w) not in pool._cpu_home or w.device.type != "cpu"
+                    or (isinstance(m, TernaryLinear) and m._frozen_codes is not None)):
+                continue
+            yield m
+
+
+@torch.no_grad()
+def refresh_frozen_codes(model: nn.Module) -> dict:
+    """Make every frozen layer's codes fresh; return {id(weight): holder}.
+
+    Called at the start of each training forward with offload. A stale module
+    (first use in a turn, or its weight changed) gets its codes recomputed by
+    the SAME per-use route (``_fp8_weight``'s uncached branch) on a temporary
+    GPU copy of its weight, then copied into its host holder. Everything else
+    is a key comparison.
+    """
+    pool = model._offload_pool
+    dev = pool.device
+    cands = list(_codes_candidates(model))
+    stale = [m for m in cands if m._f8codes is None or m._f8codes.key != _codes_key(m)]
+    if stale:
+        import time
+        t0 = time.perf_counter()
+        # Nothing may stay resident (or in flight) with old holder bytes.
+        pool.evict_all()
+        for m in stale:
+            w = m.weight
+            home = w.data
+            M, N = w.shape
+            w.data = home.to(dev)
+            try:
+                saved, m._f8codes = m._f8codes, None
+                wq, ws, wq_t = _fp8_weight(m)
+            finally:
+                w.data = home
+            packed = torch.empty((M, N), dtype=home.dtype, device=dev)
+            pf = packed.view(-1).view(torch.uint8)
+            pf[:M * N].copy_(wq.view(-1).view(torch.uint8))
+            pf[M * N:].copy_(wq_t.reshape(-1).view(torch.uint8))
+            if saved is not None and saved.shape == (M, N) and saved.holder.dtype == home.dtype:
+                holder = saved.holder
+                assert holder.device.type == "cpu", "holder resident during refresh"
+                holder.data.copy_(packed)          # in place: same host buffer
+            else:
+                holder = nn.Parameter(packed.to("cpu"), requires_grad=False)
+                pool.register_cpu_home([holder], force=True)
+                CODES_STATS["home_bytes"] += holder.numel() * holder.element_size()
+            m._f8codes = _Codes(None, holder, ws, (M, N))
+            m._f8codes.key = _codes_key(m)
+            CODES_STATS["refreshed"] += 1
+        torch.cuda.synchronize(dev)
+        CODES_STATS["refresh_calls"] += 1
+        CODES_STATS["refresh_sec"] += time.perf_counter() - t0
+    return {id(m.weight): m._f8codes.holder for m in cands}
 
 
 def fp8_active(mod: nn.Module, x: torch.Tensor) -> bool:
@@ -405,20 +653,68 @@ def fp8_active(mod: nn.Module, x: torch.Tensor) -> bool:
     return True
 
 
-def fp8_module_forward(mod: nn.Module, x: torch.Tensor) -> torch.Tensor:
-    if _REFERENCE_MODE[0]:
-        return fp8_linear_reference(x, _bf16_weight(mod), mod.bias)
-    lead, K = x.shape[:-1], x.shape[-1]
+def _fp8_gemm(mod: nn.Module, x: torch.Tensor):
+    """``x @ W.T`` as a bf16 [rows, O] tensor, no bias; and whether the GEMM was
+    skipped (output unread, #195: the tensor is then uninitialised)."""
+    K = x.shape[-1]
     wq, ws, wq_t = _fp8_weight(mod)
     x2 = x.reshape(-1, K)
     fn = _FP8Linear
-    if id(mod) in _SKIP_IDS[0] and not mod.weight.requires_grad:
+    skipped = id(mod) in _SKIP_IDS[0] and not mod.weight.requires_grad
+    if skipped:
         fn = _FP8LinearOutputUnread
     with torch.autocast("cuda", enabled=False):
         y = fn.apply(x2, mod.weight, wq, ws, wq_t)
-    if mod.bias is not None:
-        y = y + mod.bias.to(torch.bfloat16)
-    return y.reshape(*lead, wq.shape[0])
+    return y, skipped
+
+
+def fp8_module_forward(mod: nn.Module, x: torch.Tensor) -> torch.Tensor:
+    if _REFERENCE_MODE[0]:
+        return fp8_linear_reference(x, _bf16_weight(mod), mod.bias)
+    from . import fused_bias as FB
+    lead = x.shape[:-1]
+    y, skipped = _fp8_gemm(mod, x)
+    if mod.bias is not None and not (skipped and FB.MODE[0] != "off"):
+        # #207: a skipped GEMM's output is uninitialised and unread, so its
+        # bias add is dead work too (the add saves nothing for backward).
+        b = mod.bias.to(torch.bfloat16)
+        if FB.MODE[0] != "off" and FB.available(y, b):
+            y = FB.bias_add(y, b)
+        else:
+            y = y + b
+    return y.reshape(*lead, y.shape[-1])
+
+
+def fp8_parts_ok(mod: nn.Module, x: torch.Tensor) -> bool:
+    """Would :func:`fp8_linear_parts` return parts for ``mod(x)``? No side effects."""
+    from . import fused_bias as FB
+    from .ternary import TernaryLinear
+    return not (FB.MODE[0] != "fused" or _REFERENCE_MODE[0] or mod.bias is None
+                or not isinstance(mod, (FP8Linear, TernaryLinear))
+                or mod._forward_hooks or mod._forward_pre_hooks
+                or nn.modules.module._global_forward_hooks
+                or nn.modules.module._global_forward_pre_hooks
+                or not (mod.training or torch.is_grad_enabled())
+                or not fp8_active(mod, x))
+
+
+def fp8_linear_parts(mod: nn.Module, x: torch.Tensor):
+    """For a caller that fuses the bias into its next op (#207, ``fused_bias``):
+    ``(y, b)`` = the fp8 GEMM output [rows, O] without bias and the bf16 bias, or
+    None if ``mod(x)`` would not take the plain fp8 path (then call ``mod(x)``).
+
+    Exactly the work ``mod(x)`` does minus the bias add: same GEMM, same weight
+    route, same autograd handles, and ``b`` is the same ``bias.to(bf16)`` node.
+    Modules with forward hooks are refused, since calling this bypasses them.
+    """
+    if not fp8_parts_ok(mod, x):
+        return None
+    from . import fused_bias as FB
+    y, _ = _fp8_gemm(mod, x)
+    b = mod.bias.to(torch.bfloat16)
+    if not FB.available(y, b):
+        raise RuntimeError(f"fp8 GEMM output not fusable: {y.shape} {y.dtype} {b.shape} {b.dtype}")
+    return y, b
 
 
 class FP8Linear(nn.Linear):
@@ -432,6 +728,7 @@ class FP8Linear(nn.Linear):
     use_fp8 = False
     fp8_weight_cache = False
     _f8cache = None
+    _f8codes = None
 
     def forward(self, x):
         if fp8_active(self, x):
@@ -444,6 +741,7 @@ class FP8Linear(nn.Linear):
 
     def _load_from_state_dict(self, *args, **kwargs):
         self._f8cache = None
+        self._f8codes = None
         return super()._load_from_state_dict(*args, **kwargs)
 
 
@@ -462,10 +760,13 @@ def enable_fp8_linear(model: nn.Module, exempt: tuple[str, ...] = DEFAULT_EXEMPT
     ``(enabled, skipped_for_shape)``.
     """
     from .ternary import TernaryLinear, _ensure_step_hooks
+    from hvn.core.block_coordinate import register_activate_callback
     if not fp8_supported():
         raise RuntimeError("--fp8-linear needs CUDA FP8 tensor cores (sm_89+) and Triton")
     if weight_cache:
         _ensure_step_hooks()
+    # #204: every BCD switch expires every frozen weight's fp8 codes.
+    register_activate_callback(_bump_codes_turn)
     enabled, skipped = [], []
     for name, mod in model.named_modules():
         if not (type(mod) is nn.Linear or isinstance(mod, (FP8Linear, TernaryLinear))):

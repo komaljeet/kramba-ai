@@ -319,6 +319,17 @@ class EdgeHVN(nn.Module):
             self._offload_pool.evict(name)
         return out
 
+    def _offload_params(self, block: nn.Module) -> list:
+        """What the offload pool streams for a frozen layer block: its
+        parameters, except that a weight with fresh frozen fp8 codes (#204) is
+        replaced by its codes holder (same shape and dtype, so the same pool
+        buffers). The weight itself then stays on the CPU."""
+        params = list(block.parameters())
+        subs = getattr(self, "_f8codes_subs", None)
+        if subs:
+            params = [subs.get(id(p), p) for p in params]
+        return params
+
     def _offload_wrap_checkpointed(self, name: str, block: nn.Module, x_in, position_ids,
                                    doc_ids=None):
         """Offload wrapper for a checkpointed LAYER block (Issue #101).
@@ -375,6 +386,10 @@ class EdgeHVN(nn.Module):
         # the kwargs entirely when unset, so the unpacked path is unchanged.
         _kw = {} if doc_ids is None else {"doc_ids": doc_ids}
         if name in self._offload_active_names:
+            if name in self._no_ckpt_names:
+                # #202: keep this active layer's activations instead of
+                # recomputing its forward in backward. Same ops, same order.
+                return block(x_in, position_ids=position_ids, **_kw)
             if doc_ids is None:
                 return checkpoint(block, x_in, position_ids, use_reentrant=False)
 
@@ -383,7 +398,7 @@ class EdgeHVN(nn.Module):
             return checkpoint(_active_forward, x_in, position_ids, use_reentrant=False)
 
         pool = self._offload_pool
-        params = list(block.parameters())
+        params = self._offload_params(block)
 
         # Backward recompute prefetch (2026-10-12). Backward recomputes the
         # offloaded blocks in REVERSE forward order, so when block i's
@@ -434,6 +449,103 @@ class EdgeHVN(nn.Module):
             pool.evict(name)  # no call #2 coming -- free the slot now
         return out
 
+    def _forward_offload_inference(self, input_ids, position_ids, blk_kw, return_hidden):
+        """Forward with BCD weight offload outside training (#213).
+
+        The training branch of ``forward`` streams frozen blocks only when
+        ``self.training and torch.is_grad_enabled()``. Any other forward on an
+        offloaded model -- the trainer's ``--val-every`` eval, which runs in
+        ``eval()`` mode -- fell through to the plain path and called the frozen
+        layers with their weights still parked on the CPU: ``Expected all
+        tensors to be on the same device, but got weight is on cpu`` (measured,
+        1B k4, origin/main 4611a2f).
+
+        This streams each frozen segment through the offload pool, one at a
+        time: load, compute, evict, then prefetch the next one -- the order the
+        training forward uses for a block with no recompute coming. It is the
+        same walk as the #209 held-out harness (scripts/ab_heldout_209.py:
+        ``seg``), so the eval reports the same per-window losses.
+
+        - The real (bf16-parked) weights are streamed, not the frozen fp8 codes
+          (#204): eval runs under ``no_grad``, where fp8 is off.
+        - A frozen TernaryLinear's inference cache (``_wcache``, #131) is
+          dropped right after its segment runs. It is a GPU copy of the weight
+          the pool is about to evict; keeping it would rebuild the whole model
+          on the card across one eval window (~2 GB at 1B). Values are the same
+          either way (the cache is a bit-identical shortcut).
+        - Nothing stays resident afterwards: the pool is as the eval found it
+          (everything evicted), so the next training step loads from the same
+          CPU homes it would have anyway.
+
+        Gradients cannot flow through this path (a frozen segment's buffer is
+        reused as soon as it is evicted), so it refuses to run with grad on.
+        """
+        if torch.is_grad_enabled():
+            raise RuntimeError(
+                "An offloaded EdgeHVN (BCD --offload) runs outside training only "
+                "under torch.no_grad(): its frozen layers are streamed from host "
+                "RAM and evicted right after use, so no backward can reach them. "
+                "Wrap the call in torch.no_grad() (the trainer's evaluate() does).")
+        if self.shared_block is not None:
+            raise NotImplementedError("offloaded inference does not support shared_weights")
+        pool = self._offload_pool
+        act = self._offload_active_names
+        prefetch = getattr(self, "_offload_prefetch", True)
+
+        def _drop_caches(modules):
+            for m in modules:
+                for sub in m.modules():
+                    inv = getattr(sub, "invalidate_cache", None)
+                    if callable(inv):
+                        inv()
+
+        def _seg(name, modules, fn):
+            if name in act:
+                return fn()
+            params = [p for m in modules for p in m.parameters()]
+            if not pool._offloadable(params):
+                return fn()
+            pool.load(name, params)
+            out = fn()
+            _drop_caches(modules)
+            pool.evict(name)
+            return out
+
+        x = _seg("token_embedding", [self.token_embedding],
+                 lambda: self.token_embedding(input_ids))
+        n = len(self.blocks)
+        for i, block in enumerate(self.blocks):
+            x = _seg(f"blocks.{i}", [block],
+                     lambda b=block, h=x: b(h, position_ids=position_ids, **blk_kw))
+            if prefetch:
+                if i + 1 < n:
+                    nxt, nxt_params = f"blocks.{i + 1}", list(self.blocks[i + 1].parameters())
+                else:
+                    nxt = "final_norm+decoder"
+                    nxt_params = list(self.final_norm.parameters()) + list(self.decoder.parameters())
+                if nxt not in act:
+                    pool.prefetch(nxt, nxt_params)
+        if return_hidden:
+            # The caller projects with self.decoder next (the chunked loss), so
+            # the tail -- final_norm AND the decoder (its bias, or an untied
+            # weight) -- has to stay resident past this return. The caller
+            # releases it with release_offload_tail(); the trainer's evaluate()
+            # does, after each batch's loss.
+            name = "final_norm+decoder"
+            tail = list(self.final_norm.parameters()) + list(self.decoder.parameters())
+            if name not in act and pool._offloadable(tail):
+                pool.load(name, tail)
+            return self.final_norm(x)
+        return _seg("final_norm+decoder", [self.final_norm, self.decoder],
+                    lambda: self.decoder(self.final_norm(x)))
+
+    def release_offload_tail(self) -> None:
+        """Evict the tail a ``return_hidden`` offloaded inference forward left
+        resident (#213). No-op without offload, or when the tail is active."""
+        pool = getattr(self, "_offload_pool", None)
+        if pool is not None and getattr(self, "_offload_active_names", None) is not None:
+            pool.evict("final_norm+decoder")
+
     def forward(self, input_ids: torch.Tensor, position_ids: Optional[torch.Tensor] = None,
                 doc_ids: Optional[torch.Tensor] = None,
                 return_hidden: bool = False) -> torch.Tensor:
@@ -475,6 +587,11 @@ class EdgeHVN(nn.Module):
 
         offload = (getattr(self, "_offload_active_names", None) is not None
                    and self.training and torch.is_grad_enabled())
+        if (not offload and getattr(self, "_offload_active_names", None) is not None
+                and getattr(self, "_offload_pool", None) is not None):
+            # #213: eval / no_grad forward of an offloaded model.
+            return self._forward_offload_inference(input_ids, position_ids, blk_kw,
+                                                   return_hidden)
         if offload and not self.grad_checkpoint:
             raise RuntimeError(
                 "weight offload (Issue #101) requires grad_checkpoint=True -- "
@@ -507,6 +624,22 @@ class EdgeHVN(nn.Module):
             self._offload_recompute_order = (
                 [] if (getattr(self, "_offload_prefetch", True)
                        and getattr(self, "_offload_bwd_prefetch", True)) else None)
+            # #202: the last N layers of the active block run without
+            # checkpointing (their forward is not recomputed in backward).
+            # An int applies to every block; a dict maps the active block's
+            # member set to its own N (layer blocks differ in VRAM headroom).
+            n_keep = getattr(self, "_active_no_ckpt", 0) or 0
+            if isinstance(n_keep, dict):
+                n_keep = n_keep.get(self._offload_active_names, 0)
+            n_keep = int(n_keep)
+            act = [f"blocks.{i}" for i in range(len(self.blocks))
+                   if f"blocks.{i}" in self._offload_active_names]
+            self._no_ckpt_names = frozenset(act[-n_keep:]) if n_keep > 0 else frozenset()
+            # #204: frozen layers' fp8 codes, made once per BCD turn, streamed
+            # in place of their bf16 weights.
+            from .fp8_fused import frozen_codes_enabled, refresh_frozen_codes
+            self._f8codes_subs = (refresh_frozen_codes(self)
+                                  if frozen_codes_enabled(self) else None)
             x = self._offload_wrap_plain(
                 "token_embedding", [self.token_embedding],
                 lambda: self.token_embedding(input_ids),
@@ -549,7 +682,7 @@ class EdgeHVN(nn.Module):
                     if getattr(self, "_offload_prefetch", True):
                         if i + 1 < len(self.blocks):
                             next_name = f"blocks.{i + 1}"
-                            next_params = list(self.blocks[i + 1].parameters())
+                            next_params = self._offload_params(self.blocks[i + 1])
                         else:
                             next_name = "final_norm+decoder"
                             next_params = list(self.final_norm.parameters()) + list(self.decoder.parameters())

@@ -1,0 +1,116 @@
+{
+ "rows": [
+  {
+   "arm": "A",
+   "seed": 7,
+   "final_heldout": 5.910371035337448,
+   "vs_A_same_seed": 0.0,
+   "heldout_1400": 6.2262073159217834,
+   "heldout_2100": 5.984339654445648,
+   "turns": 28,
+   "mean_turn_len": 100.0,
+   "step_reaching_A_final": 2800.0,
+   "wall_min": 8.876399298508963
+  },
+  {
+   "arm": "B",
+   "seed": 7,
+   "final_heldout": 5.938975393772125,
+   "vs_A_same_seed": 0.028604358434677124,
+   "heldout_1400": 6.223914682865143,
+   "heldout_2100": 6.002238720655441,
+   "turns": 55,
+   "mean_turn_len": 50.0,
+   "step_reaching_A_final": null,
+   "wall_min": 11.296154248714448
+  },
+  {
+   "arm": "C",
+   "seed": 7,
+   "final_heldout": 5.907825857400894,
+   "vs_A_same_seed": -0.002545177936553955,
+   "heldout_1400": 6.1283203065395355,
+   "heldout_2100": 5.960274547338486,
+   "turns": 56,
+   "mean_turn_len": 50.0,
+   "step_reaching_A_final": 2609.3386515697375,
+   "wall_min": 8.869298446178437
+  },
+  {
+   "arm": "A",
+   "seed": 8,
+   "final_heldout": 5.907717168331146,
+   "vs_A_same_seed": 0.0,
+   "heldout_1400": 6.220981329679489,
+   "heldout_2100": 5.980943560600281,
+   "turns": 28,
+   "mean_turn_len": 100.0,
+   "step_reaching_A_final": 2800.0,
+   "wall_min": 8.87784764766693
+  },
+  {
+   "arm": "B",
+   "seed": 8,
+   "final_heldout": 5.900103449821472,
+   "vs_A_same_seed": -0.007613718509674072,
+   "heldout_1400": 6.206314653158188,
+   "heldout_2100": 5.96066889166832,
+   "turns": 59,
+   "mean_turn_len": 47.758620689655174,
+   "step_reaching_A_final": 2566.197650111728,
+   "wall_min": 11.333363556861878
+  },
+  {
+   "arm": "C",
+   "seed": 8,
+   "final_heldout": 5.9080371260643005,
+   "vs_A_same_seed": 0.0003199577331542969,
+   "heldout_1400": 6.1309714913368225,
+   "heldout_2100": 5.960405647754669,
+   "turns": 56,
+   "mean_turn_len": 50.0,
+   "step_reaching_A_final": null,
+   "wall_min": 8.820899665355682
+  },
+  {
+   "arm": "A",
+   "seed": 9,
+   "final_heldout": 5.911536753177643,
+   "vs_A_same_seed": 0.0,
+   "heldout_1400": 6.216054916381836,
+   "heldout_2100": 5.981877326965332,
+   "turns": 28,
+   "mean_turn_len": 100.0,
+   "step_reaching_A_final": 2800.0,
+   "wall_min": 8.87762097120285
+  },
+  {
+   "arm": "B",
+   "seed": 9,
+   "final_heldout": 5.89406555891037,
+   "vs_A_same_seed": -0.01747119426727295,
+   "heldout_1400": 6.215145587921143,
+   "heldout_2100": 5.956586092710495,
+   "turns": 47,
+   "mean_turn_len": 58.91304347826087,
+   "step_reaching_A_final": 2459.3244422432904,
+   "wall_min": 11.263930841286976
+  },
+  {
+   "arm": "C",
+   "seed": 9,
+   "final_heldout": 5.910263419151306,
+   "vs_A_same_seed": -0.00127333402633667,
+   "heldout_1400": 6.1288005113601685,
+   "heldout_2100": 5.961596071720123,
+   "turns": 56,
+   "mean_turn_len": 50.0,
+   "step_reaching_A_final": 2653.845595441182,
+   "wall_min": 8.836232356230418
+  }
+ ],
+ "same_sets_all_arms": true,
+ "record_s7_final": 5.90842393040657,
+ "same_seed_rerun_diff_A_s7_vs_record": 0.0019471049308776855,
+ "seed_diff_A": -0.00265386700630188
+}

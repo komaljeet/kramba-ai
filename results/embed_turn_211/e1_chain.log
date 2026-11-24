@@ -1,0 +1,12 @@
+=== e1_v1_base ballast [] gpu used 94 MiB Mon, Nov 16, 2026  8:54:25 PM
+exit 0 Mon, Nov 16, 2026  8:58:46 PM
+=== e1_v1_vram900 ballast [--vram-mib 900] gpu used 94 MiB Mon, Nov 16, 2026  8:58:51 PM
+[ballast] holding vram 900 MiB host 0 MiB
+exit 0 Mon, Nov 16, 2026  9:03:16 PM
+=== e1_v1_host4000 ballast [--host-mib 4000] gpu used 91 MiB Mon, Nov 16, 2026  9:03:22 PM
+[ballast] holding vram 0 MiB host 4000 MiB
+exit 0 Mon, Nov 16, 2026  9:07:49 PM
+=== e1_t_vram900 ballast [--vram-mib 900] gpu used 91 MiB Mon, Nov 16, 2026  9:07:54 PM
+[ballast] holding vram 900 MiB host 0 MiB
+exit 0 Mon, Nov 16, 2026  9:14:51 PM
+=== e1 done Mon, Nov 16, 2026  9:14:57 PM

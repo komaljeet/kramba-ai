@@ -399,3 +399,65 @@ def test_bcd_offload_trajectory_bit_identical_to_reference():
     assert sf["w_hits"] > 0 and sf["w_misses"] > 0, sf
     # #195: both savings ran in the fused arm, so the equality above covers them.
     assert sf["x_hits"] > 0 and sf["skipped"] > 0, sf
+    # #202: frozen ternary weights took the one-pass fp8 quantizer.
+    assert sf["frozen_fused"] > 0, sf
+
+
+# ---------------------------------------------------------------------------
+# #202: a BCD-frozen ternary weight goes latent -> fp8 codes in one pass.
+# ---------------------------------------------------------------------------
+def _frozen_old_route(w, scale):
+    from hvn.edge.ternary_fused import ternary_quantize_ste_fused
+    return fp8_quantize(ternary_quantize_ste_fused(w, scale=scale).to(torch.bfloat16),
+                        E4M3, transpose=True)
+
+
+def _assert_frozen_equal(w, ctx, scale=None):
+    from hvn.edge.ternary_fused import ternary_absmean_scale
+    scale = ternary_absmean_scale(w) if scale is None else scale
+    q1, s1, t1 = _frozen_old_route(w, scale)
+    q2, s2, t2 = F8.ternary_fp8_frozen(w, scale)
+    nbad = (_bits(q1) != _bits(q2)).sum().item()
+    assert nbad == 0, f"{ctx}: {nbad} of {q1.numel()} fp8 codes differ"
+    assert torch.equal(_bits(s1), _bits(s2)), f"{ctx}: scale {s1.item()!r} vs {s2.item()!r}"
+    assert torch.equal(_bits(t1), _bits(t2)), f"{ctx}: transposed copy differs"
+    return q2
+
+
+@fp8_only
+@pytest.mark.parametrize("wdtype", [torch.bfloat16, torch.float32])
+def test_frozen_ternary_fp8_bit_identical(wdtype):
+    """The production shapes at d=2048 (bf16 is the BCD park dtype), odd shapes,
+    exact .5 ties against the scale, and the all-zero weight (amax floor)."""
+    torch.manual_seed(0)
+    for shape in [(2048, 2048), (5504, 2048), (2048, 5504), (37, 53), (65, 129), (1, 16)]:
+        w = (torch.randn(shape, device="cuda") * 0.02).to(wdtype)
+        q = _assert_frozen_equal(w, f"{shape} {wdtype}")
+        assert (q.view(torch.uint8) != 0).any(), "all codes zero: the test is vacuous"
+    # Ties: |w| exactly 0.5 * scale round to even (0), 1.5 * scale clamps to 1.
+    from hvn.edge.ternary_fused import ternary_absmean_scale
+    w = (torch.randn(64, 128, device="cuda") * 0.02).to(wdtype)
+    s = ternary_absmean_scale(w)
+    w.view(-1)[:16] = (s * 0.5).to(wdtype)
+    w.view(-1)[16:32] = (-s * 0.5).to(wdtype)
+    w.view(-1)[32:48] = (s * 1.5).to(wdtype)
+    _assert_frozen_equal(w, "ties", scale=s)
+    _assert_frozen_equal(torch.zeros(64, 32, device="cuda", dtype=wdtype), "all zero")
+
+
+@fp8_only
+def test_frozen_ternary_fp8_check_can_fail():
+    """Must-fail partner. The one non-obvious step is that the fp8 amax is the
+    bf16-ROUNDED ternary scale. A kernel using the fp32 scale instead would give
+    this dequant scale -- and the equality above must be able to tell them apart.
+    fp32 weight: a bf16 weight's absmean is itself bf16 (torch.mean keeps the
+    dtype), so there the rounding is a no-op and this bug cannot exist."""
+    from hvn.edge.ternary_fused import ternary_absmean_scale
+    torch.manual_seed(2)
+    w = torch.randn(256, 512, device="cuda") * 0.02
+    s = ternary_absmean_scale(w)
+    assert s.to(torch.bfloat16).float() != s, "scale already bf16-exact: pick another seed"
+    _, s1, _ = _frozen_old_route(w, s)
+    bad = 1.0 / ((1.0 / s) * 448.0)                 # amax = fp32 scale
+    assert not torch.equal(_bits(s1), _bits(bad.reshape(()))), (
+        "fp32-scale amax gives the same bits: the test cannot see that bug")

@@ -123,24 +123,46 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="results/bcd_memory/1b.jsonl")
     ap.add_argument("--steps-per-block", type=int, default=3)
-    ap.add_argument("--blocks", type=int, default=13)
+    ap.add_argument("--blocks", type=int, default=7,
+                    help="must equal the layout's block count (7 = 1B at the #201 default "
+                         "of 4 layers per block; 13 = --layers-per-block 0)")
     ap.add_argument("--ckpt-dir", default="checkpoints/bcd_memory_scratch")
     ap.add_argument("--data-dir", default="data_cache")
     ap.add_argument("--grad-accum", type=int, default=1,
                     help="micro-batches per optimizer step (production uses 8)")
     ap.add_argument("--budget-layers", type=int, default=0,
-                    help="0 = production default; N = blocks of up to N layers")
+                    help="0 = off; N = budget packing capped at N layers (forces "
+                         "--bcd-layers-per-block 0, which the budget needs since #201)")
+    ap.add_argument("--layers-per-block", type=int, default=None,
+                    help="pass --bcd-layers-per-block N to the real training script (#194); "
+                         "unset = the trainer default (4 since #201), 0 = old budget packing")
+    ap.add_argument("--shape", default="",
+                    help="d_model,layers,heads,attn_layers e.g. 2784,12,87,3,9 (default: 1B production 2048x24)")
     a = ap.parse_args()
+    if a.budget_layers:
+        if a.layers_per_block:
+            ap.error("--budget-layers needs the budget packing; drop --layers-per-block")
+        # #201: without this the trainer's default of 4 layers per block would
+        # win over the patched budget and the run would measure k=4 instead.
+        a.layers_per_block = 0
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     sys.path.insert(0, REPO)
     os.chdir(REPO)
     install_hooks(a.out, a.budget_layers)
     import train_edge_conversational as T
-    steps = a.steps_per_block * a.blocks + 2
-    sys.argv = (["train_edge_conversational.py"] + PROD_ARGV
+    prod = list(PROD_ARGV)
+    if a.shape:
+        d, nl, nh, *attn = a.shape.split(",")
+        for flag, val in (("--d-model", d), ("--num-layers", nl), ("--n-heads", nh),
+                          ("--attn-layers", ",".join(attn))):
+            prod[prod.index(flag) + 1] = val
+    steps = a.steps_per_block * a.blocks + 2   # --blocks must equal the layout's block count
+    sys.argv = (["train_edge_conversational.py"] + prod
                 + ["--grad-accum", str(a.grad_accum), "--bcd-steps-per-block", str(a.steps_per_block),
                    "--max-steps", str(steps), "--checkpoint-dir", a.ckpt_dir,
-                   "--data-dir", a.data_dir])
+                   "--data-dir", a.data_dir]
+                + (["--bcd-layers-per-block", str(a.layers_per_block)]
+                   if a.layers_per_block is not None else []))
     T.main()
 
 

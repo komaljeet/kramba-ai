@@ -140,7 +140,7 @@ def test_tf32_flag_exists():
     import train_edge_conversational as tec
     import train as tr
 
-    tec_source = inspect.getsource(tec.main)
+    tec_source = (inspect.getsource(tec.build_arg_parser) + inspect.getsource(tec.main))
     tr_source = inspect.getsource(tr.main)
 
     assert "--tf32" in tec_source, "--tf32 flag not found in train_edge_conversational.py"
@@ -173,7 +173,7 @@ def test_tf32_default_off():
     import inspect
     import train_edge_conversational as tec
 
-    source = inspect.getsource(tec.main)
+    source = (inspect.getsource(tec.build_arg_parser) + inspect.getsource(tec.main))
     # The else branch should set allow_tf32 = False
     assert "allow_tf32 = False" in source, \
         "Default (no --tf32) should explicitly set allow_tf32 = False"

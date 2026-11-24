@@ -88,7 +88,7 @@ def test_flag_exists():
     import train_edge_conversational as tec
     import train as tr
 
-    tec_src = inspect.getsource(tec.main)
+    tec_src = (inspect.getsource(tec.build_arg_parser) + inspect.getsource(tec.main))
     tr_src = inspect.getsource(tr.main)
     assert "--num-workers" in tec_src, "--num-workers not in train_edge_conversational.py"
     assert "--num_workers" in tr_src or "--num-workers" in tr_src, "--num-workers not in train.py"
@@ -100,7 +100,7 @@ def test_default_zero():
     import inspect
     import train_edge_conversational as tec
 
-    source = inspect.getsource(tec.main)
+    source = (inspect.getsource(tec.build_arg_parser) + inspect.getsource(tec.main))
     assert 'default=0' in source, "num_workers should default to 0"
     print("[2/4] Default num_workers=0 (A/B-fair) ... OK")
 

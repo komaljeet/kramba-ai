@@ -1,0 +1,11 @@
+=== e3_base ballast 0s gpu used 91 MiB Mon, Nov 16, 2026  9:46:06 PM
+exit 0 Mon, Nov 16, 2026  9:53:51 PM
+=== e3_fix_nob ballast 0s gpu used 91 MiB Mon, Nov 16, 2026  9:53:56 PM
+exit 0 Mon, Nov 16, 2026 10:01:44 PM
+=== e3_nofix ballast 200s gpu used 91 MiB Mon, Nov 16, 2026 10:01:49 PM
+ballast up Mon, Nov 16, 2026 10:01:51 PM
+exit 0 Mon, Nov 16, 2026 10:19:33 PM
+=== e3_fix ballast 200s gpu used 90 MiB Mon, Nov 16, 2026 10:19:38 PM
+ballast up Mon, Nov 16, 2026 10:19:41 PM
+exit 0 Mon, Nov 16, 2026 10:29:17 PM
+=== e3 done Mon, Nov 16, 2026 10:29:22 PM

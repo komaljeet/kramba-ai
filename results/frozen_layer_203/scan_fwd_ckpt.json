@@ -1,0 +1,16 @@
+{
+ "fwd_ms": 6.146764755249023,
+ "ckpt_ms": 4.896035385131836,
+ "fused_bv32_ms": 6.857318115234375,
+ "fused_bv32_o_bitequal": true,
+ "fused_bv32_ckpt_bitequal": false,
+ "fused_bv32_ckpt_maxdiff": 3.5762786865234375e-07,
+ "fused_bv16_ms": 6.5795036315917965,
+ "fused_bv16_o_bitequal": true,
+ "fused_bv16_ckpt_bitequal": false,
+ "fused_bv16_ckpt_maxdiff": 3.5762786865234375e-07,
+ "fused_bv8_ms": 7.183769226074219,
+ "fused_bv8_o_bitequal": true,
+ "fused_bv8_ckpt_bitequal": false,
+ "fused_bv8_ckpt_maxdiff": 3.5762786865234375e-07
+}

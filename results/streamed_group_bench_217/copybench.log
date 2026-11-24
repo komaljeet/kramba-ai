@@ -1,0 +1,10 @@
+[s217] copy h2d_pinned: wall 12.6 ms (13.28 GB/s total), per-copy GPU GB/s [13.31]
+[s217] copy h2d_pageable: wall 13.1 ms (12.77 GB/s total), per-copy GPU GB/s [12.83]
+[s217] copy d2h_pinned: wall 12.8 ms (13.12 GB/s total), per-copy GPU GB/s [13.16]
+[s217] copy d2h_pageable: wall 16.9 ms (9.92 GB/s total), per-copy GPU GB/s [9.98]
+[s217] copy duplex_pinned: wall 25.3 ms (13.26 GB/s total), per-copy GPU GB/s [13.41, 13.19]
+[s217] copy duplex_pageable: wall 26.4 ms (12.69 GB/s total), per-copy GPU GB/s [12.84, 12.61]
+[s217] gemm_alone: 60 GEMMs 540.4 ms, copy GB/s None
+[s217] gemm+h2d: 60 GEMMs 334.8 ms, copy GB/s 13.429680688454704
+[s217] gemm+d2h: 60 GEMMs 333.6 ms, copy GB/s 13.187312461650603
+[s217] gemm+duplex: 60 GEMMs 334.6 ms, copy GB/s 13.187346071983018

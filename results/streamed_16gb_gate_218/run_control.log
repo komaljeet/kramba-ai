@@ -1,0 +1,19 @@
+gpu used 93 MiB
+=== control_lr0.02 Thu, Nov 19, 2026 11:15:45 PM
+exit 0 Thu, Nov 19, 2026 11:19:53 PM
+[n218] final ctrl_mbrev heldout 0.069590
+[n218] done peak alloc 4.45 GB host ws 7.39
+gpu used 93 MiB
+=== control_lr0.002 Thu, Nov 19, 2026 11:19:53 PM
+exit 0 Thu, Nov 19, 2026 11:24:02 PM
+[n218] final ctrl_mbrev heldout 0.130233
+[n218] done peak alloc 4.45 GB host ws 7.38
+gpu used 93 MiB
+=== control_lr0.0005 Thu, Nov 19, 2026 11:24:02 PM
+exit 0 Thu, Nov 19, 2026 11:28:09 PM
+[n218] final ctrl_mbrev heldout 0.159014
+[n218] done peak alloc 4.45 GB host ws 7.23
+gpu used 93 MiB
+=== overhead probe Thu, Nov 19, 2026 11:28:10 PM
+exit 127 Thu, Nov 19, 2026 11:28:23 PM
+=== control done Thu, Nov 19, 2026 11:28:23 PM

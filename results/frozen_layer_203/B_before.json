@@ -1,0 +1,123 @@
+{
+ "args": {
+  "repo": "C:\\Users\\komal\\Documents\\Codes\\kramba-ai-wt203",
+  "out": "results/frozen_layer_203/B_before.json",
+  "active": 3,
+  "steps": 3,
+  "ga": 8,
+  "cache_blocks": 1,
+  "profile": true,
+  "no_skip_unread": false,
+  "hash": false,
+  "set": ""
+ },
+ "info": {
+  "blocks.0": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "0/18"
+  },
+  "blocks.1": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "0/18"
+  },
+  "blocks.2": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "0/18"
+  },
+  "blocks.3": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "0/18"
+  },
+  "blocks.4": {
+   "type": "DeltaNetBlock",
+   "params": 42098752,
+   "requires_grad": "18/18"
+  },
+  "blocks.5": {
+   "type": "TransformerBlock",
+   "params": 41953280,
+   "requires_grad": "9/9"
+  }
+ },
+ "rows": [
+  {
+   "step": 0,
+   "wall": 2.9112161999801174,
+   "phases": {},
+   "peak_reserved_frac": 0.386287761582933,
+   "loss": 2.260366916656494,
+   "grad_sha": null
+  },
+  {
+   "step": 1,
+   "wall": 2.4726691000105347,
+   "phases": {
+    "embed": 0.07403968143463135,
+    "fwd.L0": 0.1580436782836914,
+    "fwd.glue": 0.01288294354965909,
+    "fwd.L1": 0.1564159984588623,
+    "fwd.L2": 0.1564252166748047,
+    "fwd.L3": 0.15603404426574705,
+    "fwd.L4": 0.15253094291687014,
+    "fwd.L5": 0.16346726417541504,
+    "head": 0.02231603217124939,
+    "bwd.L5": 0.12520755100250244,
+    "bwdgrad.L5": 0.5064089622497558,
+    "bwd.L4": 0.12737945556640623,
+    "bwdgrad.L4": 0.3972188186645508
+   },
+   "peak_reserved_frac": 0.42830388404853026,
+   "loss": -877.706298828125,
+   "grad_sha": null
+  },
+  {
+   "step": 2,
+   "wall": 2.5219014000031166,
+   "phases": {
+    "embed": 0.08439420795440672,
+    "fwd.L0": 0.15737507247924803,
+    "fwd.glue": 0.003221823994535953,
+    "fwd.L1": 0.15654803466796874,
+    "fwd.L2": 0.15650559997558594,
+    "fwd.L3": 0.15415868949890135,
+    "fwd.L4": 0.15289759826660157,
+    "fwd.L5": 0.1645149097442627,
+    "head": 0.022385151863098144,
+    "bwd.L5": 0.12521705627441407,
+    "bwdgrad.L5": 0.5077856597900391,
+    "bwd.L4": 0.12665766525268554,
+    "bwdgrad.L4": 0.3984682235717773
+   },
+   "peak_reserved_frac": 0.42830388404853026,
+   "loss": -1733.9791259765625,
+   "grad_sha": null
+  }
+ ],
+ "peak_reserved_frac": 0.42830388404853026,
+ "trace": "results/frozen_layer_203/B_before_trace.json",
+ "trace_labels": [
+  "embed",
+  "fwd.L0",
+  "fwd.glue",
+  "fwd.L1",
+  "fwd.glue",
+  "fwd.L2",
+  "fwd.glue",
+  "fwd.L3",
+  "fwd.glue",
+  "fwd.L4",
+  "fwd.glue",
+  "fwd.L5",
+  "fwd.glue",
+  "head",
+  "bwd.L5",
+  "bwdgrad.L5",
+  "bwd.L4",
+  "bwdgrad.L4",
+  "end"
+ ]
+}

@@ -162,7 +162,7 @@ def test_precision_flag_exists():
     import inspect
     import train_edge_conversational as tec
 
-    source = inspect.getsource(tec.main)
+    source = (inspect.getsource(tec.build_arg_parser) + inspect.getsource(tec.main))
     assert "--precision" in source, "--precision flag not found in main()"
     assert 'choices=["fp32"' in source or "choices=['fp32'" in source, \
         "--precision must accept fp32/bf16/fp16"

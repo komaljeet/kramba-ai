@@ -47,6 +47,29 @@ Transformer 48.3 MB (20% less) vs SSM 36.3 MB.
 **Parameter efficiency:** HVN 264,966 (1.0×) < SSM 362,496 (1.37×) < Transformer 461,312
 (1.74×) — HVN uses 43% fewer params than Transformer.
 
+## 1B training step (BCD + offload, 7 blocks of 4 layers) — current (2026-11-18)
+
+Real 1.11B training step on this card, default trainer settings (fp8, `--offload`, Muon,
+grad_accum 8, seq 4096). Metric: mean of turn steps 2-3 over the 7 block positions
+(`scripts/profile_step_202.py`). Days = 925,000 steps (30 tokens per body param).
+
+| issue | change | step (s) | same bits | days |
+|---|---|---:|---|---:|
+| #202 | first k4 round | 12.60 -> 12.10 | yes | 129.5 |
+| #204 | frozen fp8 codes once per turn | 12.08 -> 11.79 | yes | 126.2 |
+| #206 | scan launch widths | 11.797 -> 11.285 | yes | 120.8 |
+| #207 | no-ckpt 1 default, fp8 bias fused | 11.285 -> 11.095 | yes | 118.8 |
+| #210 | `--scan-kernel t` default | 11.097 -> **9.890** | no (same fp64 error; held-out not worse at 1,800 steps) | **105.9** |
+
+The #213 speed hunt re-timed main at 9.865 s and found no same-bits change worth 0.2 s/step or
+more. Per block: ~12.8 s (embedding) down to ~6.5 s (last block). Peak reserved 82-85% of the
+card. Older 13-block numbers (13.294 s, 12.335 s with fp8) are stale. Full trail:
+[state.md](state.md) (#215 roll-up and #202-#213).
+
+The days column is BCD compute, not a full-quality figure: at 208M BCD needed 6.7× the steps to
+match full backprop (#214); at 1B it is not measured. Streamed full backprop: ~22.5 s/step, ~241
+days (#217). The 1B pretrain effort was stopped on 2026-11-20 (state.md roll-up).
+
 ## 8.3 Custom Kernels & Parallel Processing (Issue #33)
 
 | Fix | Technique | Before | After | Speedup |

@@ -1,0 +1,19 @@
+--- before
+
+"(PDH-CSV 4.0)","\\MANISHA-RITISH\GPU Adapter Memory(luid_0x00000000_0x0001591F_phys_0)\Shared Usage","\\MANISHA-RITISH\GPU Adapter Memory(luid_0x00000000_0x0001767D_phys_0)\Shared Usage","\\MANISHA-RITISH\GPU Adapter Memory(luid_0x00000000_0x000176EB_phys_0)\Shared Usage","\\MANISHA-RITISH\GPU Adapter Memory(luid_0x00000000_0x0001876A_phys_0)\Shared Usage"
+"11/19/2026 22:48:55.058","96268288.000000","8192.000000","24375296.000000","0.000000"
+Exiting, please wait...                         
+The command completed successfully.
+--- while holding 4 GiB pinned
+
+"(PDH-CSV 4.0)","\\MANISHA-RITISH\GPU Adapter Memory(luid_0x00000000_0x0001591F_phys_0)\Shared Usage","\\MANISHA-RITISH\GPU Adapter Memory(luid_0x00000000_0x0001767D_phys_0)\Shared Usage","\\MANISHA-RITISH\GPU Adapter Memory(luid_0x00000000_0x000176EB_phys_0)\Shared Usage","\\MANISHA-RITISH\GPU Adapter Memory(luid_0x00000000_0x0001876A_phys_0)\Shared Usage"
+"11/19/2026 22:49:14.351","96268288.000000","8192.000000","4398886912.000000","0.000000"
+Exiting, please wait...                         
+The command completed successfully.
+--- after
+
+"(PDH-CSV 4.0)","\\MANISHA-RITISH\GPU Adapter Memory(luid_0x00000000_0x0001591F_phys_0)\Shared Usage","\\MANISHA-RITISH\GPU Adapter Memory(luid_0x00000000_0x0001767D_phys_0)\Shared Usage","\\MANISHA-RITISH\GPU Adapter Memory(luid_0x00000000_0x000176EB_phys_0)\Shared Usage","\\MANISHA-RITISH\GPU Adapter Memory(luid_0x00000000_0x0001876A_phys_0)\Shared Usage"
+"11/19/2026 22:49:30.791","96268288.000000","8192.000000","24227840.000000","0.000000"
+Exiting, please wait...                         
+The command completed successfully.
+

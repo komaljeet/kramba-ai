@@ -1,0 +1,123 @@
+PINNED HOST MEMORY (one process per size; GiB = 2^30 bytes)
+run                           asked   held      status alloc s avail after GB H2D GB/s spawn ms touch ms
+pinned_alloc_1gb               1.00   1.00          ok    0.12           7.06    13.34     32.8     62.2   (before: spawn 23.5, touch 81.8, avail 8.12)
+pinned_alloc_2gb               2.00   2.00          ok    0.20           5.96    12.65     26.8     60.5   (before: spawn 23.1, touch 32.5, avail 8.11)
+pinned_alloc_4gb               4.00   4.00          ok    0.43           3.81    12.99     25.6     58.3   (before: spawn 23.1, touch 32.3, avail 8.13)
+pinned_alloc_6gb               6.00   6.00          ok    0.60           2.00    13.32     34.1     63.8   (before: spawn 23.9, touch 31.3, avail 8.46)
+pinned_alloc_8gb               8.00   6.75        fail    0.63           2.22    13.37     30.4     61.3   (before: spawn 31.4, touch 30.3, avail 9.50)
+pinned_alloc_8gb_c1g           8.00   6.00        fail    0.46           3.25    12.93     27.7     39.0   (before: spawn 27.7, touch 31.0, avail 9.73)
+pinned_alloc_8gb_hog3          8.00   5.75 guard_avail    0.74           0.14    13.19     27.4     91.7   (before: spawn 26.7, touch 29.6, avail 6.25)
+pinned_register_6gb_reg        6.00   6.00          ok    0.52           2.92    12.50     24.3     33.1   (before: spawn 22.9, touch 29.5, avail 9.41)
+pinned_register_7gb_reg        7.00   6.75        fail    0.56           1.84    13.40     25.5     54.7   (before: spawn 22.8, touch 30.0, avail 9.39)
+shared_counter_4gb             4.00   4.00          ok    0.32           5.80    13.36     25.8     29.5   (before: spawn 23.4, touch 30.3, avail 10.12)
+
+### numerics_lr0.02.jsonl
+
+NUMERICS muon lr 0.02 (24 steps, 4 train batches cycled, held-out batch never trained)
+  step-0 grad error from bf16 park alone: 0.0174 (cos 0.999849); fp32 park repeated: 0.0e+00 (determinism)
+  ref: recompute vs forward max|diff| at step 0 = 0.0
+  ref grad on batch 0 vs step 0 (natural drift): s4 1.214, s8 1.098, s12 1.074, s16 1.052, s20 1.030
+  held-out loss by step: s0  s4  s8  s12  s16  s20  s24
+    ref      0.172426  0.116180  0.090094  0.078986  0.074354  0.071701  0.069594   gap at end +0.00e+00 = +0.00% of ref's drop (1.03e-01)
+    lean     0.172426  0.116279  0.090127  0.079044  0.074525  0.071736  0.069654   gap at end +6.07e-05 = +0.06% of ref's drop (1.03e-01)
+    rne      0.172426  0.116200  0.090010  0.078965  0.074534  0.071766  0.069672   gap at end +7.79e-05 = +0.08% of ref's drop (1.03e-01)
+    lean_m8  0.172426  0.116264  0.090151  0.079025  0.074553  0.072012  0.069899   gap at end +3.05e-04 = +0.30% of ref's drop (1.03e-01)
+  arm      kept/step    min SR noise grad_rel cum_err cum_kept train loss end cast ms/step
+  ref         1.0000  1.000    0.000   0.0000  0.0000   1.0000       0.067838          0.0
+  lean        1.0000  1.000    0.095   0.9475  0.4896   0.8804       0.067940         25.5
+  rne         0.9998  1.000    0.067   0.9505  0.4879   0.8809       0.067890          5.3
+  lean_m8     1.0000  1.000    0.094   0.9785  0.5111   0.8727       0.068167         25.4
+  cum_err by step: lean 0.297,0.355,0.398,0.432,0.462,0.490; rne 0.293,0.354,0.396,0.431,0.461,0.488; lean_m8 0.300,0.363,0.410,0.448,0.481,0.511
+  peak VRAM alloc 4.45 GB, host ws end 7.35 GB
+  cast cost per layer (GPU, 42M matrix values): {'layer_matrix_params': 42074112, 'sr_ms': 7.119872093200684, 'rne_ms': 1.4776320457458496, 'int8_q_dq_ms': 12.824576377868652}
+
+### numerics_lr0.002.jsonl
+
+NUMERICS muon lr 0.002 (24 steps, 4 train batches cycled, held-out batch never trained)
+  step-0 grad error from bf16 park alone: 0.0174 (cos 0.999849); fp32 park repeated: 0.0e+00 (determinism)
+  ref: recompute vs forward max|diff| at step 0 = 0.0
+  ref grad on batch 0 vs step 0 (natural drift): s4 0.294, s8 0.524, s12 0.675, s16 0.785, s20 0.869
+  held-out loss by step: s0  s4  s8  s12  s16  s20  s24
+    ref      0.172426  0.163844  0.155312  0.148485  0.141938  0.135920  0.130237   gap at end +0.00e+00 = +0.00% of ref's drop (4.22e-02)
+    lean     0.172426  0.163893  0.155468  0.148795  0.141938  0.136040  0.130439   gap at end +2.02e-04 = +0.48% of ref's drop (4.22e-02)
+    rne      0.172426  0.164578  0.156171  0.149453  0.143028  0.137395  0.132064   gap at end +1.83e-03 = +4.33% of ref's drop (4.22e-02)
+    lean_m8  0.172426  0.163776  0.155515  0.148798  0.141942  0.136109  0.130437   gap at end +2.01e-04 = +0.48% of ref's drop (4.22e-02)
+  arm      kept/step    min SR noise grad_rel cum_err cum_kept train loss end cast ms/step
+  ref         1.0000  1.000    0.000   0.0000  0.0000   1.0000       0.126700          0.0
+  lean        1.0000  1.000    0.944   0.1562  0.2583   0.9876       0.126825         25.4
+  rne         0.8386  0.828    0.607   0.1636  0.4903   0.8224       0.128360          5.3
+  lean_m8     1.0000  1.000    0.942   0.1641  0.2796   0.9835       0.126815         25.4
+  cum_err by step: lean 0.578,0.409,0.339,0.299,0.275,0.258; rne 0.514,0.501,0.500,0.498,0.494,0.490; lean_m8 0.579,0.414,0.347,0.312,0.291,0.280
+  peak VRAM alloc 4.45 GB, host ws end 7.64 GB
+  cast cost per layer (GPU, 42M matrix values): {'layer_matrix_params': 42074112, 'sr_ms': 7.170048236846924, 'rne_ms': 1.474560022354126, 'int8_q_dq_ms': 12.875776290893555}
+
+### numerics_lr0.0005.jsonl
+
+NUMERICS muon lr 0.0005 (24 steps, 4 train batches cycled, held-out batch never trained)
+  step-0 grad error from bf16 park alone: 0.0174 (cos 0.999849); fp32 park repeated: 0.0e+00 (determinism)
+  ref: recompute vs forward max|diff| at step 0 = 0.0
+  ref grad on batch 0 vs step 0 (natural drift): s4 0.103, s8 0.166, s12 0.225, s16 0.289, s20 0.352
+  held-out loss by step: s0  s4  s8  s12  s16  s20  s24
+    ref      0.172426  0.170187  0.168073  0.165995  0.163676  0.161239  0.159000   gap at end +0.00e+00 = +0.00% of ref's drop (1.34e-02)
+    lean     0.172426  0.170333  0.168072  0.165935  0.163675  0.161296  0.159121   gap at end +1.21e-04 = +0.90% of ref's drop (1.34e-02)
+    rne      0.172426  0.171322  0.170340  0.169388  0.168456  0.167565  0.166607   gap at end +7.61e-03 = +56.66% of ref's drop (1.34e-02)
+    lean_m8  0.172426  0.170286  0.168077  0.165953  0.163731  0.161377  0.159179   gap at end +1.79e-04 = +1.34% of ref's drop (1.34e-02)
+  arm      kept/step    min SR noise grad_rel cum_err cum_kept train loss end cast ms/step
+  ref         1.0000  1.000    0.000   0.0000  0.0000   1.0000       0.157382          0.0
+  lean        1.0001  0.999    2.450   0.0903  0.5424   0.9901       0.157388         25.5
+  rne         0.2435  0.235    0.912   0.1479  0.8919   0.2320       0.165490          5.3
+  lean_m8     1.0000  0.999    2.445   0.0920  0.5536   0.9863       0.157474         25.5
+  cum_err by step: lean 1.397,0.960,0.774,0.667,0.595,0.542; rne 0.885,0.884,0.887,0.889,0.890,0.892; lean_m8 1.398,0.963,0.779,0.673,0.604,0.554
+  peak VRAM alloc 4.45 GB, host ws end 7.35 GB
+  cast cost per layer (GPU, 42M matrix values): {'layer_matrix_params': 42074112, 'sr_ms': 7.188479900360107, 'rne_ms': 1.5011839866638184, 'int8_q_dq_ms': 12.860416412353516}
+
+### control_lr0.02.jsonl
+  determinism: ref in this process == ref in numerics_lr0.02.jsonl: True
+
+NUMERICS muon lr 0.02 (24 steps, 4 train batches cycled, held-out batch never trained)
+  step-0 grad error from bf16 park alone: 0.0174 (cos 0.999849); fp32 park repeated: 0.0e+00 (determinism)
+  ref: recompute vs forward max|diff| at step 0 = 0.0
+  ref grad on batch 0 vs step 0 (natural drift): s4 1.214, s8 1.098, s12 1.074, s16 1.052, s20 1.030
+  held-out loss by step: s0  s4  s8  s12  s16  s20  s24
+    ref      0.172426  0.116180  0.090094  0.078986  0.074354  0.071701  0.069594   gap at end +0.00e+00 = +0.00% of ref's drop (1.03e-01)
+    ctrl_mbrev 0.172426  0.116126  0.090067  0.078846  0.074532  0.071701  0.069590   gap at end -3.25e-06 = -0.00% of ref's drop (1.03e-01)
+  arm      kept/step    min SR noise grad_rel cum_err cum_kept train loss end cast ms/step
+  ref         1.0000  1.000    0.000   0.0000  0.0000   1.0000       0.067838          0.0
+  ctrl_mbrev    1.0000  1.000    0.000   0.8667  0.3715   0.9313       0.067866          0.0
+  cum_err by step: ctrl_mbrev 0.116,0.204,0.261,0.304,0.340,0.372
+  peak VRAM alloc 4.45 GB, host ws end 7.39 GB
+  cast cost per layer (GPU, 42M matrix values): {'layer_matrix_params': 42074112, 'sr_ms': 7.178239822387695, 'rne_ms': 1.4878720045089722, 'int8_q_dq_ms': 12.86246395111084}
+
+### control_lr0.002.jsonl
+  determinism: ref in this process == ref in numerics_lr0.002.jsonl: True
+
+NUMERICS muon lr 0.002 (24 steps, 4 train batches cycled, held-out batch never trained)
+  step-0 grad error from bf16 park alone: 0.0174 (cos 0.999849); fp32 park repeated: 0.0e+00 (determinism)
+  ref: recompute vs forward max|diff| at step 0 = 0.0
+  ref grad on batch 0 vs step 0 (natural drift): s4 0.294, s8 0.524, s12 0.675, s16 0.785, s20 0.869
+  held-out loss by step: s0  s4  s8  s12  s16  s20  s24
+    ref      0.172426  0.163844  0.155312  0.148485  0.141938  0.135920  0.130237   gap at end +0.00e+00 = +0.00% of ref's drop (4.22e-02)
+    ctrl_mbrev 0.172426  0.163844  0.155369  0.148510  0.141917  0.135929  0.130233   gap at end -3.28e-06 = -0.01% of ref's drop (4.22e-02)
+  arm      kept/step    min SR noise grad_rel cum_err cum_kept train loss end cast ms/step
+  ref         1.0000  1.000    0.000   0.0000  0.0000   1.0000       0.126700          0.0
+  ctrl_mbrev    1.0000  1.000    0.000   0.0624  0.0554   0.9985       0.126712          0.0
+  cum_err by step: ctrl_mbrev 0.000,0.012,0.030,0.041,0.049,0.055
+  peak VRAM alloc 4.45 GB, host ws end 7.38 GB
+  cast cost per layer (GPU, 42M matrix values): {'layer_matrix_params': 42074112, 'sr_ms': 7.172095775604248, 'rne_ms': 1.4837759733200073, 'int8_q_dq_ms': 12.830719947814941}
+
+### control_lr0.0005.jsonl
+  determinism: ref in this process == ref in numerics_lr0.0005.jsonl: True
+
+NUMERICS muon lr 0.0005 (24 steps, 4 train batches cycled, held-out batch never trained)
+  step-0 grad error from bf16 park alone: 0.0174 (cos 0.999849); fp32 park repeated: 0.0e+00 (determinism)
+  ref: recompute vs forward max|diff| at step 0 = 0.0
+  ref grad on batch 0 vs step 0 (natural drift): s4 0.103, s8 0.166, s12 0.225, s16 0.289, s20 0.352
+  held-out loss by step: s0  s4  s8  s12  s16  s20  s24
+    ref      0.172426  0.170187  0.168073  0.165995  0.163676  0.161239  0.159000   gap at end +0.00e+00 = +0.00% of ref's drop (1.34e-02)
+    ctrl_mbrev 0.172426  0.170246  0.168032  0.166055  0.163697  0.161276  0.159014   gap at end +1.44e-05 = +0.11% of ref's drop (1.34e-02)
+  arm      kept/step    min SR noise grad_rel cum_err cum_kept train loss end cast ms/step
+  ref         1.0000  1.000    0.000   0.0000  0.0000   1.0000       0.157382          0.0
+  ctrl_mbrev    1.0000  1.000    0.000   0.0323  0.0560   0.9984       0.157380          0.0
+  cum_err by step: ctrl_mbrev 0.034,0.052,0.056,0.057,0.057,0.056
+  peak VRAM alloc 4.45 GB, host ws end 7.23 GB
+  cast cost per layer (GPU, 42M matrix values): {'layer_matrix_params': 42074112, 'sr_ms': 7.1833600997924805, 'rne_ms': 1.5185920000076294, 'int8_q_dq_ms': 12.916735649108887}

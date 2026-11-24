@@ -1,0 +1,19 @@
+masters, matrices              fp32: 4.038  bf16+SR: 2.019
+masters, non-matrix (fp32)     fp32: 0.002  bf16+SR: 0.002
+Muon momentum                  fp32: 4.038  bf16: 2.019  int8/256: 1.025
+AdamW moments, non-matrix      fp32: 0.005
+AdamW moments, embedding       fp32: 0.823  bf16: 0.412  on GPU: 0.000
+parked group inputs            6 x fp32: 1.611  6 x bf16: 0.805  5 x bf16 (group 1 = embedding lookup, recomputed): 0.671  recomputed (none): 0.000
+
+exact (#216/#217)                            pinned state 10.52 GB (cap 7.25, safe 6.44: margin -4.08)
+   + process measured floor 1.47 = 11.99 GB; margin vs available at rest 8.11: -3.88; vs after trimming 10.12: -1.87
+   + process #217 bench 2.18 = 12.70 GB; margin vs available at rest 8.11: -4.59; vs after trimming 10.12: -2.58
+   + process trainer today 3.07 = 13.59 GB; margin vs available at rest 8.11: -5.48; vs after trimming 10.12: -3.47
+lean plan                                    pinned state 5.54 GB (cap 7.25, safe 6.44: margin +0.90)
+   + process measured floor 1.47 = 7.01 GB; margin vs available at rest 8.11: +1.10; vs after trimming 10.12: +3.11
+   + process #217 bench 2.18 = 7.72 GB; margin vs available at rest 8.11: +0.39; vs after trimming 10.12: +2.40
+   + process trainer today 3.07 = 8.61 GB; margin vs available at rest 8.11: -0.50; vs after trimming 10.12: +1.51
+smallest (int8 momentum, bf16 emb moments)   pinned state 4.13 GB (cap 7.25, safe 6.44: margin +2.31)
+   + process measured floor 1.47 = 5.61 GB; margin vs available at rest 8.11: +2.50; vs after trimming 10.12: +4.51
+   + process #217 bench 2.18 = 6.31 GB; margin vs available at rest 8.11: +1.80; vs after trimming 10.12: +3.81
+   + process trainer today 3.07 = 7.20 GB; margin vs available at rest 8.11: +0.91; vs after trimming 10.12: +2.92
