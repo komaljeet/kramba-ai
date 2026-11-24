@@ -1,0 +1,186 @@
+#218 gate 1: can streamed full backprop at 1B run in 16 GB of RAM?
+
+Date: 2026-11-19, 22:39-23:30. RTX 4050 laptop 6 GB, 16 GB DDR5 (15.29 GiB usable). GPU empty
+before every launch (<400 MiB check), one process and one log per run.
+GB = 10^9 bytes unless written GiB.
+
+VERDICT
+- Yes, but only with the lean state: bf16 master weights with stochastic rounding (SR), bf16
+  Muon momentum, 5 parked group inputs in bf16, everything else as #217, 0 DataLoader workers.
+- The full-precision design (#216/#217) cannot run here at all. Not only is it short of RAM:
+  Windows will not pin more than 6.75 GiB (7.25 GB) for the GPU, and it needs 10.5 GB pinned.
+- Lean plan: 5.54 GB pinned + process. Process floor measured at 1.47 GB, so 7.0 GB total.
+  Available RAM at rest today: 8.1 GB. Margin 1.1 GB. If the trainer process stays as fat as
+  today's (3.07 GB), the total is 8.6 GB: 0.5 GB short at rest, living on Windows trimming idle
+  apps (which it did in this session, up to 10.1 GB available).
+- Smallest budget: 4.13 GB pinned (adds int8 momentum, bf16 embedding Adam moments) + 1.47 =
+  5.6 GB. Margin 2.5 GB at rest. int8 momentum costs a little quality in the proxy.
+- Step-time cost of the lean levers: about +0.2 s on a 22.5 s step (~1%). int8 momentum +0.3 s more.
+- Quality proxy: SR keeps the update; round-to-nearest does not. On the real 1B group at a
+  late-schedule learning rate, SR keeps 99% of the weight update, round-to-nearest 23%, and
+  round-to-nearest's held-out loss falls only 43% as far as fp32's. SR ends 0.5-0.9% of the loss
+  drop behind fp32; a harmless fp32 control wobbles 0.0-0.45% along the way. This is a 24-step
+  synthetic proxy. A held-out LM-loss A/B is still required.
+
+1. RAM AND PINNED MEMORY ON THIS PC (step 1)
+Normal use at the time (no browser open): VS Code (11 processes, 2.2 GB private), Claude CLI
+(1.1 GB), Avast (~0.6 GB), PhoneExperienceHost, 109 leftover tail/grep processes from other
+agents' monitors (0.57 GB private). Non-paged pool 1.07 GB.
+
+  installed / usable                 16 GB / 15.29 GiB (16.42 GB)
+  available (free+standby), at rest  8.1-8.2 GB (session start, before the early runs)
+  available after Windows trimmed    9.4-10.1 GB (same apps open; idle apps' working sets cut)
+  commit limit / committed at rest   39.5 GB (21.98 GB pagefile) / 13.1-13.3 GB: never the limit
+  pagefile in use                    4.1-4.2% the whole time
+  PINNED CAP, one process            6.75 GiB (7.25 GB). cudaHostAlloc 256 MiB chunks, cudaHostAlloc
+                                     1 GiB chunks (stops at 6.0, the next would cross) and
+                                     cudaHostRegister all fail with cudaErrorMemoryAllocation there.
+  why                                WDDM "shared GPU memory" budget: dxdiag 7827 MB = half of RAM.
+                                     The NVIDIA adapter's Shared Usage counter goes 0.024 -> 4.40 GB
+                                     while 4 GiB is pinned, and back after. The cap hits with
+                                     1.8-3.3 GB of RAM still free: not a free-RAM floor. Only more
+                                     RAM raises it.
+
+  pinned GiB   result                 time    avail after GB  H2D GB/s  spawn ms (before)  touch 512MB ms
+  1            ok                     0.12 s  7.06            13.3      33 (24)            62
+  2            ok                     0.20 s  5.96            12.7      27 (23)            61
+  4            ok                     0.43 s  3.81            13.0      26 (23)            58
+  6            ok                     0.60 s  2.00            13.3      34 (24)            64
+  8            FAILS at 6.75          -       2.22            13.4      30                 61
+  7 register   FAILS at 6.75          -       1.84            13.4      26                 55
+  8, 3 GiB hog stopped by guard 5.75    -       0.14            13.2      27                 92
+9/10/11/12 GiB not run: 8 already fails at the cap. Pinning is proven, not assumed: is_pinned()
+on the first and last chunk, and copies at the pinned rate. No slowdown up to 6 GiB (spawn
+24-34 ms, no paging bursts beyond one ~13 MB write). With the hog, pinned memory took free RAM
+1:1 down to 0.14 GB; Windows did not page the hog out quickly. Pinned memory comes out of
+available RAM first; the cap is second.
+LARGEST SAFE PINNED SIZE: 6.0 GiB (6.44 GB), 0.75 GiB under the cap, and only if pinned +
+process also fit in available RAM.
+
+2. LEAN RAM BUDGET AT 1B (step 2; budget.py -> budget.txt)
+Exact counts: Muon 1,009,516,544; non-matrix 616,913; embedding 102,926,336.
+                                     exact(#217)  lean plan               smallest
+  masters, 210 matrices              4.038 fp32   2.019 bf16+SR           2.019
+  masters, non-matrix                0.002        0.002 fp32              0.002
+  Muon momentum                      4.038 fp32   2.019 bf16              1.025 int8 (absmax/256)
+  AdamW, non-matrix                  0.005        0.005                   0.005
+  AdamW, embedding moments           0.823        0.823 fp32              0.412 bf16
+  parked group inputs                1.611 6xfp32 0.671 5xbf16 (*)       0.671
+  PINNED STATE                       10.52 (>cap) 5.54                    4.13
+  + process, measured floor 1.47     11.99        7.01                    5.61
+  + process as #217 bench 2.18       12.70        7.72                    6.31
+  + process as trainer today 3.07    13.59        8.61                    7.20
+  margin vs 8.11 avail at rest       -3.9/-5.5    +1.1 / -0.5             +2.5 / +0.9   (floor / trainer today)
+  margin vs pinned-safe 6.44         -4.1         +0.9                    +2.3
+  (*) group 1's input is the embedding lookup, re-read instead of parked.
+
+Process floor (overhead.log): python 0.02 -> import torch 0.53 -> trainer import (pulls pandas,
+pyarrow) 0.59 -> CUDA context 0.73 -> first DeltaNet fwd+bwd (Triton/cuBLAS/fp8 kernels load)
+1.29 -> Muon 1.42 -> attention layer 1.47 GB. That is the irreducible part. #217's bench sat at
+2.18 and the trainer at 3.07: the extra 0.7-1.6 GB is not explained here (data, tokenizer, CPU
+model copies: unmeasured) and is the first thing the build must measure and cut.
+
+Levers (vs the lean plan):
+  lever                               RAM saved  step-time cost                          quality risk
+  bf16 master + SR (in plan)          2.02       SR 7.2 ms/layer = +0.17 s; upcast ~+0.1 (est) proxy: keeps 99% of update
+  bf16 momentum (in plan)             2.02       1.5 ms/layer = +0.04 s                  proxy: in the lean arm
+  5 not 6 parked inputs (in plan)     0.13       ~0                                      none (exact)
+  bf16 parked inputs (in plan)        0.67       ~0, fewer bytes                         1.7% grad change at step 0; in proxy
+  0 DataLoader workers (in plan)      2.24 vs today  unmeasured (loader overlapped today) none
+  pinned, not pageable (in plan)      0          pageable costs +1.7 s (#217)            none
+  int8 momentum                       0.99       12.9 ms/layer = +0.31 s (unfused)       proxy: slightly worse than bf16
+  bf16 embedding Adam moments         0.41       ~0                                      unmeasured
+  embedding Adam moments on GPU       0.82       0                                       VRAM ~83% of card vs 85% guard: REJECTED
+  trainer process down to the floor   up to 1.6  0                                       none; how much is cuttable unmeasured
+  close VS Code / Claude in training  ~2-3 avail 0                                       maintainer's call
+  recompute parked inputs             0.67       +7.8 s/step (+35%, est.)                none: REJECTED for cost
+  park inputs on SSD                  0.67       ~0 if overlapped                        620 TB written over 925k steps
+                                                                                         kills a consumer SSD: REJECTED
+
+3. QUALITY PROXY ON THE REAL 1B GROUP, LAYERS 4-7 (step 3)
+scripts/bench_lean_numerics_218.py. Production layers and stack as #217, deterministic, 8 mb x
+4096 tokens, production Muon, per-layer clip 1.0. The group learns to imitate a teacher group
+(other seed) on Gaussian inputs; 4 training batches cycled; held-out batch never trained. All
+arms start from the same bf16-representable weights. 24 steps per run, Muon lr 0.02 (peak),
+0.002 (10% of peak, ~80% into the cosine), 0.0005 (2.5%, ~90% in).
+Arms: ref (fp32 master, momentum, park); lean (bf16 SR master, bf16 momentum, bf16 park);
+rne (lean with round-to-nearest master: the FALSIFIER); lean_m8 (lean, int8 momentum);
+ctrl (fp32 like ref, micro-batch order reversed: a ~1e-7 harmless perturbation, separate runs).
+
+Held-out loss at step 24, gap to ref as % of ref's own drop over 24 steps:
+  Muon lr  ref drop  lean(SR)  rne      lean_m8  ctrl end (largest mid-run gap)
+  0.02     0.1028    +0.06%    +0.08%   +0.30%   -0.00% (0.17%)
+  0.002    0.0422    +0.48%    +4.3%    +0.48%   -0.01% (0.14%)
+  0.0005   0.0134    +0.90%    +57%     +1.34%   +0.11% (0.45%)
+
+Share of each step's update that reaches the master (kept) and cumulative update vs ref:
+  Muon lr  lean kept  rne kept  lean cum_kept  rne cum_kept  lean cum_err        ctrl cum_err
+  0.02     1.000      0.9998    0.88           0.88          0.49                0.37
+  0.002    1.000      0.84      0.99           0.82          0.26 (falling)      0.06
+  0.0005   1.000      0.24      0.99           0.23          0.54 (from 1.40)    0.06
+
+Read:
+- The falsifier works. Round-to-nearest loses most of each small update (24% kept at 0.0005) and
+  its loss stalls. SR keeps it. Had the harness been vacuous (no real rounding, or updates far
+  above the bf16 step), rne would match ref; it does not.
+- At peak lr, lean's drift from ref is mostly chaos: the fp32 control drifts nearly as far
+  (cum_err 0.37 vs 0.49) and the loss gaps are the same size.
+- At low lr, SR's per-step noise is as big as the update (0.9-2.5x), so its cumulative error
+  starts high and shrinks as the noise averages out (1.40 -> 0.54 over 24 steps). The loss gap
+  (0.5-0.9% of the drop) is 2-6x the control's END gap, but lean's mid-run gaps change sign
+  (lr 0.0005: +1.5e-4, -1e-6, -6e-5, -1e-6, +6e-5, +1.2e-4). 24 steps cannot tell it from noise.
+- The bf16 park alone changes the step-0 gradient by 1.7% (cos 0.99985); Muon turns that into a
+  ~20% different first update. The fp32 control shows the same kind of amplification at peak lr.
+- int8 momentum is a little worse than bf16 at peak and lowest lr (0.30 vs 0.06%, 1.34 vs 0.90%).
+  Use it only if RAM forces it.
+Checks: a repeated ref gradient differs by exactly 0; ref recompute == forward (max diff 0.0);
+ref in the control processes reproduces ref in the main runs bit for bit; SR is unbiased
+(-2.7e-6 relative on a value that round-to-nearest always moves by -1.2e-4). Peak VRAM 4.45 GB
+allocated; process working set 7.2-7.6 GB (four arms of host state at once).
+THIS IS A PROXY FOR A HELD-OUT LM-LOSS A/B: synthetic objective, 24 steps, one group of 6,
+multi-pass over 4 batches. It says the update is not lost. It does not say the model trains as well.
+
+STILL UNMEASURED
+- Held-out LM loss with the lean state (the A/B below).
+- The trainer's non-state RAM in this design (floor 1.47 GB measured; today 3.07).
+- A full 24-layer streamed step holding 5.5 GB pinned, and RAM/pinning over days with the
+  maintainer's normal apps (no browser was open in this session).
+- Whether the 6.75 GiB cap is shared by all processes (WDDM budget says likely; one process tested).
+- bf16 embedding Adam moments; a better int8 codec (only linear absmax/256 tried).
+- Recompute cost of parked inputs (+7.8 s is arithmetic from #217 per-layer times).
+- From #217, unchanged: loss/decoder phase in this design, per-layer vs global clip, BCD penalty at 1B.
+
+BUILD PLAN (if the maintainer goes ahead)
+1. Host state store: one pinned arena (cudaHostRegister, exact size): bf16 masters, bf16 momentum,
+   fp32 non-matrix state, fp32 embedding moments, 5 bf16 park slots. Assert arena <= 6.0 GiB and
+   process + arena <= available - 1 GB at start; refuse to start otherwise.
+2. GPU casts: bf16 -> fp32 after each H2D; SR on write-back with a seed from (step, layer) so a
+   resume reproduces it; momentum round-to-nearest.
+3. Layer-major driver from bench_streamed_group_217.py; group 1 re-reads the embedding instead of
+   parking. Loss + trainable decoder phase; per-layer clip.
+4. Checkpoint save/resume and eval from the host arena.
+5. Trainer process diet: measure its non-state RAM, target <= 2 GB (0 workers; keep pandas/pyarrow
+   out of the training process if only data prep needs them).
+6. Tests: streamed == resident over a 3+ step sequence with the bf16 store and the same SR seed
+   (bit-identical); must-fail partners (skipped write-back, skipped load); SR unbiased; an RNE
+   partner at small lr that must lose >50% of the update.
+
+FIRST HELD-OUT-LOSS A/B NEEDED
+The fp32 reference cannot run at 1B on this laptop (12 GB minimum, over the pinned cap), so:
+1. Numerics A/B at 208M (#214 full-backprop harness, both arms fit): fp32 master + momentum vs
+   bf16-SR master + bf16 momentum + bf16 parked inputs + per-layer clip, cosine to zero so the
+   low-lr tail (where RNE failed) is covered. 2 arms x 2000 steps, ~3.7 h per arm at #216's
+   1.1 h / 600 steps: ~7.5 GPU hours. Pass: held-out loss within #214's seed-to-seed spread.
+2. Decision A/B at 1B: BCD k4 today vs lean streamed full backprop, same data/seed/schedule,
+   held-out eval every 250 steps, 1000 steps each: 1000 x 9.89 s = 2.7 h plus 1000 x ~22.7 s =
+   6.3 h: ~9.5 GPU hours plus evals. Compare at equal steps and at equal wall-clock.
+
+FILES
+- scripts/probe_pinned_host_218.py, run_pinned.sh, run_pinned_cap.sh, run_shared_counter.sh:
+  step 1. Raw: pinned_*.jsonl/.log, paging_*.csv (typeperf, 1 s), shared_counter*.log, hog3.log.
+- budget.py -> budget.txt; scripts/probe_process_overhead_218.py -> overhead.json/.log
+  (overhead_crash_pyarrow_order.log: first try died importing pyarrow after CUDA init, the
+  known #217 crash; fixed by importing the trainer first).
+- scripts/bench_lean_numerics_218.py, run_numerics.sh, run_control.sh: step 3. Raw:
+  numerics_lr*.jsonl/.log, control_lr*.jsonl/.log, smoke_numerics.* (1-step smoke, run before
+  all arms were moved to a shared bf16 start). Tables: analysis.txt from analyze.py.

@@ -1,0 +1,12 @@
+[o218] python start                       ws 0.019 GB  private 0.010 GB  sys avail 9.88
+[o218] import torch                       ws 0.527 GB  private 1.291 GB  sys avail 9.32
+[o218] import trainer module              ws 0.591 GB  private 1.374 GB  sys avail 9.24
+[o218] CUDA context                       ws 0.726 GB  private 1.641 GB  sys avail 9.11
+[o218] loaded by trainer import: {'pandas': True, 'pyarrow': True, 'transformers': False, 'datasets': False, 'numpy': True}
+[o218] deltanet layer built on GPU        ws 0.814 GB  private 1.830 GB  sys avail 9.05
+[o218] deltanet fwd+bwd (kernels loaded)  ws 1.294 GB  private 3.393 GB  sys avail 8.61
+[o218] deltanet Muon step                 ws 1.417 GB  private 3.542 GB  sys avail 8.50
+[o218] attn layer built on GPU            ws 1.417 GB  private 2.607 GB  sys avail 8.50
+[o218] attn fwd+bwd (kernels loaded)      ws 1.471 GB  private 3.481 GB  sys avail 8.45
+[o218] attn Muon step                     ws 1.471 GB  private 3.481 GB  sys avail 8.47
+[o218] after freeing layers               ws 1.471 GB  private 2.645 GB  sys avail 8.47

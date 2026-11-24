@@ -1,0 +1,10 @@
+[p218] start gb=8.0 api=alloc avail 9.50 GB ws 0.66 commit 14.63/39.46 resp {'touch512MB_s': 0.030265399953350425, 'spawn_med_s': 0.03135409997776151, 'spawn_max_s': 0.032127800048328936}
+[p218] held 1.00 GB  chunk 20 ms  avail 8.40 ws 1.74 commit 15.72
+[p218] held 2.00 GB  chunk 18 ms  avail 7.34 ws 2.81 commit 16.80
+[p218] held 3.00 GB  chunk 20 ms  avail 6.26 ws 3.89 commit 17.89
+[p218] held 4.00 GB  chunk 24 ms  avail 5.19 ws 4.96 commit 18.98
+[p218] held 5.00 GB  chunk 24 ms  avail 4.11 ws 6.04 commit 20.06
+[p218] held 6.00 GB  chunk 28 ms  avail 3.03 ws 7.11 commit 21.14
+[p218] FAIL at 6.75 GB: cuda error 2 after 0.00s
+[p218] HELD 6.75/8.0 GB status=fail in 0.6s  avail 2.22 GB ws 7.91 commit 21.95  proof [{'chunk': 0, 'is_pinned': True, 'h2d_GBps_med': 13.368565879282954}, {'chunk': 26, 'is_pinned': True, 'h2d_GBps_med': 13.369298281325758}, {'chunk': 'pageable_ref', 'is_pinned': False, 'h2d_GBps_med': 12.883623774794557}]  resp {'touch512MB_s': 0.06129220000002533, 'spawn_med_s': 0.030353000038303435, 'spawn_max_s': 0.033790200017392635}  hold avail min 2.24612352
+[p218] freed in 0.4s avail 9.53 resp {'touch512MB_s': 0.02852960000745952, 'spawn_med_s': 0.023558599990792572, 'spawn_max_s': 0.024125800002366304}

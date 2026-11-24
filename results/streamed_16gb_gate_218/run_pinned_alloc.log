@@ -1,0 +1,23 @@
+gpu used 101 MiB
+=== pinned_alloc_1gb Thu, Nov 19, 2026 10:41:08 PM
+exit 0 Thu, Nov 19, 2026 10:41:29 PM
+[p218] HELD 1.00/1.0 GB status=ok in 0.1s  avail 7.06 GB ws 1.74 commit 15.90  proof [{'chunk': 0, 'is_pinned': True, 'h2d_GBps_med': 13.416003939975493}, {'chunk': 3, 'is_pinned': True, 'h2d_GBps_med': 13.341258301896712}, {'chunk': 'pageable_ref', 'is_pinned': False, 'h2d_GBps_med': 12.908715876024774}]  resp {'touch512MB_s': 0.06221849995199591, 'spawn_med_s': 0.03284839994739741, 'spawn_max_s': 0.039808600093238056}  hold avail min 7.062183936
+gpu used 101 MiB
+=== pinned_alloc_2gb Thu, Nov 19, 2026 10:41:50 PM
+exit 0 Thu, Nov 19, 2026 10:42:11 PM
+[p218] HELD 2.00/2.0 GB status=ok in 0.2s  avail 5.96 GB ws 2.81 commit 17.01  proof [{'chunk': 0, 'is_pinned': True, 'h2d_GBps_med': 13.153055877179458}, {'chunk': 7, 'is_pinned': True, 'h2d_GBps_med': 12.65309717388427}, {'chunk': 'pageable_ref', 'is_pinned': False, 'h2d_GBps_med': 12.81632940221167}]  resp {'touch512MB_s': 0.06047729996498674, 'spawn_med_s': 0.026848800014704466, 'spawn_max_s': 0.03465769998729229}  hold avail min 5.951164416
+gpu used 101 MiB
+=== pinned_alloc_4gb Thu, Nov 19, 2026 10:42:31 PM
+exit 0 Thu, Nov 19, 2026 10:42:53 PM
+[p218] HELD 4.00/4.0 GB status=ok in 0.4s  avail 3.81 GB ws 4.96 commit 19.12  proof [{'chunk': 0, 'is_pinned': True, 'h2d_GBps_med': 13.084264211964747}, {'chunk': 15, 'is_pinned': True, 'h2d_GBps_med': 12.992814986823195}, {'chunk': 'pageable_ref', 'is_pinned': False, 'h2d_GBps_med': 12.846444717545774}]  resp {'touch512MB_s': 0.05833670007996261, 'spawn_med_s': 0.02555020002182573, 'spawn_max_s': 0.029875600012019277}  hold avail min 3.926286336
+gpu used 93 MiB
+=== pinned_alloc_6gb Thu, Nov 19, 2026 10:43:13 PM
+exit 0 Thu, Nov 19, 2026 10:43:34 PM
+[p218] HELD 6.00/6.0 GB status=ok in 0.6s  avail 2.00 GB ws 7.11 commit 21.19  proof [{'chunk': 0, 'is_pinned': True, 'h2d_GBps_med': 13.31842189944898}, {'chunk': 23, 'is_pinned': True, 'h2d_GBps_med': 13.37682661931242}, {'chunk': 'pageable_ref', 'is_pinned': False, 'h2d_GBps_med': 12.486589657793486}]  resp {'touch512MB_s': 0.06379879999440163, 'spawn_med_s': 0.034086599946022034, 'spawn_max_s': 0.03630550007801503}  hold avail min 2.115121152
+gpu used 93 MiB
+=== pinned_alloc_8gb Thu, Nov 19, 2026 10:43:55 PM
+exit 0 Thu, Nov 19, 2026 10:44:16 PM
+[p218] FAIL at 6.75 GB: cuda error 2 after 0.00s
+[p218] HELD 6.75/8.0 GB status=fail in 0.6s  avail 2.22 GB ws 7.91 commit 21.95  proof [{'chunk': 0, 'is_pinned': True, 'h2d_GBps_med': 13.368565879282954}, {'chunk': 26, 'is_pinned': True, 'h2d_GBps_med': 13.369298281325758}, {'chunk': 'pageable_ref', 'is_pinned': False, 'h2d_GBps_med': 12.883623774794557}]  resp {'touch512MB_s': 0.06129220000002533, 'spawn_med_s': 0.030353000038303435, 'spawn_max_s': 0.033790200017392635}  hold avail min 2.24612352
+STOP: pinned_alloc_8gb did not hold its size
+=== sweep done Thu, Nov 19, 2026 10:44:22 PM

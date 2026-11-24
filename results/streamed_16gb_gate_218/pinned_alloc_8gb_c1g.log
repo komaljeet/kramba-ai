@@ -1,0 +1,5 @@
+[p218] start gb=8.0 api=alloc avail 9.73 GB ws 0.66 commit 14.68/39.46 resp {'touch512MB_s': 0.030961800017394125, 'spawn_med_s': 0.027665600064210594, 'spawn_max_s': 0.035880899988114834}
+[p218] held 4.00 GB  chunk 70 ms  avail 5.41 ws 4.96 commit 19.02
+[p218] FAIL at 6.00 GB: cuda error 2 after 0.00s
+[p218] HELD 6.00/8.0 GB status=fail in 0.5s  avail 3.25 GB ws 7.11 commit 21.18  proof [{'chunk': 0, 'is_pinned': True, 'h2d_GBps_med': 13.368732346623435}, {'chunk': 5, 'is_pinned': True, 'h2d_GBps_med': 12.93135130028322}, {'chunk': 'pageable_ref', 'is_pinned': False, 'h2d_GBps_med': 11.569471499391302}]  resp {'touch512MB_s': 0.03899420006200671, 'spawn_med_s': 0.027659400017000735, 'spawn_max_s': 0.03540299995802343}  hold avail min 3.246485504
+[p218] freed in 0.3s avail 9.76 resp {'touch512MB_s': 0.02926910005044192, 'spawn_med_s': 0.02876090002246201, 'spawn_max_s': 0.02991659997496754}

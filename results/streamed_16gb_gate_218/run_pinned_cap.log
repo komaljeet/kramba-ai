@@ -1,0 +1,25 @@
+gpu used 93 MiB
+=== pinned_register_6gb_reg Thu, Nov 19, 2026 10:45:16 PM
+exit 0 Thu, Nov 19, 2026 10:45:37 PM
+[p218] HELD 6.00/6.0 GB status=ok in 0.5s  avail 2.92 GB ws 7.11 commit 21.80  proof [{'chunk': 0, 'is_pinned': True, 'h2d_GBps_med': 13.26399757047359}, {'chunk': 23, 'is_pinned': True, 'h2d_GBps_med': 12.497809735543322}, {'chunk': 'pageable_ref', 'is_pinned': False, 'h2d_GBps_med': 12.906419442018587}]  resp {'touch512MB_s': 0.0330991999944672, 'spawn_med_s': 0.024297900032252073, 'spawn_max_s': 0.025069299968890846}  hold avail min 2.335993856
+gpu used 93 MiB
+=== pinned_register_7gb_reg Thu, Nov 19, 2026 10:45:57 PM
+exit 0 Thu, Nov 19, 2026 10:46:19 PM
+[p218] FAIL at 6.75 GB: cuda error 2 after 0.02s
+[p218] HELD 6.75/7.0 GB status=fail in 0.6s  avail 1.84 GB ws 8.18 commit 23.02  proof [{'chunk': 0, 'is_pinned': True, 'h2d_GBps_med': 13.39899455730589}, {'chunk': 26, 'is_pinned': True, 'h2d_GBps_med': 13.420162433862535}, {'chunk': 'pageable_ref', 'is_pinned': False, 'h2d_GBps_med': 10.888463023577861}]  resp {'touch512MB_s': 0.054711899952962995, 'spawn_med_s': 0.02545870002359152, 'spawn_max_s': 0.028198300045914948}  hold avail min 1.704194048
+STOP: pinned_register_7gb_reg did not hold its size
+=== sweep done Thu, Nov 19, 2026 10:46:24 PM
+gpu used 93 MiB
+=== pinned_alloc_8gb_c1g Thu, Nov 19, 2026 10:46:50 PM
+exit 0 Thu, Nov 19, 2026 10:47:12 PM
+[p218] FAIL at 6.00 GB: cuda error 2 after 0.00s
+[p218] HELD 6.00/8.0 GB status=fail in 0.5s  avail 3.25 GB ws 7.11 commit 21.18  proof [{'chunk': 0, 'is_pinned': True, 'h2d_GBps_med': 13.368732346623435}, {'chunk': 5, 'is_pinned': True, 'h2d_GBps_med': 12.93135130028322}, {'chunk': 'pageable_ref', 'is_pinned': False, 'h2d_GBps_med': 11.569471499391302}]  resp {'touch512MB_s': 0.03899420006200671, 'spawn_med_s': 0.027659400017000735, 'spawn_max_s': 0.03540299995802343}  hold avail min 3.246485504
+STOP: pinned_alloc_8gb_c1g did not hold its size
+=== sweep done Thu, Nov 19, 2026 10:47:17 PM
+gpu used 93 MiB
+=== pinned_alloc_8gb_hog3 Thu, Nov 19, 2026 10:48:07 PM
+exit 0 Thu, Nov 19, 2026 10:48:30 PM
+[p218] HELD 5.75/8.0 GB status=guard_avail in 0.7s  avail 0.14 GB ws 6.84 commit 24.24  proof [{'chunk': 0, 'is_pinned': True, 'h2d_GBps_med': 13.231177685134131}, {'chunk': 22, 'is_pinned': True, 'h2d_GBps_med': 13.18542410298084}, {'chunk': 'pageable_ref', 'is_pinned': False, 'h2d_GBps_med': 10.041426881543217}]  resp {'touch512MB_s': 0.0917261999566108, 'spawn_med_s': 0.02738750004209578, 'spawn_max_s': 0.0322501000482589}  hold avail min 0.595939328
+STOP: pinned_alloc_8gb_hog3 did not hold its size
+=== sweep done Thu, Nov 19, 2026 10:48:35 PM
+=== cap probes done Thu, Nov 19, 2026 10:48:35 PM
