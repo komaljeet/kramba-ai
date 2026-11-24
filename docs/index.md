@@ -29,11 +29,14 @@ source of truth; these files are the reorganized, linkable view.
 
 > **Start here if you are planning a training run:** [`training.md`](training.md) §
 > "The compute wall — why *fits in VRAM* was never the binding constraint" (2026-08-02).
-> Training cost grows as **N²** (`6·params·tokens`, Chinchilla scaling tokens with params),
-> and this project's memory work — impressive as it is — addresses only ~2× of the gap.
-> The local ceiling on the 6 GB card is **~142M** (3.6 days to Chinchilla); 6B is
-> out of reach by ~30×. Size decisions should start from `6·N·D ÷ throughput`, never from
-> whether the model fits.
+> Training cost grows as **N²** (`6·params·tokens`, Chinchilla scaling tokens with params).
+> **Dated 2026-08-02, superseded:** that section put the local ceiling at **~142M** (3.6 days
+> to Chinchilla) and 6B out of reach by ~30×, before BCD speed work. **Current (2026-11-24):**
+> a 1.11B BCD step is **9.89 s**, ~106 days of compute for 925,000 steps, but not full quality
+> (#214); streamed full backprop is ~22.5 s/step, ~241 days (#217). No measured route gives a
+> full-quality 1B under 212 days, and the 1B pretrain effort stopped on 2026-11-20 (state.md
+> roll-up). Size decisions should still start from `6·N·D ÷ throughput`, never from whether
+> the model fits.
 
 ## 1. Overview
 
@@ -53,7 +56,8 @@ that back that up.
 reimplementation of published work and says so in its own docstring — a canonical
 **gated DeltaNet** update, a **GLA / Mamba-2** style per-channel decay gate, and an
 output gate plus short causal conv from **Mamba / RWKV-7**. The default model
-(`--arch hvn-hybrid`) is 10 such blocks with 2 sliding-window attention layers, which
+(`--arch hvn-hybrid`) is 10 such blocks with 2 sliding-window attention layers (12 layers;
+the 1.11B config is 24 layers, 22 DeltaNet plus attention at layers 6 and 18), which
 places it in the same family as published hybrids.
 
 **The original block (`HVNBlock`) is original, and it lost.** It framed tokens as
@@ -74,7 +78,7 @@ Mamba or RWKV has ever been run.
 
 | claim | status |
 |---|---|
-| 1.07B-parameter model **trains in 4.05 GB** on a 6 GB card, 875 tok/s | measured 2026-08-14 |
+| 1.07B-parameter model (tied, BCD + offload) **trains in 4.05 GiB** on a 6 GB card, 875 tok/s | measured 2026-08-14 (#157, `results/offload_1b/real_seq_tied_157.json`) |
 | flat ms/token from N=256→4096 (O(1) in time) | measured, benchmarks_speed.md |
 | beats a **matched vanilla transformer** at equal compute, 12M body | measured 2026-08-16, single seed |
 | ~30 tokens/param, not Chinchilla's 20 | measured 2026-08-16, size trend unresolved |

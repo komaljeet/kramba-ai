@@ -62,7 +62,7 @@ everything else. Details and caveats: [`training.md`](training.md) section "`--f
 ### GPU / CUDA requirement
 
 All training, benchmarking, and evaluation **must run on GPU, never CPU**. Environment:
-NVIDIA GeForce RTX 4050 Laptop GPU (6 GB VRAM), driver 596.36, PyTorch with CUDA
+NVIDIA GeForce RTX 4050 Laptop GPU (6 GB VRAM), driver 610.74 (596.36 in July 2026), PyTorch with CUDA
 (`pip install torch --index-url https://download.pytorch.org/whl/cu126`). Verify
 `torch.cuda.is_available()` before running; if False, fix the install rather than falling
 back to CPU. (Windows distributed/GPU quirks in [ai_rules.md](ai_rules.md).)

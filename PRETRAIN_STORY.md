@@ -28,14 +28,21 @@ disk. Speed and memory numbers below were measured on my own machine over real s
 of training. Day counts and numbers for other cards are projections, and I say so where
 they appear.
 
-Here's the honest before-and-after, same laptop, from August 2026 to now:
+Here's the honest before-and-after, same laptop, from the early-October baseline to now:
 
-| | August 2026 | October 2026 | Now (November 2026) |
+| | Before (12 October 2026) | October 2026 | Now (November 2026) |
 |---|---|---|---|
 | Time for one training step | 21.81 seconds | 12.335 seconds | **9.89 seconds** (-55%) |
-| Tokens processed per second | 1,579 | 2,656 | **about 3,310** |
-| Projected compute time for a full pretrain | about 375 days | about 132 days (211 with a quality factor since withdrawn) | **about 106 days** (block-at-a-time training, not full quality) |
-| Peak memory used | 4.51 GB of 6 GB | 5.24 GB of 6 GB | **82-85% of the card** |
+| Tokens processed per second | 1,502 | 2,656 | **about 3,310** |
+| Projected compute time for a full pretrain | about 234 days | about 132 days (211 with a quality factor since withdrawn) | **about 106 days** (block-at-a-time training, not full quality) |
+| Peak memory used | 4.79 GiB of 6 GiB (79.9%) | 4.88 GiB of 6 GiB (81.4%) | **82-85% of the card** |
+
+Each step here is 32,768 tokens, so tokens per second is 32,768 divided by the step time.
+Older numbers came from different setups. In August (30 August) the estimate was about 375
+days: 1,111 tokens per second on much smaller 4,096-token steps, for 36 billion tokens. On
+19 September a bigger, untied 1.22B model peaked at 4.51 GiB and hit 1,579 tokens per second
+in one 50-step stretch. An earlier version of this table mixed those into one "August"
+column.
 
 In October I gave a range, "132-211 days". The top of that range assumed the cheap way of
 fitting the model (described next) costs a fixed 1.6x in quality. A later test showed that
@@ -163,7 +170,8 @@ first result is still sitting right there; moving data around in the order the h
 actually likes instead of the order that was easiest to write first.
 
 None of these individually sound like much. Stacked together, over weeks, they're a big
-part of why the step time came down by more than 40% since August.
+part of why the step time came down by more than half since early October (21.81 to 9.89
+seconds).
 The lesson I keep re-learning: "I think there's nothing left to speed up" has been wrong
 multiple times in a row now. I try to say it a lot less confidently these days.
 
@@ -257,7 +265,7 @@ is more useful than pretending it never happened.
 
 On this laptop's 6GB graphics card, right now: a 1.1 billion parameter model trains
 cleanly, using 82-85% of the card — close to full, but not spilling over. It processes
-about 3,300 tokens per second. A full, proper training run — enough real text for the model
+about 3,310 tokens per second. A full, proper training run — enough real text for the model
 to actually learn something, not just memorize a small sample — is projected to take about
 106 days of computing, roughly three and a half months. That is block-at-a-time training,
 not full quality. How much quality it costs at this size is not measured; at 208M it was
@@ -336,7 +344,7 @@ died.
 |---|---|---|---|
 | 2026-07-12 | How much memory normal training needs | — | 16.8 bytes per parameter — 1B needs ~16.8GB, 3x over this 6GB card |
 | 2026-07-12 | Train one block at a time | 268M: 6.9GB; 1.04B: hard crash | 268M: 4.2GB (-39%); 1.04B: **runs** |
-| 2026-07-12 | Recompute instead of storing activations | 1.04B still spilling past 6GB | 4.6GB peak, clean fit, no spill |
+| 2026-07-12 | Recompute instead of storing activations | 1.04B still spilling past 6GB | 4.6GB peak, clean fit, no spill — **wrong, found 2026-08-07**: the test used a small vocabulary; with the real one the model is 1.21B and spills (7.28 GiB) |
 | 2026-07-24 | A startup check that doubled memory use | looked like block-training itself failing | root cause found, fixed for that case — the same bug resurfaced in October in a slightly different form |
 | 2026-07-24 | Combining block-training with PyTorch's auto-compiler | hoped it would help | slower, and it recompiles on every block switch |
 | 2026-08-02 | Splitting the "thinking" layer into specialist sub-pieces | dense baseline | better loss, but 1.91x the compute cost — **rejected** |
@@ -352,7 +360,7 @@ died.
 | 2026-08-11 | Checking whether the GPU was sitting idle waiting on anything | assumed there was slack to reclaim | **97% busy — there wasn't any** |
 | 2026-08-11/12 | A faster scan calculation, 12 different designs tried | one design hoped to be faster | that one: **1.5-4x slower, dead**. A different design: **a real, small, kept win** |
 | 2026-08-14 | A leaner optimizer as a substitute for block-training | block-training: fast and clean | spilled past the card anyway, **10x slower** |
-| 2026-08-17 | Computing the loss in smaller pieces instead of all at once | a large model spilling past the card | **fits cleanly instead** |
+| 2026-08-17/27 | Computing the loss in smaller pieces instead of all at once | a large model spilling past the card | **fits cleanly instead** |
 | 2026-08-27 | A different way to compress certain weight matrices | — | **4x fewer parameters** there, about the same speed, quality not checked here; an earlier test at half the parameters was 22% worse |
 | 2026-09-29 | Fixing how blocks get split up for block-training | one lopsided split wasting memory | **closed 41% of the quality gap with full training** |
 | 2026-10-12 | Combining several small internal calculations into one, three separate times | baseline | each a real few-percent win, stacked together |

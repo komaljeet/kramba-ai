@@ -137,7 +137,7 @@ that does not affect the verdict.
 **Constant-memory inference is not a differentiator.** It defines the whole
 linear-attention/SSM family. No comparison against Mamba or RWKV has ever been run.
 
-**What remains defensible:** the training stack. 1.07B trains in 4.00 GB on a 6 GB card;
+**What remains defensible:** the training stack. 1.07B (tied, BCD + offload) trains in 4.00 GiB on a 6 GB card (2026-08-17);
 ~1.6B is the measured ceiling; the chunked loss returns 1436 MB at 48M and
 **1.79 GB at 1.21B** (re-measured 2026-08-27 at seq 4096 — the "does not help at
 1B" line in state.md is retracted; without it a 1B run spills at 103% of the

@@ -36,6 +36,46 @@ but ~22.5 s/step = ~241 days (#216/#217). The maintainer stopped the 1B pretrain
 - Still unmeasured: the BCD penalty at 1B and at full length; the lean variant's quality; a full
   24-layer streamed run.
 
+## Docs consistency sweep: the "August" before-column was three different runs (2026-11-24, #221)
+
+**One line: the public before/after tables paired 21.81 s/step with 1,579 tok/s and 4.51 GB
+under "August 2026". The three numbers come from three runs, none from August. Nothing new
+was run; every number below is traced to a log, a results folder or a commit.**
+
+| figure | run | tokens per step | source |
+|---|---|---:|---|
+| 3.686 s/step, 1,111 tok/s, ~375 days (36B tokens) | 2026-08-30 head-count run, 1.21B, offload | 4,096 | training.md head-count table (added in commit 30fb56a, 2026-08-30; no raw result file) |
+| 1,579 tok/s, peak reserved 4.51 GiB (75%) | 2026-09-19 blog run, 1,216,277,073 params untied, 24 DeltaNet layers, 26 BCD blocks | 32,768 | `blog_post_data/run.log`, `training_log.csv` (step 1350 window: 08:22:08 to 08:39:26 = 1,038 s / 50 steps = 20.76 s/step) |
+| 21.81 s/step = 1,502 tok/s, 4,904 MiB (79.9%) | 2026-10-12 lean harness, 1.11B hybrid (attention at 6, 18), 13 BCD blocks | 32,768 | `results/fused_glue_1b/` (21.805 / 21.814), `results/offload_losshead_1b/` (21.818 / 21.844) |
+
+Fixed in README, HF_BLOG_POST.md, PRETRAIN_STORY.md, training.md, blog_post_1b.html and
+site/index.html: the before column is now the 2026-10-12 baseline (21.81 s, 1,502 tok/s,
+~234 days = 925,000 x 21.81 s, 4.79 GiB), and the other two runs are listed apart with dates.
+Also found on the way:
+- The trainer prints memory as "GB" but divides by 1024^3, so 4.51 is GiB. 5.24 GB (81.4%)
+  and 5.31 GB (82.4%) were decimal GB (4,996 and 5,060 MiB = 4.88 and 4.94 GiB). Public pages
+  now use GiB for these. "79% of 6 GB = 4.85 GB" (2026-09-26) is 0.79 x 6,141 MiB = ~4.74 GiB;
+  no raw log was kept, the only source is commit a60699c.
+- The 2026-09-19 run was 1.22B (untied), not 1.11B; it logged to step 1,400, not 1,350. Its
+  blog table showed step 1350 at loss 8.25 / ppl 3,828, a copy of step 1000; the CSV has 8.98
+  / 7,916. The "unexplained identical loss" note was this copy error.
+- HF memory table: the 48M measurement (#158) is 183 MB weights, 183 MB optimizer, 32,003
+  vocab; the post showed ~960 MB / ~200 MB / 50,257 with no recorded source. Pinned tied table
+  is ~206 MB in bf16 (50,257 x 2,048 x 2), not 250 MB.
+- 1.07B at 4.00 GiB (2026-08-17) was measured WITH BCD + offload + tied; the blog said
+  "without BCD offload". The 2026-09-19 "tied + offload OOMs at 1.07B" row has no log and
+  conflicts with it; labelled unsourced.
+- HF "attention adds ~13% VRAM, ~7% step time" contradicted the 2026-09-29 entry below; withdrawn.
+- 14.385 -> 13.294 was quoted as -5.7%; -5.7% is 14.096 -> 13.294 (same harness).
+- Blog flag table said `--optimizer` defaults to adamw; the trainer default is muon.
+- setup.md / ai_rules.md said driver 596.36 (July); logs since 2026-09-18 show 610.74.
+- index.md's "~142M local ceiling" (2026-08-02) is now dated and points at the current state.
+- The 2026-08-14 "BCD + offload, untied (reference)" row (4.05 GiB, 875 tok/s) further down is
+  labelled untied, but its source file is `results/offload_1b/real_seq_tied_157.json` with
+  1,074,214,851 params: a tied 1.07B. Tied + offload therefore fit on 2026-08-14 and again on
+  2026-08-17. Standard-script and ceiling-table sizes (3.38, 4.80, 9.04, 4.00, 4.04, 5.92 "GB")
+  are GiB in `results/plain_ceiling/`; public pages now say GiB.
+
 ## Streamed full backprop at 1B fits 16 GB only with a lean host state: 5.5 GB pinned + process, ~7 GB of ~8.1 available; Windows caps pinned memory at 6.75 GiB (2026-11-19, #218)
 
 **One line: the full-precision design cannot run on this laptop at all: Windows will not pin more
