@@ -69,7 +69,7 @@ Every row is a real measured number, not a guess — wins and rejected ideas bot
 
 - **BCD, the stack in this post:** 9.890 s/step, about 106 days of compute. But BCD learns less per step. At 208M, the largest size where full backprop fits on this card, BCD ended 4,000 steps 32% worse in held-out loss than full backprop, needed 6.7x the steps to reach the same loss, and the gap was not closing. The cost at 1B is not measured. So 106 days is not a full-quality number.
 - **Streamed full backprop** (full quality by design; every layer streamed through the GPU one at a time): one 4-layer group was run on the GPU, and the full step comes out at about 22.5 s/step, about 241 days for 925,000 steps. That misses 212 days. The low end of the paper estimate, 19.4 s (about 208 days), was never measured. The full-precision version also needs about 13.6 GB of host RAM. That means a 32 GB machine; this one has 16 GB and will not be upgraded.
-- **A lean 16 GB version** (bf16 host state) fits: Windows caps pinned memory at 6.75 GiB, and the lean state needs 5.54 GB. It adds about 0.2 s to the 22.5 s step, and its quality cost still needs a held-out A/B. That work is in merge request !273 (#218), which is open and not merged.
+- **A lean 16 GB version** (bf16 host state) fits: Windows caps pinned memory at 6.75 GiB, and the lean state needs 5.54 GB. It adds about 0.2 s to the 22.5 s step, and its quality cost still needs a held-out A/B. That work is in merge request !273 (#218), merged on 2026-11-24; its results are on main under `results/streamed_16gb_gate_218/`.
 
 Full trail: the repo's `docs/state.md` (#214, #216, #217, and the 2026-11-20 roll-up).
 

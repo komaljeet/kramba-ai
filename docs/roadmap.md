@@ -80,7 +80,7 @@ LoRA, QLoRA, instruction tuning, LoRA save/load, demo (#29).
 
 Not a numbered phase. BCD runs a 1.11B step in 9.890 s (~106 days for 925,000 steps), but not
 at full quality (#214). Streamed full backprop is ~241 days (#217), over the maintainer's
-212-day rule. The effort was stopped on 2026-11-20; MR !273 (#218) is open, not merged. See
+212-day rule. The effort was stopped on 2026-11-20; MR !273 (#218) was merged on 2026-11-24. See
 [state.md](state.md) (2026-11-20 roll-up).
 
 ## Phase 9: PPL Root-Cause Correction (Issues #34/#35/#36, 2026-07-04)

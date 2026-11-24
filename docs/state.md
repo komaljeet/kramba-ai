@@ -5,41 +5,37 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
-## Frozen blocks before the active BCD block run forward only: no speed bug (2026-11-12, #199)
+## 1B pretrain on this laptop: no measured route reaches full quality under 212 days; effort stopped 2026-11-20 (roll-up, written 2026-11-24, #219)
 
-**One line: at 1B, the frozen blocks before the active block (and the frozen embedding) run one
-forward per micro-batch and no backward and no recompute. Nothing to fix. Running them under
-`no_grad` changes the step by 0.1%, inside run-to-run noise (0.3%).**
+**One line: the maintainer's rule is that a full-quality 1B pretrain must take under 212 days
+(19.8 s/step at 925,000 steps). BCD is ~106 days of compute but not full quality (#214: at 208M
+it needed 6.7x the steps to match full backprop). Streamed full backprop is full quality by design
+but ~22.5 s/step = ~241 days (#216/#217). The maintainer stopped the 1B pretrain effort on
+2026-11-20. MR !273 (#218) was merged on 2026-11-24. Nothing new was run for this entry.**
 
-Real 1B production flags (`scripts/profile_bcd_memory.py` PROD_ARGV), `--grad-accum 8`, 3 steps per
-block, timings = median of steps 2-3 of each block. Counter = forward pre-hook per layer, split by
-whether autograd is running a backward (a checkpoint recompute shows up there).
+| route | step (s) | days for 925,000 steps | quality | source |
+|---|---:|---:|---|---|
+| BCD, 7 blocks of 4 layers (default) | 9.890 | ~106 | not full: 208M 32% higher held-out loss at 4000 steps, 6.7x steps to match, gap not closing; 1B unmeasured | #210, #215, #214 |
+| streamed full backprop, fp32 host state | ~22.5 (one group measured, rest from per-layer times) | ~241 | full backprop by design | #217 |
+| same, paper estimate range | 19.4-25.5 | 208-273 | same | #216 (never measured end to end) |
+| streamed, lean bf16 host state | ~22.5 + ~0.2 | not computed | held-out A/B still needed | #218, MR !273, merged 2026-11-24 |
 
-| active block | layers before / after | before: fwd, bwd calls per micro-batch | after: bwd calls | step time |
-|---|---:|---|---:|---:|
-| token_embedding | 0 / 24 | - | 1 | 16.5 s |
-| blocks.0+1 | 0 / 22 | - | 1 | 15.6 s |
-| blocks.10+11 | 10 / 12 | 1, 0 | 1 | 11.5 s |
-| blocks.22+23+tail | 22 / 0 | 1, 0 | - | 6.5 s |
+- RAM: the fp32 streamed design needs ~13.6 GB of host RAM in the trainer (#216/#217). That
+  means a 32 GB machine. This laptop has 16 GB (15.29 GB usable) and will not be upgraded.
+- From MR !273 (#218, merged 2026-11-24; results on main in `results/streamed_16gb_gate_218/`):
+  Windows caps pinned memory at 6.75 GiB; the fp32 state needs 10.5 GB pinned, so
+  it cannot run here at all; a lean state (bf16 masters with stochastic rounding, bf16 Muon
+  momentum, bf16 parked inputs) needs 5.54 GB pinned and fits with ~1.1 GB margin.
+- Docs updated to match (#219): HF_BLOG_POST.md, PRETRAIN_STORY.md, README.md, training.md,
+  handoff.md, index.md, benchmarks_speed.md, roadmap.md now call 106 days BCD compute, not full
+  quality, and mark the bigger-GPU day counts (scaled from the October 132-211 days) as
+  unmeasured. The 211 figure used the 1.6x factor that #198 withdrew.
+- From MR !252 (#199, merged 2026-11-24): at 1B the frozen blocks before the active BCD block
+  run one forward per micro-batch, no backward, no recompute. A forced-bug falsifier catches it.
+  Running them under `no_grad` changes the step by 0.1%, inside 0.3% noise, so it was not shipped.
+- Still unmeasured: the BCD penalty at 1B and at full length; the lean variant's quality; a full
+  24-layer streamed run.
 
-The input to every frozen prefix layer has `requires_grad=False`, so autograd builds no graph
-there. Layers after the active block show their recompute every time (positive control).
-
-**Falsifier: forcing the bug makes it show up.** Marking the embedding output as needing grad
-makes every prefix layer show 1 recompute per micro-batch, and the step gets slower: middle block
-11.5 s -> 15.7 s, last block 6.5 s -> 15.6 s. That is what the bug would cost if it existed. It
-does not. Peak memory 82.6% of the card in every arm (guard is 85%).
-
-**Skipping the prefix forward is not possible by caching.** The prefix forward is a big share of
-the step late in the rotation: 1.7 s of 11.5 s at the middle block, 3.6 s of 6.5 s at the last
-block. But its output depends on the batch, and pretraining sees each batch once. A cache would
-only hit if the same batch came back while the prefix weights were still frozen, which never
-happens in single-pass pretraining. Not measured as a speedup, because there is nothing to cache.
-
-New test `tests/test_bcd_prefix_forward_only.py` (33 cases, CPU + CUDA + offload, tied and untied)
-fails if a prefix layer ever gets a recompute, and checks that the counter does catch a forced one.
-Data: `results/bcd_prefix/` (`base`, `base2` repeat, `forced`, `nograd`, `summary.json`).
-Harness: `scripts/profile_bcd_prefix.py`.
 ## Streamed full backprop at 1B fits 16 GB only with a lean host state: 5.5 GB pinned + process, ~7 GB of ~8.1 available; Windows caps pinned memory at 6.75 GiB (2026-11-19, #218)
 
 **One line: the full-precision design cannot run on this laptop at all: Windows will not pin more
@@ -85,33 +81,42 @@ the update where round-to-nearest keeps 23%. Proxy only: a held-out LM-loss A/B 
   is cut toward its 1.47 GB floor or int8 momentum is used. Next: a 208M fp32-vs-lean held-out
   A/B (~7.5 GPU h), then 1B BCD vs lean streamed (~9.5 GPU h). Unmeasured: the trainer's non-state
   RAM in this design, a full 24-layer run holding 5.5 GB pinned, long runs with a browser open.
-## 1B pretrain on this laptop: no measured route reaches full quality under 212 days; effort stopped 2026-11-20 (roll-up, written 2026-11-24, #219)
 
-**One line: the maintainer's rule is that a full-quality 1B pretrain must take under 212 days
-(19.8 s/step at 925,000 steps). BCD is ~106 days of compute but not full quality (#214: at 208M
-it needed 6.7x the steps to match full backprop). Streamed full backprop is full quality by design
-but ~22.5 s/step = ~241 days (#216/#217). The maintainer stopped the 1B pretrain effort on
-2026-11-20. MR !273 (#218) is open, not merged. Nothing new was run for this entry.**
+## Frozen blocks before the active BCD block run forward only: no speed bug (2026-11-12, #199)
 
-| route | step (s) | days for 925,000 steps | quality | source |
-|---|---:|---:|---|---|
-| BCD, 7 blocks of 4 layers (default) | 9.890 | ~106 | not full: 208M 32% higher held-out loss at 4000 steps, 6.7x steps to match, gap not closing; 1B unmeasured | #210, #215, #214 |
-| streamed full backprop, fp32 host state | ~22.5 (one group measured, rest from per-layer times) | ~241 | full backprop by design | #217 |
-| same, paper estimate range | 19.4-25.5 | 208-273 | same | #216 (never measured end to end) |
-| streamed, lean bf16 host state | ~22.5 + ~0.2 | not computed | held-out A/B still needed | #218, MR !273, open, not merged |
+**One line: at 1B, the frozen blocks before the active block (and the frozen embedding) run one
+forward per micro-batch and no backward and no recompute. Nothing to fix. Running them under
+`no_grad` changes the step by 0.1%, inside run-to-run noise (0.3%).**
 
-- RAM: the fp32 streamed design needs ~13.6 GB of host RAM in the trainer (#216/#217). That
-  means a 32 GB machine. This laptop has 16 GB (15.29 GB usable) and will not be upgraded.
-- From the open MR !273 (branch `exp/streamed-16gb-gate`, `results/streamed_16gb_gate_218/`,
-  not on main): Windows caps pinned memory at 6.75 GiB; the fp32 state needs 10.5 GB pinned, so
-  it cannot run here at all; a lean state (bf16 masters with stochastic rounding, bf16 Muon
-  momentum, bf16 parked inputs) needs 5.54 GB pinned and fits with ~1.1 GB margin.
-- Docs updated to match (#219): HF_BLOG_POST.md, PRETRAIN_STORY.md, README.md, training.md,
-  handoff.md, index.md, benchmarks_speed.md, roadmap.md now call 106 days BCD compute, not full
-  quality, and mark the bigger-GPU day counts (scaled from the October 132-211 days) as
-  unmeasured. The 211 figure used the 1.6x factor that #198 withdrew.
-- Still unmeasured: the BCD penalty at 1B and at full length; the lean variant's quality; a full
-  24-layer streamed run.
+Real 1B production flags (`scripts/profile_bcd_memory.py` PROD_ARGV), `--grad-accum 8`, 3 steps per
+block, timings = median of steps 2-3 of each block. Counter = forward pre-hook per layer, split by
+whether autograd is running a backward (a checkpoint recompute shows up there).
+
+| active block | layers before / after | before: fwd, bwd calls per micro-batch | after: bwd calls | step time |
+|---|---:|---|---:|---:|
+| token_embedding | 0 / 24 | - | 1 | 16.5 s |
+| blocks.0+1 | 0 / 22 | - | 1 | 15.6 s |
+| blocks.10+11 | 10 / 12 | 1, 0 | 1 | 11.5 s |
+| blocks.22+23+tail | 22 / 0 | 1, 0 | - | 6.5 s |
+
+The input to every frozen prefix layer has `requires_grad=False`, so autograd builds no graph
+there. Layers after the active block show their recompute every time (positive control).
+
+**Falsifier: forcing the bug makes it show up.** Marking the embedding output as needing grad
+makes every prefix layer show 1 recompute per micro-batch, and the step gets slower: middle block
+11.5 s -> 15.7 s, last block 6.5 s -> 15.6 s. That is what the bug would cost if it existed. It
+does not. Peak memory 82.6% of the card in every arm (guard is 85%).
+
+**Skipping the prefix forward is not possible by caching.** The prefix forward is a big share of
+the step late in the rotation: 1.7 s of 11.5 s at the middle block, 3.6 s of 6.5 s at the last
+block. But its output depends on the batch, and pretraining sees each batch once. A cache would
+only hit if the same batch came back while the prefix weights were still frozen, which never
+happens in single-pass pretraining. Not measured as a speedup, because there is nothing to cache.
+
+New test `tests/test_bcd_prefix_forward_only.py` (33 cases, CPU + CUDA + offload, tied and untied)
+fails if a prefix layer ever gets a recompute, and checks that the counter does catch a forced one.
+Data: `results/bcd_prefix/` (`base`, `base2` repeat, `forced`, `nograd`, `summary.json`).
+Harness: `scripts/profile_bcd_prefix.py`.
 
 ## Streamed full backprop at 1B, one group measured: 3.55 s vs 3.41 predicted, full step ~22.5 s (2026-11-19, #217)
 
