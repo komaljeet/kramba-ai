@@ -78,7 +78,7 @@ Mamba or RWKV has ever been run.
 
 | claim | status |
 |---|---|
-| 1.07B-parameter model (tied, BCD + offload) **trains in 4.05 GiB** on a 6 GB card, 875 tok/s | measured 2026-08-14 (#157, `results/offload_1b/real_seq_tied_157.json`) |
+| 1.07B-parameter model (tied, BCD + offload) **trains in 4.05 GiB** on a 6 GB card, 875 tok/s | measured 2026-08-14 (#157, `results/offload_1b/real_seq_tied.json`) |
 | flat ms/token from N=256→4096 (O(1) in time) | measured, benchmarks_speed.md |
 | beats a **matched vanilla transformer** at equal compute, 12M body | measured 2026-08-16, single seed |
 | ~30 tokens/param, not Chinchilla's 20 | measured 2026-08-16, size trend unresolved |

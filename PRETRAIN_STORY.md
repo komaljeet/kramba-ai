@@ -368,7 +368,7 @@ died.
 | 2026-10-15 | Combining a normalization step into the surrounding calculation | original baseline | a real step-time cut, measured honestly against the true original baseline |
 | 2026-10-16/17 | Turning off a regularization setting that's usually left on | on by default | genuinely better, not just faster — checked twice to be sure it wasn't luck |
 | 2026-10-17 | Four more small calculation-combining wins | before this batch | **a real, further 5.7% cut** |
-| 2026-10-22/23 | Doing the biggest matrix multiplication in the lowest-precision tensor format | before this change | **confirmed 7.81% faster**, answers unaffected |
+| 2026-10-22/23 | Doing the biggest matrix multiplication in the lowest-precision tensor format | before this change | **confirmed 7.77% faster**, loss the same as before over the first 25 steps |
 | 2026-10-23 | Using fewer data-loading worker processes | 7.16GB of RAM in use | **about 1.1GB saved, free, no slowdown** |
 | 2026-10-23 | Trying the lowest-precision format on the recurrent calculation too | normal path: small error in a simulation | **up to 6-18x worse error right after converting, and no speed gain unless done every step — rejected** |
 | 2026-10-24 | Measuring, for real, how big a model fits with everything except block-training | assumed around 700M-1.1B from an old estimate | **measured ~340M** at 85% of the card, ~378M at 96% — the old estimate used the wrong optimizer as its stand-in |

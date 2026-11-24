@@ -501,7 +501,7 @@ row-shares above are stale &mdash; matmul's own share actually <em>grew</em>, fr
 <h3>4 optimisations measured slower than doing nothing</h3>
 <ol>
   <li><strong>torch.compile</strong> — 2.4× slower (20.72 vs 8.66 s/step)</li>
-  <li><strong>Chunk-parallel scan (Design A)</strong> — 2–4× slower at d=64</li>
+  <li><strong>Chunk-parallel scan</strong> — 2–4× slower at d=64 (#95; the later Design A was about 1.5× slower)</li>
   <li><strong>Sequence-length curriculum</strong> — 2.9% slower at 83M</li>
   <li><strong>Attention layer removal</strong> — 6.4% slower (attention is the cheap part during training)</li>
 </ol>
