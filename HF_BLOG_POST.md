@@ -24,8 +24,8 @@ Every row is a real measured number, not a guess — wins and rejected ideas bot
 | Date | What was tried | Before | After / Verdict |
 |---|---|---|---|
 | 2026-07-12 | Vanilla full AdamW VRAM cost measured | — | 16.8 bytes/param — 1B needs ~16.8GB, 3x over this 6GB card |
-| 2026-07-12 | Block-coordinate-descent, BCD | 268M: 6.9GiB; 1.04B: hard OOM | 268M: 4.2GiB (-39%); 1.04B: **runs** |
-| 2026-07-12 | Grad-checkpoint stacked on BCD | 1.04B still spilling past 6GB | 4.6GiB peak, clean fit, no spill |
+| 2026-07-12 | Block-coordinate-descent, BCD | 268M: 6.9GiB; 1.04B: hard OOM | 268M: 4.2GiB (-39%); 1.04B: **runs** (bench used an 8,000-word vocab, not the real 50,257; see next row) |
+| 2026-07-12 | Grad-checkpoint stacked on BCD | 1.04B still spilling past 6GB | 4.6GiB peak, clean fit, no spill — **refuted 2026-08-07**: with the real vocab the model is 1.21B and reserves 7.28 GiB, so it spills |
 | 2026-07-24 | Audit double-copy OOM found | looked like BCD itself failing | root cause found, fixed, skipped under BCD — **recurred 2026-10-24 with BCD off, same bug class** |
 | 2026-07-24 | BCD stacked with `torch.compile` | hoped it would help | 6.73 vs 4.41 s/step — **slower**, recompiles every block switch |
 | 2026-08-02 | Mixture-of-Experts FFN | dense baseline | -11.8% loss but 1.91x compute cost — **rejected** |
@@ -41,14 +41,14 @@ Every row is a real measured number, not a guess — wins and rejected ideas bot
 | 2026-08-11 | GPU idle-time audit | assumed pipeline-starved | **97.2% GPU-busy — nothing to reclaim** |
 | 2026-08-11/12 | Megakernel scan search, 12 designs | chunk-parallel Design A hoped faster | A: **1.5-4x slower, dead**. B (blockwise backward): **~1.05x win, kept** |
 | 2026-08-14 | Adafactor, no BCD/offload, at 1B | BCD+offload: 4.68 s/step | spills to 9.42GiB, 48.50 s/step — **10.4x slower** |
-| 2026-08-17 | Chunked cross-entropy | 1.21B/seq4096: spilling (103%) | **fits (73%)** |
+| 2026-08-17/27 | Chunked cross-entropy | 1.21B/seq4096: spilling (103%) | **fits (73%)** (re-measured 2026-08-27) |
 | 2026-08-27 | Tensor-train projections | dense 8.05M params @ d=896 | **3.96x fewer params**, 1.05x step time, quality not gated here; an earlier test at half the params was 22% worse |
 | 2026-09-29 | BCD balanced block partition | layer partition (one oversized slot) | **41% of the full-vs-BCD quality gap closed** |
 | 2026-10-12 | Fused DeltaNet glue + prefetch + offload overlap | baseline | **+10.2%, +3.8%, +8.7%** stacked |
 | 2026-10-14 | Four ternary micro-fusions | baseline | **+0.8%, +0.9%, +3.7%, +3.5%** |
 | 2026-10-15 | Fused pre-norm RMSNorm | original baseline | **15.067 s/step, -30.9%** from the original baseline |
 | 2026-10-16/17 | Dropout off, tested not assumed | default 0.1 | **real quality win** (not just speed), confirmed 2 seeds |
-| 2026-10-17 | Four bit-identical kernel fusions | 14.385 s/step | **13.294 s/step, -5.7%** |
+| 2026-10-17 | Four bit-identical kernel fusions | 14.096 s/step | **13.294 s/step, -5.7%** |
 | 2026-10-22/23 | `--fp8-linear`, real FP8 tensor cores | 13.294 s/step | **12.335 s/step confirmed, -7.81%** (2,464 → 2,656 tok/s) |
 | 2026-10-23 | `--num-workers` 4 → 2 | 7.16GB peak resident RAM | **~1.1GB RAM saved, zero throughput cost** |
 | 2026-10-23 | Scan-kernel FP8 quantization (revisited) | bf16 path: ~0.4-0.5% error (simulated) | **up to 6-18x worse error right after quantizing, no speed gain unless done every step — rejected** |
@@ -57,13 +57,13 @@ Every row is a real measured number, not a guess — wins and rejected ideas bot
 | 2026-11-12 | BCD quality cost re-checked with more blocks (small stand-in, not 1B) | 1.6x, from one small test | 1.9x at 7 blocks, 2.4x at 13, still growing with run length — **the 1.6x does not describe the 1B layout** |
 | 2026-11-14 | 4 layers per BCD block (7 blocks at 1B instead of 13) | 13 blocks | 0.446 nats better held-out at step 2800, 6.8% slower steps — new default |
 | 2026-11-14/15 | Same-bits speedups at 1B, four rounds (among them: fp8 codes made once per turn, scan launch widths, fp8 bias folded into the next op) | 12.60 s/step | **11.095 s/step**, same numbers bit for bit |
-| 2026-11-15/16 | Transposed scan kernel (`--scan-kernel t`), not bit-identical | 11.097 s/step | **9.890 s/step**; held-out loss over 1,800 steps not worse (2 seeds each) — now the default |
+| 2026-11-15/16 | Transposed scan kernel (`--scan-kernel t`), not bit-identical | 11.097 s/step (the #210 harness re-time of 11.095) | **9.890 s/step**; held-out loss over 1,800 steps not worse (2 seeds each) — now the default |
 | 2026-11-16/17 | Whole turns 2-2.5x slower on Windows | another app took VRAM | WDDM moved trainer memory to system RAM and the CUDA cache kept it there; cache now emptied at each block switch (+0.012 s/step) |
 | 2026-11-18 | Held-out eval inside the 1B trainer | crashed under offload | fixed; same numbers as the separate harness, +0.08 s/step at one eval per 500 steps |
 | 2026-11-19 | BCD quality cost, matched test at 208M (largest size where full backprop fits) | 1.6x, from one small test | **32% higher held-out loss than full backprop at 4,000 steps; BCD needed 6.7x the steps to match; gap not closing**. Cost at 1B not measured |
 | 2026-11-19 | Streamed full backprop at 1B (one 4-layer group run on the GPU, the rest from per-layer times) | BCD: 9.890 s/step, quality cost above | **about 22.5 s/step, about 241 days for 925,000 steps** — over the 212-day limit; full precision needs about 13.6 GB of host RAM |
 
-**Overall, same hardware (updated 2026-11-24):** 21.81 s/step → **9.890 s/step** (-55%), 1,579 → **about 3,310 tok/s**, 375 days → **about 106 days of compute** for 925,000 BCD steps of a 1.1B model. That is compute time, not a full-quality figure. BCD's own quality cost: about 4x worse perplexity than full training → about 1.6x in one small October test (balanced partitioning). That 1.6x does not carry over to the 1B layout. A matched test at 208M then found BCD 32% worse in held-out loss (about 3.5x perplexity), needing 6.7x the steps to match full backprop. The cost at 1B is not measured. (October figures: 12.335 s/step, 2,656 tok/s, about 132 days of compute; the 211-day upper end used the 1.6x factor and is withdrawn.)
+**Overall, same hardware (updated 2026-11-24):** 21.81 s/step on the 2026-10-12 baseline → **9.890 s/step** (-55%), 1,502 → **about 3,310 tok/s** (both at 32,768 tokens per step), about 234 → **about 106 days of compute** for 925,000 BCD steps of a 1.1B model. (Older numbers from other setups: 1,111 tok/s and about 375 days on 2026-08-30; 1,579 tok/s on the 2026-09-19 run. See the note under the before/after table.) That is compute time, not a full-quality figure. BCD's own quality cost: about 4x worse perplexity than full training → about 1.6x in one small October test (balanced partitioning). That 1.6x does not carry over to the 1B layout. A matched test at 208M then found BCD 32% worse in held-out loss (about 3.5x perplexity), needing 6.7x the steps to match full backprop. The cost at 1B is not measured. (October figures: 12.335 s/step, 2,656 tok/s, about 132 days of compute; the 211-day upper end used the 1.6x factor and is withdrawn.)
 
 **Status (2026-11-20): the 1B pretrain effort on this laptop is stopped.** My rule was: a full-quality 1B pretrain must take under 212 days (19.8 s/step at 925,000 steps). No measured route meets it.
 
@@ -77,14 +77,16 @@ Also rejected, real but without a pinned date in the log above: the original HVN
 
 **Before / after — same hardware, real fixes (2026-08 to 2026-11)**
 
-| | August 2026 | October 2026 | November 2026 (now) |
+| | Before (date in each cell) | October 2026 | November 2026 (now) |
 |---|---|---|---|
-| 1B step time | 21.81 s/step | 12.335 s/step (-43%, old 13-block layout) | **9.890 s/step** (-55%, 7 blocks of 4 layers) |
-| Throughput | 1,579 tok/s | 2,656 tok/s | **about 3,310 tok/s** |
-| **BCD's own quality cost** | **about 4x worse perplexity** than full training (one block trains at a time, balance was naive) | about 1.6x worse perplexity (balanced block partitioning, one small test) | **not measured at 1B.** The 1.6x does not carry over to the 1B layout. At 208M: 32% higher held-out loss, 6.7x the steps to match full backprop, gap not closing |
-| 1B pretrain time | about 375 days | about 132 days of compute (211 with the 1.6x factor, since withdrawn) | **about 106 days of compute with BCD**, not full quality. Full backprop, streamed: about 241 days |
+| 1B step time | 21.81 s/step (2026-10-12 baseline) | 12.335 s/step (-43%, old 13-block layout) | **9.890 s/step** (-55%, 7 blocks of 4 layers) |
+| Throughput | 1,502 tok/s (2026-10-12: 32,768 tokens / 21.81 s) | 2,656 tok/s | **about 3,310 tok/s** |
+| **BCD's own quality cost** | **about 4x worse perplexity** than full training (one block trains at a time, balance was naive; before 2026-09-29) | about 1.6x worse perplexity (balanced block partitioning, one small test) | **not measured at 1B.** The 1.6x does not carry over to the 1B layout. At 208M: 32% higher held-out loss, 6.7x the steps to match full backprop, gap not closing |
+| 1B pretrain time | about 234 days (2026-10-12: 925,000 x 21.81 s); about 375 days in the 2026-08-30 estimate | about 132 days of compute (211 with the 1.6x factor, since withdrawn) | **about 106 days of compute with BCD**, not full quality. Full backprop, streamed: about 241 days |
 | Offload correctness | silent weight-corruption bug, present undetected for 76 days (2026-07-26 to 2026-10-10) | found, fixed, and validated end-to-end with real hard-kill-and-resume tests | same |
-| Peak VRAM at 1.11B | 4.51 GB | 5.24 GB (81.4% of the card) | **82-85% of the card** |
+| Peak VRAM at 1.11B | 4.79 GiB (79.9%, 2026-10-12 baseline) | 4.88 GiB (81.4% of the card) | **82-85% of the card** |
+
+**Older figures come from different setups, so they are kept apart.** 2026-08-30: 1.21B, 3.686 s per 4,096-token step = 1,111 tok/s, about 375 days for 36B tokens (docs/training.md). 2026-09-19: an untied 1.22B model (1.11B without its second vocab table), 24 DeltaNet layers, 26 BCD blocks: 1,579 tok/s in one 50-step window at step 1,350 (about 20.76 s per 32,768-token step), peak reserved 4.51 GiB, 75% of the card (blog_post_data/). 2026-10-12: the 1.11B hybrid, 13 BCD blocks: 21.81 s per 32,768-token step = 1,502 tok/s, 4.79 GiB (results/fused_glue_1b/, results/offload_losshead_1b/). Earlier versions of this post put 21.81 s/step, 1,579 tok/s and 4.51 GB in one "August" column; those come from three different runs, none of them from August.
 
 The BCD quality row is easy to miss but matters as much as the speed numbers: the **about 4x to about 1.6x figure is a real cut in how much worse the memory-saving training mode is** compared to training the full model at once, not a speed change at all. It came from changing how BCD splits the model into trainable blocks — one big slot sized for the vocabulary table wasted memory for every other block; grouping layers into balanced-size blocks reclaimed it, which let more layers train "live" at once for the same VRAM budget. That 1.6x came from one small test and does not hold for the 1B layout; see the 2026-11-12 and 2026-11-19 rows above.
 
@@ -108,7 +110,7 @@ A fresh profile found no further change worth 0.2 s/step that keeps the numbers 
 
 I looked everywhere to be able to **pre-train** an LLM on my low-end GPU and could not find one. Everywhere I looked, the same conclusion was reached: "You need an A100", "You can only train a 20M toy model on your hardware". So being 'broke', I did the only thing I could do — subscribe to Claude and try to find a way... after much prompting and testing, I finally stitched together the stack that allowed me to **pre-train** a 1B LLM on my laptop. After much testing, we are at **100.6% of the card's measured GEMM peak** (I don't know how 100.6% is even possible, I'm not a scientist, just a broke guy).
 
-Though I can **pre-train** a 1B LLM on 6 GB VRAM, a full-length BCD **pretraining** run would still take about **106 days** of compute — down from 375 days measured in August, after real speed and quality fixes landed since. How much quality block-coordinate descent costs at this size is not measured yet (see the 2026-11-18 update), so treat 106 days as the time, not as "the same model full training would give". At 208M the cost was large: 6.7x the steps to match full training. The full-quality route I measured, streamed full backprop, comes to about 241 days, so I stopped the 1B effort on 2026-11-20 (see the status near the top). More details below.
+Though I can **pre-train** a 1B LLM on 6 GB VRAM, a full-length BCD **pretraining** run would still take about **106 days** of compute — down from the 375 days estimated in August, after real speed and quality fixes landed since. How much quality block-coordinate descent costs at this size is not measured yet (see the 2026-11-18 update), so treat 106 days as the time, not as "the same model full training would give". At 208M the cost was large: 6.7x the steps to match full training. The full-quality route I measured, streamed full backprop, comes to about 241 days, so I stopped the 1B effort on 2026-11-20 (see the status near the top). More details below.
 
 **What This Means for Your GPU (Projected VRAM Ceilings — Extrapolated, Not Measured)**
 
@@ -141,8 +143,8 @@ What changes at larger VRAM: you can drop **--offload** (no PCIe bottleneck) for
 | Metric | Value |
 |--------|-------|
 | **Model size** | 1.11B parameters (pretraining, not inference) |
-| **Peak VRAM** | 4.51 GB, 1.5 GB to spare (August); **5.24 GB measured 2026-10-17**, 81.4% of the card — up, not down, from this week's fused kernels/caches; **82-85% of the card on the current 4-layer-block default (2026-11)** |
-| **Throughput** | 1,579 tokens/sec at 4,096 context (August measurement); **2,656 tok/s confirmed 2026-10-23** with `--fp8-linear`; **about 3,310 tok/s (9.890 s/step) on the 2026-11-16 default** |
+| **Peak VRAM** | 4.51 GiB, about 1.5 GiB to spare (2026-09-19, untied 1.22B run); **4.88 GiB measured 2026-10-17**, 81.4% of the card — up, not down, from this week's fused kernels/caches; **82-85% of the card on the current 4-layer-block default (2026-11)** |
+| **Throughput** | 1,111 tokens/sec at 4,096 context (2026-08-30); 1,579 tokens/sec in one 50-step window of the 2026-09-19 run; **2,656 tok/s confirmed 2026-10-23** with `--fp8-linear`; **about 3,310 tok/s (9.890 s/step) on the 2026-11-16 default** |
 | **Pretraining time (Chinchilla-optimal)** | about 375 days for 36B tokens (August); about 132 days of compute (October; 211 with the withdrawn 1.6x); **about 106 days of compute now** for 925,000 BCD steps, not full quality (at 208M BCD needed 6.7x the steps; 1B not measured). Full backprop, streamed: about 241 days — see the status near the top |
 
 **The 5-Technique Stack That Made Pretraining Possible**
@@ -162,7 +164,7 @@ Ternary quantization details (BitNet b1.58): what 2.33x means is weight tensors 
 
 Two of these did not previously work together. Tied embeddings share one tensor between the input lookup and the output layer, and the offload system rejected that outright — it assigns every parameter to exactly one block, and this tensor belongs to two. The combination was guarded off as unsupported.
 
-The fix: pin the tied table — a parameter reachable from two modules is never evicted, because the forward pass uses it at both ends and no single block's residency window covers both uses. Cost: one vocabulary table held resident (about 250 MB at 1B scale). When combined with chunked cross-entropy (**--chunked-loss 512**), the previously OOM combination (tied embeddings + CPU offload) now fits without OOM — a 5-step fp32 test at 1.11B parameters ran at **79% of 6 GB = 4.85 GB**. The pinned tied table (about 206 MB bf16) plus chunked loss (about 1.5 GB saved) makes the four-technique stack (BCD + offload + tied + chunked) fit together in memory. (2026-10-11: "fits" is confirmed; "trains correctly" at this combination and scale was never separately checked before an unrelated offload bug was found and fixed on 2026-10-10 — see the correction above.)
+The fix: pin the tied table — a parameter reachable from two modules is never evicted, because the forward pass uses it at both ends and no single block's residency window covers both uses. Cost: one vocabulary table held resident (about 206 MB at 1B scale in bf16: 50,257 x 2,048 x 2 bytes; earlier versions said 250 MB). When combined with chunked cross-entropy (**--chunked-loss 512**), the previously OOM combination (tied embeddings + CPU offload) now fits without OOM — a 5-step fp32 test at 1.11B parameters ran at **79% of the card, about 4.74 GiB** (0.79 x 6,141 MiB; earlier text said "4.85 GB", a unit slip; no raw log kept, source is commit a60699c). The pinned tied table (about 206 MB bf16) plus chunked loss (about 1.5 GB saved) makes the four-technique stack (BCD + offload + tied + chunked) fit together in memory. (2026-10-11: "fits" is confirmed; "trains correctly" at this combination and scale was never separately checked before an unrelated offload bug was found and fixed on 2026-10-10 — see the correction above.)
 
 **Architecture**
 
@@ -183,22 +185,22 @@ Key insight: the attention window (128 tokens) gives exact token recall inside t
 
 This means at inference: the hybrid can read and quote exact passages from the last about 128 tokens of context, while pure recurrent models can only give a lossy semantic gist. For coding agents, tool-use, and grounded QA, this is the difference between "it hallucinates the function signature" and "it copies the exact signature from context."
 
-The attention layers add only about 13% VRAM (2 TransformerBlocks with windowed KV cache capped at 128 keys each) and about 7% step time at pretraining — a small price for exact recall where it matters most.
+The attention layers are not the expensive part in pretraining. Replacing both with DeltaNet layers was 6.4% slower at seq 512 (#149), and at 1024x20 and 640x12 the hybrid ran about 1-4% faster than plain DeltaNet with the same VRAM (docs/state.md, 2026-09-29). (2026-11-24: an earlier version of this post said they add about 13% VRAM and 7% step time. That came from a different setup, a KV cache capped at 128 keys, and does not hold in the training loop, so it is withdrawn.)
 
 **What You Get Without Any of This (Same Card, Standard Script — Pretraining)**
 
 | Model | Standard Script | With This Stack |
 |-------|-----------------|-----------------|
-| 157M | 3.38 GB — fits | fits |
-| 243M | 4.80 GB — fits | fits |
-| 434M | 9.04 GB — spills | fits |
-| **1.07B (recurrent)** | far past the card | **4.00 GB** |
-| **1.07B (plain transformer)** | far past the card | **4.04 GB** |
-| **1.58B** | far past the card | **5.92 GB — the ceiling** |
+| 157M | 3.38 GiB — fits | fits |
+| 243M | 4.80 GiB — fits | fits |
+| 434M | 9.04 GiB — spills | fits |
+| **1.07B (recurrent)** | far past the card | **4.00 GiB** |
+| **1.07B (plain transformer)** | far past the card | **4.04 GiB** |
+| **1.58B** | far past the card | **5.92 GiB — the ceiling** |
 
 About 243M on a standard script, about 1.58B with the stack — roughly 6.5x. Both numbers measured on the same 6 GB card at 4,096 context, stopping at the first spill into system RAM (on Windows/WDDM, exceeding VRAM does not error — it silently gets 4-15x slower).
 
-What the table does not show: a transformer and the recurrent hybrid need almost identical memory at these sizes (4.80 GB vs 5.09 GB at 243M), and a plain 1.07B transformer runs under the same stack in 4.04 GB. The 6.5x comes from the pretraining stack, not from the architecture — so it applies to whatever model you are pretraining, including an ordinary transformer.
+What the table does not show: a transformer and the recurrent hybrid need almost identical memory at these sizes (4.80 GiB vs 5.09 GiB at 243M), and a plain 1.07B transformer runs under the same stack in 4.04 GiB. The 6.5x comes from the pretraining stack, not from the architecture — so it applies to whatever model you are pretraining, including an ordinary transformer.
 
 **System RAM Requirements (Often Overlooked)**
 
@@ -218,28 +220,28 @@ Two reasons system RAM matters. First, CPU offload (**--offload**): inactive blo
 
 | Item | Size |
 |------|------|
-| **Computing the loss** — 4,096 positions x 50,257 vocabulary | about 1,500 MB |
+| **Computing the loss** — 4,096 positions x 32,003 vocabulary | about 1,500 MB |
 | CUDA context, kernels, workspaces | about 400 MB |
-| Weights (ternary) | about 960 MB |
-| Optimiser state (BCD: one block at a time) | about 200 MB |
+| Weights | 183 MB |
+| Optimiser state | 183 MB |
 | Layer activations (grad checkpoint) | about 50 MB |
-| **Pinned tied table (if tied)** | **about 250 MB** |
+| **Pinned tied table (if tied; 1B scale, not part of the 48M run)** | **about 206 MB** |
 
-The largest consumer is not the model — it's the cross-entropy over the vocabulary (about 3x the weights). Chunked loss (512 positions at a time) recomputes logits in backward instead of keeping them, saving about 1.5 GB. This is what made the previously OOM combination (tied plus offload) work.
+The largest consumer is not the model — it's the cross-entropy over the vocabulary (about 8x the weights: about 1,500 vs 183 MB). Chunked loss (512 positions at a time) recomputes logits in backward instead of keeping them, saving 1,436 MB at 48M and 1.79 GB at 1.21B. (2026-11-24: an earlier version of this table listed about 960 MB of ternary weights, about 200 MB of optimiser state and a 50,257 vocabulary. Those had no recorded measurement; the measured 48M run in docs/state.md, #158, is what is shown now.) This is what made the previously OOM combination (tied plus offload) work.
 
 **The Trade-off: Tied Embeddings vs Offload**
 
 | Config | Params | Tied | VRAM | Status |
 |--------|--------|------|------|--------|
-| Blog claim (no BCD offload) | 1.07B | yes | 4.00 GB | Target |
-| 1.11B run (untied) | 1.11B | no | 3.48/4.51 GB | 1,350 steps, ran without OOM — loss curve needs re-verifying, see correction above |
-| **Tied + offload + chunked_loss** | **1.11B** | **yes** | **4.85 GB (79%)** | **5 steps fp32, fits without OOM (fixed) — not a trained/graded run** |
-| Tied + offload (no chunked) | 1.07B | yes | >6 GB | OOM (pinned 250 MB + overhead) |
+| 2026-08-17 ceiling sweep (BCD + offload + ternary, no chunked loss) | 1.07B | yes | 4.00 GiB | fit, memory only |
+| 2026-09-19 run (untied) | 1.22B | no | 3.48/4.51 GiB | logged to step 1,400, ran without OOM — loss curve needs re-verifying, see correction above |
+| **Tied + offload + chunked_loss** | **1.11B** | **yes** | **about 4.74 GiB (79%)** | **5 steps fp32, fits without OOM (fixed) — not a trained/graded run** |
+| Tied + offload (no chunked) | 1.07B | yes | >6 GB | OOM (pinned 206 MB + overhead) — reported 2026-09-19 with no log kept (unsourced); it conflicts with the 2026-08-17 row above |
 | 57M test | 57M | yes | Works | All 5 techniques integrate |
 
 **The Hard Reality: Fitting Is Not Training**
 
-A 1B model ran at about 1,100 tokens/sec here in August; **2,656 tok/s confirmed 2026-10-23** with the FP8 matmul lever, and **about 3,310 tok/s (9.890 s/step) on the 2026-11-16 default**. Pretraining one properly still needs roughly 30 billion-plus tokens — **about 106 days of compute** now, down from 375. That is BCD compute, not full quality: BCD's quality cost at this size is not measured, and at 208M it was large. The ceiling this stack raises is what you can hold; the wall it does not touch is arithmetic — just a smaller wall than it was in August.
+A 1B model ran at 1,111 tokens/sec here on 2026-08-30 (4,096-token steps); **2,656 tok/s confirmed 2026-10-23** with the FP8 matmul lever, and **about 3,310 tok/s (9.890 s/step) on the 2026-11-16 default**. Pretraining one properly still needs roughly 30 billion-plus tokens — **about 106 days of compute** now, down from 375. That is BCD compute, not full quality: BCD's quality cost at this size is not measured, and at 208M it was large. The ceiling this stack raises is what you can hold; the wall it does not touch is arithmetic — just a smaller wall than it was in August.
 
 Why 375 days (now about 106)? The card was first timed on the one thing it does best (GEMM) to find its real speed — not the number on the box. Then a pretraining step was broken into parts:
 
@@ -250,7 +252,7 @@ Why 375 days (now about 106)? The card was first timed on the one thing it does 
 | Stepping through the sequence | 15% | Waiting, not calculating |
 | Moving data around | 15% | The price of fitting in 6 GB |
 
-The maths runs at 100.6% of the fastest this GPU was seen to go — that part held up. "Nothing left, 20-25% at most" did not: four more real, measured levers (fusing more DeltaNet glue into the scan kernels, fixing a short causal-conv transpose, two ternary-quantize caches) landed in one week, cutting the step a further 7% on top of what was already captured, for 28% total against the August baseline at that point. Since then a fifth lever (four more bit-identical kernel fusions) landed on 2026-10-17, taking the total to **39%** against the August baseline (55% by 2026-11-18, see the timeline at the top). This project has now been wrong about "exhausted" more than once — treat any future claim like it the same way: as a thing to re-measure, not trust.
+The maths runs at 100.6% of the fastest this GPU was seen to go — that part held up. "Nothing left, 20-25% at most" did not: four more real, measured levers (fusing more DeltaNet glue into the scan kernels, fixing a short causal-conv transpose, two ternary-quantize caches) landed in one week, cutting the step a further 7% on top of what was already captured, for 28% total against the 2026-10-12 baseline (21.81 s/step) at that point. Since then a fifth lever (four more bit-identical kernel fusions) landed on 2026-10-17, taking the total to **39%** against that baseline (55% by 2026-11-18, see the timeline at the top). This project has now been wrong about "exhausted" more than once — treat any future claim like it the same way: as a thing to re-measure, not trust.
 
 **Why 30 Tokens/Param, Not 20?**
 
@@ -263,7 +265,7 @@ The Chinchilla paper (Hoffmann et al., 2022) recommended about 20 tokens/paramet
 
 30 is where the trade turns. Going from 20 to 30 buys significant quality for 50% more compute; going 30 to 40 buys marginal gains for 33% more compute. Why this architecture needs more data: the recurrent state compresses history differently than attention, exact-token recall (the hybrid's attention window) needs more exposure to learn the pattern, and the gated DeltaNet update has more learnable dynamics than a static attention matrix. How this moves with model size is unresolved — fitting the standard scaling form to all measured points gives a degenerate answer (it implies a 1B model needs less data than it has parameters, contradicting every raw curve), and three model sizes are not enough to separate the terms.
 
-**Practical rule:** budget for 30 tokens per body-param minimum with this stack. A 1.11B model (about 1.01B body params) needs about 30B tokens — **about 106 days of compute at 9.890 s/step** (about 132 days in October; 375 days at 1,579 tok/s in August). That is BCD compute. BCD's own quality cost at this size is not measured; at 208M it needed 6.7x the steps to match full training. At 20 tokens/param you'd stop earlier and leave quality on the table.
+**Practical rule:** budget for 30 tokens per body-param minimum with this stack. A 1.11B model (about 1.01B body params) needs about 30B tokens — **about 106 days of compute at 9.890 s/step** (about 132 days in October; 375 days in August, at 1,111 tok/s for a 36B-token target). That is BCD compute. BCD's own quality cost at this size is not measured; at 208M it needed 6.7x the steps to match full training. At 20 tokens/param you'd stop earlier and leave quality on the table.
 
 **What a 6 GB Card Is Good For**
 
@@ -273,7 +275,7 @@ The Chinchilla paper (Hoffmann et al., 2022) recommended about 20 tokens/paramet
 | Holding a coherent conversation | about 270M | about 19-20 days |
 | Writing code well enough to trust | Far more | Out of reach |
 
-The first two are real projects here. The third is not — code models many times larger, trained on trillions of tokens, are still weak at it.
+None of these sizes was measured for the skill in its row. 270M was the largest model that fit at the time, not a size shown to hold a conversation; the only model chat-tested here is the 83M fine-tune (docs/state.md, 2026-09-29). The day count is time only. The first two are real projects here. The third is not — code models many times larger, trained on trillions of tokens, are still weak at it.
 
 **Pretraining Config Used (1.11B Run)**
 
@@ -350,11 +352,11 @@ Code: https://gitlab.com/komalbarun/kramba-ai (Apache-2.0). Documentation: https
 
 **Updates**
 
-**2026-09-26:** the previously OOM combination (tied embeddings + CPU offload + BCD) now fits without OOM when combined with chunked cross-entropy (**--chunked-loss 512**). A 5-step fp32 test at 1.11B parameters ran at 79% of 6 GB = 4.85 GB without OOM. The pinned tied table (about 206 MB bf16) plus chunked loss (about 1.5 GB saved) makes the four-technique stack (BCD + offload + tied + chunked) fit together in memory. This was the missing piece — the blog's 1.11B run used untied embeddings (3.48/4.51 GB); the tied + offload combo was previously OOM (>6 GB) without chunked loss. (This was a memory-fit test only, 5 steps, not a graded training run.)
+**2026-09-26:** the previously OOM combination (tied embeddings + CPU offload + BCD) now fits without OOM when combined with chunked cross-entropy (**--chunked-loss 512**). A 5-step fp32 test at 1.11B parameters ran at 79% of the card (about 4.74 GiB) without OOM. The pinned tied table (about 206 MB bf16) plus chunked loss (about 1.5 GB saved) makes the four-technique stack (BCD + offload + tied + chunked) fit together in memory. This was the missing piece — the blog's 2026-09-19 run used untied embeddings (1.22B, 3.48/4.51 GiB); the tied + offload combo was reported to OOM (>6 GB) without chunked loss (2026-09-19, no log kept, unsourced; it conflicts with tied + offload fitting at 4.05 GiB on 2026-08-14 and 4.00 GiB on 2026-08-17). (This was a memory-fit test only, 5 steps, not a graded training run.)
 
-**2026-10-11:** a separate, unrelated bug in the CPU offload path (present since 2026-07-26, fixed in 2f94d7a) could swap weights between same-shaped matrices during training whenever **--offload** was active with prefetch on. It did not affect any VRAM/fit numbers in this post, only the correctness of the weights during offloaded training. Every "trains"/"works"/"loss drops" claim above that came from an **--offload** run (the 1,350-step 1.11B headline run included) needs re-running on fixed code before it can be trusted again. The fix itself has been verified correct — confirmed at small scale (8-layer test), with the quality finding below (BCD balanced partition) confirmed to hold under offload too.
+**2026-10-11:** a separate, unrelated bug in the CPU offload path (present since 2026-07-26, fixed in 2f94d7a) could swap weights between same-shaped matrices during training whenever **--offload** was active with prefetch on. It did not affect any VRAM/fit numbers in this post, only the correctness of the weights during offloaded training. Every "trains"/"works"/"loss drops" claim above that came from an **--offload** run (the 2026-09-19 untied 1.22B run, logged to step 1,400, included) needs re-running on fixed code before it can be trusted again. The fix itself has been verified correct — confirmed at small scale (8-layer test), with the quality finding below (BCD balanced partition) confirmed to hold under offload too.
 
-**2026-10-21:** every s/step, tok/s, VRAM and day-count figure in this post has been re-measured against the current code and updated — 14.385 to 13.294 s/step, 2,278 to 2,464 tok/s, 5.31 GB to 5.24 GB peak, and the day estimate from 154-246 to 142-227. The **--offload** plus tied-embeddings compatibility question raised earlier is confirmed fixed and current — the config above uses tied embeddings together with offload without issue.
+**2026-10-21:** every s/step, tok/s, VRAM and day-count figure in this post has been re-measured against the current code and updated — 14.385 to 13.294 s/step, 2,278 to 2,464 tok/s, 4.94 GiB to 4.88 GiB peak (5,060 to 4,996 MiB), and the day estimate from 154-246 to 142-227. The **--offload** plus tied-embeddings compatibility question raised earlier is confirmed fixed and current — the config above uses tied embeddings together with offload without issue.
 
 **2026-11-18:** step time, tok/s, VRAM and day counts updated to the current 4-layer-block default (9.890 s/step, about 3,310 tok/s, about 106 days of compute). The quality-adjusted 211-day figure was dropped: its 1.6x factor came from one small test that a later test showed does not carry over to the 1B layout. See the 2026-11-18 update near the top.
 

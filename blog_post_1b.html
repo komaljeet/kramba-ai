@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trainable 1.11B Model on a 6 GB VRAM Card</title>
-<meta name="description" content="Measured: 1.11B parameter model trains in 5.31 GB on RTX 4050 6 GB — full 5-technique stack, no A100 needed.">
+<meta name="description" content="Measured: 1.11B parameter model trains in 4.94 GiB on RTX 4050 6 GB — full 5-technique stack, no A100 needed.">
 <style>
   :root{
     --bg:#fbfaf8; --panel:#ffffff; --ink:#16150f; --muted:#5d5a4e;
@@ -102,10 +102,12 @@
 
 <p style="border-left:3px solid var(--accent, #c00);padding-left:1rem;">
   <strong>Stale page (note added 2026-11-24):</strong> this page is a snapshot from mid-October
-  2026. Its step times, tok/s and day counts (14.385 s/step, ~154-246 days) are out of date, and
-  the 1.6&times; BCD quality figure does not hold for the 1B layout. Current: 9.890 s/step, about
-  106 days of BCD compute, which is not full quality. The 1B pretrain effort was stopped on
-  2026-11-20. See <code>HF_BLOG_POST.md</code> and <code>docs/state.md</code> in the repo.
+  2026. Its "now" numbers are from 2026-10-16/17: 14.385 s/step, 2,278 tok/s, 4.94 GiB peak
+  (82.4% of the card), ~154-246 days. They are out of date, and the 1.6&times; BCD quality
+  figure does not hold for the 1B layout. Current (2026-11-18): 9.890 s/step, about 3,310 tok/s,
+  peak 82-85% of the card, about 106 days of BCD compute for 925,000 steps, which is not full
+  quality. Streamed full backprop: about 22.5 s/step, about 241 days. The 1B pretrain effort was
+  stopped on 2026-11-20. See <code>HF_BLOG_POST.md</code> and <code>docs/state.md</code> in the repo.
 </p>
 
 <h2>The exact machine every number here was measured on</h2>
@@ -123,25 +125,31 @@ re-measuring.</p>
 
 <h2>Before / after &mdash; same hardware, one week of real fixes (2026-08 &rarr; 2026-10)</h2>
 <table>
-<tr><th></th><th>August 2026</th><th>October 2026 (now)</th></tr>
-<tr><td>1B step time</td><td>21.81 s/step</td><td><strong>14.385 s/step</strong> (-34%)</td></tr>
-<tr><td>Throughput</td><td>1,579 tok/s</td><td><strong>2,278 tok/s</strong></td></tr>
-<tr><td><strong>BCD's own quality cost</strong></td><td><strong>~4&times; worse perplexity</strong> than full training (one block trains at a time, naive partition)</td><td><strong>~1.6&times; worse perplexity</strong> (balanced block partitioning, issue #164)</td></tr>
-<tr><td>1B pretrain time</td><td>~375 days</td><td><strong>~154-246 days</strong>, depending on how the BCD quality cost above is counted</td></tr>
-<tr><td>Offload correctness</td><td>silent weight-corruption bug, undetected for 76 days</td><td>found, fixed, validated end-to-end</td></tr>
-<tr><td>Peak VRAM at 1.11B</td><td>4.51 GB</td><td><strong>5.31 GB</strong> (82.4% of the card) &mdash; up, not down; fused kernels/caches add some transient buffers even while speeding things up</td></tr>
+<tr><th></th><th>Before (date in each cell)</th><th>2026-10-16/17 (stale, see note above)</th></tr>
+<tr><td>1B step time</td><td>21.81 s/step (2026-10-12 baseline)</td><td><strong>14.385 s/step</strong> (-34%)</td></tr>
+<tr><td>Throughput</td><td>1,502 tok/s (2026-10-12: 32,768 tokens / 21.81 s)</td><td><strong>2,278 tok/s</strong></td></tr>
+<tr><td><strong>BCD's own quality cost</strong></td><td><strong>~4&times; worse perplexity</strong> than full training (one block trains at a time, naive partition, before 2026-09-29)</td><td><strong>~1.6&times; worse perplexity</strong> (balanced block partitioning, issue #164)</td></tr>
+<tr><td>1B pretrain time</td><td>~234 days (2026-10-12: 925,000 &times; 21.81 s); ~375 days in the 2026-08-30 estimate</td><td><strong>~154-246 days</strong>, depending on how the BCD quality cost above is counted</td></tr>
+<tr><td>Offload correctness</td><td>silent weight-corruption bug, undetected for 76 days (2026-07-26 to 2026-10-10)</td><td>found, fixed, validated end-to-end</td></tr>
+<tr><td>Peak VRAM at 1.11B</td><td>4.79 GiB (79.9%, 2026-10-12 baseline)</td><td><strong>4.94 GiB</strong> (5,060 MiB, 82.4% of the card) &mdash; up, not down; fused kernels/caches add some transient buffers even while speeding things up</td></tr>
 </table>
 <p>The BCD row is a real cut in how much worse the memory-saving training mode is compared
 to training the full model at once &mdash; not a speed change. Full trail in the repo's
 <code>docs/state.md</code>.</p>
+<p>Older figures come from different setups, so they are kept apart. 2026-08-30: 1.21B,
+3.686 s per 4,096-token step = 1,111 tok/s, ~375 days for 36B tokens. 2026-09-19 (the run
+below): an untied 1.22B model, 24 DeltaNet layers, 26 BCD blocks, 1,579 tok/s in one 50-step
+window at step 1,350 (~20.76 s per 32,768-token step), peak reserved 4.51 GiB (75% of the
+card). An earlier version of this table put 21.81 s/step, 1,579 tok/s and 4.51 GB in one
+"August" column; those come from three different runs, none from August.</p>
 
 <h2>The headline number</h2>
-<p class="sub">RTX 4050 laptop, 6 GB &mdash; measured 2026-09-19</p>
+<p class="sub">RTX 4050 laptop, 6 GB &mdash; date on each card</p>
 
 <div class="cards">
   <div class="card"><div class="k">1.11B</div><div class="l">parameters, training &mdash; not inference</div></div>
-  <div class="card"><div class="k">5.31 GB</div><div class="l">peak reserved VRAM, 82.4% of card (was 4.51 GB, Aug)</div></div>
-  <div class="card"><div class="k">1,579</div><div class="l">tokens/sec at step 1350</div></div>
+  <div class="card"><div class="k">4.94 GiB</div><div class="l">peak reserved VRAM, 82.4% of card, 2026-10-16/17 (4.51 GiB on 2026-09-19, untied 1.22B run)</div></div>
+  <div class="card"><div class="k">1,579</div><div class="l">tokens/sec in one 50-step window at step 1,350, 2026-09-19 run</div></div>
 </div>
 
 <p style="border-left:3px solid var(--accent, #c00);padding-left:1rem;">
@@ -214,7 +222,7 @@ to training the full model at once &mdash; not a speed change. Full trail in the
   The fix is to <strong>pin it</strong> &mdash; a parameter reachable from two modules is
   never evicted, because the forward pass uses it at both ends and no single block's
   residency window covers both uses. The cost is one vocabulary table held resident,
-  250 MB at 1B scale. Lifting that guard also re-enabled 13 of the
+  about 206 MB at 1B scale (bf16: 50,257 &times; 2,048 &times; 2 bytes; earlier versions said 250 MB). Lifting that guard also re-enabled 13 of the
   subsystem's own tests, which had been silently skipped ever since tying
   became the default, because every one of them builds a tied model and hit the guard at
   construction.
@@ -222,7 +230,7 @@ to training the full model at once &mdash; not a speed change. Full trail in the
 <p>
   <strong>Update 2026-09-26:</strong> the previously OOM combination (tied embeddings + CPU offload)
   now fits without OOM when combined with <strong>chunked cross-entropy (--chunked-loss 512)</strong>.
-  A 5-step fp32 test at 1.11B parameters ran at <strong>79% of 6 GB = 4.85 GB</strong> without OOM.
+  A 5-step fp32 test at 1.11B parameters ran at <strong>79% of the card, about 4.74 GiB</strong> (0.79 &times; 6,141 MiB; earlier text said "4.85 GB", a unit slip; no raw log kept, source is commit <code>a60699c</code>) without OOM.
   The pinned tied table (~206 MB bf16) plus chunked loss (~1.5 GB saved) makes the previously-untested
   four-technique stack (BCD + offload + tied + chunked) fit together in memory. This was a
   5-step memory-fit test, not a graded training run.
@@ -235,17 +243,18 @@ to training the full model at once &mdash; not a speed change. Full trail in the
 </p>
 
 <h2>What we measured</h2>
-<p class="sub">1.11B run (without tied embeddings), 1350 steps</p>
+<p class="sub">2026-09-19 run: 1.22B parameters (untied), logged to step 1,400 (<code>blog_post_data/</code>)</p>
 
 <div class="tw">
 <table>
   <thead><tr><th>Step</th><th class="num">Loss</th><th class="num">PPL</th><th class="num">LR</th><th class="num">Tokens/sec</th><th class="num">VRAM alloc/reserved</th></tr></thead>
   <tbody>
-    <tr><td>50</td><td class="num">10.99</td><td class="num">58,988</td><td class="num">0.00196</td><td class="num">1,058</td><td class="num">3.48 / 4.50 GB</td></tr>
-    <tr><td>100</td><td class="num">10.99</td><td class="num">59,160</td><td class="num">0.00396</td><td class="num">1,067</td><td class="num">3.48 / 4.50 GB</td></tr>
-    <tr><td>500</td><td class="num">8.50</td><td class="num">4,932</td><td class="num">0.0200</td><td class="num">1,159</td><td class="num">3.48 / 4.51 GB</td></tr>
-    <tr><td>1000</td><td class="num">8.25</td><td class="num">3,828</td><td class="num">0.0198</td><td class="num">1,361</td><td class="num">3.48 / 4.51 GB</td></tr>
-    <tr><td>1350</td><td class="num">8.25</td><td class="num">3,828</td><td class="num">0.0197</td><td class="num"><strong>1,579</strong></td><td class="num">3.48 / 4.51 GB</td></tr>
+    <tr><td>50</td><td class="num">10.99</td><td class="num">58,988</td><td class="num">0.00196</td><td class="num">1,058</td><td class="num">3.48 / 4.50 GiB</td></tr>
+    <tr><td>100</td><td class="num">10.99</td><td class="num">59,160</td><td class="num">0.00396</td><td class="num">1,067</td><td class="num">3.48 / 4.50 GiB</td></tr>
+    <tr><td>500</td><td class="num">8.50</td><td class="num">4,932</td><td class="num">0.0200</td><td class="num">1,159</td><td class="num">3.48 / 4.51 GiB</td></tr>
+    <tr><td>1000</td><td class="num">8.25</td><td class="num">3,828</td><td class="num">0.0198</td><td class="num">1,361</td><td class="num">3.48 / 4.51 GiB</td></tr>
+    <tr><td>1350</td><td class="num">8.98</td><td class="num">7,916</td><td class="num">0.0196</td><td class="num"><strong>1,579</strong></td><td class="num">3.48 / 4.51 GiB</td></tr>
+    <tr><td>1400</td><td class="num">8.21</td><td class="num">3,660</td><td class="num">0.0196</td><td class="num">1,563</td><td class="num">3.48 / 4.51 GiB</td></tr>
   </tbody>
 </table>
 </div>
@@ -254,29 +263,33 @@ to training the full model at once &mdash; not a speed change. Full trail in the
   <strong>Correction (2026-10-11):</strong> this run used <code>--offload</code> with the
   weight-corruption bug described at the top of this page still active (fixed 2026-10-10, after
   this run). The VRAM/tokens-per-sec numbers above are unaffected. The loss column is not —
-  it needs re-measuring on fixed code. Also note steps 1000 and 1350 show the identical loss
-  and perplexity (8.25 / 3,828) — that repeat is itself unexplained and worth checking
-  separately, independent of the offload bug.
+  it needs re-measuring on fixed code. (2026-11-24: an earlier version of this table showed
+  steps 1000 and 1350 with the same loss and perplexity, 8.25 / 3,828. That was a copy error.
+  <code>blog_post_data/training_log.csv</code> has 8.98 / 7,916 at step 1350.)
 </p>
 <p>
   <strong>Key findings (as originally measured, now flagged uncertain):</strong> VRAM flat at
-  3.48/4.51 GB (fits), tokens/sec improves 1,058 &rarr; 1,579 as warmup completes, loss drops
-  from 10.99 to 8.25 through cosine decay. Checkpoint saved at step 1000.
+  3.48/4.51 GiB (fits), tokens/sec improves 1,058 &rarr; 1,579 over the run, loss drops
+  from 10.99 to 8.21 at step 1,400 (the logged loss alternates between about 8.2 and 9.0 from one
+  50-step window to the next). Checkpoint saved at step 1000.
 </p>
 
 <h2>The trade-off: Tied embeddings vs offload</h2>
-<p class="sub">Tied saves params, but pins 250 MB on GPU with offload</p>
+<p class="sub">Tied saves params, but pins 206 MB on GPU with offload</p>
 
 <p>
   Tied embeddings saves ~103M params (one vocab table instead of two). But with CPU offload,
   the shared table must stay pinned on GPU (used by both <code>token_embedding</code> and
-  <code>decoder</code>), costing 250 MB that can never be offloaded. At 1.07B params
-  (2048 d_model, 24L, 64 heads, tied) the pinned 250 MB + offload overhead pushes past
-  6 GB &rarr; OOM.
+  <code>decoder</code>), costing 206 MB that can never be offloaded. At 1.07B params
+  (2048 d_model, 24L, 64 heads, tied) the pinned 206 MB + offload overhead pushes past
+  6 GB &rarr; OOM. (Reported 2026-09-19 with no log kept: unsourced. It conflicts with tied +
+  offload fitting at 4.05 GiB on 2026-08-14 and 4.00 GiB on 2026-08-17.)
 </p>
 <p>
-  Without tied embeddings (1.11B params): all blocks offloadable, VRAM flat at 3.48/4.51 GB,
-  ran without OOM. The blog post's 1.07B at 4.00 GB claim was measured without BCD offload.
+  Without tied embeddings (1.22B params): all blocks offloadable, VRAM flat at 3.48/4.51 GiB,
+  ran without OOM. The 1.07B at 4.00 GiB figure (2026-08-17) was measured with BCD, offload
+  and tied embeddings, without chunked loss (<code>docs/state.md</code>). It conflicts with the
+  OOM row below, which was reported on 2026-09-19 with no log kept (unsourced).
   (2026-10-11: "trains smoothly" overstated what was verified — see the correction above;
   it fit and ran without crashing, which is what was actually confirmed at the time.)
 </p>
@@ -285,39 +298,39 @@ to training the full model at once &mdash; not a speed change. Full trail in the
 <table>
   <thead><tr><th>Config</th><th class="num">Params</th><th>Tied</th><th class="num">VRAM</th><th>Status</th></tr></thead>
   <tbody>
-    <tr><td>Blog claim</td><td class="num">1.07B</td><td class="win">Yes</td><td class="num">4.00 GB</td><td class="win">Target (no BCD offload)</td></tr>
-    <tr><td>This run</td><td class="num">1.11B</td><td class="loss">No</td><td class="num">3.48/4.51 GB</td><td class="win">1350 steps, ran without OOM &mdash; loss needs re-verifying</td></tr>
-    <tr><td>Target + offload + chunked_loss</td><td class="num">1.11B</td><td class="win">Yes</td><td class="num">4.85 GB (79%)</td><td class="win">5 steps fp32, fits without OOM (fixed) &mdash; not a trained run</td></tr>
-    <tr><td>Target + offload (no chunked)</td><td class="num">1.07B</td><td class="win">Yes</td><td class="num">>6 GB</td><td class="loss">OOM (pinned 250 MB + overhead)</td></tr>
+    <tr><td>2026-08-17 ceiling sweep (BCD + offload, no chunked loss)</td><td class="num">1.07B</td><td class="win">Yes</td><td class="num">4.00 GiB</td><td class="win">fit, memory only</td></tr>
+    <tr><td>This run (2026-09-19)</td><td class="num">1.22B</td><td class="loss">No</td><td class="num">3.48/4.51 GiB</td><td class="win">logged to step 1,400, ran without OOM &mdash; loss needs re-verifying</td></tr>
+    <tr><td>Target + offload + chunked_loss</td><td class="num">1.11B</td><td class="win">Yes</td><td class="num">~4.74 GiB (79%)</td><td class="win">5 steps fp32, fits without OOM (fixed) &mdash; not a trained run</td></tr>
+    <tr><td>Target + offload (no chunked)</td><td class="num">1.07B</td><td class="win">Yes</td><td class="num">>6 GB</td><td class="loss">OOM (pinned 206 MB + overhead) &mdash; reported 2026-09-19, no log kept (unsourced); conflicts with the 2026-08-17 row</td></tr>
     <tr><td>57M test</td><td class="num">57M</td><td class="win">Yes</td><td class="num">Works</td><td class="win">All 5 techniques integrate</td></tr>
   </tbody>
 </table>
 </div>
 
 <h2>Where the memory actually goes</h2>
-<p class="sub">Measured on live 1.11B run at step 1350 (untied) + 5-step fp32 test (tied + offload + chunked)</p>
+<p class="sub">Measured on a live 48M run (docs/state.md, #158, 2026-08-17); the pinned-table row is at 1B scale</p>
 
 <div class="tw">
 <table>
   <thead><tr><th>Item</th><th class="num">Size</th></tr></thead>
   <tbody>
-    <tr><td>Computing the loss &mdash; 4,096 positions &times; 50,257 vocabulary</td><td class="num">~1,500 MB</td></tr>
-    <tr><td><strong>Chunked loss (512 positions) saves</strong></td><td class="num win"><strong>~1,500 MB</strong></td></tr>
+    <tr><td>Computing the loss &mdash; 4,096 positions &times; 32,003 vocabulary</td><td class="num">~1,500 MB</td></tr>
+    <tr><td><strong>Chunked loss (512 positions) saves</strong></td><td class="num win"><strong>1,436 MB</strong></td></tr>
     <tr><td>CUDA context, kernels, workspaces</td><td class="num">~400 MB</td></tr>
-    <tr><td>Weights (ternary)</td><td class="num">~960 MB</td></tr>
-    <tr><td>Optimiser state (BCD: one block at a time)</td><td class="num">~200 MB</td></tr>
+    <tr><td>Weights</td><td class="num">183 MB</td></tr>
+    <tr><td>Optimiser state</td><td class="num">183 MB</td></tr>
     <tr><td>Layer activations (grad checkpoint)</td><td class="num">~50 MB</td></tr>
-    <tr><td><strong>Pinned tied table (if tied)</strong></td><td class="num"><strong>~250 MB</strong></td></tr>
+    <tr><td><strong>Pinned tied table (if tied)</strong></td><td class="num"><strong>~206 MB</strong></td></tr>
   </tbody>
 </table>
 </div>
 
 <p>
   The largest consumer is <strong>not the model</strong>. It is the cross-entropy over the
-  vocabulary &mdash; roughly three times the size of the weights. <strong>Chunked loss (512 positions
+  vocabulary &mdash; about eight times the size of the weights (~1,500 vs 183 MB). <strong>Chunked loss (512 positions
   at a time) recomputes logits in backward instead of keeping them, saving ~1.5 GB</strong>.
   This is what made the previously OOM combination (tied + offload) work: the pinned tied
-  table costs ~250 MB, but chunked loss returns ~1,500 MB, leaving headroom.
+  table costs ~206 MB, but chunked loss returns ~1,500 MB, leaving headroom.
 </p>
 
 <h2>What it costs</h2>
@@ -332,7 +345,7 @@ to training the full model at once &mdash; not a speed change. Full trail in the
     <tr><td>48M</td><td class="num win">yes</td><td class="num">~1 day</td></tr>
     <tr><td>108M</td><td class="num win">yes</td><td class="num">~5 days</td></tr>
     <tr><td>157M</td><td class="num win">yes</td><td class="num">~10 days</td></tr>
-    <tr><td>1.11B</td><td class="num win">yes &mdash; 5.31 GB (was 4.51, Aug)</td><td class="num loss">~154-246 days<br><span style="font-size:0.8em;opacity:0.7;">(was ~300, Aug measurement)</span></td></tr>
+    <tr><td>1.11B</td><td class="num win">yes &mdash; 4.94 GiB on 2026-10-16/17 (4.51 GiB on 2026-09-19, untied 1.22B)</td><td class="num loss">~154-246 days on 2026-10-16/17; now ~106 days of BCD compute, not full quality<br><span style="font-size:0.8em;opacity:0.7;">(375 days on 2026-08-30; ~300 was a projection, not a measurement)</span></td></tr>
   </tbody>
 </table>
 </div>
@@ -342,11 +355,11 @@ to training the full model at once &mdash; not a speed change. Full trail in the
   "every optimisation left, added up optimistically, is 20-25%" &mdash; then found four more
   real levers in October anyway, plus turned dropout off after a real multi-epoch test found
   it costs quality in this project's repeated-data regime, not helps it. Cutting the measured
-  step from 21.81 to <strong>14.385 s/step</strong> (2,278 tok/s, up from 1,579), a 34.0% cut
-  against the August baseline. The 1.11B run now needs
+  step from 21.81 to <strong>14.385 s/step</strong> (2,278 tok/s, up from 1,502), a 34.0% cut
+  against the 2026-10-12 baseline. The 1.11B run now needs
   <strong>~154 days</strong> accepting block-coordinate descent's own measured quality cost, or
   <strong>~246 days</strong> if the output needs to match full-training quality instead &mdash;
-  down from ~300-375. The lesson this project keeps re-learning: don't trust "nothing left"
+  down from 375 (2026-08-30 estimate). The lesson this project keeps re-learning: don't trust "nothing left"
   without a fresh number behind it.
 </p>
 
@@ -373,13 +386,13 @@ to training the full model at once &mdash; not a speed change. Full trail in the
   <tbody>
     <tr><td><code>--block-coordinate</code></td><td>off</td><td>BAdam: train one block at a time, clear its optim state</td><td>~8x less optim VRAM</td><td>BCD overhead, must tune <code>--bcd-steps-per-block</code></td></tr>
     <tr><td><code>--offload</code></td><td>off</td><td>Stream inactive blocks' weights to CPU</td><td>Scales with depth</td><td>PCIe overhead, needs <code>--grad-checkpoint</code></td></tr>
-    <tr><td><code>--tie-embeddings</code></td><td>on</td><td>Share vocab table between embedding + decoder</td><td>Saves 103M params</td><td>Pins 250 MB on GPU with offload</td></tr>
+    <tr><td><code>--tie-embeddings</code></td><td>on</td><td>Share vocab table between embedding + decoder</td><td>Saves 103M params</td><td>Pins 206 MB on GPU with offload</td></tr>
     <tr><td><code>--grad-checkpoint</code></td><td>off</td><td>Recompute activations in backward</td><td>~64% less activation VRAM</td><td>~20-30% slower/step</td></tr>
     <tr><td><code>--chunked-loss N</code></td><td>0</td><td>Score loss in slices, recompute in backward</td><td>Saves ~1.5 GB loss VRAM</td><td>~7% step time</td></tr>
     <tr><td><code>--ternary</code></td><td>on</td><td>BitNet b1.58 QAT: fp32→{-1,0,+1} (int8+scale), STE gradients</td><td>2.33x weight storage; 35% sparsity; checkpoint size</td><td>No training VRAM win (fp32 shadows); QAT only; collapse at init fixed by trunk warm-start</td></tr>
     <tr><td><code>--n-heads</code></td><td>auto</td><td>Head count (head_dim must be power of 2)</td><td>64 heads = 13% faster at 1B</td><td>Quality not settled at scale</td></tr>
     <tr><td><code>--precision bf16</code></td><td>fp32</td><td>Mixed precision</td><td>2-3x speed, 2x less VRAM</td><td>Needs RTX 30/40 series</td></tr>
-    <tr><td><code>--optimizer muon</code></td><td>adamw</td><td>Muon optimizer</td><td>1.6x fewer steps to same loss</td><td>~12% slower/step</td></tr>
+    <tr><td><code>--optimizer muon</code></td><td>muon</td><td>Muon optimizer</td><td>1.6x fewer steps to same loss</td><td>~12% slower/step</td></tr>
     <tr><td><code>--fast</code></td><td>on</td><td>Meta-flag: bf16 + TF32 + Triton + megakernel</td><td>One-switch recommended stack</td><td>Skips torch.compile (2.4x slower)</td></tr>
   </tbody>
 </table>

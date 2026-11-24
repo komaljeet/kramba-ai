@@ -32,7 +32,7 @@ be assumed to transfer to a desktop RTX 4050, a different driver/OS, or more sys
 without re-measuring -- this project has been wrong more than once this week about
 numbers transferring across scale, let alone across hardware.
 
-## Before / after — same hardware, one week of real fixes (2026-08 -> 2026-10)
+## Before / after — same hardware, one week of real fixes (2026-10-12 -> 2026-10-17)
 
 > **Current number (2026-11-18, status updated 2026-11-24): the default 1B k4 step is 9.890 s** (`--scan-kernel t`
 > default, 7 BCD blocks of 4 layers; #210 re-time, 9.865 s in the #213 speed hunt). That is
@@ -46,14 +46,23 @@ numbers transferring across scale, let alone across hardware.
 > days (#217). The 1B pretrain effort was stopped on 2026-11-20. See docs/state.md (#215 roll-up
 > and the 2026-11-20 roll-up).
 
-| | August 2026 | October 2026 (2026-10-17/21; stale, see the note above) |
+| | Before (date in each cell) | October 2026 (2026-10-17/21; stale, see the note above) |
 |---|---|---|
-| 1B step time | 21.81 s/step | **13.294 s/step** (-39%) |
-| Throughput | 1,579 tok/s | **2,464 tok/s** |
-| **BCD's own quality cost** | **~4x worse perplexity** than full training (one block trains at a time, naive partition) | **~1.6x worse perplexity** (balanced block partitioning, issue #164) |
-| 1B pretrain time | ~375 days | **~142-227 days**, depending on how the BCD quality cost above is counted |
+| 1B step time | 21.81 s/step (2026-10-12 baseline) | **13.294 s/step** (-39%) |
+| Throughput | 1,502 tok/s (2026-10-12: 32,768 tokens / 21.81 s) | **2,464 tok/s** |
+| **BCD's own quality cost** | **~4x worse perplexity** than full training (one block trains at a time, naive partition, before 2026-09-29) | **~1.6x worse perplexity** (balanced block partitioning, issue #164) |
+| 1B pretrain time | ~234 days (2026-10-12: 925,000 x 21.81 s); ~375 days in the 2026-08-30 estimate | **~142-227 days**, depending on how the BCD quality cost above is counted |
 | Offload correctness | silent weight-corruption bug, present undetected for 76 days (2026-07-26 to 2026-10-10) | found, fixed, and validated end-to-end with real hard-kill-and-resume tests |
-| Peak VRAM at 1.11B | 4.51 GB | **5.24 GB** (81.4% of the card) -- up, not down; fused kernels/caches add some transient buffers even while speeding things up |
+| Peak VRAM at 1.11B | 4.79 GiB (4,904 MiB, 79.9%, 2026-10-12 baseline) | **4.88 GiB** (4,996 MiB, 81.4% of the card) -- up, not down; fused kernels/caches add some transient buffers even while speeding things up |
+
+**Older figures come from different setups, so they are kept apart.** 2026-08-30: 1.21B,
+3.686 s per 4,096-token step = 1,111 tok/s, ~375 days for 36B tokens (head-count table below).
+2026-09-19: an untied 1.22B model (1.11B without its second vocab table), 24 DeltaNet layers,
+26 BCD blocks: 1,579 tok/s in one 50-step window at step 1,350 (~20.76 s per 32,768-token step),
+peak reserved 4.51 GiB, 75% of the card (`blog_post_data/`). 2026-10-12: the 1.11B hybrid,
+13 BCD blocks: 21.81 s per 32,768-token step = 1,502 tok/s, 4.79 GiB (`results/fused_glue_1b/`,
+`results/offload_losshead_1b/`). Earlier versions of this table put 21.81 s/step, 1,579 tok/s
+and 4.51 GB in one "August" column; those come from three different runs, none from August.
 
 The BCD quality row matters as much as the speed numbers, and is easy to miss in a wall of
 step-time figures: the **~4x -> ~1.6x is a real cut in how much worse the memory-saving
@@ -1243,7 +1252,7 @@ That is a 3,300× gap. It decomposes as:
 > which landed afterwards and both of which attack exactly this term. Re-measured on this card
 > at the real training shape (d=2048/24L, **seq 4096**, batch 1, grad-checkpoint, chunked
 > loss), the offload path runs at **1,014 tok/s / 4.04 s per step** at 1.21B — better than the
-> 875 tok/s recorded in #157, and comfortably inside the card at 4.38 GB (73%).
+> 875 tok/s recorded in #157, and comfortably inside the card at 4.38 GiB (73%).
 >
 > **Read the direction of this correction carefully: it makes offload look BETTER, which makes
 > the section's conclusion STRONGER, not weaker.** If PCIe overhead is smaller than ~2×, then
@@ -1287,6 +1296,12 @@ locally in 6–8 months** and leaves **6B out of reach by roughly 30×**.
 | 300M | ~129 days (measured, #112) | ❌ |
 | 1B | 6–8 months | ❌ |
 | 6B | 2.5–33 years | ❌ by ~30× |
+
+> **Dated 2026-08-02; superseded.** Later measurements changed these rows. 300M (1024x24,
+> plain): ~31.7 days (2026-10-13, docs/state.md). 270M: ~19.3 days with dropout off
+> (2026-10-17). 1.11B with BCD: 9.890 s/step, ~106 days of compute for 925,000 steps
+> (2026-11-16), not full quality; streamed full backprop ~22.5 s/step, ~241 days (#217). No
+> measured route gives a full-quality 1B under 212 days; the 1B effort stopped 2026-11-20.
 
 **A note for future planning.** "It fits in VRAM" and "it can be trained" are different claims,
 and this project spent considerable effort on the first while believing it was progress toward

@@ -59,7 +59,7 @@ grad_accum 8, seq 4096). Metric: mean of turn steps 2-3 over the 7 block positio
 | #204 | frozen fp8 codes once per turn | 12.08 -> 11.79 | yes | 126.2 |
 | #206 | scan launch widths | 11.797 -> 11.285 | yes | 120.8 |
 | #207 | no-ckpt 1 default, fp8 bias fused | 11.285 -> 11.095 | yes | 118.8 |
-| #210 | `--scan-kernel t` default | 11.097 -> **9.890** | no (same fp64 error; held-out not worse at 1,800 steps) | **105.9** |
+| #210 | `--scan-kernel t` default | 11.097 (#210 harness re-time of 11.095) -> **9.890** | no (same fp64 error; held-out not worse at 1,800 steps) | **105.9** |
 
 The #213 speed hunt re-timed main at 9.865 s and found no same-bits change worth 0.2 s/step or
 more. Per block: ~12.8 s (embedding) down to ~6.5 s (last block). Peak reserved 82-85% of the
