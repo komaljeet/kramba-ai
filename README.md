@@ -208,7 +208,7 @@ pretrain must take under 212 days (19.8 s/step at 925,000 steps). Measured route
   (~208 days), was never measured. The full-precision design needs ~13.6 GB of host RAM, i.e.
   a 32 GB machine; this laptop has 16 GB and will not be upgraded.
 - **Lean 16 GB variant** (#218, [MR !273](https://gitlab.com/komalbarun/kramba-ai/-/merge_requests/273),
-  open, not merged): Windows caps pinned memory at 6.75 GiB; a bf16 host state (5.54 GB
+  merged 2026-11-24; results in `results/streamed_16gb_gate_218/`): Windows caps pinned memory at 6.75 GiB; a bf16 host state (5.54 GB
   pinned) fits and adds ~0.2 s/step. Its quality cost needs a held-out A/B.
 
 Trail: [`docs/state.md`](docs/state.md) (2026-11-20 roll-up).

@@ -215,8 +215,8 @@ laptop. On 2026-11-20 I stopped the 1B effort, because nothing I measured meets 
   13.6 GB of system RAM: a 32 GB machine. This laptop has 16 GB, and I am not upgrading it.
 - A leaner version that keeps its copies in a smaller number format does fit in 16 GB
   (Windows will only lock about 6.75 GiB of RAM for the card). It adds about 0.2 seconds a
-  step, and its quality cost still needs a proper test. That work sits in an open merge
-  request (!273), not merged.
+  step, and its quality cost still needs a proper test. That work was merged on 2026-11-24
+  (!273); its results are in `results/streamed_16gb_gate_218/`.
 
 ## What doesn't work (and why I'm telling you)
 

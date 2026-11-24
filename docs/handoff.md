@@ -15,7 +15,10 @@ context reset. Everything below is measured unless it says otherwise.
   backprop, 32% higher held-out loss, gap not closing; 1B unmeasured).
 - Streamed full backprop: ~22.5 s/step, ~241 days (#216/#217); fp32 host state needs ~13.6 GB
   of RAM (a 32 GB machine; this one has 16 GB, no upgrade).
-- MR !273 (#218, lean 16 GB host state) is open, not merged. Do not restart this work unasked.
+- MR !273 (#218, lean 16 GB host state) was merged on 2026-11-24; results are in
+  `results/streamed_16gb_gate_218/`. Do not restart this work unasked.
+- MR !252 (#199) was merged on 2026-11-24: at 1B the frozen blocks before the active BCD block
+  run one forward per micro-batch, no backward, no recompute. Nothing to fix. See state.md (#199).
 - Detail: docs/state.md (2026-11-20 roll-up).
 
 ## 00. 1B speed state (2026-11-18, #207-#213)
