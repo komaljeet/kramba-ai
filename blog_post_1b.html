@@ -282,7 +282,8 @@ card). An earlier version of this table put 21.81 s/step, 1,579 tok/s and 4.51 G
   the shared table must stay pinned on GPU (used by both <code>token_embedding</code> and
   <code>decoder</code>), costing 206 MB that can never be offloaded. At 1.07B params
   (2048 d_model, 24L, 64 heads, tied) the pinned 206 MB + offload overhead pushes past
-  6 GB &rarr; OOM.
+  6 GB &rarr; OOM. (Reported 2026-09-19 with no log kept: unsourced. It conflicts with tied +
+  offload fitting at 4.05 GiB on 2026-08-14 and 4.00 GiB on 2026-08-17.)
 </p>
 <p>
   Without tied embeddings (1.22B params): all blocks offloadable, VRAM flat at 3.48/4.51 GiB,
