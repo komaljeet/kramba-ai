@@ -66,6 +66,10 @@ more. Per block: ~12.8 s (embedding) down to ~6.5 s (last block). Peak reserved 
 card. Older 13-block numbers (13.294 s, 12.335 s with fp8) are stale. Full trail:
 [state.md](state.md) (#215 roll-up and #202-#213).
 
+The days column is BCD compute, not a full-quality figure: at 208M BCD needed 6.7× the steps to
+match full backprop (#214); at 1B it is not measured. Streamed full backprop: ~22.5 s/step, ~241
+days (#217). The 1B pretrain effort was stopped on 2026-11-20 (state.md roll-up).
+
 ## 8.3 Custom Kernels & Parallel Processing (Issue #33)
 
 | Fix | Technique | Before | After | Speedup |
