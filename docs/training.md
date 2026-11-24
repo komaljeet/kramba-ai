@@ -34,15 +34,19 @@ numbers transferring across scale, let alone across hardware.
 
 ## Before / after — same hardware, one week of real fixes (2026-08 -> 2026-10)
 
-> **Current number (2026-11-18): the default 1B k4 step is 9.890 s** (`--scan-kernel t`
+> **Current number (2026-11-18, status updated 2026-11-24): the default 1B k4 step is 9.890 s** (`--scan-kernel t`
 > default, 7 BCD blocks of 4 layers; #210 re-time, 9.865 s in the #213 speed hunt). That is
 > ~106 days for 925,000 steps at 8 x 4096 tokens (~3,310 tok/s). Before the #207-#210 round it
 > was 11.285 s (~121 days). History at 1B k4: 12.60 -> 12.10 -> 11.79 -> 11.285 -> 11.095 ->
 > 9.890 s. The 13.294 / 12.335 s and 132-211 day figures below are for the old 13-block layout
-> and older code: stale. The BCD quality cost at 1B with today's layout is not measured (#198
-> showed the old 1.6x does not carry over). See docs/state.md (#215 roll-up).
+> and older code: stale; the 211 end also used the 1.6x factor, withdrawn. The BCD quality cost
+> at 1B with today's layout is not measured (#198 showed the old 1.6x does not carry over). At
+> 208M (#214) BCD ended 32% worse in held-out loss than full backprop and needed 6.7x the steps,
+> so ~106 days is BCD compute, not full quality. Streamed full backprop is ~22.5 s/step, ~241
+> days (#217). The 1B pretrain effort was stopped on 2026-11-20. See docs/state.md (#215 roll-up
+> and the 2026-11-20 roll-up).
 
-| | August 2026 | October 2026 (now) |
+| | August 2026 | October 2026 (2026-10-17/21; stale, see the note above) |
 |---|---|---|
 | 1B step time | 21.81 s/step | **13.294 s/step** (-39%) |
 | Throughput | 1,579 tok/s | **2,464 tok/s** |
@@ -57,7 +61,8 @@ training mode is** compared to training the full model at once -- not a speed ch
 block slot sized for the vocabulary table was wasting memory for every other block;
 grouping layers into balanced-size blocks reclaimed it, letting more layers train "live"
 at once for the same VRAM budget. Full trail: `docs/state.md`'s BCD-balanced-partition and
-offload-bugs entries.
+offload-bugs entries. (2026-11-24: that 1.6x came from one small test. #198 showed it does not
+carry over to the 1B layout, and #214 measured a much larger cost at 208M.)
 
 **13.294 s/step is a full-BCD-cycle average, not every step (2026-10-22).** Per block it
 ranges from **18.9 s/step** (`token_embedding`, slowest, trained first) down to **7.5 s/step**
@@ -76,7 +81,8 @@ full-cycle run launched to confirm this across all 13 BCD blocks (initially stal
 the pressure-reaper opt-out, see `docs/state.md`) finished to step 1300/1300. Real cycle
 average: **13.294 -> 12.335 s/step, 2,464 -> 2,656 tok/s (+7.81%)** -- slightly better than
 the one-block projection. Day estimate: **142 -> ~132 days / 227 -> ~211 days**. This is now
-the real number, not a projection.
+the real number, not a projection. (2026-11-24: only ~132 is a speed number; the 211 end used
+the 1.6x factor, withdrawn.)
 
 ## HVN vs Transformer — Fundamental Differences
 

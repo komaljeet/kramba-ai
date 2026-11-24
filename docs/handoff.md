@@ -1,4 +1,4 @@
-# Handoff — read this first (updated 2026-11-18; sections 0 onward are from 2026-10-10)
+# Handoff — read this first (updated 2026-11-24; sections 0 onward are from 2026-10-10)
 
 Author: Rambarun Komaljeet
 
@@ -6,6 +6,17 @@ State of play for a session picking this up cold, or for the same session after 
 context reset. Everything below is measured unless it says otherwise.
 
 ---
+
+## 000. 1B pretrain stopped (2026-11-20)
+
+- The maintainer stopped the 1B pretrain effort on 2026-11-20. Rule: a full-quality 1B
+  pretrain must take under 212 days. No measured route meets it.
+- BCD: ~106 days of compute, not full quality (#214: at 208M, 6.7x the steps to match full
+  backprop, 32% higher held-out loss, gap not closing; 1B unmeasured).
+- Streamed full backprop: ~22.5 s/step, ~241 days (#216/#217); fp32 host state needs ~13.6 GB
+  of RAM (a 32 GB machine; this one has 16 GB, no upgrade).
+- MR !273 (#218, lean 16 GB host state) is open, not merged. Do not restart this work unasked.
+- Detail: docs/state.md (2026-11-20 roll-up).
 
 ## 00. 1B speed state (2026-11-18, #207-#213)
 
@@ -19,7 +30,7 @@ context reset. Everything below is measured unless it says otherwise.
 - Keep other apps off the NVIDIA GPU: a WDDM squeeze made turns 2.0-2.5x slower (#211).
 - No same-bits speed change worth 0.2 s/step is left (#213 hunt). Next candidates need a
   loss A/B first (Muon with 3 Newton-Schulz steps; `alpha_proj` in fp8, not measured).
-- Unmeasured: BCD quality cost at 1B (#214 running), `t` rounding and fp8 over a full run,
+- Unmeasured: BCD quality cost at 1B (#214 measured 208M: 6.7x the steps), `t` rounding and fp8 over a full run,
   a real run with eval on.
 - Failing on main: `tests/test_issue33.py` (does not load);
   `test_fused_norm_residual.py::test_bcd_offload_trajectory_close_and_path_ran` (order dependent).

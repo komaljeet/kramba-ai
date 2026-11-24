@@ -5,6 +5,34 @@
 > not settled benchmarks. The hybrid design they feed is in
 > [architecture.md](architecture.md); settled speed numbers in [benchmarks_speed.md](benchmarks_speed.md).
 
+## 1B pretrain on this laptop: no measured route reaches full quality under 212 days; effort stopped 2026-11-20 (roll-up, written 2026-11-24, #219)
+
+**One line: the maintainer's rule is that a full-quality 1B pretrain must take under 212 days
+(19.8 s/step at 925,000 steps). BCD is ~106 days of compute but not full quality (#214: at 208M
+it needed 6.7x the steps to match full backprop). Streamed full backprop is full quality by design
+but ~22.5 s/step = ~241 days (#216/#217). The maintainer stopped the 1B pretrain effort on
+2026-11-20. MR !273 (#218) is open, not merged. Nothing new was run for this entry.**
+
+| route | step (s) | days for 925,000 steps | quality | source |
+|---|---:|---:|---|---|
+| BCD, 7 blocks of 4 layers (default) | 9.890 | ~106 | not full: 208M 32% higher held-out loss at 4000 steps, 6.7x steps to match, gap not closing; 1B unmeasured | #210, #215, #214 |
+| streamed full backprop, fp32 host state | ~22.5 (one group measured, rest from per-layer times) | ~241 | full backprop by design | #217 |
+| same, paper estimate range | 19.4-25.5 | 208-273 | same | #216 (never measured end to end) |
+| streamed, lean bf16 host state | ~22.5 + ~0.2 | not computed | held-out A/B still needed | #218, MR !273, open, not merged |
+
+- RAM: the fp32 streamed design needs ~13.6 GB of host RAM in the trainer (#216/#217). That
+  means a 32 GB machine. This laptop has 16 GB (15.29 GB usable) and will not be upgraded.
+- From the open MR !273 (branch `exp/streamed-16gb-gate`, `results/streamed_16gb_gate_218/`,
+  not on main): Windows caps pinned memory at 6.75 GiB; the fp32 state needs 10.5 GB pinned, so
+  it cannot run here at all; a lean state (bf16 masters with stochastic rounding, bf16 Muon
+  momentum, bf16 parked inputs) needs 5.54 GB pinned and fits with ~1.1 GB margin.
+- Docs updated to match (#219): HF_BLOG_POST.md, PRETRAIN_STORY.md, README.md, training.md,
+  handoff.md, index.md, benchmarks_speed.md, roadmap.md now call 106 days BCD compute, not full
+  quality, and mark the bigger-GPU day counts (scaled from the October 132-211 days) as
+  unmeasured. The 211 figure used the 1.6x factor that #198 withdrew.
+- Still unmeasured: the BCD penalty at 1B and at full length; the lean variant's quality; a full
+  24-layer streamed run.
+
 ## Streamed full backprop at 1B, one group measured: 3.55 s vs 3.41 predicted, full step ~22.5 s (2026-11-19, #217)
 
 **One line: the real 1B layers 4-7 run the #216 layer-major design (fp32 masters, momentum and
@@ -240,7 +268,8 @@ Same harness, main 2845f80, all 7 positions.
 
 ### Still unmeasured
 - BCD quality cost at 1B and at full run length (a matched-size test, #214, is running; not
-  reported here).
+  reported here). [2026-11-24: #214 has since reported at 208M, see its entry above; 1B is
+  still unmeasured.]
 - Whether `t`'s rounding matters over 925,000 steps (tested to 1800).
 - fp8 vs bf16 at full length (#197 saw no cost at 180 steps).
 - A copy_ cost in the profile that is not yet attributed to any one cause.
