@@ -5,7 +5,12 @@
 A training and evaluation stack for linear-attention language models that runs on a single
 consumer graphics card. The headline result, measured rather than estimated: **a 1.11-billion
 parameter model trains in 5.24 GB** (81.4% of the card, measured 2026-10-17 — up from 4.51 GB
-in September, see the before/after table below for why), and ~1.6B is the ceiling on the card.
+in September, see the before/after table below for why; on today's default of 7 BCD blocks it
+peaks at 82-85%), and ~1.6B is the ceiling on the card.
+
+**Status (2026-11-20): the 1B pretrain effort is stopped.** The rule was: a full-quality 1B
+pretrain must take under 212 days on this laptop. No measured route meets it. See
+[1B pretrain status](#1b-pretrain-status-stopped-2026-11-20) below.
 
 That's the whole project. The rest of this page is about what that does and doesn't mean.
 
@@ -24,14 +29,14 @@ Power-limited laptop GPU, Windows, tight system RAM relative to VRAM — don't a
 numbers transfer to a desktop RTX 4050, a different OS, or more system RAM without
 re-measuring.
 
-## Before / after — same hardware, one week of real fixes (2026-08 → 2026-10)
+## Before / after — same hardware, real fixes (2026-08 → 2026-11)
 
 | | August 2026 | October 2026 | November 2026 (now) |
 |---|---|---|---|
-| 1B step time | 21.81 s/step | 13.294 s/step (-39%, old 13-block layout) | **9.890 s/step** (-55%; 7 blocks of 4 layers, `--scan-kernel t`) |
-| Throughput | 1,579 tok/s | 2,464 tok/s | **~3,310 tok/s** |
-| **BCD's own quality cost** | **~4× worse perplexity** than full training (one block trains at a time, naive partition) | ~1.6× worse perplexity (balanced block partitioning, one small test, issue #164) | **not measured at 1B.** #198 showed the 1.6× does not carry over to the 1B layout; a matched test (#214) is running |
-| 1B pretrain time | ~375 days | ~142-227 days | **~106 days of compute** for 925,000 steps (30 tokens per body param). No quality-adjusted figure until the BCD cost is measured |
+| 1B step time | 21.81 s/step | 12.335 s/step (-43%, old 13-block layout, `--fp8-linear`) | **9.890 s/step** (-55%; 7 blocks of 4 layers, `--scan-kernel t`) |
+| Throughput | 1,579 tok/s | 2,656 tok/s | **~3,310 tok/s** |
+| **BCD's own quality cost** | **~4× worse perplexity** than full training (one block trains at a time, naive partition) | ~1.6× worse perplexity (balanced block partitioning, one small test, issue #164) | **not measured at 1B.** #198 showed the 1.6× does not carry over to the 1B layout. At 208M (#214): 32% higher held-out loss, 6.7× the steps to match full backprop, gap not closing |
+| 1B pretrain time | ~375 days | ~132 days of compute (211 with the 1.6× factor, since withdrawn) | **~106 days of compute** for 925,000 BCD steps (30 tokens per body param). Not a full-quality figure. Streamed full backprop: ~241 days (#217) |
 | Offload correctness | silent weight-corruption bug, undetected for 76 days | found, fixed, validated end-to-end | same |
 | Peak VRAM at 1.11B | 4.51 GB | 5.24 GB (81.4% of the card) | **82-85% of the card** (83.8% with the cache emptied at each block switch, the default; 84.9% max with held-out eval on) |
 
@@ -45,7 +50,8 @@ for the full trail.
 step takes ~35 s. That's expected, not a regression. Compare a short run's own number against
 the `token_embedding` block, not the mean. A real run also pays for each turn's slower first
 step and any held-out evals: #209's 1,800-step runs averaged 10.32 s/step.
-(The old 13-block figures: 18.9 down to 7.5 s/step, 13.294 s/step cycle average.)
+(The old 13-block figures: 18.9 down to 7.5 s/step, 13.294 s/step cycle average; 12.335 with
+`--fp8-linear`.)
 
 **Correction (2026-10-11):** the CPU weight-offload path used by the 1.11B run below had a bug
 from 2026-07-26 to 2026-10-10 that could swap weights between same-shaped matrices during
@@ -109,7 +115,7 @@ Triton scan and megakernel, and the fixes that make them work together.
 
 | claim | status |
 |---|---|
-| 1.11B-parameter model **trains in 4.51 GB**, 1,579 tok/s | measured 2026-09-19 — **stale**: current measured peak is 5.24 GB reserved (81.4% of the card) at 2,464 tok/s (2026-10-17); VRAM went up, not down, as this week's fused kernels/caches added some transient buffers even while speeding things up |
+| 1.11B-parameter model **trains in 4.51 GB**, 1,579 tok/s | measured 2026-09-19 — **stale**: on the current default (7 blocks of 4 layers) the step is 9.890 s, ~3,310 tok/s, peak 82-85% of the card (2026-11-18). On 2026-10-17 it was 5.24 GB reserved (81.4%) at 2,464 tok/s; VRAM went up, not down, as fused kernels/caches added some transient buffers even while speeding things up |
 | **~1.6B is the size ceiling** (2.45B spills to system RAM) | measured 2026-08-17 |
 | the stack is **not architecture-specific** — a plain 1.07B transformer also trains in 4.04 GB | measured 2026-08-17 |
 | flat ms/token from 256 → 4096 tokens of context | measured, [benchmarks_speed.md](docs/benchmarks_speed.md) |
@@ -118,7 +124,7 @@ Triton scan and megakernel, and the fixes that make them work together.
 | chunked cross-entropy saves **1436 MB at 48M** | measured 2026-08-17 |
 | **not cheaper to train** — a transformer is 1.41× faster per step | measured; the win is at inference only |
 | the 1B step runs at **close to hardware limits** — matmuls hit 100.6% of the card's own measured GEMM ceiling | measured 2026-08-31 |
-| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 — **stale**: current measured step is 9.890 s/step (~106 days of compute for 925,000 steps, 2026-11-16, see the reality check below) |
+| `--n-heads 64` at 1B is **13% faster** than 32 (~430 → ~375 days) | measured 2026-08-31 — **stale**: current measured step is 9.890 s/step (~106 days of BCD compute for 925,000 steps, not full quality, 2026-11-16, see the reality check below) |
 | **1.11B fits and runs in 4.51 GB with 5-technique stack** (BCD + offload + ternary + grad checkpoint + chunked loss) | VRAM measured 2026-09-19, 1350 steps — **but see the correction above: this run used an offload path with a weight-corruption bug (fixed 2026-10-10), so the loss curve from this run needs re-verifying, the VRAM figure does not** |
 | **tied embeddings + offload + BCD + chunked_loss fit without OOM** (previously OOM, fixed by pinning + chunked loss) | measured 2026-09-26, 79% VRAM (4.85 GB of 6 GB) at 1.11B fp32 — "composes" here means *fits*; whether it trains *correctly* at this combination and scale was never checked before 2026-10-10, and is only confirmed at small scale since |
 
@@ -152,7 +158,9 @@ The memory engineering got a 6B model to run forward and backward on this card a
 compute**. Before the latest round (#207-#210) it was 11.285 s/step, ~121 days. In October,
 on the old 13-block layout, the figure was ~132-211 days; the upper end multiplied by a 1.6×
 BCD quality cost that #198 later showed does not carry over to the 1B layout. The quality cost
-at 1B is **not measured yet**, so there is no honest quality-adjusted day count today. This
+at 1B is **not measured**. At 208M (#214), BCD ended 4,000 steps 32% worse in held-out loss
+than full backprop and needed 6.7× the steps to match it, so ~106 days is BCD compute, not a
+full-quality day count. This
 was **375 days at a smaller, un-fixed config as of 2026-08-31**. See
 [`docs/state.md`](docs/state.md) for the full trail.
 
@@ -184,7 +192,26 @@ wrong about that more than once.
 
 So: the *inference* half of the goal is real and measured. The *train-it-yourself* half is
 real up to ~1B on this hardware, at real but multi-month cost — not the "isn't achievable"
-this section used to say, and not free either.
+this section used to say, and not free either. At full quality, though, no measured route
+gets 1B under 212 days here (next section).
+
+### 1B pretrain status: stopped (2026-11-20)
+
+The maintainer stopped the 1B pretrain effort on 2026-11-20. The rule: a full-quality 1B
+pretrain must take under 212 days (19.8 s/step at 925,000 steps). Measured routes:
+
+- **BCD** (today's stack): 9.890 s/step, ~106 days of compute. Not full quality: at 208M it
+  needed 6.7× the steps to match full backprop, and the gap was not closing (#214). The
+  penalty at 1B is unmeasured.
+- **Streamed full backprop** (#216, #217): one 4-layer group run on the GPU puts the full step
+  at ~22.5 s, ~241 days for 925,000 steps. Over the rule. The paper estimate's low end, 19.4 s
+  (~208 days), was never measured. The full-precision design needs ~13.6 GB of host RAM, i.e.
+  a 32 GB machine; this laptop has 16 GB and will not be upgraded.
+- **Lean 16 GB variant** (#218, [MR !273](https://gitlab.com/komalbarun/kramba-ai/-/merge_requests/273),
+  open, not merged): Windows caps pinned memory at 6.75 GiB; a bf16 host state (5.54 GB
+  pinned) fits and adds ~0.2 s/step. Its quality cost needs a held-out A/B.
+
+Trail: [`docs/state.md`](docs/state.md) (2026-11-20 roll-up).
 
 (A note for anyone reading the compute-wall analysis in [`docs/training.md`](docs/training.md):
 its "~2× offload inefficiency" term is stale and the real figure is *smaller*, which makes that
